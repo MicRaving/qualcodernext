@@ -20,15 +20,19 @@ const PROJECT_PATH = path.join(E2E_ROOT, "Media.qda");
 const WAV_PATH = path.join(E2E_ROOT, "tone.wav");
 const SPEECH_WAV = path.join(E2E_ROOT, "speech.wav");
 
-/** Backend venv python — the same one the other specs use for fixtures. */
-const BACKEND_PYTHON = path.resolve(
-  process.cwd(),
-  "..",
-  "backend",
-  ".venv",
-  "Scripts",
-  "python.exe",
-);
+/** Backend python — prefer the local venv, fall back to `python` on PATH
+ * (CI installs backend deps into the runner python directly, no venv). */
+const BACKEND_PYTHON = (() => {
+  const venvPython = path.resolve(
+    process.cwd(),
+    "..",
+    "backend",
+    ".venv",
+    "Scripts",
+    "python.exe",
+  );
+  return fs.existsSync(venvPython) ? venvPython : "python";
+})();
 
 /**
  * Generate a 2-second 8000 Hz 16-bit mono sine WAV with the stdlib `wave`

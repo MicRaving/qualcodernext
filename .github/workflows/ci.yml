@@ -11,7 +11,7 @@ jobs:
     runs-on: windows-latest
     defaults:
       run:
-        working-directory: qualcoder-v4/backend
+        working-directory: backend
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -32,14 +32,14 @@ jobs:
     runs-on: windows-latest
     defaults:
       run:
-        working-directory: qualcoder-v4/frontend
+        working-directory: frontend
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: "24"
           cache: npm
-          cache-dependency-path: qualcoder-v4/frontend/package-lock.json
+          cache-dependency-path: frontend/package-lock.json
       - name: Install
         run: npm ci
       - name: Unit tests
@@ -54,7 +54,7 @@ jobs:
     runs-on: windows-latest
     defaults:
       run:
-        working-directory: qualcoder-v4/frontend
+        working-directory: frontend
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -64,11 +64,11 @@ jobs:
         with:
           node-version: "24"
           cache: npm
-          cache-dependency-path: qualcoder-v4/frontend/package-lock.json
+          cache-dependency-path: frontend/package-lock.json
       - name: Backend deps (the E2E suite spawns the real FastAPI backend)
         run: |
           python -m pip install --upgrade pip
-          pip install -e "qualcoder-v4/backend[dev]"
+          pip install -e "../backend[dev]"
       - name: Frontend deps
         run: npm ci
       - name: Install Playwright browser

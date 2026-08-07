@@ -5,7 +5,10 @@ export default defineConfig({
   fullyParallel: false,
   workers: 1,
   retries: 0,
-  timeout: 60000,
+  // Generous: the first navigation cold-transforms the whole app (vite dev
+  // re-optimizes dependencies on fresh checkouts, incl. the ~1.2 MB pdf.js
+  // worker), which can exceed 60 s on CI runners.
+  timeout: 120000,
   expect: { timeout: 10000 },
   globalSetup: "./tests-e2e/global-setup.ts",
   globalTeardown: "./tests-e2e/global-teardown.ts",
