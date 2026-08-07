@@ -1,0 +1,77 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  backend:
+    name: Backend (pytest + ruff)
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: qualcoder-v4/backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install backend + dev deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+      - name: Lint
+        run: python -m ruff check src tests
+      - name: Test
+        run: python -m pytest tests/ -q
+
+  frontend:
+    name: Frontend (vitest + lint + build)
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: qualcoder-v4/frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: qualcoder-v4/frontend/package-lock.json
+      - name: Install
+        run: npm ci
+      - name: Unit tests
+        run: npm test
+      - name: Lint
+        run: npm run lint
+      - name: Build
+        run: npm run build
+
+  e2e:
+    name: E2E (Playwright)
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: qualcoder-v4/frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: qualcoder-v4/frontend/package-lock.json
+      - name: Backend deps (the E2E suite spawns the real FastAPI backend)
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e "qualcoder-v4/backend[dev]"
+      - name: Frontend deps
+        run: npm ci
+      - name: Install Playwright browser
+        run: npx playwright install chromium
+      - name: Run E2E
+        run: npm run test:e2e

@@ -1,0 +1,62 @@
+{
+  "es": {
+    "translations": 155,
+    "total": 781,
+    "coverage_pct": 19.8
+  },
+  "fr": {
+    "translations": 156,
+    "total": 781,
+    "coverage_pct": 20.0
+  },
+  "eo": {
+    "translations": 135,
+    "total": 781,
+    "coverage_pct": 17.3
+  },
+  "eu": {
+    "translations": 137,
+    "total": 781,
+    "coverage_pct": 17.5
+  },
+  "fa": {
+    "translations": 137,
+    "total": 781,
+    "coverage_pct": 17.5
+  },
+  "ht": {
+    "translations": 133,
+    "total": 781,
+    "coverage_pct": 17.0
+  },
+  "it": {
+    "translations": 157,
+    "total": 781,
+    "coverage_pct": 20.1
+  },
+  "ja": {
+    "translations": 151,
+    "total": 781,
+    "coverage_pct": 19.3
+  },
+  "pt": {
+    "translations": 157,
+    "total": 781,
+    "coverage_pct": 20.1
+  },
+  "ro": {
+    "translations": 151,
+    "total": 781,
+    "coverage_pct": 19.3
+  },
+  "sv": {
+    "translations": 151,
+    "total": 781,
+    "coverage_pct": 19.3
+  },
+  "zh": {
+    "translations": 151,
+    "total": 781,
+    "coverage_pct": 19.3
+  }
+}

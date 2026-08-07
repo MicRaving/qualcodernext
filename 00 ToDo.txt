@@ -1,0 +1,2 @@
+Compare the qualcoder4 sources with the qualcoder-rework. Outline all differences, not matter how small. Provide a summary
+Integrate the qualcoder4 features into qualcoder-rework. Do not simply copy code but integrate it into the rework's logic and code. Adhere to principles of good coding. Delegate all parallelizable tasks to subagents

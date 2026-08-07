@@ -1,0 +1,854 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ui version="4.0">
+ <class>DialogCharts</class>
+ <widget class="QDialog" name="DialogCharts">
+  <property name="geometry">
+   <rect>
+    <x>0</x>
+    <y>0</y>
+    <width>1011</width>
+    <height>589</height>
+   </rect>
+  </property>
+  <property name="windowTitle">
+   <string>Charts</string>
+  </property>
+  <widget class="QLabel" name="label_info">
+   <property name="geometry">
+    <rect>
+     <x>9</x>
+     <y>9</y>
+     <width>391</width>
+     <height>22</height>
+    </rect>
+   </property>
+   <property name="text">
+    <string>Charts displayed in the default web browser</string>
+   </property>
+  </widget>
+  <widget class="QLabel" name="label_pie">
+   <property name="geometry">
+    <rect>
+     <x>10</x>
+     <y>65</y>
+     <width>321</width>
+     <height>22</height>
+    </rect>
+   </property>
+   <property name="text">
+    <string>Pie charts</string>
+   </property>
+  </widget>
+  <widget class="QLabel" name="label_bar">
+   <property name="geometry">
+    <rect>
+     <x>10</x>
+     <y>125</y>
+     <width>321</width>
+     <height>22</height>
+    </rect>
+   </property>
+   <property name="text">
+    <string>Bar charts</string>
+   </property>
+  </widget>
+  <widget class="QComboBox" name="comboBox_pie_charts">
+   <property name="geometry">
+    <rect>
+     <x>10</x>
+     <y>95</y>
+     <width>321</width>
+     <height>25</height>
+    </rect>
+   </property>
+  </widget>
+  <widget class="QComboBox" name="comboBox_bar_charts">
+   <property name="geometry">
+    <rect>
+     <x>10</x>
+     <y>153</y>
+     <width>321</width>
+     <height>25</height>
+    </rect>
+   </property>
+  </widget>
+  <widget class="QComboBox" name="comboBox_sunburst_charts">
+   <property name="geometry">
+    <rect>
+     <x>10</x>
+     <y>208</y>
+     <width>321</width>
+     <height>25</height>
+    </rect>
+   </property>
+  </widget>
+  <widget class="QLabel" name="label_hierarchy">
+   <property name="geometry">
+    <rect>
+     <x>10</x>
+     <y>181</y>
+     <width>321</width>
+     <height>22</height>
+    </rect>
+   </property>
+   <property name="text">
+    <string>Sunburst and treemap charts</string>
+   </property>
+   <property name="scaledContents">
+    <bool>true</bool>
+   </property>
+  </widget>
+  <widget class="QLabel" name="label_coder">
+   <property name="geometry">
+    <rect>
+     <x>380</x>
+     <y>103</y>
+     <width>321</width>
+     <height>22</height>
+    </rect>
+   </property>
+   <property name="text">
+    <string>Select coder</string>
+   </property>
+  </widget>
+  <widget class="QComboBox" name="comboBox_coders">
+   <property name="geometry">
+    <rect>
+     <x>380</x>
+     <y>130</y>
+     <width>321</width>
+     <height>25</height>
+    </rect>
+   </property>
+   <property name="toolTip">
+    <string>Select coder</string>
+   </property>
+  </widget>
+  <widget class="QComboBox" name="comboBox_file">
+   <property name="geometry">
+    <rect>
+     <x>380</x>
+     <y>180</y>
+     <width>321</width>
+     <height>25</height>
+    </rect>
+   </property>
+   <property name="toolTip">
+    <string>Right-click for text filter</string>
+   </property>
+  </widget>
+  <widget class="QLabel" name="label_select_file">
+   <property name="geometry">
+    <rect>
+     <x>380</x>
+     <y>160</y>
+     <width>321</width>
+     <height>22</height>
+    </rect>
+   </property>
+   <property name="text">
+    <string>Select file</string>
+   </property>
+  </widget>
+  <widget class="QComboBox" name="comboBox_case">
+   <property name="geometry">
+    <rect>
+     <x>380</x>
+     <y>230</y>
+     <width>321</width>
+     <height>25</height>
+    </rect>
+   </property>
+   <property name="toolTip">
+    <string>Right-click for text filter</string>
+   </property>
+  </widget>
+  <widget class="QLabel" name="label_select_case">
+   <property name="geometry">
+    <rect>
+     <x>380</x>
+     <y>210</y>
+     <width>321</width>
+     <height>22</height>
+    </rect>
+   </property>
+   <property name="toolTip">
+    <string>If portions of a text file are assigned to a case, the code frequency and total text characters may be incorrect.
+Codings from the entire text file are used for the calculations.</string>
+   </property>
+   <property name="text">
+    <string>Select case</string>
+   </property>
+  </widget>
+  <widget class="QPushButton" name="pushButton_attributes">
+   <property name="geometry">
+    <rect>
+     <x>380</x>
+     <y>310</y>
+     <width>231</width>
+     <height>25</height>
+    </rect>
+   </property>
+   <property name="text">
+    <string>Select attributes</string>
+   </property>
+  </widget>
+  <widget class="QLabel" name="label_filter">
+   <property name="geometry">
+    <rect>
+     <x>378</x>
+     <y>76</y>
+     <width>241</width>
+     <height>22</height>
+    </rect>
+   </property>
+   <property name="text">
+    <string>Filter out values below:</string>
+   </property>
+  </widget>
+  <widget class="QLineEdit" name="lineEdit_filter">
+   <property name="geometry">
+    <rect>
+     <x>620</x>
+     <y>76</y>
+     <width>81</width>
+     <height>25</height>
+    </rect>
+   </property>
+   <property name="toolTip">
+    <string>Enter number for filter cut off</string>
+   </property>
+   <property name="text">
+    <string/>
+   </property>
+  </widget>
+  <widget class="QLabel" name="label_filters">
+   <property name="geometry">
+    <rect>
+     <x>380</x>
+     <y>43</y>
+     <width>321</width>
+     <height>26</height>
+    </rect>
+   </property>
+   <property name="font">
+    <font>
+     <weight>50</weight>
+     <bold>false</bold>
+    </font>
+   </property>
+   <property name="text">
+    <string>&lt;b&gt;Data filters&lt;/b&gt;</string>
+   </property>
+  </widget>
+  <widget class="QLabel" name="label_chart_options">
+   <property name="geometry">
+    <rect>
+     <x>10</x>
+     <y>43</y>
+     <width>311</width>
+     <height>22</height>
+    </rect>
+   </property>
+   <property name="font">
+    <font>
+     <weight>50</weight>
+     <bold>false</bold>
+    </font>
+   </property>
+   <property name="text">
+    <string>&lt;b&gt;Coding charts&lt;/b&gt;</string>
+   </property>
+  </widget>
+  <widget class="QComboBox" name="comboBox_category">
+   <property name="geometry">
+    <rect>
+     <x>380</x>
+     <y>280</y>
+     <width>321</width>
+     <height>25</height>
+    </rect>
+   </property>
+   <property name="toolTip">
+    <string>Right-click for text filter</string>
+   </property>
+  </widget>
+  <widget class="QLabel" name="label_category">
+   <property name="geometry">
+    <rect>
+     <x>380</x>
+     <y>260</y>
+     <width>321</width>
+     <height>22</height>
+    </rect>
+   </property>
+   <property name="toolTip">
+    <string>If portions of a text file are assigned to a case,
+the code frequency and total text characters may be incorrect.
+Codings from the entire text file are used for the calculations.</string>
+   </property>
+   <property name="text">
+    <string>Select category</string>
+   </property>
+  </widget>
+  <widget class="Line" name="line">
+   <property name="geometry">
+    <rect>
+     <x>340</x>
+     <y>50</y>
+     <width>20</width>
+     <height>521</height>
+    </rect>
+   </property>
+   <property name="orientation">
+    <enum>Qt::Vertical</enum>
+   </property>
+  </widget>
+  <widget class="QLabel" name="label_chart_attributes">
+   <property name="geometry">
+    <rect>
+     <x>10</x>
+     <y>400</y>
+     <width>311</width>
+     <height>26</height>
+    </rect>
+   </property>
+   <property name="font">
+    <font>
+     <weight>50</weight>
+     <bold>false</bold>
+    </font>
+   </property>
+   <property name="text">
+    <string>&lt;b&gt;Attribute charts&lt;/b&gt;</string>
+   </property>
+  </widget>
+  <widget class="QLabel" name="label_num_attr">
+   <property name="geometry">
+    <rect>
+     <x>10</x>
+     <y>525</y>
+     <width>321</width>
+     <height>22</height>
+    </rect>
+   </property>
+   <property name="text">
+    <string>Numeric attributes</string>
+   </property>
+  </widget>
+  <widget class="QLabel" name="label_char_attr">
+   <property name="geometry">
+    <rect>
+     <x>10</x>
+     <y>472</y>
+     <width>321</width>
+     <height>22</height>
+    </rect>
+   </property>
+   <property name="text">
+    <string>Character attributes</string>
+   </property>
+  </widget>
+  <widget class="QComboBox" name="comboBox_num_attributes">
+   <property name="geometry">
+    <rect>
+     <x>10</x>
+     <y>552</y>
+     <width>321</width>
+     <height>25</height>
+    </rect>
+   </property>
+  </widget>
+  <widget class="QComboBox" name="comboBox_char_attributes">
+   <property name="geometry">
+    <rect>
+     <x>10</x>
+     <y>500</y>
+     <width>321</width>
+     <height>25</height>
+    </rect>
+   </property>
+  </widget>
+  <widget class="QGroupBox" name="groupBox">
+   <property name="geometry">
+    <rect>
+     <x>10</x>
+     <y>432</y>
+     <width>321</width>
+     <height>35</height>
+    </rect>
+   </property>
+   <property name="maximumSize">
+    <size>
+     <width>16777215</width>
+     <height>16777215</height>
+    </size>
+   </property>
+   <property name="title">
+    <string/>
+   </property>
+   <widget class="QRadioButton" name="radioButton_file">
+    <property name="geometry">
+     <rect>
+      <x>0</x>
+      <y>5</y>
+      <width>112</width>
+      <height>23</height>
+     </rect>
+    </property>
+    <property name="text">
+     <string>File</string>
+    </property>
+    <property name="checked">
+     <bool>true</bool>
+    </property>
+   </widget>
+   <widget class="QRadioButton" name="radioButton_case">
+    <property name="geometry">
+     <rect>
+      <x>120</x>
+      <y>5</y>
+      <width>112</width>
+      <height>23</height>
+     </rect>
+    </property>
+    <property name="text">
+     <string>Case</string>
+    </property>
+   </widget>
+  </widget>
+  <widget class="QCheckBox" name="checkBox_export_html">
+   <property name="geometry">
+    <rect>
+     <x>430</x>
+     <y>10</y>
+     <width>301</width>
+     <height>23</height>
+    </rect>
+   </property>
+   <property name="text">
+    <string>Export HTML file</string>
+   </property>
+  </widget>
+  <widget class="QLabel" name="label_chart_options_2">
+   <property name="geometry">
+    <rect>
+     <x>10</x>
+     <y>240</y>
+     <width>321</width>
+     <height>26</height>
+    </rect>
+   </property>
+   <property name="font">
+    <font>
+     <weight>50</weight>
+     <bold>false</bold>
+    </font>
+   </property>
+   <property name="text">
+    <string>&lt;b&gt;Heatmap charts&lt;/b&gt;</string>
+   </property>
+  </widget>
+  <widget class="Line" name="line_3">
+   <property name="geometry">
+    <rect>
+     <x>10</x>
+     <y>30</y>
+     <width>721</width>
+     <height>16</height>
+    </rect>
+   </property>
+   <property name="orientation">
+    <enum>Qt::Horizontal</enum>
+   </property>
+  </widget>
+  <widget class="QComboBox" name="comboBox_heatmap">
+   <property name="geometry">
+    <rect>
+     <x>10</x>
+     <y>300</y>
+     <width>321</width>
+     <height>25</height>
+    </rect>
+   </property>
+  </widget>
+  <widget class="Line" name="line_5">
+   <property name="geometry">
+    <rect>
+     <x>380</x>
+     <y>340</y>
+     <width>321</width>
+     <height>16</height>
+    </rect>
+   </property>
+   <property name="orientation">
+    <enum>Qt::Horizontal</enum>
+   </property>
+  </widget>
+  <widget class="QLabel" name="label_word_clouds">
+   <property name="geometry">
+    <rect>
+     <x>380</x>
+     <y>353</y>
+     <width>321</width>
+     <height>22</height>
+    </rect>
+   </property>
+   <property name="font">
+    <font>
+     <weight>75</weight>
+     <bold>true</bold>
+    </font>
+   </property>
+   <property name="text">
+    <string>Word cloud</string>
+   </property>
+  </widget>
+  <widget class="QComboBox" name="comboBox_wordcloud_background">
+   <property name="geometry">
+    <rect>
+     <x>380</x>
+     <y>380</y>
+     <width>321</width>
+     <height>25</height>
+    </rect>
+   </property>
+   <property name="toolTip">
+    <string>Background</string>
+   </property>
+  </widget>
+  <widget class="QComboBox" name="comboBox_wordcloud_foreground">
+   <property name="geometry">
+    <rect>
+     <x>380</x>
+     <y>410</y>
+     <width>321</width>
+     <height>25</height>
+    </rect>
+   </property>
+   <property name="toolTip">
+    <string>Foreground</string>
+   </property>
+  </widget>
+  <widget class="QPushButton" name="pushButton_wordcloud">
+   <property name="geometry">
+    <rect>
+     <x>720</x>
+     <y>490</y>
+     <width>50</width>
+     <height>50</height>
+    </rect>
+   </property>
+   <property name="toolTip">
+    <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Make Word Cloud&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
+   </property>
+   <property name="text">
+    <string/>
+   </property>
+  </widget>
+  <widget class="QLabel" name="label_width">
+   <property name="geometry">
+    <rect>
+     <x>380</x>
+     <y>440</y>
+     <width>71</width>
+     <height>18</height>
+    </rect>
+   </property>
+   <property name="text">
+    <string>Width</string>
+   </property>
+  </widget>
+  <widget class="QLabel" name="label_height">
+   <property name="geometry">
+    <rect>
+     <x>470</x>
+     <y>440</y>
+     <width>71</width>
+     <height>18</height>
+    </rect>
+   </property>
+   <property name="text">
+    <string>Height</string>
+   </property>
+  </widget>
+  <widget class="QLabel" name="label_max_words">
+   <property name="geometry">
+    <rect>
+     <x>566</x>
+     <y>440</y>
+     <width>201</width>
+     <height>18</height>
+    </rect>
+   </property>
+   <property name="text">
+    <string>Max words</string>
+   </property>
+  </widget>
+  <widget class="QCheckBox" name="checkBox_reverse_range">
+   <property name="geometry">
+    <rect>
+     <x>381</x>
+     <y>490</y>
+     <width>20</width>
+     <height>20</height>
+    </rect>
+   </property>
+   <property name="toolTip">
+    <string>Reverse colour range</string>
+   </property>
+   <property name="text">
+    <string/>
+   </property>
+  </widget>
+  <widget class="QLabel" name="label_reverse_range">
+   <property name="geometry">
+    <rect>
+     <x>410</x>
+     <y>490</y>
+     <width>151</width>
+     <height>22</height>
+    </rect>
+   </property>
+   <property name="toolTip">
+    <string>Reverse colour range</string>
+   </property>
+   <property name="text">
+    <string>Reverse range</string>
+   </property>
+  </widget>
+  <widget class="QLabel" name="label_ngrams">
+   <property name="geometry">
+    <rect>
+     <x>425</x>
+     <y>521</y>
+     <width>131</width>
+     <height>22</height>
+    </rect>
+   </property>
+   <property name="toolTip">
+    <string>Number of conjoined words in phrase. Stopwords applies to selection of 1 word only.</string>
+   </property>
+   <property name="text">
+    <string>n-grams</string>
+   </property>
+  </widget>
+  <widget class="QComboBox" name="comboBox_ngrams">
+   <property name="geometry">
+    <rect>
+     <x>380</x>
+     <y>519</y>
+     <width>40</width>
+     <height>28</height>
+    </rect>
+   </property>
+   <property name="toolTip">
+    <string>1=One word, 3=3 word phrase, 4=4 word phrase</string>
+   </property>
+  </widget>
+  <widget class="QLabel" name="label_upper_count">
+   <property name="geometry">
+    <rect>
+     <x>10</x>
+     <y>268</y>
+     <width>241</width>
+     <height>24</height>
+    </rect>
+   </property>
+   <property name="toolTip">
+    <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;This is to allow a wider spread of heatmap colours when there are extreme count differences.&lt;/p&gt;&lt;p&gt;0 represents no limit.&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
+   </property>
+   <property name="layoutDirection">
+    <enum>Qt::LeftToRight</enum>
+   </property>
+   <property name="text">
+    <string>Upper count limiter</string>
+   </property>
+   <property name="alignment">
+    <set>Qt::AlignRight|Qt::AlignTrailing|Qt::AlignVCenter</set>
+   </property>
+  </widget>
+  <widget class="QLineEdit" name="lineEdit_width">
+   <property name="geometry">
+    <rect>
+     <x>380</x>
+     <y>460</y>
+     <width>71</width>
+     <height>22</height>
+    </rect>
+   </property>
+   <property name="toolTip">
+    <string>Image width</string>
+   </property>
+  </widget>
+  <widget class="QLineEdit" name="lineEdit_height">
+   <property name="geometry">
+    <rect>
+     <x>470</x>
+     <y>460</y>
+     <width>71</width>
+     <height>22</height>
+    </rect>
+   </property>
+   <property name="toolTip">
+    <string>Image height</string>
+   </property>
+  </widget>
+  <widget class="QLineEdit" name="lineEdit_max_words">
+   <property name="geometry">
+    <rect>
+     <x>560</x>
+     <y>460</y>
+     <width>71</width>
+     <height>22</height>
+    </rect>
+   </property>
+   <property name="toolTip">
+    <string>Maximum words</string>
+   </property>
+  </widget>
+  <widget class="QLineEdit" name="lineEdit_count_limiter">
+   <property name="geometry">
+    <rect>
+     <x>260</x>
+     <y>270</y>
+     <width>71</width>
+     <height>22</height>
+    </rect>
+   </property>
+  </widget>
+  <widget class="QLabel" name="label_cumulative_bar">
+   <property name="geometry">
+    <rect>
+     <x>10</x>
+     <y>332</y>
+     <width>321</width>
+     <height>22</height>
+    </rect>
+   </property>
+   <property name="font">
+    <font>
+     <weight>50</weight>
+     <bold>false</bold>
+    </font>
+   </property>
+   <property name="text">
+    <string>&lt;b&gt;Cumulative barchart&lt;/b&gt;</string>
+   </property>
+  </widget>
+  <widget class="QComboBox" name="comboBox_cumulative_bar">
+   <property name="geometry">
+    <rect>
+     <x>10</x>
+     <y>362</y>
+     <width>321</width>
+     <height>25</height>
+    </rect>
+   </property>
+  </widget>
+  <widget class="QPushButton" name="pushButton_stopwords">
+   <property name="geometry">
+    <rect>
+     <x>560</x>
+     <y>520</y>
+     <width>151</width>
+     <height>28</height>
+    </rect>
+   </property>
+   <property name="toolTip">
+    <string>Selecting a text file here will override exisitng stopwords in the software, and also override stopwords stored in the .qualcoder configuration folder. 
+This is temporary and must be selected each time the Charts screen is opened.
+
+The file must be plain text with one word per line.
+Each word is excluded in the n-grams=1 Word cloud.</string>
+   </property>
+   <property name="text">
+    <string>Stop words</string>
+   </property>
+  </widget>
+  <widget class="QComboBox" name="comboBox_stopwords">
+   <property name="geometry">
+    <rect>
+     <x>560</x>
+     <y>490</y>
+     <width>151</width>
+     <height>25</height>
+    </rect>
+   </property>
+   <property name="toolTip">
+    <string>Select stopwords list by language</string>
+   </property>
+  </widget>
+  <zorder>groupBox</zorder>
+  <zorder>label_info</zorder>
+  <zorder>label_pie</zorder>
+  <zorder>label_bar</zorder>
+  <zorder>comboBox_pie_charts</zorder>
+  <zorder>comboBox_bar_charts</zorder>
+  <zorder>comboBox_sunburst_charts</zorder>
+  <zorder>label_hierarchy</zorder>
+  <zorder>label_coder</zorder>
+  <zorder>comboBox_coders</zorder>
+  <zorder>comboBox_file</zorder>
+  <zorder>label_select_file</zorder>
+  <zorder>comboBox_case</zorder>
+  <zorder>label_select_case</zorder>
+  <zorder>pushButton_attributes</zorder>
+  <zorder>label_filter</zorder>
+  <zorder>lineEdit_filter</zorder>
+  <zorder>label_filters</zorder>
+  <zorder>label_chart_options</zorder>
+  <zorder>comboBox_category</zorder>
+  <zorder>label_category</zorder>
+  <zorder>line</zorder>
+  <zorder>label_chart_attributes</zorder>
+  <zorder>label_num_attr</zorder>
+  <zorder>label_char_attr</zorder>
+  <zorder>comboBox_num_attributes</zorder>
+  <zorder>comboBox_char_attributes</zorder>
+  <zorder>checkBox_export_html</zorder>
+  <zorder>label_chart_options_2</zorder>
+  <zorder>line_3</zorder>
+  <zorder>comboBox_heatmap</zorder>
+  <zorder>line_5</zorder>
+  <zorder>label_word_clouds</zorder>
+  <zorder>comboBox_wordcloud_background</zorder>
+  <zorder>comboBox_wordcloud_foreground</zorder>
+  <zorder>pushButton_wordcloud</zorder>
+  <zorder>label_width</zorder>
+  <zorder>label_height</zorder>
+  <zorder>label_max_words</zorder>
+  <zorder>checkBox_reverse_range</zorder>
+  <zorder>label_reverse_range</zorder>
+  <zorder>label_ngrams</zorder>
+  <zorder>comboBox_ngrams</zorder>
+  <zorder>label_upper_count</zorder>
+  <zorder>lineEdit_width</zorder>
+  <zorder>lineEdit_height</zorder>
+  <zorder>lineEdit_max_words</zorder>
+  <zorder>lineEdit_count_limiter</zorder>
+  <zorder>label_cumulative_bar</zorder>
+  <zorder>comboBox_cumulative_bar</zorder>
+  <zorder>pushButton_stopwords</zorder>
+  <zorder>comboBox_stopwords</zorder>
+ </widget>
+ <tabstops>
+  <tabstop>checkBox_export_html</tabstop>
+  <tabstop>comboBox_pie_charts</tabstop>
+  <tabstop>comboBox_bar_charts</tabstop>
+  <tabstop>comboBox_sunburst_charts</tabstop>
+  <tabstop>comboBox_heatmap</tabstop>
+  <tabstop>radioButton_file</tabstop>
+  <tabstop>radioButton_case</tabstop>
+  <tabstop>comboBox_char_attributes</tabstop>
+  <tabstop>comboBox_num_attributes</tabstop>
+  <tabstop>lineEdit_filter</tabstop>
+  <tabstop>comboBox_coders</tabstop>
+  <tabstop>comboBox_file</tabstop>
+  <tabstop>comboBox_case</tabstop>
+  <tabstop>comboBox_category</tabstop>
+  <tabstop>pushButton_attributes</tabstop>
+ </tabstops>
+ <resources/>
+ <connections/>
+</ui>

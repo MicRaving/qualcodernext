@@ -1,0 +1,18 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+authors:
+  - family-names: Curtain
+    given-names: Colin
+    orcid: https://orcid.org/0000-0001-5029-7541
+  - family-names: Dröge
+    given-names: Kai
+    family-names: Missaghieh--Poncet
+    given-names: Justin
+    family-names: Salomón
+    given-names: Lorenzo
+title: "QualCoder"
+version: 4.0 
+keywords: qualitative
+license: LGPL v3
+repository-code: https://github.com/ccbogel/QualCoder/releases/tag/4.0 [SOON]
+date-released: 2026-08-31 [SOON]

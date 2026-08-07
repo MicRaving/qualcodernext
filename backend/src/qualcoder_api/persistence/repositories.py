@@ -1,0 +1,1164 @@
+"""Async repositories over the v14 project schema.
+
+Each repository wraps an ``AsyncSession`` and returns Pydantic domain models
+(``qualcoder_api.core.models``). SQL follows the legacy behavior exactly;
+business-rule quirks (unique-constraint conflicts during merge, orphan
+supercatid cleanup) are preserved deliberately.
+"""
+
+from __future__ import annotations
+
+import datetime
+import logging
+import random
+from typing import Any, cast
+
+from sqlalchemy import delete, func, insert, select, text, update
+from sqlalchemy.engine import CursorResult, Result
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from qualcoder_api.core.models import (
+    Annotation,
+    Attribute,
+    AttributeType,
+    AVCoding,
+    Case,
+    CaseText,
+    Category,
+    Code,
+    Coding,
+    ImageCoding,
+    Journal,
+    Project,
+    Source,
+)
+from qualcoder_api.persistence import tables
+
+logger = logging.getLogger(__name__)
+
+
+def _coding_row(mapping) -> dict:
+    """Normalize a raw coding row for model validation.
+
+    Legacy data may carry ``important = NULL``; the models require an int,
+    so NULL is coerced to 0 (the column default).
+    """
+    data = dict(mapping)
+    if data.get("important") is None:
+        data["important"] = 0
+    return data
+
+
+def _inserted_pk(result: Result[Any]) -> int:
+    """First inserted primary key from an INSERT statement result.
+
+    ``AsyncSession.execute`` is statically typed as returning ``Result``,
+    but for INSERT/DML statements the runtime type is ``CursorResult``
+    which carries ``inserted_primary_key``.
+    """
+    pk = cast(CursorResult[Any], result).inserted_primary_key
+    if pk is None:  # pragma: no cover - inserts always return a pk here
+        raise RuntimeError("insert returned no primary key")
+    return int(pk[0])
+
+# Legacy 120-color code palette (color_selector.py, ported verbatim).
+CODE_COLORS = [
+    "#F5F6CE", "#F2F5A9", "#F4FA58", "#F7FE2E", "#DDE600", "#F8ECE0", "#F6E3CE", "#F5D0A9", "#F7BE81", "#FAAC58",
+    "#F5ECCE", "#F3E2A9", "#F5DA81", "#F7D358", "#FACC2E", "#FFE2CC", "#FFC599", "#FFA866", "#FF8B33", "#FF6F00",
+    "#F8E6E0", "#F6D8CE", "#F5BCA9", "#F79F81", "#FA8258", "#FADCCC", "#F5B999", "#F09666", "#EB7333", "#E65100",
+    "#F8E0E0", "#F6CECE", "#F5A9A9", "#F78181", "#FA5858", "#F0D1D1", "#E2A4A4", "#D37676", "#C54949", "#B71C1C",
+    "#F2D6CE", "#E5AE9D", "#D8866D", "#CB5E3C", "#BF360C", "#E7CEDB", "#CF9EB8", "#B76E95", "#9F3E72", "#880E4F",
+    "#F8E0E6", "#F6CED8", "#F5A9BC", "#F7819F", "#FA5882", "#F8E0F7", "#F6CEF5", "#F5A9F2", "#F781F3", "#FA58F4",
+    "#D1DED2", "#A3BEA5", "#769E78", "#487E4B", "#1B5E20", "#DEE9E4", "#BED3C9", "#9EBDAE", "#7EA793", "#5E9179",
+    "#CEF6E3", "#A9F5D0", "#81F7BE", "#58FAAC", "#00FF7F", "#E0F8E0", "#CEF6CE", "#A9F5A9", "#81F781", "#58FA58",
+    "#D0F5A9", "#BEF781", "#ACFA58", "#9AFE2E", "#80FF00", "#CEF6F5", "#A9F5F2", "#81F7F3", "#58FAF4", "#00F0F0",
+    "#E4D3F5", "#CAA8EB", "#B07CE1", "#9651D7", "#7D26CD", "#ECE0F8", "#E3CEF6", "#D0A9F5", "#BE81F7", "#AC58FA",
+    "#DADAF5", "#B5B5EC", "#9090E3", "#6B6BDA", "#4646D1", "#CEE3F6", "#A9D0F5", "#81BEF7", "#3498DB", "#5882FA",
+    "#CEDAEC", "#9EB5D9", "#6D91C6", "#3D6CB3", "#0D47A1", "#E8E8E8", "#D8D8D8", "#C8C8C8", "#B8B8B8", "#A8A8A8",
+]
+
+COLOUR_RANGES = [
+    {"name": "yellow", "min": 0, "max": 5},
+    {"name": "orange", "min": 6, "max": 30},
+    {"name": "red", "min": 31, "max": 45},
+    {"name": "pink", "min": 46, "max": 60},
+    {"name": "green", "min": 61, "max": 85},
+    {"name": "cyan", "min": 86, "max": 90},
+    {"name": "purple", "min": 91, "max": 100},
+    {"name": "blue", "min": 101, "max": 115},
+    {"name": "gray", "min": 116, "max": 120},
+    {"name": "all", "min": 0, "max": 120},
+]
+
+
+def _now() -> str:
+    return datetime.datetime.now().astimezone().strftime("%Y-%m-%d %H:%M:%S")
+
+
+def random_code_color() -> str:
+    """Pick a random color from the code palette (custom scheme when set)."""
+    try:
+        from qualcoder_api.services.user_settings import get_color_scheme
+
+        scheme = get_color_scheme()
+        palette = scheme.get("colors") or CODE_COLORS
+    except Exception:  # pragma: no cover - settings never raise here
+        palette = CODE_COLORS
+    return palette[random.randint(0, len(palette) - 1)]
+
+
+class ProjectRepository:
+    """Metadata operations on the ``project`` row and coder names."""
+
+    def __init__(self, session: AsyncSession):
+        self.session = session
+
+    async def get_header(self) -> Project | None:
+        """Return minimal project metadata (columns present in ALL versions).
+
+        Legacy v2 databases only have (databaseversion, date, memo, about);
+        the full column set is selected only after migration.
+        """
+        row = (
+            await self.session.execute(
+                select(
+                    tables.project.c.databaseversion,
+                    tables.project.c.date,
+                    tables.project.c.memo,
+                    tables.project.c.about,
+                )
+            )
+        ).first()
+        if row is None:
+            return None
+        return Project(
+            databaseversion=row[0] or "",
+            date=row[1] or "",
+            memo=row[2] or "",
+            about=row[3] or "",
+        )
+
+    async def get_last_coder(self) -> str:
+        row = (
+            await self.session.execute(select(tables.project.c.codername))
+        ).first()
+        return row[0] or "" if row else ""
+
+    async def update_memo(self, memo: str) -> None:
+        await self.session.execute(update(tables.project).values(memo=memo))
+        await self.session.commit()
+
+    async def get_summary(self) -> dict:
+        """Aggregate project statistics (files, codes, cases, ...)."""
+        summary: dict = {}
+        project = await self.get_header()
+        if project is None:
+            return summary
+        summary.update(
+            databaseversion=project.databaseversion,
+            project_date=project.date,
+            project_memo=project.memo,
+            about=project.about,
+            bookmark_file_id=project.bookmarkfile,
+            bookmark_pos=project.bookmarkpos,
+        )
+        for key, table, col in (
+            ("files_count", tables.source, tables.source.c.id),
+            ("cases_count", tables.cases, tables.cases.c.caseid),
+            ("code_categories_count", tables.code_cat, tables.code_cat.c.catid),
+            ("codes_count", tables.code_name, tables.code_name.c.cid),
+            ("attributes_count", tables.attribute_type, tables.attribute_type.c.name),
+            ("journals_count", tables.journal, tables.journal.c.jid),
+        ):
+            count = (
+                await self.session.execute(select(func.count(col)).select_from(table))
+            ).scalar_one()
+            summary[key] = count
+        summary["bookmark_filename"] = None
+        if project.bookmarkfile is not None:
+            row = (
+                await self.session.execute(
+                    select(tables.source.c.name).where(tables.source.c.id == project.bookmarkfile)
+                )
+            ).first()
+            if row is not None:
+                summary["bookmark_filename"] = row[0]
+        return summary
+
+    async def get_bookmarks(self) -> dict:
+        """Text + audio/video bookmarks from the project row."""
+        row = (
+            await self.session.execute(
+                select(
+                    tables.project.c.bookmarkfile,
+                    tables.project.c.bookmarkpos,
+                    tables.project.c.avbookmarkfile,
+                    tables.project.c.avbookmarkmsec,
+                    tables.project.c.avbookmarktextpos,
+                )
+            )
+        ).first()
+        if row is None:
+            return {}
+        return {
+            "bookmark_file_id": row[0],
+            "bookmark_pos": row[1],
+            "av_bookmark_file_id": row[2],
+            "av_bookmark_msec": row[3],
+            "av_bookmark_textpos": row[4],
+        }
+
+    async def set_bookmark(self, *, file_id: int | None, pos: int | None) -> dict:
+        """Set the text bookmark (legacy ``bookmarkfile``/``bookmarkpos``)."""
+        values = {}
+        if file_id is not None:
+            values["bookmarkfile"] = file_id
+        if pos is not None:
+            values["bookmarkpos"] = pos
+        if values:
+            await self.session.execute(update(tables.project).values(**values))
+            await self.session.commit()
+        return await self.get_bookmarks()
+
+    async def set_av_bookmark(
+        self, *, file_id: int | None, msec: int | None, textpos: int | None
+    ) -> dict:
+        """Set the audio/video bookmark (upstream v15 columns)."""
+        values = {}
+        if file_id is not None:
+            values["avbookmarkfile"] = file_id
+        if msec is not None:
+            values["avbookmarkmsec"] = msec
+        if textpos is not None:
+            values["avbookmarktextpos"] = textpos
+        if values:
+            await self.session.execute(update(tables.project).values(**values))
+            await self.session.commit()
+        return await self.get_bookmarks()
+
+    async def get_casenames(self) -> list[dict]:
+        rows = await self.session.execute(
+            select(
+                tables.cases.c.caseid,
+                tables.cases.c.name,
+                func.ifnull(tables.cases.c.memo, ""),
+                tables.cases.c.date,
+            ).order_by(func.lower(tables.cases.c.name))
+        )
+        return [
+            {"id": r[0], "name": r[1], "memo": r[2], "date": r[3]}
+            for r in rows
+        ]
+
+    async def get_journal_texts(self, journal_ids: list[int] | None = None) -> list[dict]:
+        stmt = select(
+            tables.journal.c.name,
+            tables.journal.c.jid,
+            tables.journal.c.jentry,
+            tables.journal.c.owner,
+            tables.journal.c.date,
+        )
+        if journal_ids is not None:
+            stmt = stmt.where(tables.journal.c.jid.in_(journal_ids))
+        else:
+            stmt = stmt.order_by(tables.journal.c.date.desc())
+        rows = await self.session.execute(stmt)
+        return [
+            {"name": r[0], "jid": r[1], "jentry": r[2], "owner": r[3], "date": r[4]}
+            for r in rows
+        ]
+
+    async def update_coder_names(self, current_coder: str) -> None:
+        """Refresh the ``coder_names`` table from all owner columns."""
+        union_sql = "\nUNION ".join(
+            f"SELECT owner AS name FROM {t} WHERE owner IS NOT NULL"
+            for t in tables.OWNER_TABLES
+        )
+        await self.session.execute(
+            text(f"INSERT OR IGNORE INTO coder_names (name) {union_sql}")
+        )
+        await self.session.execute(
+            text(
+                "INSERT INTO coder_names (name, visibility) VALUES (:name, 1) "
+                "ON CONFLICT(name) DO UPDATE SET visibility = 1 "
+                "WHERE coder_names.visibility <> 1"
+            ),
+            {"name": current_coder},
+        )
+        last_coder = await self.get_last_coder()
+        if last_coder:
+            await self.session.execute(
+                text("INSERT OR IGNORE INTO coder_names (name) VALUES (:name)"),
+                {"name": last_coder},
+            )
+        await self.session.execute(
+            text("INSERT OR IGNORE INTO coder_names (name) VALUES (:name)"),
+            {"name": tables.SYSTEM_CODER_NAME},
+        )
+        await self.session.commit()
+
+
+class SourceRepository:
+    """CRUD for the ``source`` table."""
+
+    def __init__(self, session: AsyncSession):
+        self.session = session
+
+    async def list_sources(self) -> list[Source]:
+        rows = await self.session.execute(select(tables.source))
+        return [Source.model_validate(r._mapping) for r in rows]
+
+    async def get_source(self, source_id: int) -> Source | None:
+        row = (
+            await self.session.execute(
+                select(tables.source).where(tables.source.c.id == source_id)
+            )
+        ).first()
+        return Source.model_validate(row._mapping) if row else None
+
+    async def add_source(
+        self,
+        *,
+        name: str,
+        mediapath: str | None = None,
+        fulltext: str | None = None,
+        memo: str = "",
+        owner: str = "",
+        av_text_id: int | None = None,
+        risid: int | None = None,
+    ) -> Source:
+        values = {
+            "name": name,
+            "fulltext": fulltext,
+            "mediapath": mediapath,
+            "memo": memo,
+            "owner": owner,
+            "date": _now(),
+            "av_text_id": av_text_id,
+            "risid": risid,
+        }
+        result = await self.session.execute(
+            insert(tables.source).values(**values)
+        )
+        new_id = _inserted_pk(result)
+        await self.session.commit()
+        source = await self.get_source(new_id)
+        if source is None:  # pragma: no cover - defensive
+            raise RuntimeError("source row vanished after insert")
+        return source
+
+    async def update_source(self, source_id: int, **fields) -> Source | None:
+        allowed = {
+            "name",
+            "fulltext",
+            "mediapath",
+            "memo",
+            "owner",
+            "date",
+            "av_text_id",
+            "risid",
+        }
+        values = {k: v for k, v in fields.items() if k in allowed}
+        if values:
+            await self.session.execute(
+                update(tables.source).where(tables.source.c.id == source_id).values(**values)
+            )
+            await self.session.commit()
+        return await self.get_source(source_id)
+
+    async def delete_source(self, source_id: int) -> None:
+        """Delete a source and all its codings/annotations/case links."""
+        for tbl, fk in (
+            (tables.code_text, tables.code_text.c.fid),
+            (tables.code_image, tables.code_image.c.id),
+            (tables.code_av, tables.code_av.c.id),
+            (tables.annotation, tables.annotation.c.fid),
+            (tables.case_text, tables.case_text.c.fid),
+            (tables.attribute, tables.attribute.c.id),
+        ):
+            await self.session.execute(delete(tbl).where(fk == source_id))
+        await self.session.execute(
+            delete(tables.source).where(tables.source.c.id == source_id)
+        )
+        await self.session.commit()
+
+
+class CodeRepository:
+    """CRUD for codes, categories, and the codebook tree."""
+
+    def __init__(self, session: AsyncSession):
+        self.session = session
+
+    async def list_categories(self) -> list[Category]:
+        rows = await self.session.execute(
+            select(tables.code_cat).order_by(func.lower(tables.code_cat.c.name))
+        )
+        return [Category.model_validate(r._mapping) for r in rows]
+
+    async def list_codes(self) -> list[Code]:
+        rows = await self.session.execute(
+            select(tables.code_name).order_by(func.lower(tables.code_name.c.name))
+        )
+        return [Code.model_validate(r._mapping) for r in rows]
+
+    async def add_code(
+        self,
+        *,
+        name: str,
+        owner: str,
+        catid: int | None = None,
+        color: str | None = None,
+        memo: str = "",
+        supercid: int | None = None,
+    ) -> Code | None:
+        if color is None:
+            color = random_code_color()
+        result = await self.session.execute(
+            insert(tables.code_name).values(
+                name=name, memo=memo, owner=owner, date=_now(), catid=catid, color=color,
+                supercid=supercid,
+            )
+        )
+        await self.session.commit()
+        row = (
+            await self.session.execute(
+                select(tables.code_name).where(
+                    tables.code_name.c.cid == _inserted_pk(result)
+                )
+            )
+        ).first()
+        return Code.model_validate(row._mapping) if row else None
+
+    async def add_category(
+        self,
+        *,
+        name: str,
+        owner: str,
+        supercatid: int | None = None,
+        memo: str = "",
+    ) -> Category | None:
+        result = await self.session.execute(
+            insert(tables.code_cat).values(
+                name=name, memo=memo, owner=owner, date=_now(), supercatid=supercatid
+            )
+        )
+        await self.session.commit()
+        row = (
+            await self.session.execute(
+                select(tables.code_cat).where(
+                    tables.code_cat.c.catid == _inserted_pk(result)
+                )
+            )
+        ).first()
+        return Category.model_validate(row._mapping) if row else None
+
+    async def rename_code(self, cid: int, name: str) -> Code | None:
+        await self.session.execute(
+            update(tables.code_name).where(tables.code_name.c.cid == cid).values(name=name)
+        )
+        await self.session.commit()
+        return await self.get_code(cid)
+
+    async def set_supercid(self, cid: int, supercid: int | None) -> Code | None:
+        """Nest ``cid`` under code ``supercid`` (sub-codes, upstream v16).
+
+        Raises ``ValueError`` when nesting would create a cycle (a code
+        cannot be its own ancestor).
+        """
+        if supercid is not None:
+            if supercid == cid:
+                raise ValueError("a code cannot be its own parent")
+            # Walk up the parent chain from supercid; if we reach cid, cycle.
+            seen: set[int] = set()
+            current: int | None = supercid
+            while current is not None and current not in seen:
+                if current == cid:
+                    raise ValueError("cannot nest a code under its own sub-code")
+                seen.add(current)
+                parent_row = (
+                    await self.session.execute(
+                        select(tables.code_name.c.supercid).where(
+                            tables.code_name.c.cid == current
+                        )
+                    )
+                ).first()
+                current = int(parent_row[0]) if parent_row is not None and parent_row[0] is not None else None
+        await self.session.execute(
+            update(tables.code_name).where(tables.code_name.c.cid == cid).values(supercid=supercid)
+        )
+        await self.session.commit()
+        return await self.get_code(cid)
+
+    async def get_code(self, cid: int) -> Code | None:
+        row = (
+            await self.session.execute(
+                select(tables.code_name).where(tables.code_name.c.cid == cid)
+            )
+        ).first()
+        return Code.model_validate(row._mapping) if row else None
+
+    async def delete_code(self, cid: int) -> None:
+        """Delete a code and all its codings (legacy order)."""
+        for tbl, col in (
+            (tables.code_name, tables.code_name.c.cid),
+            (tables.code_text, tables.code_text.c.cid),
+            (tables.code_av, tables.code_av.c.cid),
+            (tables.code_image, tables.code_image.c.cid),
+        ):
+            await self.session.execute(delete(tbl).where(col == cid))
+        # Sub-codes of the deleted code are orphaned (reparented to null).
+        await self.session.execute(
+            update(tables.code_name)
+            .where(tables.code_name.c.supercid == cid)
+            .values(supercid=None)
+        )
+        await self.session.commit()
+
+    async def delete_category(self, catid: int) -> None:
+        """Delete a category; reassign orphaned codes and children to null."""
+        await self.session.execute(
+            update(tables.code_name).where(tables.code_name.c.catid == catid).values(catid=None)
+        )
+        await self.session.execute(
+            update(tables.code_cat).where(tables.code_cat.c.catid == catid).values(supercatid=None)
+        )
+        await self.session.execute(
+            delete(tables.code_cat).where(tables.code_cat.c.catid == catid)
+        )
+        await self.session.execute(
+            text(
+                "UPDATE code_cat SET supercatid = NULL "
+                "WHERE supercatid IS NOT NULL AND supercatid NOT IN (SELECT catid FROM code_cat)"
+            )
+        )
+        await self.session.commit()
+
+    async def merge_codes(self, old_cid: int, new_cid: int) -> None:
+        """Merge code ``old_cid`` into ``new_cid`` (legacy semantics).
+
+        ``code_text`` has a unique(cid,fid,pos0,pos1,owner) constraint: if the
+        merged segment would collide with an existing one under ``new_cid``,
+        the source row is DELETED (matching legacy ``merge_codes``). The
+        ``code_av``/``code_image`` tables have no unique constraint, so their
+        rows are reassigned unconditionally.
+        """
+        rows = (
+            await self.session.execute(
+                select(tables.code_text).where(tables.code_text.c.cid == old_cid)
+            )
+        ).all()
+        for row in rows:
+            dup = (
+                await self.session.execute(
+                    select(tables.code_text.c.ctid).where(
+                        tables.code_text.c.cid == new_cid,
+                        tables.code_text.c.fid == row.fid,
+                        tables.code_text.c.pos0 == row.pos0,
+                        tables.code_text.c.pos1 == row.pos1,
+                        tables.code_text.c.owner == row.owner,
+                    )
+                )
+            ).first()
+            if dup is not None:
+                await self.session.execute(
+                    delete(tables.code_text).where(tables.code_text.c.ctid == row.ctid)
+                )
+            else:
+                await self.session.execute(
+                    update(tables.code_text)
+                    .where(tables.code_text.c.ctid == row.ctid)
+                    .values(cid=new_cid)
+                )
+        for tbl, col in (
+            (tables.code_av, tables.code_av.c.cid),
+            (tables.code_image, tables.code_image.c.cid),
+        ):
+            await self.session.execute(
+                update(tbl).where(col == old_cid).values(**{col.name: new_cid})
+            )
+        # Sub-codes of the merged-away code move under the target code.
+        await self.session.execute(
+            update(tables.code_name)
+            .where(tables.code_name.c.supercid == old_cid)
+            .values(supercid=new_cid)
+        )
+        await self.session.execute(
+            delete(tables.code_name).where(tables.code_name.c.cid == old_cid)
+        )
+        await self.session.commit()
+
+    async def merge_category(self, catid: int, target_catid: int) -> None:
+        """Merge category ``catid`` into ``target_catid``."""
+        await self.session.execute(
+            update(tables.code_name)
+            .where(tables.code_name.c.catid == catid)
+            .values(catid=target_catid)
+        )
+        await self.session.execute(
+            delete(tables.code_cat).where(tables.code_cat.c.catid == catid)
+        )
+        await self.session.execute(
+            update(tables.code_cat)
+            .where(tables.code_cat.c.supercatid == catid)
+            .values(supercatid=target_catid)
+        )
+        await self.session.execute(
+            text(
+                "UPDATE code_cat SET supercatid = NULL "
+                "WHERE supercatid IS NOT NULL AND supercatid NOT IN (SELECT catid FROM code_cat)"
+            )
+        )
+        await self.session.commit()
+
+
+class CodingRepository:
+    """CRUD for text/image/AV coding segments."""
+
+    def __init__(self, session: AsyncSession):
+        self.session = session
+
+    async def add_text_coding(
+        self,
+        *,
+        cid: int,
+        fid: int,
+        seltext: str,
+        pos0: int,
+        pos1: int,
+        owner: str,
+        memo: str = "",
+        avid: int | None = None,
+        important: int = 0,
+    ) -> Coding:
+        result = await self.session.execute(
+            insert(tables.code_text).values(
+                cid=cid,
+                fid=fid,
+                seltext=seltext,
+                pos0=pos0,
+                pos1=pos1,
+                owner=owner,
+                date=_now(),
+                memo=memo,
+                avid=avid,
+                important=important,
+            )
+        )
+        await self.session.commit()
+        row = (
+            await self.session.execute(
+                select(tables.code_text).where(
+                    tables.code_text.c.ctid == _inserted_pk(result)
+                )
+            )
+        ).first()
+        assert row is not None
+        return Coding.model_validate(row._mapping)
+
+    async def list_text_codings_for_file(self, fid: int) -> list[Coding]:
+        """Text codings of one file, excluding hidden coders' rows (view)."""
+        rows = await self.session.execute(
+            text(
+                "SELECT * FROM code_text_visible WHERE fid = :fid ORDER BY pos0"
+            ),
+            {"fid": fid},
+        )
+        return [Coding.model_validate(_coding_row(r._mapping)) for r in rows]
+
+    async def list_text_codings_for_code(self, cid: int) -> list[Coding]:
+        """Text codings of one code, excluding hidden coders' rows (view)."""
+        rows = await self.session.execute(
+            text(
+                "SELECT * FROM code_text_visible WHERE cid = :cid ORDER BY pos0"
+            ),
+            {"cid": cid},
+        )
+        return [Coding.model_validate(_coding_row(r._mapping)) for r in rows]
+
+    async def update_text_coding(self, ctid: int, **fields) -> Coding | None:
+        allowed = {"seltext", "pos0", "pos1", "memo", "important", "avid", "cid"}
+        values = {k: v for k, v in fields.items() if k in allowed}
+        if values:
+            await self.session.execute(
+                update(tables.code_text)
+                .where(tables.code_text.c.ctid == ctid)
+                .values(**values)
+            )
+            await self.session.commit()
+        row = (
+            await self.session.execute(
+                select(tables.code_text).where(tables.code_text.c.ctid == ctid)
+            )
+        ).first()
+        return Coding.model_validate(row._mapping) if row else None
+
+    async def delete_text_coding(self, ctid: int) -> None:
+        await self.session.execute(
+            delete(tables.code_text).where(tables.code_text.c.ctid == ctid)
+        )
+        await self.session.commit()
+
+    async def add_image_coding(
+        self,
+        *,
+        id: int,
+        x1: int,
+        y1: int,
+        width: int,
+        height: int,
+        cid: int,
+        owner: str,
+        memo: str = "",
+        important: int = 0,
+        pdf_page: int | None = None,
+    ) -> ImageCoding:
+        result = await self.session.execute(
+            insert(tables.code_image).values(
+                id=id,
+                x1=x1,
+                y1=y1,
+                width=width,
+                height=height,
+                cid=cid,
+                memo=memo,
+                date=_now(),
+                owner=owner,
+                important=important,
+                pdf_page=pdf_page,
+            )
+        )
+        await self.session.commit()
+        row = (
+            await self.session.execute(
+                select(tables.code_image).where(
+                    tables.code_image.c.imid == _inserted_pk(result)
+                )
+            )
+        ).first()
+        assert row is not None
+        return ImageCoding.model_validate(row._mapping)
+
+    async def list_image_codings_for_file(self, source_id: int) -> list[ImageCoding]:
+        rows = await self.session.execute(
+            select(tables.code_image)
+            .where(tables.code_image.c.id == source_id)
+            .order_by(tables.code_image.c.imid)
+        )
+        return [ImageCoding.model_validate(_coding_row(r._mapping)) for r in rows]
+
+    async def update_image_coding(self, imid: int, **fields) -> ImageCoding | None:
+        """Update a coded image rectangle (position/size/memo/important/cid).
+
+        Port of the legacy ``move_resize_rectangle`` behaviour.
+        """
+        allowed = {"x1", "y1", "width", "height", "cid", "memo", "important", "pdf_page"}
+        values = {k: v for k, v in fields.items() if k in allowed and v is not None}
+        if values:
+            await self.session.execute(
+                update(tables.code_image)
+                .where(tables.code_image.c.imid == imid)
+                .values(**values)
+            )
+            await self.session.commit()
+        row = (
+            await self.session.execute(
+                select(tables.code_image).where(tables.code_image.c.imid == imid)
+            )
+        ).first()
+        return ImageCoding.model_validate(row._mapping) if row else None
+
+    async def delete_image_coding(self, imid: int) -> None:
+        await self.session.execute(
+            delete(tables.code_image).where(tables.code_image.c.imid == imid)
+        )
+        await self.session.commit()
+
+    async def add_av_coding(
+        self,
+        *,
+        id: int,
+        pos0: int,
+        pos1: int,
+        cid: int,
+        owner: str,
+        memo: str = "",
+        important: int = 0,
+    ) -> AVCoding:
+        result = await self.session.execute(
+            insert(tables.code_av).values(
+                id=id,
+                pos0=pos0,
+                pos1=pos1,
+                cid=cid,
+                memo=memo,
+                date=_now(),
+                owner=owner,
+                important=important,
+            )
+        )
+        await self.session.commit()
+        row = (
+            await self.session.execute(
+                select(tables.code_av).where(
+                    tables.code_av.c.avid == _inserted_pk(result)
+                )
+            )
+        ).first()
+        assert row is not None
+        return AVCoding.model_validate(row._mapping)
+
+    async def list_av_codings_for_file(self, source_id: int) -> list[AVCoding]:
+        rows = await self.session.execute(
+            select(tables.code_av)
+            .where(tables.code_av.c.id == source_id)
+            .order_by(tables.code_av.c.pos0)
+        )
+        return [AVCoding.model_validate(_coding_row(r._mapping)) for r in rows]
+
+    async def delete_av_coding(self, avid: int) -> None:
+        await self.session.execute(
+            delete(tables.code_av).where(tables.code_av.c.avid == avid)
+        )
+        await self.session.commit()
+
+
+class CaseRepository:
+    """CRUD for cases and case-text span links."""
+
+    def __init__(self, session: AsyncSession):
+        self.session = session
+
+    async def list_cases(self) -> list[Case]:
+        rows = await self.session.execute(
+            select(tables.cases).order_by(func.lower(tables.cases.c.name))
+        )
+        return [Case.model_validate(r._mapping) for r in rows]
+
+    async def get_case(self, caseid: int) -> Case | None:
+        row = (
+            await self.session.execute(
+                select(tables.cases).where(tables.cases.c.caseid == caseid)
+            )
+        ).first()
+        return Case.model_validate(row._mapping) if row else None
+
+    async def add_case(self, *, name: str, owner: str, memo: str = "") -> Case | None:
+        result = await self.session.execute(
+            insert(tables.cases).values(
+                name=name, memo=memo, owner=owner, date=_now()
+            )
+        )
+        await self.session.commit()
+        row = (
+            await self.session.execute(
+                select(tables.cases).where(
+                    tables.cases.c.caseid == _inserted_pk(result)
+                )
+            )
+        ).first()
+        return Case.model_validate(row._mapping) if row else None
+
+    async def update_case(self, caseid: int, **fields) -> Case | None:
+        allowed = {"name", "memo", "owner", "date"}
+        values = {k: v for k, v in fields.items() if k in allowed}
+        if values:
+            await self.session.execute(
+                update(tables.cases)
+                .where(tables.cases.c.caseid == caseid)
+                .values(**values)
+            )
+            await self.session.commit()
+        return await self.get_case(caseid)
+
+    async def delete_case(self, caseid: int) -> None:
+        """Delete a case and its case_text links."""
+        await self.session.execute(
+            delete(tables.case_text).where(tables.case_text.c.caseid == caseid)
+        )
+        await self.session.execute(
+            delete(tables.cases).where(tables.cases.c.caseid == caseid)
+        )
+        await self.session.commit()
+
+    async def link_file(self, *, caseid: int, fid: int, owner: str, memo: str = "") -> CaseText:
+        result = await self.session.execute(
+            insert(tables.case_text).values(
+                caseid=caseid,
+                fid=fid,
+                pos0=0,
+                pos1=0,
+                owner=owner,
+                date=_now(),
+                memo=memo,
+            )
+        )
+        await self.session.commit()
+        row = (
+            await self.session.execute(
+                select(tables.case_text).where(
+                    tables.case_text.c.id == _inserted_pk(result)
+                )
+            )
+        ).first()
+        assert row is not None
+        return CaseText.model_validate(row._mapping)
+
+    async def link_text_span(
+        self, *, caseid: int, fid: int, pos0: int, pos1: int, owner: str, memo: str = ""
+    ) -> CaseText:
+        result = await self.session.execute(
+            insert(tables.case_text).values(
+                caseid=caseid,
+                fid=fid,
+                pos0=pos0,
+                pos1=pos1,
+                owner=owner,
+                date=_now(),
+                memo=memo,
+            )
+        )
+        await self.session.commit()
+        row = (
+            await self.session.execute(
+                select(tables.case_text).where(
+                    tables.case_text.c.id == _inserted_pk(result)
+                )
+            )
+        ).first()
+        assert row is not None
+        return CaseText.model_validate(row._mapping)
+
+    async def unlink_file(self, *, caseid: int, fid: int) -> None:
+        await self.session.execute(
+            delete(tables.case_text).where(
+                tables.case_text.c.caseid == caseid, tables.case_text.c.fid == fid
+            )
+        )
+        await self.session.commit()
+
+    async def case_files(self, caseid: int) -> list[dict]:
+        """Return source rows linked to a case (deduplicated by fid)."""
+        rows = await self.session.execute(
+            select(
+                tables.source.c.id,
+                tables.source.c.name,
+                tables.source.c.mediapath,
+                tables.source.c.memo,
+                tables.source.c.date,
+            )
+            .select_from(tables.case_text.join(tables.source, tables.source.c.id == tables.case_text.c.fid))
+            .where(tables.case_text.c.caseid == caseid)
+            .distinct()
+            .order_by(func.lower(tables.source.c.name))
+        )
+        return [
+            {"id": r[0], "name": r[1], "mediapath": r[2], "memo": r[3], "date": r[4]}
+            for r in rows
+        ]
+
+    async def case_text_spans(self, caseid: int) -> list[CaseText]:
+        rows = await self.session.execute(
+            select(tables.case_text)
+            .where(tables.case_text.c.caseid == caseid)
+            .order_by(tables.case_text.c.fid, tables.case_text.c.pos0)
+        )
+        return [CaseText.model_validate(r._mapping) for r in rows]
+
+
+class AttributeRepository:
+    """CRUD for attribute types and values."""
+
+    def __init__(self, session: AsyncSession):
+        self.session = session
+
+    async def list_types(self) -> list[AttributeType]:
+        rows = await self.session.execute(
+            select(tables.attribute_type).order_by(func.lower(tables.attribute_type.c.name))
+        )
+        return [AttributeType.model_validate(r._mapping) for r in rows]
+
+    async def add_type(self, *, name: str, owner: str, case_or_file: str = "case",
+                       value_type: str = "text", memo: str = "") -> AttributeType:
+        await self.session.execute(
+            insert(tables.attribute_type).values(
+                name=name,
+                date=_now(),
+                owner=owner,
+                memo=memo,
+                caseOrFile=case_or_file,
+                valuetype=value_type,
+            )
+        )
+        await self.session.commit()
+        return AttributeType(
+            name=name, date=_now(), owner=owner, memo=memo,
+            case_or_file=case_or_file, value_type=value_type,
+        )
+
+    async def delete_type(self, name: str) -> None:
+        """Delete an attribute type and all its values.
+
+        ``attribute.name`` holds the attribute type name; ``attribute.attr_type``
+        holds the scope ("case"/"file").
+        """
+        await self.session.execute(
+            delete(tables.attribute).where(tables.attribute.c.name == name)
+        )
+        await self.session.execute(
+            delete(tables.attribute_type).where(tables.attribute_type.c.name == name)
+        )
+        await self.session.commit()
+
+    async def list_values(self, *, entity_id: int | None = None,
+                          attr_type: str | None = None) -> list[Attribute]:
+        stmt = select(tables.attribute)
+        if entity_id is not None:
+            stmt = stmt.where(tables.attribute.c.id == entity_id)
+        if attr_type is not None:
+            stmt = stmt.where(tables.attribute.c.attr_type == attr_type)
+        rows = await self.session.execute(stmt.order_by(tables.attribute.c.name))
+        return [Attribute.model_validate(r._mapping) for r in rows]
+
+    async def set_value(self, *, name: str, attr_type: str, value: str,
+                        entity_id: int, owner: str) -> Attribute:
+        """Insert or replace an attribute value for an entity."""
+        await self.session.execute(
+            delete(tables.attribute).where(
+                tables.attribute.c.name == name,
+                tables.attribute.c.attr_type == attr_type,
+                tables.attribute.c.id == entity_id,
+            )
+        )
+        result = await self.session.execute(
+            insert(tables.attribute).values(
+                name=name,
+                attr_type=attr_type,
+                value=value,
+                id=entity_id,
+                date=_now(),
+                owner=owner,
+            )
+        )
+        await self.session.commit()
+        row = (
+            await self.session.execute(
+                select(tables.attribute).where(
+                    tables.attribute.c.attrid == _inserted_pk(result)
+                )
+            )
+        ).first()
+        assert row is not None
+        return Attribute.model_validate(row._mapping)
+
+
+class JournalRepository:
+    """CRUD for journal entries."""
+
+    def __init__(self, session: AsyncSession):
+        self.session = session
+
+    async def list_journals(self) -> list[Journal]:
+        rows = await self.session.execute(
+            select(tables.journal).order_by(tables.journal.c.date.desc())
+        )
+        return [Journal.model_validate(r._mapping) for r in rows]
+
+    async def add_journal(self, *, name: str, jentry: str, owner: str) -> Journal:
+        result = await self.session.execute(
+            insert(tables.journal).values(
+                name=name, jentry=jentry, date=_now(), owner=owner
+            )
+        )
+        await self.session.commit()
+        row = (
+            await self.session.execute(
+                select(tables.journal).where(
+                    tables.journal.c.jid == _inserted_pk(result)
+                )
+            )
+        ).first()
+        assert row is not None
+        return Journal.model_validate(row._mapping)
+
+    async def update_journal(self, jid: int, **fields) -> Journal | None:
+        allowed = {"name", "jentry", "owner", "date"}
+        values = {k: v for k, v in fields.items() if k in allowed}
+        if values:
+            await self.session.execute(
+                update(tables.journal).where(tables.journal.c.jid == jid).values(**values)
+            )
+            await self.session.commit()
+        row = (
+            await self.session.execute(
+                select(tables.journal).where(tables.journal.c.jid == jid)
+            )
+        ).first()
+        return Journal.model_validate(row._mapping) if row else None
+
+    async def delete_journal(self, jid: int) -> None:
+        await self.session.execute(
+            delete(tables.journal).where(tables.journal.c.jid == jid)
+        )
+        await self.session.commit()
+
+
+class AnnotationRepository:
+    """CRUD for text annotations."""
+
+    def __init__(self, session: AsyncSession):
+        self.session = session
+
+    async def list_for_file(self, fid: int) -> list[Annotation]:
+        rows = await self.session.execute(
+            select(tables.annotation)
+            .where(tables.annotation.c.fid == fid)
+            .order_by(tables.annotation.c.pos0)
+        )
+        return [Annotation.model_validate(r._mapping) for r in rows]
+
+    async def add_annotation(self, *, fid: int, pos0: int, pos1: int,
+                             memo: str, owner: str) -> Annotation:
+        result = await self.session.execute(
+            insert(tables.annotation).values(
+                fid=fid, pos0=pos0, pos1=pos1, memo=memo, owner=owner, date=_now()
+            )
+        )
+        await self.session.commit()
+        row = (
+            await self.session.execute(
+                select(tables.annotation).where(
+                    tables.annotation.c.anid == _inserted_pk(result)
+                )
+            )
+        ).first()
+        assert row is not None
+        return Annotation.model_validate(row._mapping)
+
+    async def update_annotation(self, anid: int, *, memo: str | None = None,
+                                pos0: int | None = None, pos1: int | None = None) -> Annotation | None:
+        values: dict = {}
+        if memo is not None:
+            values["memo"] = memo
+        if pos0 is not None:
+            values["pos0"] = pos0
+        if pos1 is not None:
+            values["pos1"] = pos1
+        if values:
+            await self.session.execute(
+                update(tables.annotation)
+                .where(tables.annotation.c.anid == anid)
+                .values(**values)
+            )
+            await self.session.commit()
+        row = (
+            await self.session.execute(
+                select(tables.annotation).where(tables.annotation.c.anid == anid)
+            )
+        ).first()
+        return Annotation.model_validate(row._mapping) if row else None
+
+    async def delete_annotation(self, anid: int) -> None:
+        await self.session.execute(
+            delete(tables.annotation).where(tables.annotation.c.anid == anid)
+        )
+        await self.session.commit()

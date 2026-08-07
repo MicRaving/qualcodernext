@@ -1,0 +1,89 @@
+@import "tailwindcss";
+
+/* ------------------------------------------------------------------ */
+/* QualCoder v4 design tokens                                         */
+/* Canonical source: ../../tokens.json                                */
+/* CSS custom properties flip with the `.dark` class on <html>.       */
+/* Tailwind utilities are generated from these via `@theme inline`.   */
+/* ------------------------------------------------------------------ */
+
+:root {
+  --qc-bg: #ffffff;
+  --qc-surface: #f5f5f7;
+  --qc-surface-higher: #ebebed;
+  --qc-border: #d9d9dc;
+  --qc-text-primary: #1d1d23;
+  --qc-text-secondary: #6b6b76;
+  --qc-accent: #d97706;
+  --qc-accent-hover: #b45309;
+  --qc-danger: #dc2626;
+  --qc-success: #16a34a;
+  --qc-warning: #ca8a04;
+  --qc-info: #2563eb;
+}
+
+.dark {
+  --qc-bg: #1e1e2e;
+  --qc-surface: #282840;
+  --qc-surface-higher: #313150;
+  --qc-border: #3e3e5c;
+  --qc-text-primary: #e8e8ed;
+  --qc-text-secondary: #9a9ab0;
+  --qc-accent: #f59e0b;
+  --qc-accent-hover: #d97706;
+  --qc-danger: #ef4444;
+  --qc-success: #22c55e;
+  --qc-warning: #eab308;
+  --qc-info: #3b82f6;
+}
+
+@theme inline {
+  --color-bg: var(--qc-bg);
+  --color-surface: var(--qc-surface);
+  --color-surface-higher: var(--qc-surface-higher);
+  --color-border: var(--qc-border);
+  --color-text-primary: var(--qc-text-primary);
+  --color-text-secondary: var(--qc-text-secondary);
+  --color-accent: var(--qc-accent);
+  --color-accent-hover: var(--qc-accent-hover);
+  --color-danger: var(--qc-danger);
+  --color-success: var(--qc-success);
+  --color-warning: var(--qc-warning);
+  --color-info: var(--qc-info);
+
+  /* NOTE: do NOT define --spacing-* / --container-* here — Tailwind v4
+     derives the named max-w-* and max-h-* utilities from those namespaces
+     and custom values silently break layout (max-w-lg collapsed to 16px).
+     The 8px grid (tokens.json spacing) maps to Tailwind's numeric scale. */
+
+  --radius-sm: 3px;
+  --radius-md: 4px;
+  --radius-lg: 8px;
+
+  --font-sans:
+    "Inter", system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  font-family: var(--font-sans);
+  font-size: 12px;
+  background-color: var(--qc-bg);
+  color: var(--qc-text-primary);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Visible focus ring for keyboard navigation (WCAG) */
+:focus-visible {
+  outline: 2px solid var(--qc-accent);
+  outline-offset: 1px;
+}
+
+::selection {
+  background-color: color-mix(in srgb, var(--qc-accent) 30%, transparent);
+}

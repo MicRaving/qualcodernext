@@ -1,0 +1,43 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+build/
+
+# Frontend
+node_modules/
+dist/
+*.tsbuildinfo
+src-tauri/gen/
+
+# Generated artifacts
+src/lib/_locale_report.json
+
+# Project databases (user data)
+*.qda
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# Playwright E2E
+test-results/
+playwright-report/
+tests-e2e/.servers.json
+tests-e2e/*.log
+
+
+# Rust / Tauri (build cache — multi-GB, fully regenerable)
+**/src-tauri/target/
+
+
+
+# Tauri updater signing (SECRET — never commit)
+updater.key
+
