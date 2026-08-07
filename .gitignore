@@ -29,8 +29,8 @@ Thumbs.db
 # Playwright E2E
 test-results/
 playwright-report/
-tests-e2e/.servers.json
-tests-e2e/*.log
+**/tests-e2e/.servers.json
+**/tests-e2e/*.log
 
 
 # Rust / Tauri (build cache — multi-GB, fully regenerable)
