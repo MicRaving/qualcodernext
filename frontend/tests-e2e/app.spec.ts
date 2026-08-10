@@ -54,8 +54,8 @@ test("app shell (no welcome screen) and theme toggle", async ({ page }) => {
   await expect(page.getByRole("button", { name: "Files" })).toBeDisabled();
   await expect(page.locator("h1")).toHaveCount(0);
 
-  // Backend health pill: the app calls GET /api/v1/health on mount.
-  await expect(page.getByRole("status").first()).toHaveText(/Backend ok/);
+  // No backend status indicator in the top bar during startup.
+  await expect(page.getByRole("status")).toHaveCount(0);
 
   // Theme toggle: flips the `dark` class on <html> and switches its label.
   const toggle = page.getByRole("button", { name: /Switch to (dark|light) theme/ });

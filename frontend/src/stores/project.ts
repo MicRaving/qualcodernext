@@ -131,6 +131,36 @@ interface ProjectState {
   inspectorLoading: boolean;
   inspectorError: string | null;
 
+  /** Per-view workspace UI state (left bar / center coordination). */
+  casesUi: { selectedId: number | null; query: string; tick: number };
+  setCasesUi: (patch: Partial<{ selectedId: number | null; query: string; tick: number }>) => void;
+  notesUi: {
+    tab: "journal" | "annotations" | "memos";
+    query: string;
+    selectedId: number | null;
+    selectedKind: "code" | "file" | null;
+    tick: number;
+  };
+  setNotesUi: (
+    patch: Partial<{
+      tab: "journal" | "annotations" | "memos";
+      query: string;
+      selectedId: number | null;
+      selectedKind: "code" | "file" | null;
+      tick: number;
+    }>,
+  ) => void;
+  annotationsAll: {
+    anid: number;
+    fid: number;
+    file_name: string;
+    memo: string;
+    pos0: number;
+    pos1: number;
+    date: string;
+    owner: string;
+  }[];
+
   createProject: (path: string) => Promise<boolean>;
   openProject: (path: string) => Promise<boolean>;
   closeProject: () => Promise<void>;
@@ -331,8 +361,20 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     }
   },
 
-  setView: (view) => set({ view }),
+  setView: (view) => {
+    set({ view });
+    // Opening a file in the coder shows its details in the right bar.
+    if (view.kind === "coding" && "sourceId" in view) {
+      void get().selectFile(view.sourceId);
+    }
+  },
   clearError: () => set({ error: null }),
+
+  casesUi: { selectedId: null, query: "", tick: 0 },
+  setCasesUi: (patch) => set((s) => ({ casesUi: { ...s.casesUi, ...patch } })),
+  notesUi: { tab: "journal", query: "", selectedId: null, selectedKind: null, tick: 0 },
+  setNotesUi: (patch) => set((s) => ({ notesUi: { ...s.notesUi, ...patch } })),
+  annotationsAll: [],
 
   clearInspector: () =>
     set({

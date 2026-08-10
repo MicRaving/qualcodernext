@@ -20,56 +20,21 @@ import {
 import { Sidebar } from "@/components/shell/Sidebar";
 import { Inspector } from "@/components/shell/Inspector";
 import { CoderSwitcher } from "@/components/shell/CoderSwitcher";
+import { WorkspaceLayout } from "@/components/shell/WorkspaceLayout";
 import { DashboardView } from "@/features/dashboard/DashboardView";
 import { CodingWorkspace } from "@/features/coding/CodingWorkspace";
 import { FileManager } from "@/features/manage/FileManager";
-import { CasesView } from "@/features/cases/CasesView";
-import { NotesView } from "@/features/notes/NotesView";
+import { CaseDetails, CasesList } from "@/features/cases/CasesView";
+import { NotesEditor, NotesList } from "@/features/notes/NotesView";
 import { AnalyzeView } from "@/features/analyze/AnalyzeView";
 import { GraphsView } from "@/features/graphs/GraphsView";
 import { HistoryView } from "@/features/history/HistoryView";
 import { SettingsView } from "@/features/settings/SettingsView";
 import { AiView } from "@/features/ai/AiView";
-import { api, type HealthStatus } from "@/lib/api";
+import { api } from "@/lib/api";
 import { useToast } from "@/lib/toast";
 import { useI18n } from "@/lib/i18n";
 import { useProjectStore, type WorkspaceView } from "@/stores/project";
-
-function BackendStatus() {
-  const { t } = useI18n();
-  const [health, setHealth] = useState<HealthStatus | null>(null);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    let cancelled = false;
-    api
-      .health()
-      .then((h) => {
-        if (!cancelled) setHealth(h);
-      })
-      .catch((e: unknown) => {
-        if (!cancelled) setError(e instanceof Error ? e.message : "backend unreachable");
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  if (error) {
-    return (
-      <span className="flex items-center gap-1.5 text-warning" role="status">
-        <span className="h-2 w-2 rounded-full bg-warning" aria-hidden />
-        {t("backend.offline")}
-      </span>
-    );
-  }
-  return (
-    <span className="flex items-center gap-1.5 text-text-secondary" role="status">
-      <span className="h-2 w-2 rounded-full bg-success" aria-hidden />
-      {health ? t("backend.ok", { status: health.status }) : t("backend.connecting")}
-    </span>
-  );
-}
 
 function ThemeToggle() {
   const { t } = useI18n();
@@ -167,77 +132,77 @@ export function ProjectShell() {
   const hasBackground = transcribeJobs.length > 0 || importState !== null;
 
   return (
-    <div className="flex h-full flex-col bg-bg text-text-primary">
-      {/* Toolbar */}
-      <header className="flex h-11 shrink-0 items-center gap-0.5 border-b border-border bg-surface px-3">
-        {NAV_BUTTONS.map(({ kind, labelKey, icon: Icon }) => {
-          const label = t(labelKey);
-          return (
-            <button
-              key={kind}
-              type="button"
-              onClick={projectOpen ? () => setView({ kind } as WorkspaceView) : undefined}
-              disabled={!projectOpen}
-              aria-label={label}
-              title={projectOpen ? label : t("shell.navDisabled")}
-              className={`flex items-center gap-1.5 rounded-sm px-2 py-1 ${
-                !projectOpen
-                  ? "cursor-not-allowed text-text-secondary/40"
-                  : `hover:bg-surface-higher ${
-                      view.kind === kind ? "bg-surface-higher text-accent" : "text-text-secondary"
-                    }`
-              }`}
-            >
-              <Icon size={20} aria-hidden />
-              <span className="text-xs font-medium">{label}</span>
-            </button>
-          );
-        })}
-        <div className="h-5 w-px bg-border" aria-hidden />
-        <div className="flex-1" />
-        {projectOpen && <CoderSwitcher />}
-        {projectOpen ? (
-          <>
-            {hasBackground && (
-              <div className="relative">
-                <button
-                  type="button"
-                  onClick={() => setQueueOpen((o) => !o)}
-                  aria-expanded={queueOpen}
-                  className="flex items-center gap-1.5 rounded-sm border border-border bg-bg px-2 py-1 text-xs hover:bg-surface-higher"
-                >
-                  <LoaderCircle size={12} className="animate-spin" aria-hidden />
-                  {activeJobs.length > 0
-                    ? `${t("transcribe.running")} ${avgProgress}%`
-                    : importState !== null
-                      ? `${t("files.importingShort")} ${Math.round((importState.done / importState.total) * 100)}%`
-                      : `${finishedJobs.length} ${t("transcribe.finished")}`}
-                </button>
-                {queueOpen && (
-                  <div className="absolute right-0 top-full z-50 mt-1 w-72 rounded-md border border-border bg-surface py-1 shadow-lg">
-                    <div className="border-b border-border px-2 py-1 text-xs font-medium text-text-secondary">
-                      {t("transcribe.queue")}
-                    </div>
-                    {importState !== null && (
-                      <div className="px-2 py-1.5">
-                        <div className="flex items-center gap-2 text-xs">
-                          <span className="min-w-0 flex-1 truncate text-text-primary">
-                            {t("files.importingShort")}
-                          </span>
-                          <span className="text-text-secondary">
-                            {importState.done}/{importState.total}
-                          </span>
-                        </div>
-                        <div className="mt-1 h-1 w-full overflow-hidden rounded-full bg-border">
-                          <div
-                            className="h-full rounded-full bg-accent transition-all"
-                            style={{
-                              width: `${Math.round((importState.done / importState.total) * 100)}%`,
-                            }}
-                          />
-                        </div>
+    <WorkspaceLayout
+      ribbon={
+        <header className="flex h-11 shrink-0 items-center gap-0.5 border-b border-border bg-surface px-3">
+          {NAV_BUTTONS.map(({ kind, labelKey, icon: Icon }) => {
+            const label = t(labelKey);
+            return (
+              <button
+                key={kind}
+                type="button"
+                onClick={projectOpen ? () => setView({ kind } as WorkspaceView) : undefined}
+                disabled={!projectOpen}
+                aria-label={label}
+                title={projectOpen ? label : t("shell.navDisabled")}
+                className={`flex items-center gap-1.5 rounded-sm px-2 py-1 ${
+                  !projectOpen
+                    ? "cursor-not-allowed text-text-secondary/40"
+                    : `hover:bg-surface-higher ${
+                        view.kind === kind ? "bg-surface-higher text-accent" : "text-text-secondary"
+                      }`
+                }`}
+              >
+                <Icon size={20} aria-hidden />
+                <span className="text-xs font-medium">{label}</span>
+              </button>
+            );
+          })}
+          <div className="h-5 w-px bg-border" aria-hidden />
+          <div className="flex-1" />
+          {projectOpen && <CoderSwitcher />}
+          {projectOpen ? (
+            <>
+              {hasBackground && (
+                <div className="relative">
+                  <button
+                    type="button"
+                    onClick={() => setQueueOpen((o) => !o)}
+                    aria-expanded={queueOpen}
+                    className="flex items-center gap-1.5 rounded-sm border border-border bg-bg px-2 py-1 text-xs hover:bg-surface-higher"
+                  >
+                    <LoaderCircle size={12} className="animate-spin" aria-hidden />
+                    {activeJobs.length > 0
+                      ? `${t("transcribe.running")} ${avgProgress}%`
+                      : importState !== null
+                        ? `${t("files.importingShort")} ${Math.round((importState.done / importState.total) * 100)}%`
+                        : `${finishedJobs.length} ${t("transcribe.finished")}`}
+                  </button>
+                  {queueOpen && (
+                    <div className="absolute right-0 top-full z-50 mt-1 w-72 rounded-md border border-border bg-surface py-1 shadow-lg">
+                      <div className="border-b border-border px-2 py-1 text-xs font-medium text-text-secondary">
+                        {t("transcribe.queue")}
                       </div>
-                    )}
+                      {importState !== null && (
+                        <div className="px-2 py-1.5">
+                          <div className="flex items-center gap-2 text-xs">
+                            <span className="min-w-0 flex-1 truncate text-text-primary">
+                              {t("files.importingShort")}
+                            </span>
+                            <span className="text-text-secondary">
+                              {importState.done}/{importState.total}
+                            </span>
+                          </div>
+                          <div className="mt-1 h-1 w-full overflow-hidden rounded-full bg-border">
+                            <div
+                              className="h-full rounded-full bg-accent transition-all"
+                              style={{
+                                width: `${Math.round((importState.done / importState.total) * 100)}%`,
+                              }}
+                            />
+                          </div>
+                        </div>
+                      )}
                     {transcribeJobs.map((job) => (
                       <div key={job.id} className="px-2 py-1.5">
                         <div className="flex items-center gap-2 text-xs">
@@ -303,50 +268,48 @@ export function ProjectShell() {
             </button>
           </>
         ) : (
-          <>
-            <BackendStatus />
-            <ThemeToggle />
-          </>
+          <ThemeToggle />
         )}
       </header>
-
-      {/* Body: sidebar | workspace | inspector (only with an open project).
-          Cases/journals have their own function bars — hide the sidebar. */}
+      }
+      menuBar={undefined}
+      leftBar={
+        view.kind === "cases" ? (
+          <CasesList />
+        ) : view.kind === "notes" ? (
+          <NotesList />
+        ) : (
+          <Sidebar />
+        )
+      }
+      rightBar={<Inspector />}
+      statusBar={projectOpen ? <StatusBar /> : undefined}
+    >
       {projectOpen ? (
-        <div className="flex min-h-0 flex-1">
-          {view.kind !== "cases" && view.kind !== "notes" && <Sidebar />}
-          <main className="min-w-0 flex-1 overflow-hidden">
-            {view.kind === "coding" ? (
-              <CodingWorkspace sourceId={view.sourceId} />
-            ) : view.kind === "files" ? (
-              <FileManager />
-            ) : view.kind === "cases" ? (
-              <CasesView />
-            ) : view.kind === "notes" ? (
-              <NotesView />
-            ) : view.kind === "analyze" ? (
-              <AnalyzeView />
-            ) : view.kind === "graphs" ? (
-              <GraphsView />
-            ) : view.kind === "history" ? (
-              <HistoryView />
-            ) : view.kind === "ai" ? (
-              <AiView />
-            ) : view.kind === "settings" ? (
-              <SettingsView />
-            ) : (
-              <DashboardView />
-            )}
-          </main>
-          <Inspector />
-        </div>
-      ) : (
-        <main className="min-h-0 flex-1 overflow-hidden">
+        view.kind === "coding" ? (
+          <CodingWorkspace sourceId={view.sourceId} />
+        ) : view.kind === "files" ? (
+          <FileManager />
+        ) : view.kind === "cases" ? (
+          <CaseDetails />
+        ) : view.kind === "notes" ? (
+          <NotesEditor />
+        ) : view.kind === "analyze" ? (
+          <AnalyzeView />
+        ) : view.kind === "graphs" ? (
+          <GraphsView />
+        ) : view.kind === "history" ? (
+          <HistoryView />
+        ) : view.kind === "ai" ? (
+          <AiView />
+        ) : view.kind === "settings" ? (
+          <SettingsView />
+        ) : (
           <DashboardView />
-        </main>
+        )
+      ) : (
+        <DashboardView />
       )}
-
-      {projectOpen && <StatusBar />}
-    </div>
+    </WorkspaceLayout>
   );
 }

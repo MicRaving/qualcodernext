@@ -9,10 +9,24 @@
  * errors); clicking it opens the flyout.
  */
 import { useEffect, useRef, useState } from "react";
-import { Check, ChevronDown, Eye, EyeOff, RefreshCw, User, UserPlus, X } from "lucide-react";
-import { api } from "@/lib/api";
+import {
+  BarChart3,
+  Check,
+  ChevronDown,
+  Eye,
+  EyeOff,
+  LoaderCircle,
+  Pencil,
+  RefreshCw,
+  Trash2,
+  User,
+  UserPlus,
+  X,
+} from "lucide-react";
+import { api, ApiError } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 import { useProjectStore } from "@/stores/project";
+import { useToast } from "@/lib/toast";
 
 const SYNC_POLL_MS = 30_000;
 
@@ -25,8 +39,20 @@ function formatSince(ts: number): string {
   return `${Math.round(delta / 86400)}d`;
 }
 
+interface CoderStats {
+  coder: string;
+  tables: { entity: string; count: number }[];
+  total: number;
+}
+
+function errorMessage(e: unknown): string {
+  if (e instanceof ApiError && typeof e.detail === "string") return e.detail;
+  return e instanceof Error ? e.message : "Operation failed";
+}
+
 export function CoderSwitcher() {
   const { t } = useI18n();
+  const toast = useToast();
   const coderName = useProjectStore((s) => s.coderName);
   const coders = useProjectStore((s) => s.coders);
   const switchCoder = useProjectStore((s) => s.switchCoder);
@@ -41,6 +67,9 @@ export function CoderSwitcher() {
   const [error, setError] = useState<string | null>(null);
   const [syncBusy, setSyncBusy] = useState(false);
   const [visibility, setVisibility] = useState<Record<string, number>>({});
+  const [menu, setMenu] = useState<{ name: string; x: number; y: number } | null>(null);
+  const [stats, setStats] = useState<CoderStats | null>(null);
+  const [statsLoading, setStatsLoading] = useState(false);
   const rootRef = useRef<HTMLDivElement | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
 
@@ -80,12 +109,14 @@ export function CoderSwitcher() {
       if (target && !rootRef.current?.contains(target)) {
         setOpen(false);
         setAdding(false);
+        setMenu(null);
       }
     };
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
         setOpen(false);
         setAdding(false);
+        setMenu(null);
       }
     };
     document.addEventListener("mousedown", onDown);
@@ -99,6 +130,15 @@ export function CoderSwitcher() {
   useEffect(() => {
     if (adding) inputRef.current?.focus();
   }, [adding]);
+
+  useEffect(() => {
+    if (!stats && !statsLoading) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setStats(null);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [stats, statsLoading]);
 
   async function toggleVisibility(name: string) {
     const next = (visibility[name] ?? 1) === 1 ? 0 : 1;
@@ -141,6 +181,70 @@ export function CoderSwitcher() {
     await switchCoder(name);
     setAdding(false);
     setNewName("");
+  }
+
+  async function refreshCoders() {
+    await useProjectStore.getState().loadCoders();
+    try {
+      const res = await api.coderVisibility();
+      setVisibility(res.visibility);
+    } catch {
+      setVisibility({});
+    }
+  }
+
+  async function handleRenameCoder(name: string) {
+    const next = window.prompt(t("coder.renamePrompt", { name }), name);
+    if (!next || next.trim() === name) return;
+    const newName = next.trim();
+    setMenu(null);
+    try {
+      await api.renameCoder(name, newName);
+      toast.success(t("coder.renamed", { name: newName }));
+      await refreshCoders();
+    } catch (e) {
+      toast.error(errorMessage(e));
+    }
+  }
+
+  async function handleDeleteCoder(name: string) {
+    setMenu(null);
+    if (name === coderName) {
+      toast.error(t("coder.deleteCurrent"));
+      return;
+    }
+    try {
+      await api.deleteCoder(name);
+    } catch (e) {
+      if (e instanceof ApiError && e.status === 409 && typeof e.detail === "string") {
+        const target = window.prompt(t("coder.deleteReassignPrompt", { name }));
+        if (!target?.trim()) return;
+        try {
+          await api.deleteCoder(name, target.trim());
+        } catch (err) {
+          toast.error(errorMessage(err));
+          return;
+        }
+      } else {
+        toast.error(errorMessage(e));
+        return;
+      }
+    }
+    toast.success(t("coder.deleted", { name }));
+    await refreshCoders();
+  }
+
+  async function handleCoderStats(name: string) {
+    setMenu(null);
+    setStatsLoading(true);
+    setStats(null);
+    try {
+      setStats(await api.coderStats(name));
+    } catch (e) {
+      toast.error(errorMessage(e));
+    } finally {
+      setStatsLoading(false);
+    }
   }
 
   function closeAll() {
@@ -190,6 +294,11 @@ export function CoderSwitcher() {
               key={c.name}
               role="option"
               aria-selected={c.name === coderName}
+              onContextMenu={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                setMenu({ name: c.name, x: e.clientX, y: e.clientY });
+              }}
               className={`flex w-full items-center gap-2 px-2 py-1.5 text-left text-sm hover:bg-surface-higher ${
                 c.name === coderName ? "text-accent" : ""
               }`}
@@ -343,6 +452,100 @@ export function CoderSwitcher() {
                 </button>
               </div>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* Coder context menu (right-click) */}
+      {menu && (
+        <div
+          role="menu"
+          aria-label={t("coder.contextMenu", { name: menu.name })}
+          className="fixed z-50 min-w-44 rounded-md border border-border bg-surface py-1 shadow-lg"
+          style={{
+            left: Math.min(menu.x, window.innerWidth - 190),
+            top: Math.min(menu.y, window.innerHeight - 130),
+          }}
+        >
+          <button
+            type="button"
+            role="menuitem"
+            onClick={() => void handleRenameCoder(menu.name)}
+            className="flex w-full items-center gap-2 px-2 py-1.5 text-left text-sm hover:bg-surface-higher"
+          >
+            <Pencil size={13} aria-hidden />
+            {t("coder.rename")}
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            onClick={() => void handleDeleteCoder(menu.name)}
+            className="flex w-full items-center gap-2 px-2 py-1.5 text-left text-sm text-danger hover:bg-surface-higher"
+          >
+            <Trash2 size={13} aria-hidden />
+            {t("coder.delete")}
+          </button>
+          <div className="my-1 h-px bg-border" aria-hidden />
+          <button
+            type="button"
+            role="menuitem"
+            onClick={() => void handleCoderStats(menu.name)}
+            className="flex w-full items-center gap-2 px-2 py-1.5 text-left text-sm hover:bg-surface-higher"
+          >
+            <BarChart3 size={13} aria-hidden />
+            {t("coder.statistics")}
+          </button>
+        </div>
+      )}
+
+      {/* Coder statistics modal */}
+      {(stats || statsLoading) && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-bg/70"
+          onMouseDown={(e) => {
+            if (e.target === e.currentTarget) setStats(null);
+          }}
+          role="dialog"
+          aria-modal="true"
+          aria-label={t("coder.statistics")}
+        >
+          <div className="w-80 max-w-[92vw] rounded-lg border border-border bg-surface shadow-xl">
+            <div className="flex items-center justify-between border-b border-border px-4 py-2.5">
+              <h2 className="text-sm font-semibold text-text-primary">
+                {t("coder.statisticsTitle", { name: stats?.coder ?? coderName })}
+              </h2>
+              <button
+                type="button"
+                onClick={() => setStats(null)}
+                aria-label={t("common.close")}
+                className="rounded-sm p-0.5 text-text-secondary hover:bg-surface-higher hover:text-text-primary"
+              >
+                <X size={14} aria-hidden />
+              </button>
+            </div>
+            <div className="max-h-80 overflow-y-auto p-4">
+              {statsLoading ? (
+                <div className="flex items-center justify-center gap-2 py-6 text-text-secondary">
+                  <LoaderCircle size={14} className="animate-spin" aria-hidden />
+                  {t("coder.statsLoading")}
+                </div>
+              ) : (
+                <ul className="space-y-1.5">
+                  {stats?.tables.map((row) => (
+                    <li key={row.entity} className="flex items-center justify-between text-sm">
+                      <span className="text-text-secondary">{row.entity}</span>
+                      <span className="font-medium text-text-primary">{row.count}</span>
+                    </li>
+                  ))}
+                  {stats && (
+                    <li className="mt-2 flex items-center justify-between border-t border-border pt-2 text-sm">
+                      <span className="font-medium text-text-primary">{t("coder.statsTotal")}</span>
+                      <span className="font-bold text-text-primary">{stats.total}</span>
+                    </li>
+                  )}
+                </ul>
+              )}
+            </div>
           </div>
         </div>
       )}

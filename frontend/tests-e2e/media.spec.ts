@@ -292,10 +292,11 @@ test("transcribe audio with whisper and open the transcript", async ({ page }) =
   await expect(row).toBeVisible({ timeout: 20_000 });
   await row.click();
 
-  // Open the transcription dialog and start with the tiny model (cached in
-  // ~/.qualcoder/models/whisper by the earlier manual smoke run; first use
-  // downloads it, which the generous timeout covers).
-  await page.getByRole("button", { name: "Transcribe" }).click();
+  // Open the transcription dialog (Transcribe menu -> Transcribe) and start
+  // with the tiny model (cached in ~/.qualcoder/models/whisper by the earlier
+  // manual smoke run; first use downloads it, which the timeout covers).
+  await page.getByRole("button", { name: "Transcribe", exact: true }).click();
+  await page.getByRole("button", { name: "Transcribe…", exact: true }).click();
   const dialog = page.getByRole("dialog", { name: "Transcribe audio/video" });
   await expect(dialog).toBeVisible({ timeout: 10_000 });
   await dialog

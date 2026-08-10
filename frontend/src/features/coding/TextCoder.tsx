@@ -876,9 +876,9 @@ export function TextCoder({
       <header className="flex h-10 shrink-0 items-center gap-2 border-b border-border bg-surface px-3">
         <button
           type="button"
-          onClick={() => setView({ kind: "dashboard" })}
-          aria-label={t("dashboard.back")}
-          title={t("dashboard.back")}
+          onClick={() => setView({ kind: "files" })}
+          aria-label={t("coder.back")}
+          title={t("coder.back")}
           className="rounded-sm p-1.5 text-text-secondary hover:bg-surface-higher hover:text-text-primary"
         >
           <ArrowLeft size={16} aria-hidden />

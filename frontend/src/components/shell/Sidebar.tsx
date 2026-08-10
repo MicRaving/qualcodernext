@@ -240,18 +240,8 @@ export function Sidebar() {
   }
 
   async function editFileMemo(source: Source) {
-    const next = window.prompt(t("files.memoPrompt", { name: source.name }), source.memo);
-    if (next === null) return;
-    setToolbarError(null);
-    try {
-      await api.patchSource(source.id, { memo: next });
-      await useProjectStore.getState().refreshProject();
-      toast.success(t("files.memoSaved"));
-    } catch (e) {
-      const detail = e instanceof Error ? e.message : t("files.memoError");
-      setToolbarError(detail);
-      toast.error(detail);
-    }
+    // The details panel (right bar) hosts the inline memo editor.
+    void selectFile(source.id);
   }
 
   async function deleteFile(source: Source) {

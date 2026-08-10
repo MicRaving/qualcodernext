@@ -873,6 +873,15 @@ export const api = {
       method: "DELETE",
       body: JSON.stringify({ reassign_to }),
     }),
+  renameCoder: (name: string, new_name: string) =>
+    request<CodersResponse>(`/coders/${encodeURIComponent(name)}`, {
+      method: "PATCH",
+      body: JSON.stringify({ new_name }),
+    }),
+  coderStats: (name: string) =>
+    request<{ coder: string; tables: { entity: string; count: number }[]; total: number }>(
+      `/coders/${encodeURIComponent(name)}/stats`,
+    ),
   coderVisibility: () => request<{ visibility: Record<string, number> }>("/coders/visibility"),
   setCoderVisibility: (name: string, visible: boolean) =>
     request<{ ok: boolean }>(`/coders/${encodeURIComponent(name)}/visibility`, {

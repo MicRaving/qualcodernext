@@ -6,7 +6,7 @@
  * to screen pixels: screen = image * zoom.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { LoaderCircle, Pencil, Trash2, ZoomIn, ZoomOut } from "lucide-react";
+import { ArrowLeft, LoaderCircle, Pencil, Trash2, ZoomIn, ZoomOut } from "lucide-react";
 import { api, sourceFileUrl, type CodeTreeItem, type ImageCoding, type Source } from "@/lib/api";
 import { CodePicker, type PickedCode } from "@/features/coding/CodePicker";
 import { codeTint } from "@/features/coding/tint";
@@ -29,6 +29,7 @@ interface RectState {
 
 export function ImageCoder({ source }: { source: Source }) {
   const { t } = useI18n();
+  const setView = useProjectStore((s) => s.setView);
   const activeCodeId = useProjectStore((s) => s.activeCodeId);
   const [codings, setCodings] = useState<ImageCoding[]>([]);
   const [codes, setCodes] = useState<CodeTreeItem[]>([]);
@@ -280,7 +281,16 @@ export function ImageCoder({ source }: { source: Source }) {
   return (
     <div className="flex h-full flex-col bg-bg">
       {/* Toolbar */}
-      <div className="flex h-10 shrink-0 items-center gap-2 border-b border-border bg-surface px-3">
+      <header className="flex h-10 shrink-0 items-center gap-2 border-b border-border bg-surface px-3">
+        <button
+          type="button"
+          onClick={() => setView({ kind: "files" })}
+          aria-label={t("coder.back")}
+          title={t("coder.back")}
+          className="rounded-sm p-1.5 text-text-secondary hover:bg-surface-higher hover:text-text-primary"
+        >
+          <ArrowLeft size={16} aria-hidden />
+        </button>
         <span className="truncate text-sm font-medium text-text-primary">{source.name}</span>
         <span className="text-xs text-text-secondary">· {t("imageCoder.dragHint")}</span>
         <div className="flex-1" />
@@ -310,7 +320,7 @@ export function ImageCoder({ source }: { source: Source }) {
             {t("imageCoder.fit")}
           </button>
         </div>
-      </div>
+      </header>
 
       {error && (
         <div role="alert" className="border-b border-border bg-danger/10 px-3 py-1.5 text-xs text-danger">

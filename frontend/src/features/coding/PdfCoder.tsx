@@ -529,25 +529,24 @@ export function PdfCoder({ source }: { source: Source }) {
 
   return (
     <div className="flex h-full flex-col bg-bg">
-      <header className="flex h-10 shrink-0 items-center gap-2 border-b border-border bg-surface px-3">
+      <header className="flex min-h-10 shrink-0 flex-wrap items-center gap-1 border-b border-border bg-surface px-3 py-1">
         <button
           type="button"
-          onClick={() => setView({ kind: "dashboard" })}
-          aria-label={t("dashboard.back")}
-          title={t("dashboard.back")}
+          onClick={() => setView({ kind: "files" })}
+          aria-label={t("coder.back")}
+          title={t("coder.back")}
           className="rounded-sm p-1.5 text-text-secondary hover:bg-surface-higher hover:text-text-primary"
         >
           <ArrowLeft size={16} aria-hidden />
         </button>
-        <span className="max-w-64 truncate font-medium">{source.name}</span>
-        {source.memo && <span className="max-w-64 truncate text-xs text-text-secondary">{source.memo}</span>}
+        <span className="max-w-48 truncate font-medium">{source.name}</span>
+        {source.memo && <span className="max-w-48 truncate text-xs text-text-secondary">{source.memo}</span>}
         <div className="flex-1" />
         <span className="hidden text-xs text-text-secondary lg:inline">
           {t("pdfCoder.dragHint")}
         </span>
-      </header>
 
-      <div className="flex shrink-0 flex-wrap items-center gap-1 border-b border-border bg-surface px-3 py-1.5">
+        <div className="flex flex-wrap items-center gap-1">
         <button
           type="button"
           onClick={() => setZoom("fit")}
@@ -622,7 +621,8 @@ export function PdfCoder({ source }: { source: Source }) {
           <FileText size={12} aria-hidden />
           {t("pdfCoder.plainText")}
         </button>
-      </div>
+        </div>
+      </header>
 
       {errMsg && (
         <div className="flex shrink-0 items-center gap-2 border-b border-danger bg-danger/10 px-3 py-1.5 text-sm text-danger">
