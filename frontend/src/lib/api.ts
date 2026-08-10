@@ -797,6 +797,31 @@ export const GRAPH_MODELS = [
   "cooccurrence-network",
 ] as const;
 
+// --- Collaboration sync (Option B) ------------------------------------
+
+export interface SyncCollaborator {
+  user: string;
+  last_sync: number; // sidecar mtime (epoch seconds)
+  pending_import: number;
+}
+
+export interface SyncStatus {
+  ok: boolean;
+  reason?: string;
+  enabled?: boolean;
+  user?: string;
+  pending_export: number;
+  pending_import: number;
+  collaborators: SyncCollaborator[];
+}
+
+export interface SyncResult {
+  ok: boolean;
+  reason?: string;
+  exported?: number;
+  imported?: Record<string, { applied: number; conflicts: string[] }>;
+}
+
 export const api = {
   health: () => request<HealthStatus>("/health"),
 
@@ -1441,6 +1466,11 @@ export const api = {
       body: JSON.stringify({ colors, ranges }),
     }),
   resetColorScheme: () => request<ColorScheme>("/color-scheme", { method: "DELETE" }),
+
+  // --- Collaboration sync -----------------------------------------------
+
+  syncStatus: () => request<SyncStatus>("/sync/status"),
+  syncNow: () => request<SyncResult>("/sync/now", { method: "POST" }),
 };
 
 async function handleJson<T>(res: Response): Promise<T> {

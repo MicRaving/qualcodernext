@@ -37,6 +37,7 @@ EXPECTED_TABLES = {
     "manage_files_display",
     "files_filter",
     "coder_names",
+    "sync_log",
 }
 
 EXPECTED_VIEWS = {
@@ -83,7 +84,7 @@ async def test_initial_project_row(new_db):
     )
     row = await cur.fetchone()
     assert row is not None
-    assert row[0] == "v18"
+    assert row[0] == "v19"
     assert row[1] == ""
     assert row[2] == "4.0-test"
     assert row[3] == 0

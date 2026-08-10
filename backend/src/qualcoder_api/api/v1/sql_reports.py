@@ -116,11 +116,32 @@ async def create_saved_query(req: SavedQueryCreate, db: DbDep) -> dict:
     except (IntegrityError, sqlite3.IntegrityError):
         await db.rollback()
         raise HTTPException(status_code=409, detail="duplicate title") from None
+    from qualcoder_api.persistence.repositories import _capture
+
+    await _capture(
+        db, "stored_sql", "insert", "title", req.title,
+        {
+            "title": req.title,
+            "description": req.description or "",
+            "grouper": req.grouper or "",
+            "ssql": req.ssql,
+        },
+    )
+    await db.commit()
     return req.model_dump()
 
 
 @router.delete("/saved/{title}", status_code=204)
 async def delete_saved_query(title: str, db: DbDep) -> None:
     """Delete a saved query by title."""
+    row = (
+        await db.execute(
+            select(tables.stored_sql).where(tables.stored_sql.c.title == title)
+        )
+    ).first()
     await db.execute(delete(tables.stored_sql).where(tables.stored_sql.c.title == title))
+    if row is not None:
+        from qualcoder_api.persistence.repositories import _capture, _rowdict
+
+        await _capture(db, "stored_sql", "delete", "title", title, _rowdict(row))
     await db.commit()

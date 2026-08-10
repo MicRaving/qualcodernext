@@ -277,7 +277,25 @@ class MigrationChain:
         applied += await self.migrate_v6_to_v14(app_version)
         applied += await self.migrate_v15()
         applied += await self.migrate_v16_to_v18(app_version)
+        applied += await self.migrate_v19(app_version)
         return applied
+
+    async def migrate_v19(self, app_version: str) -> list[str]:
+        """v19: sync_log — the change journal used by the collaboration sync
+        (Option B: sidecar change files exchanged via folder-sync tools)."""
+        if self.conn is None:
+            return []
+        cur = await self.conn.cursor()
+        if not await self._has_table(cur, "sync_log"):
+            await cur.execute(
+                "CREATE TABLE sync_log (id integer primary key autoincrement, ts text, "
+                "user text, seq integer, entity text, action text, pk_name text, "
+                "pk_value text, row_json text)"
+            )
+            await cur.execute('update project set databaseversion="v19", about=?', [app_version])
+            await self.conn.commit()
+            return ["v19"]
+        return []
 
     async def migrate_v15(self) -> list[str]:
         """v15: audit_log table + legacy-data backfill (idempotent)."""

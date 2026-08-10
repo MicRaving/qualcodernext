@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import json
 
-from sqlalchemy import text, update
+from sqlalchemy import select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 
@@ -35,6 +35,20 @@ def _ensure(detail: dict, key: str):
     if detail.get(key) is None:
         raise UnsupportedAction(f"missing detail field {key}")
     return detail[key]
+
+
+async def _sync_capture(session: AsyncSession, entity: str, action: str, pk: str, pk_value) -> None:
+    """Capture the current state of one row after an undo/redo write."""
+    from qualcoder_api.persistence import tables
+    from qualcoder_api.persistence.repositories import _capture, _rowdict
+
+    table = getattr(tables, entity, None)
+    if table is None:
+        return
+    row = (await session.execute(select(table).where(table.c[pk] == pk_value))).first()
+    if row is not None:
+        await _capture(session, entity, action, pk, pk_value, _rowdict(row))
+    await session.flush()
 
 
 async def _insert_row(session: AsyncSession, table: str, row: dict) -> None:
@@ -61,6 +75,7 @@ async def _revert_coding(session: AsyncSession, row: dict, *, undo: bool) -> str
         await _delete_by_id(session, table, pk, row_id)
         return f"deleted {table} #{row_id}"
     await _insert_row(session, table, detail)
+    await _sync_capture(session, table, "insert", pk, row_id)
     return f"restored {table} #{row_id}"
 
 
@@ -72,6 +87,7 @@ async def _revert_annotation(session: AsyncSession, row: dict, *, undo: bool) ->
         await _delete_by_id(session, "annotation", "anid", anid)
         return f"deleted annotation #{anid}"
     await _insert_row(session, "annotation", detail)
+    await _sync_capture(session, "annotation", "insert", "anid", anid)
     return f"restored annotation #{anid}"
 
 
@@ -102,6 +118,7 @@ async def _revert_rename(session: AsyncSession, row: dict, *, undo: bool) -> str
     await session.execute(
         update(tables.code_name).where(tables.code_name.c.cid == cid).values(name=name)
     )
+    await _sync_capture(session, "code_name", "update", "cid", cid)
     return f"renamed code #{cid} to {name!r}"
 
 
@@ -113,6 +130,7 @@ async def _revert_code_create(session: AsyncSession, row: dict, *, undo: bool) -
         await _delete_by_id(session, "code_name", "cid", cid)
         return f"deleted code #{cid} (and its codings)"
     await _insert_row(session, "code_name", detail)
+    await _sync_capture(session, "code_name", "insert", "cid", cid)
     return f"restored code #{cid}"
 
 
@@ -131,6 +149,7 @@ async def _revert_entity_create(session: AsyncSession, row: dict, *, undo: bool)
         await _delete_by_id(session, table, pk, row_id)
         return f"deleted {table} #{row_id}"
     await _insert_row(session, table, detail)
+    await _sync_capture(session, table, "insert", pk, row_id)
     return f"restored {table} #{row_id}"
 
 
@@ -145,6 +164,7 @@ async def _revert_update(session: AsyncSession, row: dict, *, undo: bool) -> str
         await session.execute(
             text("UPDATE annotation SET memo = :m WHERE anid = :id"), {"m": memo, "id": anid}
         )
+        await _sync_capture(session, "annotation", "update", "anid", anid)
         return f"annotation #{anid} memo {'restored' if undo else 're-applied'}"
     if action == "journal.update":
         jid = _ensure(detail, "jid")
@@ -154,6 +174,7 @@ async def _revert_update(session: AsyncSession, row: dict, *, undo: bool) -> str
             text("UPDATE journal SET name = :n, jentry = :j WHERE jid = :id"),
             {"n": name, "j": jentry, "id": jid},
         )
+        await _sync_capture(session, "journal", "update", "jid", jid)
         return f"journal #{jid} {'restored' if undo else 're-applied'}"
     if action == "case.update":
         caseid = _ensure(detail, "caseid")
@@ -163,6 +184,7 @@ async def _revert_update(session: AsyncSession, row: dict, *, undo: bool) -> str
             text("UPDATE cases SET name = :n, memo = :m WHERE caseid = :id"),
             {"n": name, "m": memo, "id": caseid},
         )
+        await _sync_capture(session, "cases", "update", "caseid", caseid)
         return f"case #{caseid} {'restored' if undo else 're-applied'}"
     raise UnsupportedAction(f"no undo for {action}")
 
@@ -172,6 +194,7 @@ async def _revert_code_delete(session: AsyncSession, row: dict, *, undo: bool) -
     cid = _ensure(detail, "cid")
     if undo:
         await _insert_row(session, "code_name", detail)
+        await _sync_capture(session, "code_name", "insert", "cid", cid)
         return f"restored code #{cid}"
     await _delete_by_id(session, "code_name", "cid", cid)
     return f"deleted code #{cid}"

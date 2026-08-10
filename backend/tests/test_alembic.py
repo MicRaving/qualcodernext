@@ -48,7 +48,7 @@ async def test_upgrade_head_creates_v14_schema(tmp_path):
     conn = await aiosqlite.connect(db)
     cur = await conn.cursor()
     await cur.execute("SELECT databaseversion, codername FROM project")
-    assert await cur.fetchone() == ("v18", "default")
+    assert await cur.fetchone() == ("v19", "default")
     await cur.execute("SELECT version_num FROM alembic_version")
     assert (await cur.fetchone())[0] == "0001_baseline_v14"
     await conn.close()
@@ -78,7 +78,7 @@ async def test_migrated_legacy_can_be_stamped(tmp_path):
     conn = await aiosqlite.connect(db)
     cur = await conn.cursor()
     await cur.execute("SELECT databaseversion FROM project")
-    assert (await cur.fetchone())[0] == "v18"
+    assert (await cur.fetchone())[0] == "v19"
     await cur.execute("SELECT version_num FROM alembic_version")
     assert (await cur.fetchone())[0] == "0001_baseline_v14"
     await conn.close()

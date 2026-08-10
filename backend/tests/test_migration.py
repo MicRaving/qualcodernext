@@ -34,7 +34,7 @@ LEGACY_TABLES = [
     "CREATE TABLE journal (jid integer primary key, name text, jentry text, date text, owner text)",
 ]
 
-ALL_VERSIONS = [f"v{v}" for v in range(2, 19)]
+ALL_VERSIONS = [f"v{v}" for v in range(2, 20)]
 
 
 @pytest.fixture
@@ -98,7 +98,7 @@ async def test_full_chain_sets_final_version(v2_db):
     cur = await v2_db.cursor()
     await cur.execute("SELECT databaseversion, about FROM project")
     row = await cur.fetchone()
-    assert row[0] == "v18"
+    assert row[0] == "v19"
     assert row[1] == "4.0-test"
 
 

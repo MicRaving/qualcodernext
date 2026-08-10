@@ -50,7 +50,7 @@ def upgrade() -> None:
         sa.text(
             "INSERT INTO project (databaseversion, date, memo, about, bookmarkfile, "
             "bookmarkpos, codername, recently_used_codes) "
-            "VALUES ('v18', :date, '', :about, 0, 0, :coder, '')"
+            "VALUES ('v19', :date, '', :about, 0, 0, :coder, '')"
         ),
         {"date": now, "about": "QualCoder 4.0", "coder": "default"},
     )

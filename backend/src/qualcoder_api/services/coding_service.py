@@ -302,9 +302,26 @@ async def commit_edit(session: AsyncSession, fid: int, new_text: str, owner: str
         update(tables.source).where(tables.source.c.id == fid).values(fulltext=new_text)
     )
     updated = {"code_text": 0, "annotation": 0, "case_text": 0}
+
+    from qualcoder_api.persistence.repositories import _capture, _rowdict
+
+    async def _capture_after(table, pk_col, pk_value, action="update") -> None:
+        row = (
+            await session.execute(select(table).where(table.c[pk_col] == pk_value))
+        ).first()
+        if row is not None:
+            await _capture(session, table.name, action, pk_col, pk_value, _rowdict(row))
+
     for c in shifts["codings"]:
         if c["newpos0"] is None:
+            row = (
+                await session.execute(
+                    select(tables.code_text).where(tables.code_text.c.ctid == c["ctid"])
+                )
+            ).first()
             await session.execute(delete(tables.code_text).where(tables.code_text.c.ctid == c["ctid"]))
+            if row is not None:
+                await _capture(session, "code_text", "delete", "ctid", c["ctid"], _rowdict(row))
         else:
             await session.execute(
                 update(tables.code_text)
@@ -316,9 +333,17 @@ async def commit_edit(session: AsyncSession, fid: int, new_text: str, owner: str
                 )
             )
             updated["code_text"] += 1
+            await _capture_after(tables.code_text, "ctid", c["ctid"])
     for c in shifts["annotations"]:
         if c["newpos0"] is None:
+            row = (
+                await session.execute(
+                    select(tables.annotation).where(tables.annotation.c.anid == c["anid"])
+                )
+            ).first()
             await session.execute(delete(tables.annotation).where(tables.annotation.c.anid == c["anid"]))
+            if row is not None:
+                await _capture(session, "annotation", "delete", "anid", c["anid"], _rowdict(row))
         else:
             await session.execute(
                 update(tables.annotation)
@@ -326,9 +351,17 @@ async def commit_edit(session: AsyncSession, fid: int, new_text: str, owner: str
                 .values(pos0=c["newpos0"], pos1=c["newpos1"])
             )
             updated["annotation"] += 1
+            await _capture_after(tables.annotation, "anid", c["anid"])
     for c in shifts["case_text"]:
         if c["newpos0"] is None:
+            row = (
+                await session.execute(
+                    select(tables.case_text).where(tables.case_text.c.id == c["id"])
+                )
+            ).first()
             await session.execute(delete(tables.case_text).where(tables.case_text.c.id == c["id"]))
+            if row is not None:
+                await _capture(session, "case_text", "delete", "id", c["id"], _rowdict(row))
         else:
             await session.execute(
                 update(tables.case_text)
@@ -336,6 +369,8 @@ async def commit_edit(session: AsyncSession, fid: int, new_text: str, owner: str
                 .values(pos0=c["newpos0"], pos1=c["newpos1"])
             )
             updated["case_text"] += 1
+            await _capture_after(tables.case_text, "id", c["id"])
+    await _capture_after(tables.source, "id", fid)
     await session.commit()
     return {"updated": updated, "deleted": shifts["deletions"]}
 
@@ -482,6 +517,8 @@ async def undo_codings(session: AsyncSession, items: list[dict]) -> int:
     constraint are skipped silently.
     """
     restored = 0
+    from qualcoder_api.persistence.repositories import _capture, _rowdict
+
     for item in items:
         try:
             await session.execute(
@@ -498,6 +535,19 @@ async def undo_codings(session: AsyncSession, items: list[dict]) -> int:
                 )
             )
             await session.flush()
+            row = (
+                await session.execute(
+                    select(tables.code_text).where(
+                        tables.code_text.c.cid == item["cid"],
+                        tables.code_text.c.fid == item["fid"],
+                        tables.code_text.c.pos0 == item["pos0"],
+                        tables.code_text.c.pos1 == item["pos1"],
+                        tables.code_text.c.owner == item["owner"],
+                    )
+                )
+            ).first()
+            if row is not None:
+                await _capture(session, "code_text", "insert", "ctid", row.ctid, _rowdict(row))
             restored += 1
         except IntegrityError:
             await session.rollback()

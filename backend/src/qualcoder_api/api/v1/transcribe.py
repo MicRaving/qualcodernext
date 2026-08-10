@@ -153,6 +153,8 @@ async def job(job_id: str, svc: ServiceDep) -> dict:
             # Link the transcript to the media source (the video view shows
             # it; the importer already created an empty companion for most
             # AV files — prefer that one over a second source).
+            from qualcoder_api.persistence.repositories import _capture, _rowdict
+
             async with factory() as session:
                 from sqlalchemy import delete, select, update
 
@@ -172,15 +174,33 @@ async def job(job_id: str, svc: ServiceDep) -> dict:
                         .where(tables.source.c.id == companion_id)
                         .values(fulltext=transcript)
                     )
+                    companion_row = (
+                        await session.execute(
+                            select(tables.source).where(tables.source.c.id == companion_id)
+                        )
+                    ).first()
+                    if companion_row is not None:
+                        await _capture(
+                            session, "source", "update", "id", companion_id,
+                            _rowdict(companion_row),
+                        )
+                    dup_row = (
+                        await session.execute(
+                            select(tables.source).where(tables.source.c.id == source_id)
+                        )
+                    ).first()
                     await session.execute(
                         update(tables.source)
                         .where(tables.source.c.id == source_id)
                         .values(fulltext="")
                     )
-                    await session.commit()
                     await session.execute(
                         delete(tables.source).where(tables.source.c.id == source_id)
                     )
+                    if dup_row is not None:
+                        await _capture(
+                            session, "source", "delete", "id", int(source_id), _rowdict(dup_row)
+                        )
                     await session.commit()
                     source_id = companion_id
                 else:
@@ -189,6 +209,16 @@ async def job(job_id: str, svc: ServiceDep) -> dict:
                         .where(tables.source.c.id == media_source_id)
                         .values(av_text_id=source_id)
                     )
+                    media_after = (
+                        await session.execute(
+                            select(tables.source).where(tables.source.c.id == media_source_id)
+                        )
+                    ).first()
+                    if media_after is not None:
+                        await _capture(
+                            session, "source", "update", "id", media_source_id,
+                            _rowdict(media_after),
+                        )
                     await session.commit()
             async with factory() as session:
                 await audit.record(

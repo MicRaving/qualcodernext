@@ -320,6 +320,8 @@ class ImportService:
 
     async def _add_attribute_placeholders(self, session: AsyncSession, entity_id: int, owner: str) -> None:
         """Insert empty attribute values for every file-scope attribute type."""
+        from qualcoder_api.persistence.repositories import _capture
+
         rows = await session.execute(
             select(tables.attribute_type.c.name).where(
                 text("caseOrFile = 'file'")
@@ -334,6 +336,20 @@ class ImportService:
                 ),
                 {"n": attr_name, "id": entity_id, "d": now, "o": owner},
             )
+            row = (
+                await session.execute(
+                    text(
+                        "SELECT * FROM attribute WHERE name = :n AND attr_type = 'file' "
+                        "AND id = :id"
+                    ),
+                    {"n": attr_name, "id": entity_id},
+                )
+            ).first()
+            if row is not None:
+                data = dict(dict(row._mapping).items())
+                await _capture(
+                    session, "attribute", "insert", "attrid", data.get("attrid"), data
+                )
         await session.commit()
 
     async def import_file(

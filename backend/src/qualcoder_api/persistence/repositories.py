@@ -95,6 +95,23 @@ def _now() -> str:
     return datetime.datetime.now().astimezone().strftime("%Y-%m-%d %H:%M:%S")
 
 
+def _rowdict(row) -> dict:
+    """Raw table-column dict from a row mapping (sync-safe snapshot)."""
+    from qualcoder_api.services import sync
+
+    return sync.table_row(row._mapping)
+
+
+async def _capture(
+    session, entity: str, action: str, pk_name: str, pk_value: int | str | None, row: dict | None
+) -> None:
+    from qualcoder_api.services import sync
+
+    await sync.capture(
+        session, entity=entity, action=action, pk_name=pk_name, pk_value=pk_value, row=row
+    )
+
+
 def random_code_color() -> str:
     """Pick a random color from the code palette (custom scheme when set)."""
     try:
@@ -147,6 +164,16 @@ class ProjectRepository:
     async def update_memo(self, memo: str) -> None:
         await self.session.execute(update(tables.project).values(memo=memo))
         await self.session.commit()
+        row = (
+            await self.session.execute(
+                select(tables.project).where(tables.project.c.databaseversion.is_not(None))
+            )
+        ).first()
+        if row is not None:
+            await _capture(
+                self.session, "project", "update", "rowid", 1, _rowdict(row)
+            )
+            await self.session.commit()
 
     async def get_summary(self) -> dict:
         """Aggregate project statistics (files, codes, cases, ...)."""
@@ -345,6 +372,18 @@ class SourceRepository:
         source = await self.get_source(new_id)
         if source is None:  # pragma: no cover - defensive
             raise RuntimeError("source row vanished after insert")
+        row = (
+            await self.session.execute(
+                select(tables.source).where(tables.source.c.id == new_id)
+            )
+        ).first()
+        from qualcoder_api.services import sync
+
+        await sync.capture_insert(
+            self.session, entity="source", pk_name="id", pk_value=new_id,
+            row=sync.table_row(row._mapping) if row else None,
+        )
+        await self.session.commit()
         return source
 
     async def update_source(self, source_id: int, **fields) -> Source | None:
@@ -364,22 +403,54 @@ class SourceRepository:
                 update(tables.source).where(tables.source.c.id == source_id).values(**values)
             )
             await self.session.commit()
-        return await self.get_source(source_id)
+        source = await self.get_source(source_id)
+        from qualcoder_api.services import sync
+
+        if source is not None:
+            row = (
+                await self.session.execute(
+                    select(tables.source).where(tables.source.c.id == source_id)
+                )
+            ).first()
+            await sync.capture_update(
+                self.session, entity="source", pk_name="id", pk_value=source_id,
+                row=sync.table_row(row._mapping) if row else None,
+            )
+            await self.session.commit()
+        return source
 
     async def delete_source(self, source_id: int) -> None:
         """Delete a source and all its codings/annotations/case links."""
-        for tbl, fk in (
-            (tables.code_text, tables.code_text.c.fid),
-            (tables.code_image, tables.code_image.c.id),
-            (tables.code_av, tables.code_av.c.id),
-            (tables.annotation, tables.annotation.c.fid),
-            (tables.case_text, tables.case_text.c.fid),
-            (tables.attribute, tables.attribute.c.id),
+        from qualcoder_api.services import sync
+
+        async def _grab(table, col) -> list[dict]:
+            rows = (
+                await self.session.execute(select(table).where(col == source_id))
+            ).all()
+            return [sync.table_row(r._mapping) for r in rows]
+
+        for table, fk, pk in (
+            (tables.code_text, tables.code_text.c.fid, "ctid"),
+            (tables.code_image, tables.code_image.c.id, "imid"),
+            (tables.code_av, tables.code_av.c.id, "avid"),
+            (tables.annotation, tables.annotation.c.fid, "anid"),
+            (tables.case_text, tables.case_text.c.fid, "id"),
+            (tables.attribute, tables.attribute.c.id, "attrid"),
         ):
-            await self.session.execute(delete(tbl).where(fk == source_id))
+            rows = await _grab(table, fk)
+            await self.session.execute(delete(table).where(fk == source_id))
+            for row in rows:
+                await sync.capture_delete(
+                    self.session, entity=table.name, pk_name=pk, pk_value=row.get(pk), row=row
+                )
+        src_rows = await _grab(tables.source, tables.source.c.id)
         await self.session.execute(
             delete(tables.source).where(tables.source.c.id == source_id)
         )
+        for row in src_rows:
+            await sync.capture_delete(
+                self.session, entity="source", pk_name="id", pk_value=source_id, row=row
+            )
         await self.session.commit()
 
 
@@ -427,7 +498,16 @@ class CodeRepository:
                 )
             )
         ).first()
-        return Code.model_validate(row._mapping) if row else None
+        code = Code.model_validate(row._mapping) if row else None
+        from qualcoder_api.services import sync
+
+        if row is not None:
+            await sync.capture_insert(
+                self.session, entity="code_name", pk_name="cid", pk_value=row.cid,
+                row=sync.table_row(row._mapping),
+            )
+        await self.session.commit()
+        return code
 
     async def add_category(
         self,
@@ -450,14 +530,37 @@ class CodeRepository:
                 )
             )
         ).first()
-        return Category.model_validate(row._mapping) if row else None
+        category = Category.model_validate(row._mapping) if row else None
+        from qualcoder_api.services import sync
+
+        if row is not None:
+            await sync.capture_insert(
+                self.session, entity="code_cat", pk_name="catid", pk_value=row.catid,
+                row=sync.table_row(row._mapping),
+            )
+        await self.session.commit()
+        return category
 
     async def rename_code(self, cid: int, name: str) -> Code | None:
         await self.session.execute(
             update(tables.code_name).where(tables.code_name.c.cid == cid).values(name=name)
         )
         await self.session.commit()
-        return await self.get_code(cid)
+        code = await self.get_code(cid)
+        from qualcoder_api.services import sync
+
+        if code is not None:
+            row = (
+                await self.session.execute(
+                    select(tables.code_name).where(tables.code_name.c.cid == cid)
+                )
+            ).first()
+            await sync.capture_update(
+                self.session, entity="code_name", pk_name="cid", pk_value=cid,
+                row=sync.table_row(row._mapping) if row else None,
+            )
+            await self.session.commit()
+        return code
 
     async def set_supercid(self, cid: int, supercid: int | None) -> Code | None:
         """Nest ``cid`` under code ``supercid`` (sub-codes, upstream v16).
@@ -487,7 +590,21 @@ class CodeRepository:
             update(tables.code_name).where(tables.code_name.c.cid == cid).values(supercid=supercid)
         )
         await self.session.commit()
-        return await self.get_code(cid)
+        code = await self.get_code(cid)
+        from qualcoder_api.services import sync
+
+        if code is not None:
+            row = (
+                await self.session.execute(
+                    select(tables.code_name).where(tables.code_name.c.cid == cid)
+                )
+            ).first()
+            await sync.capture_update(
+                self.session, entity="code_name", pk_name="cid", pk_value=cid,
+                row=sync.table_row(row._mapping) if row else None,
+            )
+            await self.session.commit()
+        return code
 
     async def get_code(self, cid: int) -> Code | None:
         row = (
@@ -499,32 +616,94 @@ class CodeRepository:
 
     async def delete_code(self, cid: int) -> None:
         """Delete a code and all its codings (legacy order)."""
-        for tbl, col in (
-            (tables.code_name, tables.code_name.c.cid),
-            (tables.code_text, tables.code_text.c.cid),
-            (tables.code_av, tables.code_av.c.cid),
-            (tables.code_image, tables.code_image.c.cid),
+        from qualcoder_api.services import sync
+
+        def _rowdict(row) -> dict:
+            return sync.table_row(row._mapping)
+
+        for tbl, col, pk in (
+            (tables.code_name, tables.code_name.c.cid, "cid"),
+            (tables.code_text, tables.code_text.c.cid, "ctid"),
+            (tables.code_av, tables.code_av.c.cid, "avid"),
+            (tables.code_image, tables.code_image.c.cid, "imid"),
         ):
+            rows = (await self.session.execute(select(tbl).where(col == cid))).all()
             await self.session.execute(delete(tbl).where(col == cid))
+            for row in rows:
+                await sync.capture_delete(
+                    self.session, entity=tbl.name, pk_name=pk,
+                    pk_value=_rowdict(row).get(pk), row=_rowdict(row),
+                )
         # Sub-codes of the deleted code are orphaned (reparented to null).
+        sub_rows = (
+            await self.session.execute(
+                select(tables.code_name).where(tables.code_name.c.supercid == cid)
+            )
+        ).all()
         await self.session.execute(
             update(tables.code_name)
             .where(tables.code_name.c.supercid == cid)
             .values(supercid=None)
         )
+        for row in sub_rows:
+            data = _rowdict(row)
+            data["supercid"] = None
+            await sync.capture_update(
+                self.session, entity="code_name", pk_name="cid",
+                pk_value=data.get("cid"), row=data,
+            )
         await self.session.commit()
 
     async def delete_category(self, catid: int) -> None:
         """Delete a category; reassign orphaned codes and children to null."""
+        from qualcoder_api.services import sync
+
+        def _rowdict(row) -> dict:
+            return sync.table_row(row._mapping)
+
+        code_rows = (
+            await self.session.execute(
+                select(tables.code_name).where(tables.code_name.c.catid == catid)
+            )
+        ).all()
         await self.session.execute(
             update(tables.code_name).where(tables.code_name.c.catid == catid).values(catid=None)
         )
+        for row in code_rows:
+            data = _rowdict(row)
+            data["catid"] = None
+            await sync.capture_update(
+                self.session, entity="code_name", pk_name="cid",
+                pk_value=data.get("cid"), row=data,
+            )
+        cat_rows = (
+            await self.session.execute(
+                select(tables.code_cat).where(tables.code_cat.c.supercatid == catid)
+            )
+        ).all()
         await self.session.execute(
-            update(tables.code_cat).where(tables.code_cat.c.catid == catid).values(supercatid=None)
+            update(tables.code_cat).where(tables.code_cat.c.supercatid == catid).values(supercatid=None)
         )
+        for row in cat_rows:
+            data = _rowdict(row)
+            data["supercatid"] = None
+            await sync.capture_update(
+                self.session, entity="code_cat", pk_name="catid",
+                pk_value=data.get("catid"), row=data,
+            )
+        cat_row = (
+            await self.session.execute(
+                select(tables.code_cat).where(tables.code_cat.c.catid == catid)
+            )
+        ).first()
         await self.session.execute(
             delete(tables.code_cat).where(tables.code_cat.c.catid == catid)
         )
+        if cat_row is not None:
+            await sync.capture_delete(
+                self.session, entity="code_cat", pk_name="catid", pk_value=catid,
+                row=_rowdict(cat_row),
+            )
         await self.session.execute(
             text(
                 "UPDATE code_cat SET supercatid = NULL "
@@ -547,6 +726,8 @@ class CodeRepository:
                 select(tables.code_text).where(tables.code_text.c.cid == old_cid)
             )
         ).all()
+        from qualcoder_api.services import sync
+
         for row in rows:
             dup = (
                 await self.session.execute(
@@ -560,6 +741,11 @@ class CodeRepository:
                 )
             ).first()
             if dup is not None:
+                data = sync.table_row(row._mapping)
+                await sync.capture_delete(
+                    self.session, entity="code_text", pk_name="ctid",
+                    pk_value=data.get("ctid"), row=data,
+                )
                 await self.session.execute(
                     delete(tables.code_text).where(tables.code_text.c.ctid == row.ctid)
                 )
@@ -569,39 +755,112 @@ class CodeRepository:
                     .where(tables.code_text.c.ctid == row.ctid)
                     .values(cid=new_cid)
                 )
+                data = sync.table_row(row._mapping)
+                data["cid"] = new_cid
+                await sync.capture_update(
+                    self.session, entity="code_text", pk_name="ctid",
+                    pk_value=data.get("ctid"), row=data,
+                )
         for tbl, col in (
             (tables.code_av, tables.code_av.c.cid),
             (tables.code_image, tables.code_image.c.cid),
         ):
+            rows = (await self.session.execute(select(tbl).where(col == old_cid))).all()
             await self.session.execute(
                 update(tbl).where(col == old_cid).values(**{col.name: new_cid})
             )
+            for row in rows:
+                data = sync.table_row(row._mapping)
+                data[col.name] = new_cid
+                pk = "avid" if tbl is tables.code_av else "imid"
+                await sync.capture_update(
+                    self.session, entity=tbl.name, pk_name=pk,
+                    pk_value=int(data[pk]), row=data,
+                )
         # Sub-codes of the merged-away code move under the target code.
+        sub_rows = (
+            await self.session.execute(
+                select(tables.code_name).where(tables.code_name.c.supercid == old_cid)
+            )
+        ).all()
         await self.session.execute(
             update(tables.code_name)
             .where(tables.code_name.c.supercid == old_cid)
             .values(supercid=new_cid)
         )
+        for row in sub_rows:
+            data = sync.table_row(row._mapping)
+            data["supercid"] = new_cid
+            await sync.capture_update(
+                self.session, entity="code_name", pk_name="cid",
+                pk_value=data.get("cid"), row=data,
+            )
+        old_row = (
+            await self.session.execute(
+                select(tables.code_name).where(tables.code_name.c.cid == old_cid)
+            )
+        ).first()
         await self.session.execute(
             delete(tables.code_name).where(tables.code_name.c.cid == old_cid)
         )
+        if old_row is not None:
+            await sync.capture_delete(
+                self.session, entity="code_name", pk_name="cid", pk_value=old_cid,
+                row=sync.table_row(old_row._mapping),
+            )
         await self.session.commit()
 
     async def merge_category(self, catid: int, target_catid: int) -> None:
         """Merge category ``catid`` into ``target_catid``."""
+        from qualcoder_api.services import sync
+
+        code_rows = (
+            await self.session.execute(
+                select(tables.code_name).where(tables.code_name.c.catid == catid)
+            )
+        ).all()
         await self.session.execute(
             update(tables.code_name)
             .where(tables.code_name.c.catid == catid)
             .values(catid=target_catid)
         )
+        for row in code_rows:
+            data = sync.table_row(row._mapping)
+            data["catid"] = target_catid
+            await sync.capture_update(
+                self.session, entity="code_name", pk_name="cid",
+                pk_value=data.get("cid"), row=data,
+            )
+        cat_row = (
+            await self.session.execute(
+                select(tables.code_cat).where(tables.code_cat.c.catid == catid)
+            )
+        ).first()
         await self.session.execute(
             delete(tables.code_cat).where(tables.code_cat.c.catid == catid)
         )
+        if cat_row is not None:
+            await sync.capture_delete(
+                self.session, entity="code_cat", pk_name="catid", pk_value=catid,
+                row=sync.table_row(cat_row._mapping),
+            )
+        sub_rows = (
+            await self.session.execute(
+                select(tables.code_cat).where(tables.code_cat.c.supercatid == catid)
+            )
+        ).all()
         await self.session.execute(
             update(tables.code_cat)
             .where(tables.code_cat.c.supercatid == catid)
             .values(supercatid=target_catid)
         )
+        for row in sub_rows:
+            data = sync.table_row(row._mapping)
+            data["supercatid"] = target_catid
+            await sync.capture_update(
+                self.session, entity="code_cat", pk_name="catid",
+                pk_value=data.get("catid"), row=data,
+            )
         await self.session.execute(
             text(
                 "UPDATE code_cat SET supercatid = NULL "
@@ -653,6 +912,10 @@ class CodingRepository:
             )
         ).first()
         assert row is not None
+        await _capture(
+            self.session, "code_text", "insert", "ctid", row.ctid, _rowdict(row)
+        )
+        await self.session.commit()
         return Coding.model_validate(row._mapping)
 
     async def list_text_codings_for_file(self, fid: int) -> list[Coding]:
@@ -690,12 +953,26 @@ class CodingRepository:
                 select(tables.code_text).where(tables.code_text.c.ctid == ctid)
             )
         ).first()
+        if row is not None:
+            await _capture(
+                self.session, "code_text", "update", "ctid", ctid, _rowdict(row)
+            )
+            await self.session.commit()
         return Coding.model_validate(row._mapping) if row else None
 
     async def delete_text_coding(self, ctid: int) -> None:
+        row = (
+            await self.session.execute(
+                select(tables.code_text).where(tables.code_text.c.ctid == ctid)
+            )
+        ).first()
         await self.session.execute(
             delete(tables.code_text).where(tables.code_text.c.ctid == ctid)
         )
+        if row is not None:
+            await _capture(
+                self.session, "code_text", "delete", "ctid", ctid, _rowdict(row)
+            )
         await self.session.commit()
 
     async def add_image_coding(
@@ -736,6 +1013,10 @@ class CodingRepository:
             )
         ).first()
         assert row is not None
+        await _capture(
+            self.session, "code_image", "insert", "imid", row.imid, _rowdict(row)
+        )
+        await self.session.commit()
         return ImageCoding.model_validate(row._mapping)
 
     async def list_image_codings_for_file(self, source_id: int) -> list[ImageCoding]:
@@ -765,12 +1046,26 @@ class CodingRepository:
                 select(tables.code_image).where(tables.code_image.c.imid == imid)
             )
         ).first()
+        if row is not None:
+            await _capture(
+                self.session, "code_image", "update", "imid", imid, _rowdict(row)
+            )
+            await self.session.commit()
         return ImageCoding.model_validate(row._mapping) if row else None
 
     async def delete_image_coding(self, imid: int) -> None:
+        row = (
+            await self.session.execute(
+                select(tables.code_image).where(tables.code_image.c.imid == imid)
+            )
+        ).first()
         await self.session.execute(
             delete(tables.code_image).where(tables.code_image.c.imid == imid)
         )
+        if row is not None:
+            await _capture(
+                self.session, "code_image", "delete", "imid", imid, _rowdict(row)
+            )
         await self.session.commit()
 
     async def add_av_coding(
@@ -805,6 +1100,10 @@ class CodingRepository:
             )
         ).first()
         assert row is not None
+        await _capture(
+            self.session, "code_av", "insert", "avid", row.avid, _rowdict(row)
+        )
+        await self.session.commit()
         return AVCoding.model_validate(row._mapping)
 
     async def list_av_codings_for_file(self, source_id: int) -> list[AVCoding]:
@@ -816,9 +1115,18 @@ class CodingRepository:
         return [AVCoding.model_validate(_coding_row(r._mapping)) for r in rows]
 
     async def delete_av_coding(self, avid: int) -> None:
+        row = (
+            await self.session.execute(
+                select(tables.code_av).where(tables.code_av.c.avid == avid)
+            )
+        ).first()
         await self.session.execute(
             delete(tables.code_av).where(tables.code_av.c.avid == avid)
         )
+        if row is not None:
+            await _capture(
+                self.session, "code_av", "delete", "avid", avid, _rowdict(row)
+            )
         await self.session.commit()
 
 
@@ -856,7 +1164,13 @@ class CaseRepository:
                 )
             )
         ).first()
-        return Case.model_validate(row._mapping) if row else None
+        case = Case.model_validate(row._mapping) if row else None
+        if row is not None:
+            await _capture(
+                self.session, "cases", "insert", "caseid", row.caseid, _rowdict(row)
+            )
+            await self.session.commit()
+        return case
 
     async def update_case(self, caseid: int, **fields) -> Case | None:
         allowed = {"name", "memo", "owner", "date"}
@@ -868,16 +1182,46 @@ class CaseRepository:
                 .values(**values)
             )
             await self.session.commit()
-        return await self.get_case(caseid)
+        case = await self.get_case(caseid)
+        if case is not None:
+            row = (
+                await self.session.execute(
+                    select(tables.cases).where(tables.cases.c.caseid == caseid)
+                )
+            ).first()
+            await _capture(
+                self.session, "cases", "update", "caseid", caseid, _rowdict(row)
+            )
+            await self.session.commit()
+        return case
 
     async def delete_case(self, caseid: int) -> None:
         """Delete a case and its case_text links."""
+        rows = (
+            await self.session.execute(
+                select(tables.case_text).where(tables.case_text.c.caseid == caseid)
+            )
+        ).all()
         await self.session.execute(
             delete(tables.case_text).where(tables.case_text.c.caseid == caseid)
         )
+        for row in rows:
+            data = _rowdict(row)
+            await _capture(
+                self.session, "case_text", "delete", "id", data.get("id"), data
+            )
+        case_row = (
+            await self.session.execute(
+                select(tables.cases).where(tables.cases.c.caseid == caseid)
+            )
+        ).first()
         await self.session.execute(
             delete(tables.cases).where(tables.cases.c.caseid == caseid)
         )
+        if case_row is not None:
+            await _capture(
+                self.session, "cases", "delete", "caseid", caseid, _rowdict(case_row)
+            )
         await self.session.commit()
 
     async def link_file(self, *, caseid: int, fid: int, owner: str, memo: str = "") -> CaseText:
@@ -901,6 +1245,10 @@ class CaseRepository:
             )
         ).first()
         assert row is not None
+        await _capture(
+            self.session, "case_text", "insert", "id", row.id, _rowdict(row)
+        )
+        await self.session.commit()
         return CaseText.model_validate(row._mapping)
 
     async def link_text_span(
@@ -926,14 +1274,31 @@ class CaseRepository:
             )
         ).first()
         assert row is not None
+        await _capture(
+            self.session, "case_text", "insert", "id", row.id, _rowdict(row)
+        )
+        await self.session.commit()
         return CaseText.model_validate(row._mapping)
 
     async def unlink_file(self, *, caseid: int, fid: int) -> None:
+        rows = (
+            await self.session.execute(
+                select(tables.case_text).where(
+                    tables.case_text.c.caseid == caseid,
+                    tables.case_text.c.fid == fid,
+                )
+            )
+        ).all()
         await self.session.execute(
             delete(tables.case_text).where(
                 tables.case_text.c.caseid == caseid, tables.case_text.c.fid == fid
             )
         )
+        for row in rows:
+            data = _rowdict(row)
+            await _capture(
+                self.session, "case_text", "delete", "id", data.get("id"), data
+            )
         await self.session.commit()
 
     async def case_files(self, caseid: int) -> list[dict]:
@@ -990,6 +1355,16 @@ class AttributeRepository:
             )
         )
         await self.session.commit()
+        row = (
+            await self.session.execute(
+                select(tables.attribute_type).where(tables.attribute_type.c.name == name)
+            )
+        ).first()
+        if row is not None:
+            await _capture(
+                self.session, "attribute_type", "insert", "name", name, _rowdict(row)
+            )
+            await self.session.commit()
         return AttributeType(
             name=name, date=_now(), owner=owner, memo=memo,
             case_or_file=case_or_file, value_type=value_type,
@@ -1001,12 +1376,29 @@ class AttributeRepository:
         ``attribute.name`` holds the attribute type name; ``attribute.attr_type``
         holds the scope ("case"/"file").
         """
+        rows = (
+            await self.session.execute(select(tables.attribute).where(tables.attribute.c.name == name))
+        ).all()
         await self.session.execute(
             delete(tables.attribute).where(tables.attribute.c.name == name)
         )
+        for row in rows:
+            data = _rowdict(row)
+            await _capture(
+                self.session, "attribute", "delete", "attrid", data.get("attrid"), data
+            )
+        type_row = (
+            await self.session.execute(
+                select(tables.attribute_type).where(tables.attribute_type.c.name == name)
+            )
+        ).first()
         await self.session.execute(
             delete(tables.attribute_type).where(tables.attribute_type.c.name == name)
         )
+        if type_row is not None:
+            await _capture(
+                self.session, "attribute_type", "delete", "name", name, _rowdict(type_row)
+            )
         await self.session.commit()
 
     async def list_values(self, *, entity_id: int | None = None,
@@ -1022,6 +1414,16 @@ class AttributeRepository:
     async def set_value(self, *, name: str, attr_type: str, value: str,
                         entity_id: int, owner: str) -> Attribute:
         """Insert or replace an attribute value for an entity."""
+        existing = (
+            await self.session.execute(
+                select(tables.attribute).where(
+                    tables.attribute.c.name == name,
+                    tables.attribute.c.attr_type == attr_type,
+                    tables.attribute.c.id == entity_id,
+                )
+            )
+        ).first()
+        action = "update" if existing is not None else "insert"
         await self.session.execute(
             delete(tables.attribute).where(
                 tables.attribute.c.name == name,
@@ -1048,6 +1450,10 @@ class AttributeRepository:
             )
         ).first()
         assert row is not None
+        await _capture(
+            self.session, "attribute", action, "attrid", row.attrid, _rowdict(row)
+        )
+        await self.session.commit()
         return Attribute.model_validate(row._mapping)
 
 
@@ -1078,6 +1484,10 @@ class JournalRepository:
             )
         ).first()
         assert row is not None
+        await _capture(
+            self.session, "journal", "insert", "jid", row.jid, _rowdict(row)
+        )
+        await self.session.commit()
         return Journal.model_validate(row._mapping)
 
     async def update_journal(self, jid: int, **fields) -> Journal | None:
@@ -1093,12 +1503,26 @@ class JournalRepository:
                 select(tables.journal).where(tables.journal.c.jid == jid)
             )
         ).first()
+        if row is not None:
+            await _capture(
+                self.session, "journal", "update", "jid", jid, _rowdict(row)
+            )
+            await self.session.commit()
         return Journal.model_validate(row._mapping) if row else None
 
     async def delete_journal(self, jid: int) -> None:
+        row = (
+            await self.session.execute(
+                select(tables.journal).where(tables.journal.c.jid == jid)
+            )
+        ).first()
         await self.session.execute(
             delete(tables.journal).where(tables.journal.c.jid == jid)
         )
+        if row is not None:
+            await _capture(
+                self.session, "journal", "delete", "jid", jid, _rowdict(row)
+            )
         await self.session.commit()
 
 
@@ -1132,6 +1556,10 @@ class AnnotationRepository:
             )
         ).first()
         assert row is not None
+        await _capture(
+            self.session, "annotation", "insert", "anid", row.anid, _rowdict(row)
+        )
+        await self.session.commit()
         return Annotation.model_validate(row._mapping)
 
     async def update_annotation(self, anid: int, *, memo: str | None = None,
@@ -1155,10 +1583,24 @@ class AnnotationRepository:
                 select(tables.annotation).where(tables.annotation.c.anid == anid)
             )
         ).first()
+        if row is not None:
+            await _capture(
+                self.session, "annotation", "update", "anid", anid, _rowdict(row)
+            )
+            await self.session.commit()
         return Annotation.model_validate(row._mapping) if row else None
 
     async def delete_annotation(self, anid: int) -> None:
+        row = (
+            await self.session.execute(
+                select(tables.annotation).where(tables.annotation.c.anid == anid)
+            )
+        ).first()
         await self.session.execute(
             delete(tables.annotation).where(tables.annotation.c.anid == anid)
         )
+        if row is not None:
+            await _capture(
+                self.session, "annotation", "delete", "anid", anid, _rowdict(row)
+            )
         await self.session.commit()

@@ -15,6 +15,7 @@ import {
   type Source,
   type Journal,
   type SourceDetails,
+  type SyncStatus,
 } from "@/lib/api";
 
 export type ThemeMode = "light" | "dark";
@@ -119,6 +120,11 @@ interface ProjectState {
   importState: { done: number; total: number } | null;
   setImportState: (v: { done: number; total: number } | null) => void;
 
+  /** Collaboration sync (Option B: sidecar change files over folder sync). */
+  syncStatus: SyncStatus | null;
+  setSyncStatus: (v: SyncStatus | null) => void;
+  runSyncNow: () => Promise<boolean>;
+
   inspectorSelection: InspectorSelection;
   inspectorDetails: CodeDetails | SourceDetails | null;
   inspectorLoading: boolean;
@@ -220,6 +226,20 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
 
   importState: null,
   setImportState: (v) => set({ importState: v }),
+
+  syncStatus: null,
+  setSyncStatus: (v) => set({ syncStatus: v }),
+  runSyncNow: async () => {
+    try {
+      const res = await api.syncNow();
+      if (!res.ok) return false;
+      const status = await api.syncStatus();
+      set({ syncStatus: status });
+      return true;
+    } catch {
+      return false;
+    }
+  },
 
   inspectorSelection: null,
   inspectorDetails: null,

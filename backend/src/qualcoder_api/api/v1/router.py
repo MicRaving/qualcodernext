@@ -24,6 +24,7 @@ from qualcoder_api.api.v1.interchange import router as interchange_router
 from qualcoder_api.api.v1.reports import router as reports_router
 from qualcoder_api.api.v1.sources import router as sources_router
 from qualcoder_api.api.v1.sql_reports import router as sql_router
+from qualcoder_api.api.v1.sync_api import router as sync_router
 from qualcoder_api.api.v1.tools import router as tools_router
 from qualcoder_api.api.v1.transcribe import router as transcribe_router
 from qualcoder_api.services.project_service import OpenResult, ProjectService
@@ -49,6 +50,7 @@ router.include_router(coders_router)
 router.include_router(audit_router)
 router.include_router(transcribe_router)
 router.include_router(graphs_router)
+router.include_router(sync_router)
 
 
 def get_service() -> ProjectService:

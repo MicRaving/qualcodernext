@@ -74,6 +74,8 @@ _SCHEMA_SQL: list[str] = [
     "CREATE TABLE files_filter (filterid integer primary key, name text, filter text, owner text);",
     "CREATE TABLE audit_log (id integer primary key autoincrement, ts text, user text, action text, "
     "entity text, entity_id integer, source_id integer, detail text);",
+    "CREATE TABLE sync_log (id integer primary key autoincrement, ts text, user text, seq integer, "
+    "entity text, action text, pk_name text, pk_value text, row_json text);",
 ]
 
 # Extra tables/views beyond the v14 core (added at project-open time).
@@ -113,7 +115,7 @@ async def create_new_project_schema(
     await cur.execute(
         "INSERT INTO project VALUES(?,?,?,?,?,?,?,?,?,?,?)",
         (
-            "v18",
+            "v19",
             datetime.datetime.now().astimezone().strftime("%Y-%m-%d %H:%M:%S"),
             "",
             app_version,

@@ -406,6 +406,20 @@ coder_names = Table(
     ),
 )
 
+sync_log = Table(
+    "sync_log",
+    metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("ts", String),
+    Column("user", String),
+    Column("seq", Integer),  # per-user monotonic counter (used by importers)
+    Column("entity", String),  # table name
+    Column("action", String),  # insert | update | delete
+    Column("pk_name", String),
+    Column("pk_value", String),  # primary key value (int or name string)
+    Column("row_json", Text),  # full row snapshot (JSON)
+)
+
 # Tables whose `owner` column feeds the coder_names table.
 OWNER_TABLES = [
     "code_image",
