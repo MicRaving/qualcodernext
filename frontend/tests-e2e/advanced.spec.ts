@@ -132,7 +132,7 @@ async function ensureProjectOpen(page: Page) {
 test("PDF import and region coding", async ({ page }) => {
   // -------------------------------------------------------------- create
   await page.goto("/");
-  await expect(page.getByRole("heading", { name: "QualCoder" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "New project" })).toBeVisible();
   await page.getByRole("button", { name: "New project" }).click();
   const dialog = page.getByRole("dialog", { name: "New project" });
   await expect(dialog).toBeVisible();
@@ -311,7 +311,7 @@ test("recent projects persist after reload", async ({ page }) => {
 
 test("open nonexistent project shows an error", async ({ page }) => {
   await page.goto("/");
-  await expect(page.getByRole("heading", { name: "QualCoder" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "New project" })).toBeVisible();
 
   await page.getByRole("button", { name: "Open project" }).click();
   const openDialog = page.getByRole("dialog", { name: "Open project" });
@@ -329,5 +329,5 @@ test("open nonexistent project shows an error", async ({ page }) => {
   // while our Advanced.qda sqlite engine is still open.
   await page.request.post("http://localhost:8765/api/v1/projects/close");
   await page.goto("/");
-  await expect(page.getByRole("heading", { name: "QualCoder" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "New project" })).toBeVisible();
 });

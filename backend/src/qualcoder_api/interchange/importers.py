@@ -35,6 +35,74 @@ from qualcoder_api.persistence.repositories import (
     SourceRepository,
 )
 
+
+def detect_import_kind(path: str) -> str:
+    """Sniff an interchange upload and return the import kind.
+
+    Returns one of ``"refi"``, ``"rqda"``, ``"taguette"``, ``"ris"``,
+    ``"survey"``, ``"codebook"``, ``"merge"``. Raises ``ValueError`` when
+    the file is not a supported interchange format.
+    """
+    import zipfile
+
+    name = Path(path).name.lower()
+    with open(path, "rb") as fh:
+        head = fh.read(4096)
+
+    # Zip archive → a zipped .qda project (merge).
+    if head.startswith(b"PK\x03\x04"):
+        try:
+            with zipfile.ZipFile(path) as archive:
+                if any(entry.split("/")[-1] == "data.qda" for entry in archive.namelist()):
+                    return "merge"
+        except zipfile.BadZipFile as err:
+            raise ValueError("not a valid zip archive") from err
+        raise ValueError("zip archive without a data.qda — expected a zipped .qda project")
+
+    # SQLite database → RQDA (QualCoder v3) or Taguette.
+    if head.startswith(b"SQLite format 3\x00"):
+        try:
+            with sqlite3.connect(path) as conn:
+                tables_present = {
+                    row[0]
+                    for row in conn.execute(
+                        "SELECT name FROM sqlite_master WHERE type='table'"
+                    )
+                }
+        except sqlite3.Error as err:
+            raise ValueError(f"invalid database file: {err}") from err
+        if {"documents", "tags", "highlights"} <= tables_present:
+            return "taguette"
+        if tables_present & {"source", "file", "codecat", "freecode"}:
+            return "rqda"
+        raise ValueError("unrecognized database (expected RQDA or Taguette)")
+
+    # XML document → REFI-QDA.
+    if head.lstrip().startswith(b"<?xml") or b"<project" in head[:1024]:
+        return "refi"
+
+    text = head.decode("utf-8", errors="replace")
+    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+    if lines and (lines[0].startswith("TY") or any(ln.startswith("TY  -") for ln in lines[:10])):
+        return "ris"
+
+    # Codebook lines are ``category>>subcategory>>code`` (txt or csv).
+    if ">>" in text:
+        return "codebook"
+
+    if name.endswith((".txt", ".text")):
+        return "codebook"
+
+    if name.endswith(".csv") or "," in text or ";" in text:
+        return "survey"
+
+    raise ValueError(
+        "unrecognized file type — supported: .qdp/.qdc (REFI-QDA), .rqda, "
+        "Taguette (.sqlite3), .ris, survey .csv, codebook .txt/.csv, "
+        "zipped .qda projects and Zotero"
+    )
+
+
 # ----------------------------------------------------------------------
 # Shared helpers
 # ----------------------------------------------------------------------

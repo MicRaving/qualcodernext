@@ -78,6 +78,35 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
+/* UI chrome (top bar, sidebar, inspector, status bar) and any workspace
+   view that does NOT contain a selectable document (the coder) must not
+   be markable like a browser page. The coder document re-enables
+   selection via .qc-selectable — and a body-level user-select:none is
+   deliberately avoided because it makes Chromium drag-selection inside
+   such descendants unreliable. */
+header,
+aside,
+footer,
+.qc-no-select {
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+main:not(:has(.qc-selectable)) {
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+/* Text selection stays enabled where it matters: the coder document
+   (selection-based coding), plain-text PDF mode and all form fields. */
+.qc-selectable,
+input,
+textarea,
+select {
+  user-select: text;
+  -webkit-user-select: text;
+}
+
 /* Visible focus ring for keyboard navigation (WCAG) */
 :focus-visible {
   outline: 2px solid var(--qc-accent);

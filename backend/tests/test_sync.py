@@ -48,8 +48,14 @@ async def rater_b(tmp_path):
 
 
 @pytest.fixture
-async def project_client(tmp_path):
-    """API client with a fresh open project (endpoint tests)."""
+async def project_client(tmp_path, monkeypatch):
+    """API client with a fresh open project (endpoint tests).
+
+    The sync switch lives in the per-machine settings file — isolate it so
+    endpoint tests never read or write the developer's real settings."""
+    from qualcoder_api.services import user_settings
+
+    monkeypatch.setattr(user_settings, "SETTINGS_FILE", tmp_path / "settings.json")
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as c:
         target = tmp_path / "sync-api.qda"

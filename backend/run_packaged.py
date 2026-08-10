@@ -6,15 +6,13 @@ written to ``%TEMP%\\qualcoder-port-<pid>.json`` so the Tauri shell can
 discover it (multiple app instances each get their own backend + port).
 """
 
+import contextlib as _contextlib
 import json
 import os
 import socket
-import sys
 import tempfile
 
 import uvicorn
-
-from qualcoder_api.main import app
 
 DEFAULT_PORT = 8765
 
@@ -43,11 +41,13 @@ if __name__ == "__main__":
             json.dump({"port": port, "pid": pid}, f)
     except OSError:
         port_file = ""
+    # The heavy qualcoder_api import happens AFTER the port file is written,
+    # so the Tauri shell discovers the port while Python is still booting.
+    from qualcoder_api.main import app
+
     try:
         uvicorn.run(app, host="127.0.0.1", port=port, log_level="info")
     finally:
         if port_file:
-            try:
+            with _contextlib.suppress(OSError):
                 os.remove(port_file)
-            except OSError:
-                pass

@@ -178,7 +178,7 @@ async function openToneInCoder(page: Page) {
 
 test("create project and import the audio file", async ({ page }) => {
   await page.goto("/");
-  await expect(page.getByRole("heading", { name: "QualCoder" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "New project" })).toBeVisible();
 
   await page.getByRole("button", { name: "New project" }).click();
   const dialog = page.getByRole("dialog", { name: "New project" });

@@ -43,10 +43,16 @@ test.beforeAll(async () => {
   await ensureFixtureFiles();
 });
 
-test("welcome screen and theme toggle", async ({ page }) => {
+test("app shell (no welcome screen) and theme toggle", async ({ page }) => {
   await page.goto("/");
 
-  await expect(page.getByRole("heading", { name: "QualCoder" })).toBeVisible();
+  // No welcome hero — the shell renders with only New/Open enabled; the
+  // project nav buttons are present but disabled.
+  await expect(page.getByRole("button", { name: "New project" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Open project" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Dashboard" })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "Files" })).toBeDisabled();
+  await expect(page.locator("h1")).toHaveCount(0);
 
   // Backend health pill: the app calls GET /api/v1/health on mount.
   await expect(page.getByRole("status").first()).toHaveText(/Backend ok/);
@@ -72,7 +78,7 @@ test("create project, import a file, autocode it, and run a report", async ({ pa
 
   // ---------------------------------------------------------------- create
   await test.step("create project from the dashboard", async () => {
-    await expect(page.getByRole("heading", { name: "QualCoder" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "New project" })).toBeVisible();
     await page.getByRole("button", { name: "New project" }).click();
     const dialog = page.getByRole("dialog", { name: "New project" });
     await expect(dialog).toBeVisible();
@@ -136,7 +142,7 @@ test("create project, import a file, autocode it, and run a report", async ({ pa
   await test.step("close the project; it appears in recent projects", async () => {
     await page.request.post("http://localhost:8765/api/v1/projects/close");
     await page.goto("/");
-    await expect(page.getByRole("heading", { name: "QualCoder" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "New project" })).toBeVisible();
     await expect(page.getByText("Recent projects", { exact: true })).toBeVisible();
     await expect(page.getByRole("button", { name: PROJECT_PATH, exact: true })).toBeVisible();
   });

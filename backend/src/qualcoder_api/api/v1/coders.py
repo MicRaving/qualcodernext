@@ -72,6 +72,18 @@ async def _coding_counts(svc) -> dict[str, int]:
     return result
 
 
+def _all_coders(svc, counts: dict[str, int]) -> list[str]:
+    """The coder list: per-machine coders (settings) merged with every
+    owner found in the open project. Projects keep their own coder set
+    (upstream `coder_names`), so analysis and the coder switcher must show
+    the project's coders even when they were never created on this machine."""
+    names = list(get_coders())
+    for owner in sorted(counts):
+        if owner not in names:
+            names.append(owner)
+    return names
+
+
 def _response(current: str, names: list[str], counts: dict[str, int]) -> CodersResponse:
     return CodersResponse(
         current=current,
@@ -82,7 +94,7 @@ def _response(current: str, names: list[str], counts: dict[str, int]) -> CodersR
 @router.get("", response_model=CodersResponse)
 async def list_coders(svc: ServiceDep) -> CodersResponse:
     counts = await _coding_counts(svc)
-    return _response(get_codername(), get_coders(), counts)
+    return _response(get_codername(), _all_coders(svc, counts), counts)
 
 
 @router.post("", response_model=CodersResponse, status_code=201)
@@ -98,15 +110,15 @@ async def create_coder(req: CoderRequest) -> CodersResponse:
 
 
 @router.put("/current", response_model=CodersResponse)
-async def switch_coder(req: CurrentCoderRequest) -> CodersResponse:
+async def switch_coder(req: CurrentCoderRequest, svc: ServiceDep) -> CodersResponse:
     name = req.name.strip()
     if not name:
         raise HTTPException(status_code=422, detail="coder name must not be empty")
-    names = get_coders()
-    if name not in names:
+    counts = await _coding_counts(svc)
+    if name not in _all_coders(svc, counts):
         raise HTTPException(status_code=404, detail=f'coder "{name}" does not exist')
     set_codername(name)
-    return _response(name, names, {})
+    return _response(name, _all_coders(svc, counts), counts)
 
 
 @router.delete("/{name}", response_model=CodersResponse)
@@ -179,8 +191,8 @@ async def set_coder_visibility(name: str, req: VisibilityRequest, svc: ServiceDe
     """
     if svc.engine is None:
         raise HTTPException(status_code=409, detail="no project is open")
-    names = get_coders()
-    if name not in names:
+    counts = await _coding_counts(svc)
+    if name not in _all_coders(svc, counts):
         raise HTTPException(status_code=404, detail=f'coder "{name}" does not exist')
     _, factory = svc._ensure_engine()
     async with factory() as session:

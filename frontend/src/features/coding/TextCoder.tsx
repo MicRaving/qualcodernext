@@ -53,7 +53,7 @@ import { useI18n } from "@/lib/i18n";
 import { useProjectStore } from "@/stores/project";
 
 /** Shared font metrics so the edit-mode textarea and overlay align. */
-const DOC_FONT_CLS = "font-sans text-sm leading-6 whitespace-pre-wrap break-words";
+const DOC_FONT_CLS = "qc-selectable font-sans text-sm leading-6 whitespace-pre-wrap break-words";
 const FALLBACK_CODE_COLOR = "var(--qc-accent)";
 
 /** Soft highlight for coded segments: the code color, transparently. */

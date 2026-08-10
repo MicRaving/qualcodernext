@@ -151,6 +151,45 @@ async def test_import_rqda_twice_is_idempotent(project_client):
     assert body["cases"] == 0
 
 
+async def test_import_auto_detects_rqda_and_survey(project_client):
+    """The auto-detect import endpoint routes files by content — no format
+    chooser needed."""
+    client, tmp_path = project_client
+    rqda_path = tmp_path / "sample.rqda"
+    await build_rqda_db(rqda_path)
+    res = await client.post(
+        "/api/v1/interchange/import/auto",
+        files={"file": ("sample.rqda", rqda_path.read_bytes(), "application/octet-stream")},
+        data={"codername": "tester"},
+    )
+    assert res.status_code == 200, res.text
+    assert res.json()["sources"] == 1
+    assert res.json()["codings"] == 1
+
+    csv = "name,age,comment\nalice,42,hello world\nbob,33,second row\n"
+    res = await client.post(
+        "/api/v1/interchange/import/auto",
+        files={"file": ("survey.csv", csv.encode(), "text/csv")},
+    )
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert body["cases"] == 2
+
+    codebook = "Theme>>Subtheme>>code1\nTheme>>code2\n"
+    res = await client.post(
+        "/api/v1/interchange/import/auto",
+        files={"file": ("codebook.txt", codebook.encode(), "text/plain")},
+    )
+    assert res.status_code == 200, res.text
+    assert res.json()["codes"] == 2
+
+    res = await client.post(
+        "/api/v1/interchange/import/auto",
+        files={"file": ("garbage.bin", b"\x00\x01\x02 not a format", "application/octet-stream")},
+    )
+    assert res.status_code == 422
+
+
 # ----------------------------------------------------------------------
 # Taguette
 # ----------------------------------------------------------------------

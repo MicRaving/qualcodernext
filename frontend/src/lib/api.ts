@@ -21,9 +21,10 @@ function resolveBase(): Promise<string> {
       if (typeof window !== "undefined" && "__TAURI_INTERNALS__" in window) {
         try {
           const core = await import("@tauri-apps/api/core");
-          // The embedded backend takes ~10s to start; its port file appears
-          // late, so retry the resolution instead of falling back early.
-          for (let i = 0; i < 20; i++) {
+          // The embedded backend takes a few seconds to start; its port file
+          // appears early (written before the heavy imports), so poll fast
+          // instead of sitting through a fixed delay.
+          for (let i = 0; i < 150; i++) {
             try {
               const port = await core.invoke<number>("backend_port");
               if (typeof port === "number" && port > 0) {
@@ -32,7 +33,7 @@ function resolveBase(): Promise<string> {
             } catch {
               /* not in the Tauri shell — use the dev default */
             }
-            await new Promise((r) => setTimeout(r, 1000));
+            await new Promise((r) => setTimeout(r, 200));
           }
         } catch {
           /* fall through to the dev default */
@@ -1244,6 +1245,13 @@ export const api = {
     importMultipart<InterchangeResult>("/interchange/import/codebook", file, codername),
   importMerge: (file: File, codername?: string) =>
     importMultipart<InterchangeResult>("/interchange/import/merge", file, codername),
+  importAuto: (file: File, codername?: string, qualitativeHeaders?: string[]) =>
+    importMultipart<InterchangeResult>(
+      "/interchange/import/auto",
+      file,
+      codername,
+      qualitativeHeaders ? { qualitative_headers: qualitativeHeaders.join(",") } : undefined,
+    ),
   importZotero: (codername?: string) => {
     const form = new FormData();
     if (codername) form.append("codername", codername);

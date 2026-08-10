@@ -112,6 +112,9 @@ const NAV_BUTTONS: { kind: WorkspaceView["kind"]; labelKey: string; icon: typeof
   { kind: "notes", labelKey: "nav.notes", icon: NotebookPen },
   { kind: "analyze", labelKey: "nav.analyze", icon: BarChart3 },
   { kind: "graphs", labelKey: "nav.graphs", icon: Network },
+];
+
+const RIGHT_ICON_BUTTONS: { kind: WorkspaceView["kind"]; labelKey: string; icon: typeof Files }[] = [
   { kind: "history", labelKey: "nav.history", icon: History },
   { kind: "ai", labelKey: "nav.ai", icon: Sparkles },
 ];
@@ -167,36 +170,32 @@ export function ProjectShell() {
     <div className="flex h-full flex-col bg-bg text-text-primary">
       {/* Toolbar */}
       <header className="flex h-11 shrink-0 items-center gap-0.5 border-b border-border bg-surface px-3">
-        {projectOpen ? (
-          <>
-            {NAV_BUTTONS.map(({ kind, labelKey, icon: Icon }) => {
-              const label = t(labelKey);
-              return (
-                <button
-                  key={kind}
-                  type="button"
-                  onClick={() => setView({ kind } as WorkspaceView)}
-                  aria-label={label}
-                  title={label}
-                  className={`flex items-center gap-1.5 rounded-sm px-2 py-1 hover:bg-surface-higher ${
-                    view.kind === kind ? "bg-surface-higher text-accent" : "text-text-secondary"
-                  }`}
-                >
-                  <Icon size={20} aria-hidden />
-                  <span className="text-xs font-medium">{label}</span>
-                </button>
-              );
-            })}
-            <div className="h-5 w-px bg-border" aria-hidden />
-          </>
-        ) : (
-          <>
-            <span className="font-heading">{t("app.name")}</span>
-            <span className="text-xs text-text-secondary">{t("app.version")}</span>
-          </>
-        )}
+        {NAV_BUTTONS.map(({ kind, labelKey, icon: Icon }) => {
+          const label = t(labelKey);
+          return (
+            <button
+              key={kind}
+              type="button"
+              onClick={projectOpen ? () => setView({ kind } as WorkspaceView) : undefined}
+              disabled={!projectOpen}
+              aria-label={label}
+              title={projectOpen ? label : t("shell.navDisabled")}
+              className={`flex items-center gap-1.5 rounded-sm px-2 py-1 ${
+                !projectOpen
+                  ? "cursor-not-allowed text-text-secondary/40"
+                  : `hover:bg-surface-higher ${
+                      view.kind === kind ? "bg-surface-higher text-accent" : "text-text-secondary"
+                    }`
+              }`}
+            >
+              <Icon size={20} aria-hidden />
+              <span className="text-xs font-medium">{label}</span>
+            </button>
+          );
+        })}
+        <div className="h-5 w-px bg-border" aria-hidden />
         <div className="flex-1" />
-        <CoderSwitcher />
+        {projectOpen && <CoderSwitcher />}
         {projectOpen ? (
           <>
             {hasBackground && (
@@ -274,6 +273,23 @@ export function ProjectShell() {
                 )}
               </div>
             )}
+            {RIGHT_ICON_BUTTONS.map(({ kind, labelKey, icon: Icon }) => {
+              const label = t(labelKey);
+              return (
+                <button
+                  key={kind}
+                  type="button"
+                  onClick={() => setView({ kind } as WorkspaceView)}
+                  aria-label={label}
+                  title={label}
+                  className={`rounded-sm px-2 py-1 hover:bg-surface-higher ${
+                    view.kind === kind ? "bg-surface-higher text-accent" : "text-text-secondary"
+                  }`}
+                >
+                  <Icon size={20} aria-hidden />
+                </button>
+              );
+            })}
             <button
               type="button"
               onClick={() => setView({ kind: "settings" })}

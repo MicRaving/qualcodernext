@@ -35,10 +35,13 @@ export const en: Record<string, string> = {
 
   // shell toolbar / status bar
   "shell.closeProject": "Close project",
-  "shell.closeProjectTitle": "Close project and return to the welcome screen",
+  "shell.closeProjectTitle": "Close project and return to the start",
   "shell.summary": "{codes} codes · {files} files",
   "shell.openingRecent": "Opening last project…",
   "shell.startingBackend": "Starting backend…",
+  "shell.navDisabled": "Open or create a project first",
+  "shell.noProject": "No project open",
+  "shell.emptyBlocks": "No project open — create or open one to start.",
   "status.summary": "{files} files · {codes} codes",
 
   // welcome screen

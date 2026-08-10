@@ -40,6 +40,9 @@ export const de: Record<string, string> = {
   "shell.summary": "{codes} Codes · {files} Dateien",
   "shell.openingRecent": "Letztes Projekt wird geöffnet …",
   "shell.startingBackend": "Backend wird gestartet …",
+  "shell.navDisabled": "Zuerst ein Projekt öffnen oder erstellen",
+  "shell.noProject": "Kein Projekt geöffnet",
+  "shell.emptyBlocks": "Kein Projekt geöffnet – erstellen oder öffnen Sie ein Projekt, um zu starten.",
   "status.summary": "{files} Dateien · {codes} Codes",
 
   // welcome screen

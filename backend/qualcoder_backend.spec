@@ -1,7 +1,12 @@
 # -*- mode: python ; coding: utf-8 -*-
-"""PyInstaller spec for the QualCoder v4 packaged backend (onefile, windowed).
+"""PyInstaller spec for the QualCoder v4 packaged backend (onedir, windowed).
 
-Build:  .\.venv\Scripts\python.exe -m PyInstaller --noconfirm --clean qualcoder_backend.spec
+Onedir (not onefile): the app ships the whole directory in the installer,
+so nothing is unpacked at launch — the current onefile variant re-extracted
+~140 MB to a temp dir on every start, which dominated the startup time.
+
+Build:  .\.venv\Scripts\python.exe -m PyInstaller --noconfirm qualcoder_backend.spec
+Output: dist/qualcoder-backend/  (copied into the Tauri resources by compile.ps1)
 """
 
 from PyInstaller.utils.hooks import collect_data_files, collect_submodules
@@ -78,9 +83,8 @@ pyz = PYZ(a.pure)
 exe = EXE(
     pyz,
     a.scripts,
-    a.binaries,
-    a.datas,
     [],
+    exclude_binaries=True,
     name="qualcoder-backend",
     debug=False,
     bootloader_ignore_signals=False,
@@ -94,4 +98,14 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+)
+
+coll = COLLECT(
+    exe,
+    a.binaries,
+    a.datas,
+    strip=False,
+    upx=False,
+    upx_exclude=[],
+    name="qualcoder-backend",
 )

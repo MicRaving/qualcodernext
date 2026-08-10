@@ -165,7 +165,7 @@ async function ensureProjectOpen(page: Page) {
 
 test("create project, import image and text fixtures", async ({ page }) => {
   await page.goto("/");
-  await expect(page.getByRole("heading", { name: "QualCoder" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "New project" })).toBeVisible();
 
   await page.getByRole("button", { name: "New project" }).click();
   const dialog = page.getByRole("dialog", { name: "New project" });
@@ -422,8 +422,8 @@ test("interchange export and import", async ({ page }) => {
   const dlPath = await download.path();
   expect(dlPath).toBeTruthy();
 
-  // Import: the handcrafted REFI-QDA file (code + source + coding + case).
-  await page.getByLabel(/^Format/).selectOption("refi");
+  // Import: the handcrafted REFI-QDA file (code + source + coding + case);
+  // the format is detected automatically from the file content.
   await page.getByLabel("Import file").setInputFiles(MINIMAL_QDP);
   await page.getByRole("button", { name: "Import", exact: true }).click();
   await expect(

@@ -8,10 +8,11 @@
 # Usage:
 #   powershell -ExecutionPolicy Bypass -File compile.ps1
 #   powershell -ExecutionPolicy Bypass -File compile.ps1 -SkipBackend   # rebuild only the Tauri app
-#   powershell -ExecutionPolicy Bypass -File compile.ps1 -SkipTauri     # rebuild only the backend exe
+#   powershell -ExecutionPolicy Bypass -File compile.ps1 -SkipTauri     # rebuild only the backend onedir
 #
 # Artifacts (after a successful run):
-#   backend\dist\qualcoder-backend.exe
+#   backend\dist\qualcoder-backend\          PyInstaller onedir (copy of the resource below)
+#   frontend\src-tauri\resources\backend\    backend onedir bundled into the Tauri resources
 #   frontend\src-tauri\target\release\qualcoder-tauri.exe
 #   frontend\src-tauri\target\release\bundle\nsis\QualCoder_*-setup.exe
 #   frontend\src-tauri\target\release\bundle\msi\QualCoder_*.msi
@@ -46,22 +47,28 @@ Write-Host "==========================================" -ForegroundColor Cyan
 
 # --- 1/2 Backend ----------------------------------------------------------
 if (-not $SkipBackend) {
-    Write-Host "`n[1/2] Packaging the backend (PyInstaller)..." -ForegroundColor Yellow
+    Write-Host "`n[1/2] Packaging the backend (PyInstaller onedir)..." -ForegroundColor Yellow
     if (-not (Test-Path $venvPython)) {
         throw "Backend venv not found at $venvPython - create it first (see backend\pyproject.toml)."
     }
     Push-Location $backendDir
     try {
-        & $venvPython -m PyInstaller --noconfirm --clean qualcoder_backend.spec
+        & $venvPython -m PyInstaller --noconfirm qualcoder_backend.spec
         if ($LASTEXITCODE -ne 0) { throw "PyInstaller failed (exit $LASTEXITCODE)." }
     } finally {
         Pop-Location
     }
-    $backendExe = Join-Path $backendDir "dist\qualcoder-backend.exe"
-    if (-not (Test-Path $backendExe)) {
-        throw "PyInstaller completed but $backendExe is missing."
+    $backendDirOut = Join-Path $backendDir "dist\qualcoder-backend"
+    if (-not (Test-Path (Join-Path $backendDirOut "qualcoder-backend.exe"))) {
+        throw "PyInstaller completed but $backendDirOut\qualcoder-backend.exe is missing."
     }
-    Write-Host "Backend exe: $backendExe" -ForegroundColor Green
+    # Ship the onedir as a Tauri resource so nothing is unpacked at launch.
+    $resourceTarget = Join-Path $frontendDir "src-tauri\resources\backend"
+    Write-Host "Copying backend onedir to $resourceTarget" -ForegroundColor Yellow
+    if (Test-Path $resourceTarget) { Remove-Item $resourceTarget -Recurse -Force }
+    New-Item -ItemType Directory -Path $resourceTarget -Force | Out-Null
+    Copy-Item (Join-Path $backendDirOut "*") $resourceTarget -Recurse -Force
+    Write-Host "Backend onedir: $backendDirOut" -ForegroundColor Green
 } else {
     Write-Host "`n[1/2] Skipping backend packaging (-SkipBackend)." -ForegroundColor DarkGray
 }
@@ -104,7 +111,8 @@ Write-Host "`n==========================================" -ForegroundColor Cyan
 Write-Host " Build finished. Artifacts:" -ForegroundColor Cyan
 Write-Host "==========================================" -ForegroundColor Cyan
 $report = @(
-    (Join-Path $backendDir "dist\qualcoder-backend.exe"),
+    (Join-Path $backendDir "dist\qualcoder-backend"),
+    (Join-Path $frontendDir "src-tauri\resources\backend"),
     (Join-Path $frontendDir "src-tauri\target\release\qualcoder-tauri.exe"),
     (Join-Path $frontendDir "src-tauri\target\release\bundle\nsis"),
     (Join-Path $frontendDir "src-tauri\target\release\bundle\msi")

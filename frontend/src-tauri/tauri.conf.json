@@ -27,7 +27,10 @@
     "active": true,
     "targets": "all",
     "icon": ["icons/icon.ico", "icons/icon.png"],
-    "createUpdaterArtifacts": false
+    "createUpdaterArtifacts": false,
+    "resources": {
+      "resources/backend": "backend"
+    }
   }
 }
 

@@ -962,7 +962,7 @@ export function CodebookReport() {
           {copied ? "Copied" : "Copy to clipboard"}
         </button>
       </div>
-      <pre className="max-h-96 overflow-auto rounded-sm border border-border bg-surface p-3 text-xs leading-relaxed text-text-primary">
+      <pre className="qc-selectable max-h-96 overflow-y-auto whitespace-pre-wrap break-words rounded-sm border border-border bg-surface p-3 text-xs leading-relaxed text-text-primary">
         {data?.text || "—"}
       </pre>
     </div>

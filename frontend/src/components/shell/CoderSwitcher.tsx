@@ -157,29 +157,27 @@ export function CoderSwitcher() {
         aria-expanded={open}
         aria-label={t("coder.switchAria", { name: coderName })}
         title={t("coder.switchTitle")}
-        className="flex max-w-40 items-center gap-1.5 rounded-sm border border-border bg-bg px-2 py-1 text-xs hover:bg-surface-higher"
+        className="flex max-w-44 items-center gap-1.5 rounded-sm border border-border bg-bg px-2 py-1 text-xs hover:bg-surface-higher"
       >
         <User size={12} className="shrink-0 text-text-secondary" aria-hidden />
         <span className="truncate">{coderName}</span>
+        <span
+          role="status"
+          aria-label={syncEnabled ? (syncError ? "sync-error" : "sync-on") : "sync-off"}
+          title={
+            syncEnabled
+              ? syncError
+                ? syncStatus?.last_error ?? t("sync.error")
+                : t("sync.lastSyncShort", { when: formatSince(syncStatus?.last_sync ?? 0) })
+              : undefined
+          }
+          className={`h-1.5 w-1.5 shrink-0 rounded-full ${
+            syncEnabled ? (syncError ? "bg-danger" : "bg-success") : "bg-transparent"
+          }`}
+          aria-hidden={!syncEnabled}
+        />
         <ChevronDown size={12} className="shrink-0 text-text-secondary" aria-hidden />
       </button>
-
-      {/* Tiny sync indicator: only while sync is switched on. */}
-      {syncEnabled && (
-        <button
-          type="button"
-          onClick={() => setOpen(true)}
-          title={syncError ? syncStatus?.last_error ?? t("sync.error") : t("sync.lastSyncShort", { when: formatSince(syncStatus?.last_sync ?? 0) })}
-          className={`flex items-center gap-1 rounded-sm border px-1.5 py-1 text-[11px] leading-none ${
-            syncError
-              ? "border-danger/60 bg-danger/10 text-danger"
-              : "border-border bg-bg text-text-secondary hover:bg-surface-higher"
-          }`}
-        >
-          <RefreshCw size={11} className={syncError ? undefined : "opacity-80"} aria-hidden />
-          {syncError ? "!" : formatSince(syncStatus?.last_sync ?? 0)}
-        </button>
-      )}
 
       {open && (
         <div
