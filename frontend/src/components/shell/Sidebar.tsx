@@ -89,11 +89,17 @@ export function Sidebar() {
   }, [sources]);
 
   const treeItems = useMemo(() => {
-    const byParent = new Map<number | null, CodeTreeItem[]>();
+    const byParent = new Map<string, CodeTreeItem[]>();
     for (const item of codeTree) {
-      const list = byParent.get(item.parent_id) ?? [];
+      const parentKey =
+        item.parent_id == null
+          ? "root"
+          : item.kind === "category" || !item.subcode
+            ? `cat:${item.parent_id}`
+            : `code:${item.parent_id}`;
+      const list = byParent.get(parentKey) ?? [];
       list.push(item);
-      byParent.set(item.parent_id, list);
+      byParent.set(parentKey, list);
     }
     return byParent;
   }, [codeTree]);
@@ -453,12 +459,15 @@ export function Sidebar() {
   /* Rendering                                                           */
   /* ------------------------------------------------------------------ */
 
-  function renderCodeNode(parent: number | null, depth: number) {
+  const MAX_TREE_DEPTH = 64;
+
+  function renderCodeNode(parent: string, depth: number) {
     const items = treeItems.get(parent) ?? [];
     return items.map((item) => {
       const key = `${item.kind}:${item.id}`;
       const isCollapsed = collapsed[key] ?? false;
-      const hasChildren = (treeItems.get(item.id)?.length ?? 0) > 0;
+      const childrenKey = item.kind === "category" ? `cat:${item.id}` : `code:${item.id}`;
+      const hasChildren = (treeItems.get(childrenKey)?.length ?? 0) > 0;
       return (
         <div key={key}>
           <button
@@ -518,7 +527,7 @@ export function Sidebar() {
             )}
             <span className="truncate">{item.name}</span>
           </button>
-          {hasChildren && !isCollapsed && renderCodeNode(item.id, depth + 1)}
+          {hasChildren && !isCollapsed && depth < MAX_TREE_DEPTH && renderCodeNode(childrenKey, depth + 1)}
         </div>
       );
     });
@@ -567,7 +576,7 @@ export function Sidebar() {
             {toolbarError && (
               <p className="shrink-0 px-2 pt-1 text-xs text-danger">{toolbarError}</p>
             )}
-            <div className="pt-1">{renderCodeNode(null, 0)}</div>
+            <div className="pt-1">{renderCodeNode("root", 0)}</div>
           </div>
         ) : (
           Object.entries(groups).map(([group, items]) =>

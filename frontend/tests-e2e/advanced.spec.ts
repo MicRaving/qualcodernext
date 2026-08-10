@@ -109,7 +109,7 @@ async function repairProjectMeta(): Promise<void> {
  * for the full quirk story).
  */
 async function ensureProjectOpen(page: Page) {
-  const closeBtn = page.getByRole("button", { name: "Go to code" });
+  const closeBtn = page.getByRole("button", { name: "Cases" });
   for (let attempt = 0; attempt < 3; attempt++) {
     await page.goto("/");
     fs.rmSync(path.join(PROJECT_PATH, "project_in_use.lock"), { force: true });
@@ -138,7 +138,7 @@ test("PDF import and region coding", async ({ page }) => {
   await expect(dialog).toBeVisible();
   await dialog.locator("#create-path").fill(PROJECT_PATH);
   await dialog.getByRole("button", { name: "Create project" }).click();
-  await expect(page.getByRole("button", { name: "Go to code" })).toBeVisible({
+  await expect(page.getByRole("button", { name: "Cases" })).toBeVisible({
     timeout: 30_000,
   });
 
@@ -302,7 +302,7 @@ test("recent projects persist after reload", async ({ page }) => {
   fs.rmSync(path.join(PROJECT_PATH, "project_in_use.lock"), { force: true });
   await repairProjectMeta();
   await recent.click();
-  await expect(page.getByRole("button", { name: "Go to code" })).toBeVisible({
+  await expect(page.getByRole("button", { name: "Cases" })).toBeVisible({
     timeout: 30_000,
   });
 });

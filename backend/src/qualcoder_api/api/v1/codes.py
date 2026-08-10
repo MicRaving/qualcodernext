@@ -106,6 +106,36 @@ async def code_tree(db: DbDep) -> list[CodeTreeItem]:
         )
         for code in codes
     )
+    # Guard against parent cycles (self-references or loops from legacy /
+    # imported projects): detach any item whose parent chain circles back
+    # on itself so the tree always stays renderable. Categories and codes
+    # use separate id sequences (upstream legacy), so parent references
+    # resolve kind-aware: codes point at a category unless they are
+    # sub-codes, which point at the parent code.
+    cats_by_id = {item.id: item for item in items if item.kind == "category"}
+    codes_by_id = {item.id: item for item in items if item.kind == "code"}
+
+    def resolve_parent(item: CodeTreeItem) -> CodeTreeItem | None:
+        if item.parent_id is None:
+            return None
+        if item.kind == "category":
+            return cats_by_id.get(item.parent_id)
+        if item.subcode:
+            return codes_by_id.get(item.parent_id)
+        return cats_by_id.get(item.parent_id)
+
+    for item in items:
+        if item.parent_id is None:
+            continue
+        seen = {(item.kind, item.id)}
+        parent = resolve_parent(item)
+        while parent is not None:
+            key = (parent.kind, parent.id)
+            if key in seen:
+                item.parent_id = None
+                break
+            seen.add(key)
+            parent = resolve_parent(parent)
     return items
 
 

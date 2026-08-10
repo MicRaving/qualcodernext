@@ -7,7 +7,6 @@
 import { useEffect, useState } from "react";
 import {
   BarChart3,
-  Code2,
   Files,
   History,
   LayoutDashboard,
@@ -115,7 +114,6 @@ const NAV_BUTTONS: { kind: WorkspaceView["kind"]; labelKey: string; icon: typeof
   { kind: "graphs", labelKey: "nav.graphs", icon: Network },
   { kind: "history", labelKey: "nav.history", icon: History },
   { kind: "ai", labelKey: "nav.ai", icon: Sparkles },
-  { kind: "settings", labelKey: "nav.settings", icon: Settings },
 ];
 
 export function ProjectShell() {
@@ -201,18 +199,6 @@ export function ProjectShell() {
         <CoderSwitcher />
         {projectOpen ? (
           <>
-            <button
-              type="button"
-              onClick={() =>
-                setView(view.kind === "coding" ? { kind: "coding", sourceId: view.sourceId } : { kind: "files" })
-              }
-              aria-label={t("nav.codeGo")}
-              title={t("nav.code")}
-              className="flex items-center gap-1.5 rounded-sm border border-border bg-bg px-2 py-1 text-xs hover:bg-surface-higher"
-            >
-              <Code2 size={13} aria-hidden />
-              {t("nav.code")}
-            </button>
             {hasBackground && (
               <div className="relative">
                 <button
@@ -288,6 +274,17 @@ export function ProjectShell() {
                 )}
               </div>
             )}
+            <button
+              type="button"
+              onClick={() => setView({ kind: "settings" })}
+              aria-label={t("nav.settings")}
+              title={t("nav.settings")}
+              className={`rounded-sm px-2 py-1 hover:bg-surface-higher ${
+                view.kind === "settings" ? "bg-surface-higher text-accent" : "text-text-secondary"
+              }`}
+            >
+              <Settings size={20} aria-hidden />
+            </button>
           </>
         ) : (
           <>

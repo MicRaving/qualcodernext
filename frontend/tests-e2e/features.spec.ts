@@ -141,7 +141,7 @@ async function repairProjectMeta(): Promise<void> {
  *  - the `about` marker is rewritten on open (see repairProjectMeta).
  */
 async function ensureProjectOpen(page: Page) {
-  const closeBtn = page.getByRole("button", { name: "Go to code" });
+  const closeBtn = page.getByRole("button", { name: "Cases" });
   for (let attempt = 0; attempt < 3; attempt++) {
     // The welcome screen fetches the recent-projects list once on mount; a
     // transient network hiccup leaves it empty, so reload and retry.
@@ -172,7 +172,7 @@ test("create project, import image and text fixtures", async ({ page }) => {
   await expect(dialog).toBeVisible();
   await dialog.locator("#create-path").fill(PROJECT_PATH);
   await dialog.getByRole("button", { name: "Create project" }).click();
-  await expect(page.getByRole("button", { name: "Go to code" })).toBeVisible({
+  await expect(page.getByRole("button", { name: "Cases" })).toBeVisible({
     timeout: 30_000,
   });
 

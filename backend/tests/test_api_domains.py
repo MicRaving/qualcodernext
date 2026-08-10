@@ -162,6 +162,40 @@ async def test_code_tree_and_crud(project_client):
     assert (await client.get("/api/v1/codes")).json() == []
 
 
+async def test_code_tree_detaches_cycles(project_client, tmp_path):
+    """Legacy/imported data can contain self-referencing or looping parent
+    chains; the tree response must detach such items instead of looping.
+    Category and code ids use separate sequences (upstream legacy), so a
+    code whose ``catid`` equals its own ``cid`` must NOT be treated as a
+    cycle — it legitimately nests under the category with that id."""
+    import sqlite3
+
+    client, target = project_client
+    cat = await client.post(
+        "/api/v1/codes/categories", json={"name": "Top", "owner": "tester"}
+    )
+    assert cat.status_code == 201
+    catid = cat.json()["catid"]
+    code = await client.post(
+        "/api/v1/codes",
+        json={"name": "nested", "owner": "tester", "catid": catid},
+    )
+    assert code.status_code == 201
+    cid = code.json()["cid"]
+    assert cid == catid == 1
+
+    tree = (await client.get("/api/v1/codes")).json()
+    nested = next(t for t in tree if t["kind"] == "code" and t["id"] == cid)
+    assert nested["parent_id"] == catid
+
+    with sqlite3.connect(str(target / "data.qda")) as conn:
+        conn.execute("UPDATE code_name SET supercid = ? WHERE cid = ?", (cid, cid))
+        conn.commit()
+    tree = (await client.get("/api/v1/codes")).json()
+    self_ref = next(t for t in tree if t["kind"] == "code" and t["id"] == cid)
+    assert self_ref["parent_id"] is None
+
+
 async def test_merge_codes_via_api(project_client):
     client, _ = project_client
     c1 = (await client.post("/api/v1/codes", json={"name": "one"})).json()
