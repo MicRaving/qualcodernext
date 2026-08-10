@@ -851,15 +851,11 @@ export const de: Record<string, string> = {
 
   // Collaboration sync (Option B: Änderungsdateien)
   "sync.title": "Sync",
-  "sync.settingsTitle": "Zusammenarbeit",
-  "sync.settingsHint": "Arbeiten Sie an einer eigenen Kopie des Projektordners und teilen Sie diese über einen Ordner-Sync (Nextcloud, Sync&Share, Syncthing). Jede Minute exportiert die App Ihre Änderungen und importiert die Änderungen Ihrer Mitwirkenden über den Ordner „changes“ — die Datenbank selbst wird nie vom Sync-Werkzeug zusammengeführt. Verwenden Sie pro Mitwirkendem einen eindeutigen Codierernamen.",
+  "sync.toggle": "Hintergrund-Sync aktivieren",
   "sync.pending": "{n} ausstehend",
   "sync.pendingExport": "{n} zu senden",
   "sync.pendingImport": "{n} zu empfangen",
-  "sync.active": "aktiv",
-  "sync.synced": "Synchronisiert",
   "sync.now": "Jetzt synchronisieren",
-  "sync.lastSync": "zuletzt {when}",
-  "sync.noCollaborators": "Noch keine anderen Mitwirkenden gesehen.",
-  "sync.hint": "Die Datenbank wird nie vom Sync-Werkzeug zusammengeführt.",
+  "sync.lastSyncShort": "vor {when}",
+  "sync.error": "Sync-Fehler",
 };

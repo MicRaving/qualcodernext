@@ -113,8 +113,10 @@ async def test_import_rqda(project_client):
     sources = (await client.get("/api/v1/sources")).json()
     assert len(sources) == 1
     assert sources[0]["name"] == "rq.txt"
-    assert sources[0]["fulltext"] == "Hello rqda world"
+    assert sources[0]["fulltext"] is None  # the list omits fulltext
     fid = sources[0]["id"]
+    detail = (await client.get(f"/api/v1/sources/{fid}")).json()
+    assert detail["fulltext"] == "Hello rqda world"
 
     codings = (await client.get(f"/api/v1/codings/text/{fid}")).json()
     assert len(codings) == 1
@@ -173,8 +175,10 @@ async def test_import_taguette(project_client):
 
     sources = (await client.get("/api/v1/sources")).json()
     assert len(sources) == 1
-    assert sources[0]["fulltext"] == "Hello world"
+    assert sources[0]["fulltext"] is None
     fid = sources[0]["id"]
+    detail = (await client.get(f"/api/v1/sources/{fid}")).json()
+    assert detail["fulltext"] == "Hello world"
 
     codings = (await client.get(f"/api/v1/codings/text/{fid}")).json()
     assert len(codings) == 1

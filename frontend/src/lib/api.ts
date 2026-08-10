@@ -68,13 +68,26 @@ export class ApiError extends Error {
   }
 }
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
+/** Fetch with an AbortController timeout (no request ever hangs forever). */
+export function fetchWithTimeout(
+  url: string,
+  init: RequestInit = {},
+  timeoutMs = 15_000,
+): Promise<Response> {
+  const controller = new AbortController();
+  const timer = window.setTimeout(() => controller.abort(), timeoutMs);
+  return fetch(url, { ...init, signal: controller.signal }).finally(() =>
+    window.clearTimeout(timer),
+  );
+}
+
+async function request<T>(path: string, init?: RequestInit, timeoutMs = 15_000): Promise<T> {
   const base = await resolveBase();
   resolvedBase = base;
-  const res = await fetch(`${base}${path}`, {
+  const res = await fetchWithTimeout(`${base}${path}`, {
     headers: { "Content-Type": "application/json" },
     ...init,
-  });
+  }, timeoutMs);
   if (!res.ok) {
     let detail: unknown;
     try {
@@ -813,6 +826,9 @@ export interface SyncStatus {
   pending_export: number;
   pending_import: number;
   collaborators: SyncCollaborator[];
+  last_sync: number; // epoch seconds of the last successful cycle (0 = never)
+  last_error: string;
+  last_error_at: number;
 }
 
 export interface SyncResult {
@@ -825,7 +841,8 @@ export interface SyncResult {
 export const api = {
   health: () => request<HealthStatus>("/health"),
 
-  recentProjects: () => request<{ recent: string[] }>("/projects"),
+  recentProjects: (timeoutMs?: number) =>
+    request<{ recent: string[] }>("/projects", undefined, timeoutMs),
   createProject: (project_path: string, codername?: string) =>
     request<OpenProjectResult>("/projects", {
       method: "POST",
@@ -1471,6 +1488,12 @@ export const api = {
 
   syncStatus: () => request<SyncStatus>("/sync/status"),
   syncNow: () => request<SyncResult>("/sync/now", { method: "POST" }),
+  syncSettings: () => request<{ enabled: boolean }>("/sync/settings"),
+  setSyncEnabled: (enabled: boolean) =>
+    request<{ enabled: boolean }>("/sync/settings", {
+      method: "PUT",
+      body: JSON.stringify({ enabled }),
+    }),
 };
 
 async function handleJson<T>(res: Response): Promise<T> {

@@ -130,7 +130,10 @@ async def test_round_trip_import_into_second_project(project_client, tmp_path):
     sources = (await client.get("/api/v1/sources")).json()
     assert len(sources) == 1
     assert sources[0]["name"] == "doc.txt"
-    assert sources[0]["fulltext"] == DOC_TEXT
+    # The list endpoint omits fulltext; the detail endpoint carries it.
+    assert sources[0]["fulltext"] is None
+    detail = (await client.get(f"/api/v1/sources/{sources[0]['id']}")).json()
+    assert detail["fulltext"] == DOC_TEXT
 
 
 # ----------------------------------------------------------------------

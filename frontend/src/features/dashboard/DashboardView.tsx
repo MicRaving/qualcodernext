@@ -254,10 +254,22 @@ export function DashboardView() {
   const autoOpenStage = useProjectStore((s) => s.autoOpenStage);
   const summary = useProjectStore((s) => s.summary);
   const projectName = useProjectStore((s) => s.projectName);
-  const closeProject = useProjectStore((s) => s.closeProject);
   const openProject = useProjectStore((s) => s.openProject);
+  const busy = useProjectStore((s) => s.busy);
   const [openers, setOpeners] = useState<string[]>([]);
   const [recent, setRecent] = useState<string[]>([]);
+  const [dialog, setDialog] = useState<"create" | "open" | null>(null);
+
+  // In the Tauri shell, Open is ONE step: the native folder picker IS the
+  // action (the backend swaps projects without closing the current one).
+  async function handleOpenClick() {
+    if (isTauriShell) {
+      const dir = await pickDirectory();
+      if (dir) await openProject(dir);
+    } else {
+      setDialog("open");
+    }
+  }
 
   useEffect(() => {
     if (!projectOpen) {
@@ -346,8 +358,9 @@ export function DashboardView() {
       <div className="mt-6 flex items-center gap-2">
         <button
           type="button"
-          onClick={() => void closeProject()}
-          className="flex items-center gap-1.5 rounded-sm bg-accent px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-accent-hover"
+          onClick={() => setDialog("create")}
+          disabled={busy}
+          className="flex items-center gap-1.5 rounded-sm bg-accent px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-accent-hover disabled:opacity-50"
           title={t("welcome.newProject")}
         >
           <PlusCircle size={15} aria-hidden />
@@ -355,8 +368,9 @@ export function DashboardView() {
         </button>
         <button
           type="button"
-          onClick={() => void closeProject()}
-          className="flex items-center gap-1.5 rounded-sm border border-border bg-surface px-3 py-1.5 text-sm hover:bg-surface-higher"
+          onClick={() => void handleOpenClick()}
+          disabled={busy}
+          className="flex items-center gap-1.5 rounded-sm border border-border bg-surface px-3 py-1.5 text-sm hover:bg-surface-higher disabled:opacity-50"
           title={t("welcome.openProject")}
         >
           <FolderOpen size={15} aria-hidden />
@@ -373,7 +387,8 @@ export function DashboardView() {
                 <button
                   type="button"
                   onClick={() => openProject(path)}
-                  className="flex w-full max-w-xl items-center gap-2 rounded-sm px-2 py-1.5 text-left text-sm hover:bg-surface-higher"
+                  disabled={busy}
+                  className="flex w-full max-w-xl items-center gap-2 rounded-sm px-2 py-1.5 text-left text-sm hover:bg-surface-higher disabled:opacity-50"
                 >
                   <FolderOpen size={14} className="shrink-0 text-text-secondary" aria-hidden />
                   <span className="truncate">{path}</span>
@@ -383,6 +398,8 @@ export function DashboardView() {
           </ul>
         </div>
       )}
+
+      {dialog && <ProjectFormDialog mode={dialog} onClose={() => setDialog(null)} />}
     </div>
   );
 }

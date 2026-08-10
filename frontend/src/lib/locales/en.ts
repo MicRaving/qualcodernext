@@ -877,15 +877,11 @@ export const en: Record<string, string> = {
 
   // Collaboration sync (Option B: sidecar change files)
   "sync.title": "Sync",
-  "sync.settingsTitle": "Collaboration",
-  "sync.settingsHint": "Work on your own copy of the project folder and share it via a folder-sync tool (Nextcloud, Sync&Share, Syncthing). Every minute the app exports your changes and imports your collaborators' changes through the \"changes\" folder — the database itself is never merged by the sync tool. Use a unique coder name per collaborator.",
+  "sync.toggle": "Enable background sync",
   "sync.pending": "{n} pending",
   "sync.pendingExport": "{n} to send",
   "sync.pendingImport": "{n} to receive",
-  "sync.active": "active",
-  "sync.synced": "Synced",
   "sync.now": "Sync now",
-  "sync.lastSync": "last sync {when}",
-  "sync.noCollaborators": "No other collaborators seen yet.",
-  "sync.hint": "The database is never merged by the sync tool.",
+  "sync.lastSyncShort": "{when} ago",
+  "sync.error": "Sync error",
 };

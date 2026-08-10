@@ -115,7 +115,8 @@ async def test_transcribe_job_creates_transcript_source(client, tmp_path, monkey
     transcript = next((s for s in sources if s["id"] == transcript_source_id), None)
     assert transcript is not None
     assert transcript["name"] == "clip.wav.txt"
-    assert "hello world" in (transcript["fulltext"] or "")
+    detail = (await client.get(f"/api/v1/sources/{transcript_source_id}")).json()
+    assert "hello world" in (detail["fulltext"] or "")
     # No orphaned second transcript source.
     assert not any(s["name"] == "clip.txt" for s in sources)
 

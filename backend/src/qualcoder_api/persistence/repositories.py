@@ -332,8 +332,27 @@ class SourceRepository:
         self.session = session
 
     async def list_sources(self) -> list[Source]:
-        rows = await self.session.execute(select(tables.source))
-        return [Source.model_validate(r._mapping) for r in rows]
+        """All sources WITHOUT their fulltext — the coder fetches individual
+        sources (``get_source``) when needed. Keeping megabytes of text out
+        of the list keeps startup and the file manager fast for big projects."""
+        rows = await self.session.execute(
+            select(
+                tables.source.c.id,
+                tables.source.c.name,
+                tables.source.c.mediapath,
+                tables.source.c.memo,
+                tables.source.c.owner,
+                tables.source.c.date,
+                tables.source.c.av_text_id,
+                tables.source.c.risid,
+            )
+        )
+        sources: list[Source] = []
+        for row in rows:
+            data = dict(row._mapping)
+            data["fulltext"] = None
+            sources.append(Source.model_validate(data))
+        return sources
 
     async def get_source(self, source_id: int) -> Source | None:
         row = (

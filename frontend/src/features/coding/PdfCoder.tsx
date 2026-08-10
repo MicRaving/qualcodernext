@@ -26,7 +26,7 @@ import {
   Trash2,
   X,
 } from "lucide-react";
-import { api, type CodeTreeItem, type ImageCoding, type Source } from "@/lib/api";
+import { api, fetchWithTimeout, type CodeTreeItem, type ImageCoding, type Source } from "@/lib/api";
 import { sourceFileUrl } from "@/lib/api";
 import { CodePicker, type PickedCode } from "@/features/coding/CodePicker";
 import { TextCoder } from "@/features/coding/TextCoder";
@@ -137,9 +137,18 @@ export function PdfCoder({ source }: { source: Source }) {
     setPdfError(null);
     setPageSizes(new Map());
     setFittedScale(1);
-    const task = pdfjsLib.getDocument({ url: sourceFileUrl(source.id) });
     void (async () => {
       try {
+        // Fetch the raw bytes ourselves (with a timeout) and hand them to
+        // pdf.js as `data` — this avoids Range/streaming/mixed-content
+        // quirks of `url` loading inside WebView2/Tauri custom protocols.
+        const res = await fetchWithTimeout(sourceFileUrl(source.id), undefined, 60_000);
+        if (!res.ok) {
+          throw new Error(`HTTP ${res.status} from ${sourceFileUrl(source.id)}`);
+        }
+        const data = await res.arrayBuffer();
+        if (cancelled) return;
+        const task = pdfjsLib.getDocument({ data });
         const doc = await task.promise;
         if (cancelled) return;
         setPdf(doc);
@@ -157,7 +166,6 @@ export function PdfCoder({ source }: { source: Source }) {
     })();
     return () => {
       cancelled = true;
-      void task.destroy().catch(() => undefined);
     };
   }, [source.id, pdfReloadTick, t]);
 
@@ -176,16 +184,27 @@ export function PdfCoder({ source }: { source: Source }) {
     for (const p of targets) {
       const canvas = canvasRefs.current.get(p);
       if (!canvas) continue;
-      void pdf.getPage(p).then((page) => {
-        if (cancelled) return;
-        const viewport = page.getViewport({ scale });
-        canvas.width = viewport.width;
-        canvas.height = viewport.height;
-        canvas.style.width = `${viewport.width}px`;
-        canvas.style.height = `${viewport.height}px`;
-        const task = page.render({ canvas, viewport });
-        tasks.push(task);
-      });
+      void (async () => {
+        try {
+          if (cancelled) return;
+          const page = await pdf.getPage(p);
+          if (cancelled) return;
+          const viewport = page.getViewport({ scale });
+          canvas.width = viewport.width;
+          canvas.height = viewport.height;
+          canvas.style.width = `${viewport.width}px`;
+          canvas.style.height = `${viewport.height}px`;
+          const task = page.render({ canvas, viewport });
+          tasks.push(task);
+          // Await the render: a failed render must be visible, not a silent
+          // black page (unhandled rejections left canvases blank before).
+          await task.promise;
+        } catch (e) {
+          if (!cancelled) {
+            setErrMsg(e instanceof Error ? e.message : t("pdfCoder.loadDocumentError"));
+          }
+        }
+      })();
     }
     return () => {
       cancelled = true;
@@ -197,7 +216,7 @@ export function PdfCoder({ source }: { source: Source }) {
         }
       }
     };
-  }, [pdf, scale, currentPage, continuous]);
+  }, [pdf, scale, currentPage, continuous, t]);
 
   /* ---------------------------------------------------------------- fit */
 

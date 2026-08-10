@@ -27,7 +27,10 @@ function App() {
         store.setAutoOpenStage("backend");
         const tryAutoOpen = async (attempt: number) => {
           try {
-            const { recent } = await api.recentProjects();
+            // Short timeout: when the backend is still booting this fails
+            // fast and the 2 s retry cadence keeps the total wait bounded
+            // (~40 s), instead of hanging on a stale listener.
+            const { recent } = await api.recentProjects(5_000);
             useProjectStore.getState().setAutoOpenStage("open");
             for (const path of recent.slice(0, 3)) {
               const ok = await useProjectStore.getState().openProject(path);

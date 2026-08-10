@@ -18,7 +18,7 @@ import httpx
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
-from qualcoder_api.persistence.repositories import SourceRepository
+from qualcoder_api.core.models import Source
 from qualcoder_api.services.ai_service import (
     SIMILARITY_THRESHOLD,
     _chunk_text,
@@ -102,10 +102,26 @@ async def rebuild_index(
 
     Raises ``AiUnavailable`` when the embedding backend is unreachable.
     """
+    from sqlalchemy import select
+
+    from qualcoder_api.persistence import tables
     from qualcoder_api.services.ai_service import AiUnavailable
 
     async with session_factory() as session:
-        sources = await SourceRepository(session).list_sources()
+        rows = await session.execute(
+            select(
+                tables.source.c.id,
+                tables.source.c.name,
+                tables.source.c.fulltext,
+                tables.source.c.mediapath,
+            ).where(tables.source.c.fulltext.is_not(None))
+        )
+        sources = [
+            Source.model_validate(
+                {"id": r[0], "name": r[1], "fulltext": r[2], "mediapath": r[3]}
+            )
+            for r in rows
+        ]
     chunks: list[dict] = []
     for source in sources:
         fulltext = (source.fulltext or "").strip()

@@ -21,7 +21,6 @@ import {
 import { Sidebar } from "@/components/shell/Sidebar";
 import { Inspector } from "@/components/shell/Inspector";
 import { CoderSwitcher } from "@/components/shell/CoderSwitcher";
-import { SyncChip } from "@/components/shell/SyncChip";
 import { DashboardView } from "@/features/dashboard/DashboardView";
 import { CodingWorkspace } from "@/features/coding/CodingWorkspace";
 import { FileManager } from "@/features/manage/FileManager";
@@ -289,7 +288,6 @@ export function ProjectShell() {
                 )}
               </div>
             )}
-            <SyncChip />
           </>
         ) : (
           <>

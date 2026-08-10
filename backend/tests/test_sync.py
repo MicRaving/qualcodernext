@@ -294,6 +294,19 @@ async def test_sync_endpoints(project_client):
     assert res.status_code == 200
     body = res.json()
     assert body["ok"] is True
+    assert body["enabled"] is False  # the switch is off by default
+    assert "last_sync" in body
+    # Toggle on and verify the setting sticks + status reflects it.
+    res = await client.put("/api/v1/sync/settings", json={"enabled": True})
+    assert res.status_code == 200
+    assert res.json()["enabled"] is True
+    res = await client.get("/api/v1/sync/settings")
+    assert res.json()["enabled"] is True
+    res = await client.get("/api/v1/sync/status")
+    assert res.json()["enabled"] is True
     res = await client.post("/api/v1/sync/now")
     assert res.status_code == 200
     assert res.json()["ok"] is True
+    assert res.json()["exported"] == 0  # nothing mutated yet
+    res = await client.put("/api/v1/sync/settings", json={"enabled": False})
+    assert res.json()["enabled"] is False

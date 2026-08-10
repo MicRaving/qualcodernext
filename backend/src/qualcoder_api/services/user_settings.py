@@ -49,7 +49,25 @@ DEFAULT_SETTINGS: dict = {
     "recent_projects": [],
     "ai": dict(AI_DEFAULTS),
     "transcription": dict(TRANSCRIPTION_DEFAULTS),
+    "sync": {"enabled": False},
 }
+
+
+def get_sync_settings(settings: dict | None = None) -> dict:
+    """Return the collaboration-sync settings (enabled flag)."""
+    settings = settings or load_settings()
+    sync = settings.get("sync")
+    if not isinstance(sync, dict):
+        sync = {}
+    return {"enabled": bool(sync.get("enabled", False))}
+
+
+def save_sync_settings(enabled: bool, settings: dict | None = None) -> dict:
+    """Persist the collaboration-sync switch."""
+    settings = settings or load_settings()
+    settings["sync"] = {"enabled": bool(enabled)}
+    save_settings(settings)
+    return {"enabled": bool(enabled)}
 
 
 def load_settings() -> dict:

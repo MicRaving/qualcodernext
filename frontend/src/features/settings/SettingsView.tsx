@@ -3,7 +3,7 @@
  * the semantic index), pseudonyms and Import/Export.
  */
 import { useCallback, useEffect, useState, type FormEvent } from "react";
-import { Check, LoaderCircle, RefreshCw, RotateCw, Save, Trash2 } from "lucide-react";
+import { Check, LoaderCircle, RotateCw, Save, Trash2 } from "lucide-react";
 import { api, type AiIndexStatus, type AiStatus, type Pseudonym } from "@/lib/api";
 import { errorDetail } from "@/features/ai/format";
 import { InterchangeView } from "@/features/interchange/InterchangeView";
@@ -12,15 +12,6 @@ import { useProjectStore } from "@/stores/project";
 
 const inputCls =
   "h-8 w-full rounded-sm border border-border bg-bg px-2 text-sm outline-none focus:border-accent";
-
-function formatSyncTime(ts: number): string {
-  if (!ts) return "—";
-  const delta = Date.now() / 1000 - ts;
-  if (delta < 60) return "now";
-  if (delta < 3600) return `${Math.round(delta / 60)} min`;
-  if (delta < 86400) return `${Math.round(delta / 3600)} h`;
-  return `${Math.round(delta / 86400)} d`;
-}
 
 export function SettingsView() {
   const { t, locale, setLocale } = useI18n();
@@ -56,20 +47,6 @@ export function SettingsView() {
   const [palette, setPalette] = useState<string[]>([]);
   const [paletteSaved, setPaletteSaved] = useState(false);
   const [paletteError, setPaletteError] = useState<string | null>(null);
-
-  // Collaboration sync
-  const syncStatus = useProjectStore((s) => s.syncStatus);
-  const runSyncNow = useProjectStore((s) => s.runSyncNow);
-  const [syncBusy, setSyncBusy] = useState(false);
-
-  async function syncNow() {
-    setSyncBusy(true);
-    try {
-      await runSyncNow();
-    } finally {
-      setSyncBusy(false);
-    }
-  }
 
   const PROVIDER_PRESETS: Record<string, { url: string; model: string }> = {
     ollama: { url: "http://localhost:11434/v1", model: "llama3.2" },
@@ -582,43 +559,6 @@ export function SettingsView() {
                 </span>
               )}
             </div>
-          </section>
-
-          {/* Collaboration sync */}
-          <section className="rounded-lg border border-border bg-surface p-4">
-            <h2 className="text-sm font-semibold text-text-primary">{t("sync.settingsTitle")}</h2>
-            <p className="mt-1 text-xs leading-relaxed text-text-secondary">{t("sync.settingsHint")}</p>
-            {syncStatus?.ok && (
-              <div className="mt-3 space-y-1.5 text-xs text-text-primary">
-                <p>
-                  {t("sync.pendingExport", { n: String(syncStatus.pending_export) })} ·{" "}
-                  {t("sync.pendingImport", { n: String(syncStatus.pending_import) })}
-                </p>
-                {syncStatus.collaborators.length > 0 && (
-                  <ul className="space-y-0.5">
-                    {syncStatus.collaborators.map((c) => (
-                      <li key={c.user} className="text-text-secondary">
-                        {c.user} —{" "}
-                        {t("sync.lastSync", { when: formatSyncTime(c.last_sync) })}
-                      </li>
-                    ))}
-                  </ul>
-                )}
-              </div>
-            )}
-            <button
-              type="button"
-              onClick={() => void syncNow()}
-              disabled={syncBusy}
-              className="mt-3 flex items-center gap-1.5 rounded-sm bg-accent px-2.5 py-1 text-xs font-medium text-[var(--qc-bg)] hover:bg-accent-hover disabled:opacity-50"
-            >
-              {syncBusy ? (
-                <LoaderCircle size={12} className="animate-spin" aria-hidden />
-              ) : (
-                <RefreshCw size={12} aria-hidden />
-              )}
-              {t("sync.now")}
-            </button>
           </section>
 
           {/* Import / Export */}

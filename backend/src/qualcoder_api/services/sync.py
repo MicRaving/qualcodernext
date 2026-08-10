@@ -25,6 +25,7 @@ import contextvars
 import hashlib
 import json
 import logging
+import time
 from pathlib import Path
 from typing import Any, cast
 
@@ -61,6 +62,25 @@ _current_user: contextvars.ContextVar[str] = contextvars.ContextVar("sync_user",
 # Repositories call capture() for every mutation; replay and imports set
 # this so their writes are not re-captured (no ping-pong).
 _suspended: contextvars.ContextVar[bool] = contextvars.ContextVar("sync_suspended", default=False)
+
+# Process-wide sync health: timestamp of the last successful cycle and the
+# most recent error (surfaced to the toolbar indicator).
+_last_sync_ts: float = 0.0
+_last_error: str = ""
+_last_error_ts: float = 0.0
+_last_result: dict | None = None
+
+
+def _note_success(result: dict | None) -> None:
+    global _last_sync_ts, _last_result
+    _last_sync_ts = time.time()
+    _last_result = result
+
+
+def _note_error(err: Exception) -> None:
+    global _last_error, _last_error_ts
+    _last_error = str(err)
+    _last_error_ts = time.time()
 
 
 @contextlib.asynccontextmanager
@@ -465,10 +485,23 @@ async def run_sync_cycle(session_factory, project_path: str, user: str) -> dict:
                 exported = await export_pending(session, project_path, user)
             async with session_factory() as session:
                 imported = await import_pending(session, project_path, user)
-            return {"ok": True, **exported, "imported": imported}
+            result = {"ok": True, **exported, "imported": imported}
+            _note_success(result)
+            return result
         except Exception as err:  # pragma: no cover - defensive
             logger.exception("sync cycle failed: %s", err)
+            _note_error(err)
             return {"ok": False, "reason": str(err)}
+
+
+def sync_enabled() -> bool:
+    """Whether the background sync cycle is switched on (per-machine)."""
+    try:
+        from qualcoder_api.services.user_settings import get_sync_settings
+
+        return get_sync_settings().get("enabled", False)
+    except Exception:  # pragma: no cover - defensive
+        return False
 
 
 async def sync_status(session_factory, project_path: str, user: str) -> dict:
@@ -510,9 +543,12 @@ async def sync_status(session_factory, project_path: str, user: str) -> dict:
 
     return {
         "ok": True,
-        "enabled": True,
+        "enabled": sync_enabled(),
         "user": user,
         "pending_export": pending_export,
         "pending_import": sum(c["pending_import"] for c in collaborators),
         "collaborators": collaborators,
+        "last_sync": _last_sync_ts,
+        "last_error": _last_error,
+        "last_error_at": _last_error_ts,
     }

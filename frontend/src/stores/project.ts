@@ -123,6 +123,7 @@ interface ProjectState {
   /** Collaboration sync (Option B: sidecar change files over folder sync). */
   syncStatus: SyncStatus | null;
   setSyncStatus: (v: SyncStatus | null) => void;
+  setSyncEnabled: (enabled: boolean) => Promise<boolean>;
   runSyncNow: () => Promise<boolean>;
 
   inspectorSelection: InspectorSelection;
@@ -229,6 +230,16 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
 
   syncStatus: null,
   setSyncStatus: (v) => set({ syncStatus: v }),
+  setSyncEnabled: async (enabled) => {
+    try {
+      await api.setSyncEnabled(enabled);
+      const status = await api.syncStatus();
+      set({ syncStatus: status });
+      return true;
+    } catch {
+      return false;
+    }
+  },
   runSyncNow: async () => {
     try {
       const res = await api.syncNow();

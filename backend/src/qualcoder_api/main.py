@@ -23,10 +23,12 @@ service = ProjectService()
 
 
 async def _sync_loop() -> None:
-    """Collaboration sync: export local changes and import other raters'
-    sidecar files every ``SYNC_INTERVAL_SECS`` while a project is open."""
+    """Collaboration sync: while the per-machine switch is on, export local
+    changes and import other raters' sidecar files every ``SYNC_INTERVAL_SECS``."""
     while True:
         await asyncio.sleep(sync.SYNC_INTERVAL_SECS)
+        if not sync.sync_enabled():
+            continue
         if service.project_path and service.session_factory:
             try:
                 await sync.run_sync_cycle(
