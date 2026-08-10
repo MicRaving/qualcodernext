@@ -466,6 +466,14 @@ class SourceRepository:
         await self.session.execute(
             delete(tables.source).where(tables.source.c.id == source_id)
         )
+        # Clear any media source's transcript pointer to the deleted row so
+        # re-transcription links a fresh transcript instead of folding into
+        # a missing companion.
+        await self.session.execute(
+            update(tables.source)
+            .where(tables.source.c.av_text_id == source_id)
+            .values(av_text_id=None)
+        )
         for row in src_rows:
             await sync.capture_delete(
                 self.session, entity="source", pk_name="id", pk_value=source_id, row=row

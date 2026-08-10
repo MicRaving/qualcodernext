@@ -15,7 +15,6 @@ import {
   type ReactNode,
 } from "react";
 import {
-  ArrowLeft,
   BookMarked,
   CaseSensitive,
   FileText,
@@ -32,12 +31,7 @@ import {
   ZoomIn,
   ZoomOut,
 } from "lucide-react";
-import {
-  api,
-  GRAPH_MODELS,
-  type GraphData,
-  type GraphSummary,
-} from "@/lib/api";
+import { api, GRAPH_MODELS, type GraphData } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { useI18n } from "@/lib/i18n";
 import { useProjectStore } from "@/stores/project";
@@ -228,11 +222,118 @@ function buildLines(data: GraphData, nodes: NodeView[]): LineView[] {
 
 const ARROW_MODES = ["solid_with_arrow", "solid_without_arrow", "dotted_with_arrow", "dotted_without_arrow"];
 
+/** Menu bar: graph picker + create/model/delete actions. */
+export function GraphsMenuBar() {
+  const { t } = useI18n();
+  const graphsUi = useProjectStore((s) => s.graphsUi);
+  const setGraphsUi = useProjectStore((s) => s.setGraphsUi);
+  const [modelOpen, setModelOpen] = useState(false);
+
+  async function loadGraphs() {
+    try {
+      const res = await api.graphs();
+      setGraphsUi({
+        list: res.graphs.map((g) => ({ grid: g.grid, name: g.name })),
+        grid: graphsUi.grid ?? (res.graphs.length > 0 ? res.graphs[0].grid : null),
+        tick: graphsUi.tick + 1,
+      });
+    } catch {
+      /* the picker shows whatever is cached */
+    }
+  }
+
+  async function createGraph() {
+    const name = window.prompt("Graph name:");
+    if (!name?.trim()) return;
+    try {
+      const graph = await api.createGraph(name.trim());
+      await loadGraphs();
+      setGraphsUi({ grid: graph.grid, tick: graphsUi.tick + 1 });
+    } catch {
+      /* keep the picker state */
+    }
+  }
+
+  async function deleteGraph() {
+    const grid = graphsUi.grid;
+    if (grid == null) return;
+    const name = graphsUi.list.find((g) => g.grid === grid)?.name ?? "";
+    if (!window.confirm(`Delete graph "${name}"?`)) return;
+    try {
+      await api.deleteGraph(grid);
+      setGraphsUi({ grid: null, tick: graphsUi.tick + 1 });
+      await loadGraphs();
+    } catch {
+      /* keep the picker state */
+    }
+  }
+
+  return (
+    <>
+      <h1 className="text-sm font-semibold text-text-primary">{t("graphs.title")}</h1>
+      <select
+        value={graphsUi.grid ?? ""}
+        onChange={(e) =>
+          setGraphsUi({ grid: e.target.value === "" ? null : Number(e.target.value), tick: graphsUi.tick + 1 })
+        }
+        className="h-7 rounded-sm border border-border bg-bg px-1.5 text-xs outline-none focus:border-accent"
+        aria-label="Graph"
+      >
+        <option value="">—</option>
+        {graphsUi.list.map((g) => (
+          <option key={g.grid} value={g.grid}>
+            {g.name}
+          </option>
+        ))}
+      </select>
+      <button
+        type="button"
+        onClick={() => void createGraph()}
+        className="flex items-center gap-1 rounded-sm border border-border bg-bg px-2 py-1 text-xs hover:bg-surface-higher"
+      >
+        <Plus size={12} aria-hidden />
+        {t("graphs.newGraph")}
+      </button>
+      <button
+        type="button"
+        onClick={() => setModelOpen(true)}
+        className="flex items-center gap-1 rounded-sm border border-border bg-bg px-2 py-1 text-xs hover:bg-surface-higher"
+      >
+        <Sparkles size={12} aria-hidden />
+        {t("graphs.models")}
+      </button>
+      <div className="flex-1" />
+      {graphsUi.grid != null && (
+        <button
+          type="button"
+          onClick={() => void deleteGraph()}
+          className="flex items-center gap-1 rounded-sm border border-danger/50 px-2 py-1 text-xs text-danger hover:bg-danger/10"
+        >
+          <Trash2 size={12} aria-hidden />
+          {t("common.delete")}
+        </button>
+      )}
+      {modelOpen && (
+        <ModelDialog
+          onClose={() => setModelOpen(false)}
+          onCreated={(g) => {
+            setModelOpen(false);
+            setGraphsUi({ grid: g, tick: graphsUi.tick + 1 });
+            void loadGraphs();
+          }}
+          setError={() => undefined}
+        />
+      )}
+    </>
+  );
+}
+
 export function GraphsView() {
   const { t } = useI18n();
-  const setView = useProjectStore((s) => s.setView);
-  const [graphs, setGraphs] = useState<GraphSummary[]>([]);
-  const [grid, setGrid] = useState<number | null>(null);
+  const graphsUi = useProjectStore((s) => s.graphsUi);
+  const setGraphsUi = useProjectStore((s) => s.setGraphsUi);
+  const graphs = graphsUi.list;
+  const grid = graphsUi.grid;
   const [data, setData] = useState<GraphData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -252,7 +353,6 @@ export function GraphsView() {
   const [drag, setDrag] = useState<{ node: string; startX: number; startY: number; origX: number; origY: number } | null>(null);
   const [panDrag, setPanDrag] = useState<{ x: number; y: number; startX: number; startY: number } | null>(null);
   const [addMenu, setAddMenu] = useState<{ x: number; y: number } | null>(null);
-  const [modelOpen, setModelOpen] = useState(false);
   const [saving, setSaving] = useState(false);
   const svgRef = useRef<SVGSVGElement | null>(null);
 
@@ -264,10 +364,13 @@ export function GraphsView() {
   const loadGraphs = useCallback(async () => {
     try {
       const res = await api.graphs();
-      setGraphs(res.graphs);
-      if (grid == null && res.graphs.length > 0) {
-        setGrid(res.graphs[0].grid);
-      }
+      setGraphsUi({
+        list: res.graphs.map((g) => ({ grid: g.grid, name: g.name })),
+        grid:
+          graphsUi.grid ??
+          (res.graphs.length > 0 ? res.graphs[0].grid : null),
+        tick: graphsUi.tick + 1,
+      });
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to load graphs");
     } finally {
@@ -302,23 +405,10 @@ export function GraphsView() {
     if (!name?.trim()) return;
     try {
       const graph = await api.createGraph(name.trim());
+      setGraphsUi({ grid: graph.grid, tick: graphsUi.tick + 1 });
       await loadGraphs();
-      setGrid(graph.grid);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Could not create graph");
-    }
-  }
-
-  async function deleteGraph() {
-    if (grid == null) return;
-    if (!window.confirm(`Delete graph "${graphs.find((g) => g.grid === grid)?.name}"?`)) return;
-    try {
-      await api.deleteGraph(grid);
-      setGrid(null);
-      setData(null);
-      await loadGraphs();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Could not delete graph");
     }
   }
 
@@ -637,58 +727,6 @@ export function GraphsView() {
 
   return (
     <div className="flex h-full flex-col bg-bg">
-      <header className="flex h-10 shrink-0 items-center gap-2 border-b border-border bg-surface px-3">
-        <h1 className="text-sm font-semibold text-text-primary">{t("graphs.title")}</h1>
-        <select
-          value={grid ?? ""}
-          onChange={(e) => setGrid(e.target.value === "" ? null : Number(e.target.value))}
-          className="h-7 rounded-sm border border-border bg-bg px-1.5 text-xs outline-none focus:border-accent"
-          aria-label="Graph"
-        >
-          <option value="">—</option>
-          {graphs.map((g) => (
-            <option key={g.grid} value={g.grid}>
-              {g.name}
-            </option>
-          ))}
-        </select>
-        <button
-          type="button"
-          onClick={() => void createGraph()}
-          className="flex items-center gap-1 rounded-sm border border-border bg-bg px-2 py-1 text-xs hover:bg-surface-higher"
-        >
-          <Plus size={12} aria-hidden />
-          {t("graphs.newGraph")}
-        </button>
-        <button
-          type="button"
-          onClick={() => setModelOpen(true)}
-          className="flex items-center gap-1 rounded-sm border border-border bg-bg px-2 py-1 text-xs hover:bg-surface-higher"
-        >
-          <Sparkles size={12} aria-hidden />
-          {t("graphs.models")}
-        </button>
-        <div className="flex-1" />
-        {grid != null && (
-          <button
-            type="button"
-            onClick={() => void deleteGraph()}
-            className="flex items-center gap-1 rounded-sm border border-danger/50 px-2 py-1 text-xs text-danger hover:bg-danger/10"
-          >
-            <Trash2 size={12} aria-hidden />
-            {t("common.delete")}
-          </button>
-        )}
-        <button
-          type="button"
-          onClick={() => setView({ kind: "dashboard" })}
-          className="rounded-sm p-1.5 text-text-secondary hover:bg-surface-higher hover:text-text-primary"
-          aria-label={t("common.close")}
-        >
-          <ArrowLeft size={16} aria-hidden />
-        </button>
-      </header>
-
       {error && (
         <div className="flex shrink-0 items-center gap-2 border-b border-danger bg-danger/10 px-3 py-1.5 text-sm text-danger">
           <span className="min-w-0 flex-1 truncate">{error}</span>
@@ -1017,18 +1055,6 @@ export function GraphsView() {
         </>
       )}
 
-      {/* Model generator dialog */}
-      {modelOpen && (
-        <ModelDialog
-          onClose={() => setModelOpen(false)}
-          onCreated={(g) => {
-            setModelOpen(false);
-            void loadGraphs();
-            setGrid(g);
-          }}
-          setError={setError}
-        />
-      )}
       {saving && (
         <div className="pointer-events-none fixed inset-0 z-50 flex items-center justify-center">
           <LoaderCircle size={18} className="animate-spin text-text-secondary" aria-hidden />

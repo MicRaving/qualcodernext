@@ -542,6 +542,14 @@ export function Sidebar() {
 
   return (
     <aside className="flex w-64 shrink-0 flex-col border-r border-border bg-surface">
+      {view.kind !== "coding" && (
+        <header className="flex h-10 shrink-0 items-center gap-2 border-b border-border px-3">
+          <h1 className="text-sm font-semibold text-text-primary">{t("nav.files")}</h1>
+          <span className="rounded-sm bg-surface-higher px-1.5 py-px text-xs font-medium text-text-secondary">
+            {sources.length}
+          </span>
+        </header>
+      )}
       <div className="min-h-0 flex-1 overflow-y-auto p-1">
         {view.kind === "coding" ? (
           <div className="flex flex-col">

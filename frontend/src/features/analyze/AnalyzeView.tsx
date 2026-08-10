@@ -1,4 +1,5 @@
 import { useState, type ComponentType } from "react";
+import { useI18n } from "@/lib/i18n";
 import {
   AlignJustify,
   ArrowLeft,
@@ -220,6 +221,7 @@ const REPORT_COMPONENTS: Record<ReportId, ComponentType> = {
 };
 
 export function AnalyzeView() {
+  const { t } = useI18n();
   const [selected, setSelected] = useState<ReportId | null>(null);
   const meta = selected ? REPORT_META.find((r) => r.id === selected) : undefined;
   const ReportComponent = selected ? REPORT_COMPONENTS[selected] : null;
@@ -227,6 +229,17 @@ export function AnalyzeView() {
   return (
     <div className="flex h-full flex-col bg-bg">
       <header className="flex h-10 shrink-0 items-center gap-2 border-b border-border bg-surface px-3">
+        {selected && (
+          <button
+            type="button"
+            onClick={() => setSelected(null)}
+            aria-label={t("analyze.backToReports")}
+            title={t("analyze.backToReports")}
+            className="rounded-sm p-1.5 text-text-secondary hover:bg-surface-higher hover:text-text-primary"
+          >
+            <ArrowLeft size={16} aria-hidden />
+          </button>
+        )}
         <h1 className="text-sm font-semibold text-text-primary">Analysis</h1>
         {meta && (
           <span className="text-xs text-text-secondary">
@@ -234,16 +247,6 @@ export function AnalyzeView() {
           </span>
         )}
         <div className="flex-1" />
-        {selected && (
-          <button
-            type="button"
-            onClick={() => setSelected(null)}
-            className="flex items-center gap-1 rounded-sm border border-border bg-surface px-2.5 py-1 text-xs text-text-secondary hover:bg-surface-higher hover:text-text-primary"
-          >
-            <ArrowLeft size={14} aria-hidden />
-            Back to reports
-          </button>
-        )}
       </header>
 
       <div className="min-h-0 flex-1 overflow-y-auto p-4">

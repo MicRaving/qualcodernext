@@ -107,6 +107,34 @@ async def test_file_404_for_unknown_source(project_client):
     assert (await client.get("/api/v1/sources/99999/file")).status_code == 404
 
 
+async def test_delete_source_clears_transcript_pointer(project_client):
+    """Deleting a transcript source must clear the media source's av_text_id
+    so re-transcription links a fresh transcript (no stale fold target)."""
+    import sqlite3
+
+    client, target = project_client
+    media = await client.post(
+        "/api/v1/sources/import", files={"file": ("clip.mp4", b"\x00" * 64, "video/mp4")}
+    )
+    assert media.status_code == 200, media.text
+    media_id = media.json()["id"]
+    tx = await client.post(
+        "/api/v1/sources/import", files={"file": ("clip.txt", "hello transcript", "text/plain")}
+    )
+    assert tx.status_code == 200, tx.text
+    tx_id = tx.json()["id"]
+
+    with sqlite3.connect(str(target / "data.qda")) as conn:
+        conn.execute("UPDATE source SET av_text_id = ? WHERE id = ?", (tx_id, media_id))
+        conn.commit()
+
+    assert (await client.delete(f"/api/v1/sources/{tx_id}")).status_code == 204
+
+    with sqlite3.connect(str(target / "data.qda")) as conn:
+        row = conn.execute("SELECT av_text_id FROM source WHERE id = ?", (media_id,)).fetchone()
+    assert row[0] is None
+
+
 async def test_traversal_rejected(project_client):
     client, target = project_client
     res = await client.post(

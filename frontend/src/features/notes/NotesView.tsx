@@ -3,8 +3,9 @@
  * (NotesEditor). A dropdown in the left bar's header picks the note type;
  * the per-type list and editor fill the left/center slots.
  */
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  ChevronDown,
   FileText,
   FolderOpen,
   Hash,
@@ -34,6 +35,25 @@ export function NotesList() {
   const annotations = useProjectStore((s) => s.annotationsAll);
   const sources = useProjectStore((s) => s.sources);
   const codeTree = useProjectStore((s) => s.codeTree);
+  const [typeMenuOpen, setTypeMenuOpen] = useState(false);
+  const typeMenuRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!typeMenuOpen) return;
+    const onDown = (e: MouseEvent) => {
+      const target = e.target instanceof Node ? e.target : null;
+      if (target && !typeMenuRef.current?.contains(target)) setTypeMenuOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setTypeMenuOpen(false);
+    };
+    document.addEventListener("mousedown", onDown);
+    window.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDown);
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [typeMenuOpen]);
 
   const loadAnnotations = useCallback(async () => {
     try {
@@ -64,23 +84,57 @@ export function NotesList() {
         : sources.filter((s) => (s.memo ?? "").trim() !== "").length +
           codeTree.filter((c) => (c.memo ?? "").trim() !== "").length;
 
-  const selectCls =
-    "h-7 rounded-sm border border-border bg-bg px-1.5 text-xs outline-none focus:border-accent";
+  function pickTab(tab: NotesTab) {
+    setTypeMenuOpen(false);
+    setNotesUi({ tab, selectedId: null, selectedKind: null });
+  }
 
   return (
     <aside className="flex w-72 shrink-0 flex-col border-r border-border bg-surface">
       <header className="flex h-10 shrink-0 items-center gap-1.5 border-b border-border px-3">
         <span className="text-sm font-semibold text-text-primary">{t("nav.notes")}</span>
-        <select
-          value={notesUi.tab}
-          onChange={(e) => setNotesUi({ tab: e.target.value as NotesTab, selectedId: null, selectedKind: null })}
-          aria-label={t("notes.tabsAria")}
-          className={selectCls}
-        >
-          <option value="journal">{t("notes.tab.journal")}</option>
-          <option value="annotations">{t("notes.tab.annotations")}</option>
-          <option value="memos">{t("notes.tab.memos")}</option>
-        </select>
+        <div className="relative" ref={typeMenuRef}>
+          <button
+            type="button"
+            onClick={() => setTypeMenuOpen((o) => !o)}
+            aria-expanded={typeMenuOpen}
+            aria-haspopup="listbox"
+            aria-label={t("notes.tabsAria")}
+            className="flex items-center gap-1 rounded-sm border border-border bg-bg px-1.5 py-0.5 text-xs hover:bg-surface-higher"
+          >
+            {t(`notes.tab.${notesUi.tab}`)}
+            <ChevronDown size={11} className="text-text-secondary" aria-hidden />
+          </button>
+          {typeMenuOpen && (
+            <div
+              role="listbox"
+              aria-label={t("notes.tabsAria")}
+              className="absolute left-0 top-full z-50 mt-1 min-w-36 rounded-md border border-border bg-surface py-1 shadow-lg"
+            >
+              {(["journal", "annotations", "memos"] as NotesTab[]).map((tab) => (
+                <button
+                  key={tab}
+                  type="button"
+                  role="option"
+                  aria-selected={notesUi.tab === tab}
+                  onClick={() => pickTab(tab)}
+                  className={`flex w-full items-center gap-2 px-2 py-1.5 text-left text-sm hover:bg-surface-higher ${
+                    notesUi.tab === tab ? "text-accent" : ""
+                  }`}
+                >
+                  {tab === "journal" ? (
+                    <Hash size={12} aria-hidden />
+                  ) : tab === "annotations" ? (
+                    <StickyNote size={12} aria-hidden />
+                  ) : (
+                    <Hash size={12} aria-hidden />
+                  )}
+                  {t(`notes.tab.${tab}`)}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
         <span className="rounded-sm bg-surface-higher px-1.5 py-px text-xs font-medium text-text-secondary">
           {count}
         </span>

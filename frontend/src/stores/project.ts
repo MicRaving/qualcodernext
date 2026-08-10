@@ -161,6 +161,16 @@ interface ProjectState {
     owner: string;
   }[];
 
+  /** Graph workspace state (shared between the menu bar and the canvas). */
+  graphsUi: { grid: number | null; list: { grid: number; name: string }[]; tick: number };
+  setGraphsUi: (
+    patch: Partial<{
+      grid: number | null;
+      list: { grid: number; name: string }[];
+      tick: number;
+    }>,
+  ) => void;
+
   createProject: (path: string) => Promise<boolean>;
   openProject: (path: string) => Promise<boolean>;
   closeProject: () => Promise<void>;
@@ -375,6 +385,8 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   notesUi: { tab: "journal", query: "", selectedId: null, selectedKind: null, tick: 0 },
   setNotesUi: (patch) => set((s) => ({ notesUi: { ...s.notesUi, ...patch } })),
   annotationsAll: [],
+  graphsUi: { grid: null, list: [], tick: 0 },
+  setGraphsUi: (patch) => set((s) => ({ graphsUi: { ...s.graphsUi, ...patch } })),
 
   clearInspector: () =>
     set({

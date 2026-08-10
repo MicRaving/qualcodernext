@@ -165,8 +165,19 @@ async def job(job_id: str, svc: ServiceDep) -> dict:
                         select(tables.source).where(tables.source.c.id == media_source_id)
                     )
                 ).first()
+                # The companion may have been deleted since it was linked
+                # (deleting a transcript source used to leave a stale
+                # av_text_id behind) — only fold into it when it still
+                # exists, otherwise link the fresh transcript source.
                 companion_id = media_row.av_text_id if media_row is not None else None
+                companion_row = None
                 if companion_id is not None:
+                    companion_row = (
+                        await session.execute(
+                            select(tables.source).where(tables.source.c.id == companion_id)
+                        )
+                    ).first()
+                if companion_row is not None:
                     # Fold the transcript into the linked companion instead of
                     # leaving a second, orphaned source behind.
                     await session.execute(
@@ -174,16 +185,10 @@ async def job(job_id: str, svc: ServiceDep) -> dict:
                         .where(tables.source.c.id == companion_id)
                         .values(fulltext=transcript)
                     )
-                    companion_row = (
-                        await session.execute(
-                            select(tables.source).where(tables.source.c.id == companion_id)
-                        )
-                    ).first()
-                    if companion_row is not None:
-                        await _capture(
-                            session, "source", "update", "id", companion_id,
-                            _rowdict(companion_row),
-                        )
+                    await _capture(
+                        session, "source", "update", "id", companion_id,
+                        _rowdict(companion_row),
+                    )
                     dup_row = (
                         await session.execute(
                             select(tables.source).where(tables.source.c.id == source_id)

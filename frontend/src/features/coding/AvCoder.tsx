@@ -5,7 +5,6 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  ArrowLeft,
   Bookmark,
   Captions,
   ChevronDown,
@@ -38,9 +37,7 @@ const IDENTIFIER_OPTIONS = [
 
 export function AvCoder({ source }: { source: Source }) {
   const { t } = useI18n();
-  const setView = useProjectStore((s) => s.setView);
   const [transcribeOpen, setTranscribeOpen] = useState(false);
-  const [transcribeMenuOpen, setTranscribeMenuOpen] = useState(false);
   const activeCodeId = useProjectStore((s) => s.activeCodeId);
   const mediaRef = useRef<HTMLVideoElement & HTMLAudioElement>(null);
   const timelineRef = useRef<HTMLDivElement>(null);
@@ -52,6 +49,9 @@ export function AvCoder({ source }: { source: Source }) {
 
   const [durationMs, setDurationMs] = useState(0);
   const [currentMs, setCurrentMs] = useState(0);
+  const currentMsRef = useRef(0);
+  const seekTargetRef = useRef<number | null>(null);
+  const seekAtRef = useRef(0);
   const [playing, setPlaying] = useState(false);
   const [mediaError, setMediaError] = useState<string | null>(null);
 
@@ -63,26 +63,9 @@ export function AvCoder({ source }: { source: Source }) {
   const [playbackRate, setPlaybackRate] = useState(1);
   const [videoVisible, setVideoVisible] = useState(true);
 
-  useEffect(() => {
-    if (!transcribeMenuOpen) return;
-    const onDown = (e: MouseEvent) => {
-      const target = e.target instanceof Node ? e.target : null;
-      if (target && !(target as HTMLElement).closest("[data-transcribe-menu]")) {
-        setTranscribeMenuOpen(false);
-      }
-    };
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setTranscribeMenuOpen(false);
-    };
-    document.addEventListener("mousedown", onDown);
-    window.addEventListener("keydown", onKey);
-    return () => {
-      document.removeEventListener("mousedown", onDown);
-      window.removeEventListener("keydown", onKey);
-    };
-  }, [transcribeMenuOpen]);
+  // Combined transcript / transcribe / speakers panel.
   const [panelVisible, setPanelVisible] = useState(true);
-  const [panelTab, setPanelTab] = useState<"transcript" | "speakers">("transcript");
+  const [panelTab, setPanelTab] = useState<"transcribe" | "transcript" | "speakers">("transcript");
   const subtitleRef = useRef<HTMLDivElement | null>(null);
 
   // Bookmark + speakers
@@ -290,7 +273,19 @@ export function AvCoder({ source }: { source: Source }) {
     if (!el) return;
 
     const onLoaded = () => setDurationMs(secondsToMs(el.duration || 0));
-    const onTime = () => setCurrentMs(secondsToMs(el.currentTime || 0));
+    const onTime = () => {
+      const ms = secondsToMs(el.currentTime || 0);
+      // A seek's timeupdate may report the PRE-seek position (the media
+      // seek is async) — while a seek is in flight, keep the intended
+      // target so a quick mark-start → seek → mark-end sequence is exact.
+      const target = seekTargetRef.current;
+      if (target !== null && Date.now() - seekAtRef.current < 1500 && ms < target) {
+        return;
+      }
+      if (target !== null) seekTargetRef.current = null;
+      currentMsRef.current = ms;
+      setCurrentMs(ms);
+    };
     const onPlay = () => setPlaying(true);
     const onPause = () => setPlaying(false);
     const onEnded = () => setPlaying(false);
@@ -325,7 +320,11 @@ export function AvCoder({ source }: { source: Source }) {
     const clamped = Math.max(0, Math.min(ms, durationMs));
     el.currentTime = clamped / 1000;
     // Round: the backend AV segment schema requires integer milliseconds,
-    // and a pixel-click ratio yields fractional values.
+    // and a pixel-click ratio yields fractional values. The ref keeps the
+    // latest intended position even before the media's timeupdate fires.
+    seekTargetRef.current = Math.round(clamped);
+    seekAtRef.current = Date.now();
+    currentMsRef.current = Math.round(clamped);
     setCurrentMs(Math.round(clamped));
   }
 
@@ -340,20 +339,21 @@ export function AvCoder({ source }: { source: Source }) {
   // --- coding flow ------------------------------------------------------
 
   function handleSetStart() {
-    setStartMark(currentMs);
+    setStartMark(currentMsRef.current);
     setSelected(null);
   }
 
   function handleSetEnd() {
+    const now = currentMsRef.current;
     if (startMark === null) return;
-    if (currentMs <= startMark) {
+    if (now <= startMark) {
       setError(t("avCoder.endAfterStart"));
       return;
     }
     setPendingStart(startMark);
     setStartMark(null);
     if (activeCodeId != null) {
-      void codeRange(activeCodeId, startMark, currentMs);
+      void codeRange(activeCodeId, startMark, now);
     } else {
       setPickerOpen(true);
     }
@@ -446,15 +446,6 @@ export function AvCoder({ source }: { source: Source }) {
     <div className="flex h-full flex-col bg-bg">
       {/* Header: back button + file name + all playback/coding controls */}
       <header className="flex min-h-10 shrink-0 flex-wrap items-center gap-1.5 border-b border-border bg-surface px-3 py-1">
-        <button
-          type="button"
-          onClick={() => setView({ kind: "files" })}
-          aria-label={t("coder.back")}
-          title={t("coder.back")}
-          className="rounded-sm p-1.5 text-text-secondary hover:bg-surface-higher hover:text-text-primary"
-        >
-          <ArrowLeft size={16} aria-hidden />
-        </button>
         <span className="max-w-40 truncate font-medium">{source.name}</span>
         {source.memo && (
           <span className="hidden max-w-40 truncate text-xs text-text-secondary xl:inline">{source.memo}</span>
@@ -497,23 +488,16 @@ export function AvCoder({ source }: { source: Source }) {
         )}
         <button
           type="button"
-          onClick={() => {
-            if (!panelVisible) {
-              setPanelVisible(true);
-              setPanelTab("transcript");
-            } else if (panelTab !== "transcript") {
-              setPanelTab("transcript");
-            } else {
-              setPanelVisible(false);
-            }
-          }}
-          disabled={subtitleSegments.length === 0}
-          className={`flex shrink-0 items-center gap-1 rounded-sm border border-border px-2 py-1 text-xs hover:bg-surface-higher disabled:opacity-40 ${
-            panelVisible && panelTab === "transcript" ? "border-accent text-accent" : "bg-bg text-text-secondary"
+          onClick={() => setPanelVisible((v) => !v)}
+          aria-expanded={panelVisible}
+          title={t("transcribe.title")}
+          className={`flex shrink-0 items-center gap-1 rounded-sm border border-border px-2 py-1 text-xs hover:bg-surface-higher ${
+            panelVisible ? "border-accent text-accent" : "bg-bg text-text-secondary"
           }`}
         >
           <Captions size={12} aria-hidden />
           {t("avCoder.transcript")}
+          <ChevronDown size={11} className="text-text-secondary" aria-hidden />
         </button>
         <div className="flex-1" />
         <button
@@ -537,46 +521,6 @@ export function AvCoder({ source }: { source: Source }) {
           <Bookmark size={12} className="fill-current" aria-hidden />
           {t("avCoder.bookmarkGo")}
         </button>
-        <div className="relative shrink-0" data-transcribe-menu>
-          <button
-            type="button"
-            onClick={() => setTranscribeMenuOpen((o) => !o)}
-            aria-expanded={transcribeMenuOpen}
-            title={t("transcribe.title")}
-            className="flex items-center gap-1 rounded-sm border border-border bg-bg px-2 py-1 text-xs hover:bg-surface-higher"
-          >
-            <Mic size={12} aria-hidden />
-            {t("transcribe.button")}
-            <ChevronDown size={11} className="text-text-secondary" aria-hidden />
-          </button>
-          {transcribeMenuOpen && (
-            <div className="absolute right-0 top-full z-50 mt-1 min-w-44 rounded-md border border-border bg-surface py-1 shadow-lg">
-              <button
-                type="button"
-                onClick={() => {
-                  setTranscribeMenuOpen(false);
-                  setTranscribeOpen(true);
-                }}
-                className="flex w-full items-center gap-2 px-2 py-1.5 text-left text-sm hover:bg-surface-higher"
-              >
-                <Mic size={13} aria-hidden />
-                {t("transcribe.button")}…
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  setTranscribeMenuOpen(false);
-                  setPanelVisible(true);
-                  setPanelTab("speakers");
-                }}
-                className="flex w-full items-center gap-2 px-2 py-1.5 text-left text-sm hover:bg-surface-higher"
-              >
-                <Users size={13} aria-hidden />
-                {t("avCoder.markSpeakers")}
-              </button>
-            </div>
-          )}
-        </div>
         <button
           type="button"
           onClick={startMark !== null ? handleSetEnd : handleSetStart}
@@ -716,10 +660,22 @@ export function AvCoder({ source }: { source: Source }) {
         </div>
       )}
 
-      {/* Combined transcript + speakers panel */}
-      {panelVisible && (panelTab === "speakers" || transcript != null) && (
+      {/* Combined transcript / transcribe / speakers panel */}
+      {panelVisible && (panelTab !== "transcript" || transcript != null) && (
         <div className="flex min-h-0 flex-1 flex-col border-t border-border bg-bg">
           <div className="flex shrink-0 items-center gap-1 border-b border-border bg-surface px-3 py-1.5">
+            <button
+              type="button"
+              onClick={() => setPanelTab("transcribe")}
+              className={`flex items-center gap-1 rounded-sm px-2 py-0.5 text-xs font-medium ${
+                panelTab === "transcribe"
+                  ? "bg-surface-higher text-accent"
+                  : "text-text-secondary hover:text-text-primary"
+              }`}
+            >
+              <Mic size={12} aria-hidden />
+              {t("transcribe.button")}
+            </button>
             <button
               type="button"
               onClick={() => setPanelTab("transcript")}
@@ -758,7 +714,21 @@ export function AvCoder({ source }: { source: Source }) {
             </button>
           </div>
 
-          {panelTab === "transcript" ? (
+          {panelTab === "transcribe" ? (
+            <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4">
+              <p className="max-w-md text-xs leading-relaxed text-text-secondary">
+                {t("transcribe.panelHint")}
+              </p>
+              <button
+                type="button"
+                onClick={() => setTranscribeOpen(true)}
+                className="mt-3 flex items-center gap-1.5 rounded-sm bg-accent px-3 py-1.5 text-xs font-medium text-[var(--qc-bg)] hover:bg-accent-hover"
+              >
+                <Mic size={13} aria-hidden />
+                {t("transcribe.button")}…
+              </button>
+            </div>
+          ) : panelTab === "transcript" ? (
             <div
               ref={subtitleRef}
               className="min-h-0 flex-1 overflow-y-auto px-4 py-3"

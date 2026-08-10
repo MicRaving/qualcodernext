@@ -13,7 +13,6 @@ import {
   type ReactNode,
 } from "react";
 import {
-  ArrowLeft,
   Bookmark,
   Check,
   CircleAlert,
@@ -124,7 +123,6 @@ export function TextCoder({
   onExitPlainText?: () => void;
 }) {
   const { t } = useI18n();
-  const setView = useProjectStore((s) => s.setView);
   const activeCodeId = useProjectStore((s) => s.activeCodeId);
 
   const [source, setSource] = useState<Source | null>(null);
@@ -874,15 +872,6 @@ export function TextCoder({
   return (
     <div className="flex h-full flex-col bg-bg">
       <header className="flex h-10 shrink-0 items-center gap-2 border-b border-border bg-surface px-3">
-        <button
-          type="button"
-          onClick={() => setView({ kind: "files" })}
-          aria-label={t("coder.back")}
-          title={t("coder.back")}
-          className="rounded-sm p-1.5 text-text-secondary hover:bg-surface-higher hover:text-text-primary"
-        >
-          <ArrowLeft size={16} aria-hidden />
-        </button>
         <span className="max-w-64 truncate font-medium">{source.name}</span>
         {source.memo && <span className="max-w-64 truncate text-xs text-text-secondary">{source.memo}</span>}
         <div className="flex-1" />

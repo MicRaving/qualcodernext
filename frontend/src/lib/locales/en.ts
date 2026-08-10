@@ -188,6 +188,7 @@ export const en: Record<string, string> = {
   // transcription
   "transcribe.title": "Transcribe audio/video",
   "transcribe.button": "Transcribe",
+"transcribe.panelHint": "Generate a text transcript of this audio or video. The finished transcript appears here automatically.",
   "transcribe.engine": "Engine",
   "transcribe.model": "Whisper model",
   "transcribe.language": "Language (ISO code, empty = auto)",
@@ -838,6 +839,7 @@ export const en: Record<string, string> = {
   "analyze.descCodebook": "Plain-text codebook export (category>>subcategory>>code).",
   "analyze.titleReferences": "References",
   "analyze.descReferences": "Bibliographic references imported from RIS or Zotero.",
+  "analyze.backToReports": "Back to reports",
   "analyze.pickCode": "Code:",
   "analyze.pickCoderA": "Coder A:",
   "analyze.pickCoderB": "Coder B:",

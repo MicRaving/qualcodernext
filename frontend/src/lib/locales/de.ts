@@ -196,6 +196,7 @@ export const de: Record<string, string> = {
   // transcription
   "transcribe.title": "Audio/Video transkribieren",
   "transcribe.button": "Transkribieren",
+"transcribe.panelHint": "Erstellt ein Texttranskript dieser Audio- oder Videodatei. Das fertige Transkript erscheint hier automatisch.",
   "transcribe.engine": "Engine",
   "transcribe.model": "Whisper-Modell",
   "transcribe.language": "Sprache (ISO-Code, leer = automatisch)",
@@ -712,6 +713,7 @@ export const de: Record<string, string> = {
   "analyze.descCodebook": "Codebuch als Klartext (Kategorie>>Unterkategorie>>Code) exportieren.",
   "analyze.titleReferences": "Referenzen",
   "analyze.descReferences": "Bibliografische Referenzen aus RIS- und Zotero-Importen.",
+  "analyze.backToReports": "Zurück zu den Berichten",
   "analyze.pickCode": "Code wählen:",
   "analyze.pickCoderA": "Codierer A:",
   "analyze.pickCoderB": "Codierer B:",

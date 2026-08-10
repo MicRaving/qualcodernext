@@ -169,8 +169,8 @@ function toneAudioRow(page: Page) {
 
 /** Files view → open tone.wav in the AV coder. */
 async function openToneInCoder(page: Page) {
-  await page.getByRole("button", { name: "Files" }).click();
-  await expect(page.getByRole("heading", { name: "Files" })).toBeVisible();
+  await page.getByRole("button", { name: "Files", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Files" }).first()).toBeVisible();
   await toneAudioRow(page).click();
 }
 
@@ -189,8 +189,8 @@ test("create project and import the audio file", async ({ page }) => {
     timeout: 30_000,
   });
 
-  await page.getByRole("button", { name: "Files" }).click();
-  await expect(page.getByRole("heading", { name: "Files" })).toBeVisible();
+  await page.getByRole("button", { name: "Files", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Files" }).first()).toBeVisible();
 
   await page.setInputFiles("input[type=file]", [WAV_PATH]);
   const row = toneAudioRow(page);
@@ -228,8 +228,14 @@ test("code a segment via the timeline and verify it appears", async ({ page }) =
   await page.mouse.click(box!.x + box!.width * 0.3, midY);
   await page.getByRole("button", { name: "Set start" }).click();
 
+  // The header can wrap when the start indicator appears, shifting the
+  // timeline down — re-measure before seeking to the end position.
+  const box2 = await timeline.boundingBox();
+  expect(box2).not.toBeNull();
+  const midY2 = box2!.y + box2!.height / 2;
+
   // Seek to ~70% and open the code picker (the end mark is the current time).
-  await page.mouse.click(box!.x + box!.width * 0.7, midY);
+  await page.mouse.click(box2!.x + box2!.width * 0.7, midY2);
   await page.getByRole("button", { name: "Set end & code…" }).click();
 
   const picker = page.getByRole("dialog", { name: "Pick a code" });
@@ -283,8 +289,8 @@ test("transcribe audio with whisper and open the transcript", async ({ page }) =
   );
   await ensureProjectOpen(page);
 
-  await page.getByRole("button", { name: "Files" }).click();
-  await expect(page.getByRole("heading", { name: "Files" })).toBeVisible();
+  await page.getByRole("button", { name: "Files", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Files" }).first()).toBeVisible();
   await page.setInputFiles("input[type=file]", [SPEECH_WAV]);
   // The importer also creates an empty "speech.wav.txt" transcript
   // companion — target the exact media row.
