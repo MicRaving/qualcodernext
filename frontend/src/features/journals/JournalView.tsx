@@ -14,10 +14,8 @@ import {
 import { api } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { useI18n } from "@/lib/i18n";
+import { Button } from "@/components/ui/orchestrator";
 import { useProjectStore } from "@/stores/project";
-
-const primaryBtnCls =
-  "flex items-center gap-1 rounded-sm bg-accent px-2.5 py-1 text-xs font-medium text-bg hover:bg-accent-hover disabled:opacity-50";
 
 /** Left bar: the journal entry list (header lives in the notes left bar). */
 export function JournalList() {
@@ -190,27 +188,27 @@ export function JournalEditor() {
               aria-label={t("journal.namePlaceholder")}
               className="h-7 min-w-0 flex-1 rounded-sm border border-border bg-surface px-2 text-sm outline-none focus:border-accent"
             />
-            <button
-              type="button"
+            <Button
+              variant="primary"
+              icon={
+                saving ? (
+                  <LoaderCircle size={12} className="animate-spin" aria-hidden />
+                ) : (
+                  <Save size={12} aria-hidden />
+                )
+              }
               onClick={() => void saveEntry()}
               disabled={saving || !dirty}
-              className={primaryBtnCls}
             >
-              {saving ? (
-                <LoaderCircle size={12} className="animate-spin" aria-hidden />
-              ) : (
-                <Save size={12} aria-hidden />
-              )}
               {t("common.save")}
-            </button>
-            <button
-              type="button"
+            </Button>
+            <Button
+              variant="danger"
+              icon={<Trash2 size={12} aria-hidden />}
               onClick={() => void deleteEntry()}
-              className="flex items-center gap-1 rounded-sm border border-border px-2.5 py-1 text-xs font-medium text-danger hover:bg-surface-higher"
             >
-              <Trash2 size={12} aria-hidden />
               {t("common.delete")}
-            </button>
+            </Button>
           </div>
           <textarea
             ref={entryRef}

@@ -7,6 +7,7 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { BookOpen, FolderOpen, FolderTree, Hash, Layers, PlusCircle } from "lucide-react";
 import { api } from "@/lib/api";
+import { ViewHeader } from "@/components/ui/orchestrator";
 import { useI18n } from "@/lib/i18n";
 import { useProjectStore } from "@/stores/project";
 
@@ -352,27 +353,29 @@ export function DashboardView() {
   }
 
   return (
-    <div className="overflow-y-auto bg-bg p-6">
-      <h1 className="text-[28px] font-bold text-text-primary">{projectName}</h1>
-      <p className="mt-1 text-sm text-text-secondary">
-        Database version {summary.databaseversion} · created {summary.project_date}
-      </p>
-      {openers.length > 0 && (
-        <p className="mt-1 text-xs text-warning">
-          {t("dashboard.openers", { users: openers.join(", ") })}
-        </p>
-      )}
+    <div className="flex h-full flex-col bg-bg">
+      <ViewHeader
+        title={projectName}
+        meta={`Database version ${summary.databaseversion} · created ${summary.project_date}`}
+        actions={
+          openers.length > 0 ? (
+            <span className="text-xs text-warning">
+              {t("dashboard.openers", { users: openers.join(", ") })}
+            </span>
+          ) : undefined
+        }
+      />
+      <div className="min-h-0 flex-1 overflow-y-auto p-6">
+        <div className="grid grid-cols-2 gap-4 lg:grid-cols-3">
+          <Stat icon={<BookOpen size={16} aria-hidden />} label="Files" value={summary.files_count} />
+          <Stat icon={<FolderTree size={16} aria-hidden />} label="Codes" value={summary.codes_count} />
+          <Stat icon={<Layers size={16} aria-hidden />} label="Code categories" value={summary.code_categories_count} />
+          <Stat icon={<Hash size={16} aria-hidden />} label="Cases" value={summary.cases_count} />
+          <Stat icon={<BookOpen size={16} aria-hidden />} label="Attribute types" value={summary.attributes_count} />
+          <Stat icon={<BookOpen size={16} aria-hidden />} label="Journal entries" value={summary.journals_count} />
+        </div>
 
-      <div className="mt-6 grid grid-cols-2 gap-4 lg:grid-cols-3">
-        <Stat icon={<BookOpen size={16} aria-hidden />} label="Files" value={summary.files_count} />
-        <Stat icon={<FolderTree size={16} aria-hidden />} label="Codes" value={summary.codes_count} />
-        <Stat icon={<Layers size={16} aria-hidden />} label="Code categories" value={summary.code_categories_count} />
-        <Stat icon={<Hash size={16} aria-hidden />} label="Cases" value={summary.cases_count} />
-        <Stat icon={<BookOpen size={16} aria-hidden />} label="Attribute types" value={summary.attributes_count} />
-        <Stat icon={<BookOpen size={16} aria-hidden />} label="Journal entries" value={summary.journals_count} />
-      </div>
-
-      <div className="mt-6 flex items-center gap-2">
+        <div className="mt-6 flex items-center gap-2">
         <button
           type="button"
           onClick={() => setDialog("create")}
@@ -417,6 +420,7 @@ export function DashboardView() {
       )}
 
       {dialog && <ProjectFormDialog mode={dialog} onClose={() => setDialog(null)} />}
+      </div>
     </div>
   );
 }

@@ -29,6 +29,7 @@ import {
   Undo2,
   X,
 } from "lucide-react";
+import { ViewBackButton } from "@/components/shell/ViewBackButton";
 import {
   api,
   type Annotation,
@@ -872,6 +873,7 @@ export function TextCoder({
   return (
     <div className="flex h-full flex-col bg-bg">
       <header className="flex h-10 shrink-0 items-center gap-2 border-b border-border bg-surface px-3">
+        <ViewBackButton />
         <span className="max-w-64 truncate font-medium">{source.name}</span>
         {source.memo && <span className="max-w-64 truncate text-xs text-text-secondary">{source.memo}</span>}
         <div className="flex-1" />

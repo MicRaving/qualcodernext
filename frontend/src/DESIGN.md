@@ -6,6 +6,27 @@ styling of every control, and where every element sits. When in doubt,
 mirror an existing screen — the orchestrator (`WorkspaceLayout`) is the
 single source of truth for structure.
 
+## 0. The design orchestrator module
+
+`frontend/src/components/ui/orchestrator.tsx` is the ONLY place that
+defines structural UI parts. Views import from it — they never hardcode
+design classes:
+
+- `Button` — variants `primary` / `primaryCompact` / `secondary` / `danger`
+  with an optional `icon` prop.
+- `IconButton` — ghost icon button; `label` (aria-label) and `title` are
+  REQUIRED props.
+- `ViewHeader` — the center-view header (`h-10`): back button + `title` +
+  optional `meta` + `actions` on the right.
+- `BarHeader` — the compact left/right bar header (`h-5`, half of the
+  center bar): `title` + `count` badge + `actions`.
+- `CountBadge`, `SectionLabel`, `Card`, `ErrorBanner`, `LoadingState`,
+  `EmptyState`.
+
+Style strings live in `frontend/src/components/ui/tokens.ts` (`cls`).
+If a part is missing, add it to the orchestrator — never inline new
+structural classes in a view.
+
 ---
 
 ## 1. Layout system — the orchestrator
@@ -47,23 +68,36 @@ engine. Views never lay themselves out; they fill slots:
 
 ### Left-bar header (all list left bars)
 
-Every left bar starts with a header:
+Every left bar starts with a compact header (via `BarHeader`, h-5 — HALF
+the height of the center bar):
 
 ```
-[h-10, border-b border-border, px-3, flex items-center gap-1.5]
-[ title (text-sm font-semibold) ] [ count badge ] ... [ actions ]
+[h-5, border-b border-border, px-2, flex items-center gap-1]
+[ title (h1, text-xs font-semibold) ] [ count badge ] ... [ actions ]
 ```
 
-- Count badge: `rounded-sm bg-surface-higher px-1.5 py-px text-xs font-medium text-text-secondary`.
+- Count badge: `CountBadge` — `rounded-sm bg-surface-higher px-1 py-px text-[10px] font-medium text-text-secondary`.
+- Right-side actions: yellow/accent add or import buttons (`Button
+  variant="primaryCompact"`) and ghost icons (`IconButton size="sm"`).
 - List rows below: `border-b border-border`, selected row `bg-accent/10`.
 - Left-bar menus (dropdowns) open below the header: `absolute left-0 top-full z-50 mt-1 rounded-md border border-border bg-surface py-1 shadow-lg`.
 
-### Center-view toolbars
+### Center-view header (all views)
 
-Views that need a function bar render it as the FIRST row of the center,
-visually identical to the menu bar: `flex h-10 shrink-0 items-center gap-2
-border-b border-border bg-surface px-3`. View-global toolbars (e.g. Graphs)
-are passed to the orchestrator's `menuBar` slot instead.
+Every center view starts with `ViewHeader` (h-10):
+
+```
+[back ←] [ h1 title ] [ meta ] ... [ interaction buttons ]
+```
+
+- The back button (leftmost) is rendered by `ViewHeader`; it navigates to
+  Files. It is present in EVERY center view header.
+- Right-side interaction buttons use `Button` variants.
+
+Views that need a function bar render it as the FIRST row of the center
+(visually identical: `h-10 border-b border-border bg-surface px-3`).
+View-global toolbars (e.g. Graphs) are passed to the orchestrator's
+`menuBar` slot instead.
 
 ---
 
@@ -94,8 +128,7 @@ are passed to the orchestrator's `menuBar` slot instead.
 | Size | Where |
 |---|---|
 | `20` | Ribbon nav buttons + right icon buttons (History/AI/Settings) |
-| `18` | Ribbon back button |
-| `16` | Back buttons in view toolbars, view-level utility icons |
+| `16` | Back buttons in center view headers, view-level utility icons |
 | `14` | Left-bar header actions, menu items, toolbar buttons |
 | `12–13` | Inside buttons, list rows, tabs, badges |
 
@@ -145,13 +178,11 @@ Status dots (e.g. coder/sync indicator): `h-1.5 w-1.5 rounded-full`,
 With a project open:
 
 ```
-[Back ←] [Dashboard] [Files] [Cases] [Notes] [Reports] [Graphs] │ [spacer]
+[Dashboard] [Files] [Cases] [Notes] [Reports] [Graphs] │ [spacer]
 [Coder switcher: User + name + sync-dot + ▾] [queue chip?] [History]
 [AI] [Settings]
 ```
 
-- Back button: ghost icon, `ArrowLeft 18`, aria-label "Back to files",
-  `setView({ kind: "files" })`. Present in EVERY view with an open project.
 - Nav buttons: `icon 20 + label text-xs font-medium`, active =
   `bg-surface-higher text-accent`, idle = `text-text-secondary`.
 - Divider after nav: `h-5 w-px bg-border`.
@@ -164,23 +195,29 @@ With a project open:
   (`disabled`, `cursor-not-allowed text-text-secondary/40`), right side shows
   only the theme toggle. NO backend status indicator.
 - The theme toggle: `rounded-sm border border-border bg-bg px-2 py-1 text-xs`.
+- The BACK button is NOT in the ribbon — it lives in every center view
+  header (`ViewHeader`).
 
-## 7. Coder headers (Text/PDF/Image/AV)
+## 7. Center headers per view (registry)
 
-- Single row: `flex min-h-10 shrink-0 flex-wrap items-center gap-1 border-b
-  border-border bg-surface px-3 py-1` (flex-wrap is allowed; controls wrap to
-  a second row).
-- Order: `file name (truncate, max-w-40..64, font-medium)` → controls
-  (zoom / playback / coding buttons per coder).
-- NO back button in coder headers — the ribbon back button is the only one.
+| View | Center header (ViewHeader) | Notes |
+|---|---|---|
+| coding (Text/PDF/Image/AV) | back + file name + coder controls | controls wrap to a second row (`flex-wrap` allowed) |
+| files | back + "Files" + count + search/filters/import | |
+| dashboard | back + project name + version + openers | |
+| cases | back + case name | details pane |
+| notes | back + type name | editor pane |
+| analyze | back + "Analysis" + report title + "Back to reports" | |
+| graphs | back + "Graphs" + picker/actions | in the menuBar slot |
+| history / ai / settings | back + title + actions | |
 
 ## 8. Left bars per view (registry)
 
-| View | Left bar | Width | Header |
+| View | Left bar | Width | Header (BarHeader) |
 |---|---|---|---|
-| coding | Sidebar — code tree (namespace-aware, depth ≤ 64) | w-64 | Code/Category buttons row |
+| coding | Sidebar — code tree (namespace-aware, depth ≤ 64) | w-64 | "Codes" + count + yellow Code/Category |
 | files, dashboard, analyze, graphs, history, ai, settings | Sidebar — file groups | w-64 | "Files" + count |
-| cases | CasesList | w-72 | "Cases" + count + refresh + Add |
+| cases | CasesList | w-72 | "Cases" + count + refresh + yellow Add |
 | notes | NotesList (type dropdown + per-type list) | w-72 | "Notes" + type dropdown + count + actions |
 
 - The Sidebar's file groups: group label `px-2 py-1 text-xs font-medium
@@ -190,6 +227,8 @@ With a project open:
 ## 9. Right bar — Inspector
 
 - Always present with an open project.
+- Compact header (`BarHeader`, h-5): item icon + name (or "Details") +
+  close button.
 - Empty state: "Select a code or file for details." (centered, secondary).
 - Code details: memo editor (inline textarea + Save), color, category path,
   counts, recent examples.

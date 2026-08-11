@@ -346,7 +346,7 @@ test("autocode + SQL report", async ({ page }) => {
 
   // SQL report: count codings per code, expect the RainCode row.
   await page.getByRole("button", { name: "Reports" }).click();
-  await expect(page.getByRole("heading", { name: "Analysis" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Analysis" }).first()).toBeVisible();
   await page.getByRole("button", { name: "SQL report" }).click();
 
   const sqlBox = page.getByLabel("SQL query");
@@ -373,7 +373,7 @@ test("cases and attributes", async ({ page }) => {
   // Add case "FeatureCase" (the view uses window.prompt).
   page.on("dialog", (d) => void d.accept("FeatureCase"));
   await navButton("Cases").click();
-  await expect(page.getByRole("heading", { name: "Cases" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Cases" }).first()).toBeVisible();
   await page.getByRole("button", { name: "Add case" }).click();
   await expect(page.getByText("FeatureCase").first()).toBeVisible({ timeout: 15_000 });
 
@@ -411,7 +411,7 @@ test("interchange export and import", async ({ page }) => {
 
   // Import/Export lives in Settings now.
   await page.getByRole("button", { name: "Settings" }).click();
-  await expect(page.getByRole("heading", { name: "Settings" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Settings" }).first()).toBeVisible();
   await expect(page.getByText("Import / Export", { exact: true }).first()).toBeVisible();
 
   // Export: the project downloads as a .qdp attachment.

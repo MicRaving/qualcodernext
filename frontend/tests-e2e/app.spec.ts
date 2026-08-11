@@ -128,7 +128,7 @@ test("create project, import a file, autocode it, and run a report", async ({ pa
   // ----------------------------------------------------------------- report
   await test.step("code frequencies report shows the new code", async () => {
     await page.getByRole("button", { name: "Reports" }).click();
-    await expect(page.getByRole("heading", { name: "Analysis" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Analysis" }).first()).toBeVisible();
 
     await page.getByRole("button", { name: /Code frequencies/ }).click();
 

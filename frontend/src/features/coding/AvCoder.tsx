@@ -24,6 +24,7 @@ import { TranscribeDialog } from "@/features/coding/TranscribeDialog";
 import { formatTime, parseTranscript, segmentLeft, secondsToMs, segmentWidth } from "@/features/coding/media";
 import { codeTint } from "@/features/coding/tint";
 import { useI18n } from "@/lib/i18n";
+import { ViewBackButton } from "@/components/shell/ViewBackButton";
 import { useProjectStore } from "@/stores/project";
 
 const IDENTIFIER_OPTIONS = [
@@ -446,6 +447,7 @@ export function AvCoder({ source }: { source: Source }) {
     <div className="flex h-full flex-col bg-bg">
       {/* Header: back button + file name + all playback/coding controls */}
       <header className="flex min-h-10 shrink-0 flex-wrap items-center gap-1.5 border-b border-border bg-surface px-3 py-1">
+        <ViewBackButton />
         <span className="max-w-40 truncate font-medium">{source.name}</span>
         {source.memo && (
           <span className="hidden max-w-40 truncate text-xs text-text-secondary xl:inline">{source.memo}</span>

@@ -1,5 +1,6 @@
 import { useState, type ComponentType } from "react";
 import { useI18n } from "@/lib/i18n";
+import { Button, ViewHeader } from "@/components/ui/orchestrator";
 import {
   AlignJustify,
   ArrowLeft,
@@ -228,26 +229,24 @@ export function AnalyzeView() {
 
   return (
     <div className="flex h-full flex-col bg-bg">
-      <header className="flex h-10 shrink-0 items-center gap-2 border-b border-border bg-surface px-3">
-        {selected && (
-          <button
-            type="button"
-            onClick={() => setSelected(null)}
-            aria-label={t("analyze.backToReports")}
-            title={t("analyze.backToReports")}
-            className="rounded-sm p-1.5 text-text-secondary hover:bg-surface-higher hover:text-text-primary"
-          >
-            <ArrowLeft size={16} aria-hidden />
-          </button>
-        )}
-        <h1 className="text-sm font-semibold text-text-primary">Analysis</h1>
-        {meta && (
-          <span className="text-xs text-text-secondary">
-            · <span className="font-medium text-text-primary">{meta.title}</span>
-          </span>
-        )}
-        <div className="flex-1" />
-      </header>
+      <ViewHeader
+        title="Analysis"
+        meta={meta ? <span>· {meta.title}</span> : undefined}
+        actions={
+          <>
+            {selected && (
+              <Button
+                variant="secondary"
+                icon={<ArrowLeft size={14} aria-hidden />}
+                aria-label={t("analyze.backToReports")}
+                onClick={() => setSelected(null)}
+              >
+                {t("analyze.backToReports")}
+              </Button>
+            )}
+          </>
+        }
+      />
 
       <div className="min-h-0 flex-1 overflow-y-auto p-4">
         {ReportComponent ? (

@@ -35,6 +35,7 @@ import { api, ApiError, type BadLink, type FileFilter, type Source } from "@/lib
 import { isPdf } from "@/lib/media";
 import { cn } from "@/lib/utils";
 import { useI18n } from "@/lib/i18n";
+import { ViewHeader } from "@/components/ui/orchestrator";
 import { useProjectStore } from "@/stores/project";
 import {
   filterSources,
@@ -369,12 +370,16 @@ export function FileManager() {
   return (
     <div className="flex h-full flex-col bg-bg">
       {/* Header */}
-      <header className="flex h-10 shrink-0 items-center gap-2 border-b border-border bg-surface px-3">
-        <h1 className="text-sm font-semibold text-text-primary">{t("nav.files")}</h1>
-        <span className="rounded-sm bg-surface-higher px-1.5 py-px text-xs font-medium text-text-secondary">
-          {rows.length}
-        </span>
-        <div className="relative ml-2">
+      <ViewHeader
+        title={t("nav.files")}
+        meta={
+          <span className="rounded-sm bg-surface-higher px-1.5 py-px text-xs font-medium text-text-secondary">
+            {rows.length}
+          </span>
+        }
+        actions={
+          <>
+            <div className="relative ml-2">
           <Search
             size={14}
             className="pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 text-text-secondary"
@@ -388,7 +393,6 @@ export function FileManager() {
             className="h-7 w-56 rounded-sm border border-border bg-bg pl-7 pr-2 text-sm outline-none focus:border-accent"
           />
         </div>
-        <div className="flex-1" />
         {filters.length > 0 && (
           <div className="flex items-center gap-1">
             <select
@@ -465,7 +469,9 @@ export function FileManager() {
           aria-hidden
           onChange={handleFilesChange}
         />
-      </header>
+          </>
+        }
+      />
 
       {/* Inline notices */}
       {skipped.length > 0 && (

@@ -2,9 +2,10 @@
  * Inspector — right-side details panel for the selected code or file.
  */
 import { useState, type ReactNode } from "react";
-import { ChevronRight, FileText, LoaderCircle, Pencil, Trash2, X } from "lucide-react";
+import { ChevronRight, FileText, Hash, LoaderCircle, Pencil, Trash2, X } from "lucide-react";
 import { api, type CodeDetails, type SourceDetails } from "@/lib/api";
 import { AttributeEditor } from "@/components/shell/AttributeEditor";
+import { BarHeader, IconButton, SectionLabel } from "@/components/ui/orchestrator";
 import { useI18n } from "@/lib/i18n";
 import { useProjectStore } from "@/stores/project";
 import {
@@ -16,14 +17,6 @@ import {
 
 /** Fallback for code swatches with no API color (matches CodePicker). */
 const SWATCH_FALLBACK = "var(--qc-accent)";
-
-function SectionLabel({ children }: { children: ReactNode }) {
-  return (
-    <div className="mb-1 text-xs font-medium uppercase tracking-wide text-text-secondary">
-      {children}
-    </div>
-  );
-}
 
 /**
  * Inline memo editor: shows the memo text with an Edit button, and swaps
@@ -151,24 +144,6 @@ function CodeDetailsPanel({ details }: { details: CodeDetails }) {
 
   return (
     <div className="flex flex-col">
-      {/* Header */}
-      <div className="flex items-center gap-2 border-b border-border px-3 py-2">
-        <span
-          className="h-3 w-3 shrink-0 rounded-sm border border-border"
-          style={{ backgroundColor: details.code.color ?? SWATCH_FALLBACK }}
-          aria-hidden
-        />
-        <h2 className="min-w-0 flex-1 truncate font-heading text-sm">{details.code.name}</h2>
-        <button
-          type="button"
-          onClick={clearInspector}
-          aria-label={t("common.closeDetails")}
-          className="rounded-sm p-1 text-text-secondary hover:bg-surface-higher hover:text-text-primary"
-        >
-          <X size={14} aria-hidden />
-        </button>
-      </div>
-
       {/* Category path */}
       <div className="flex items-center gap-1 border-b border-border px-3 py-1.5 text-xs text-text-secondary">
         {details.category_path.length === 0 ? (
@@ -239,20 +214,6 @@ function FileDetailsPanel({ details }: { details: SourceDetails }) {
 
   return (
     <div className="flex flex-col">
-      {/* Header */}
-      <div className="flex items-center gap-2 border-b border-border px-3 py-2">
-        <FileText size={14} className="shrink-0 text-text-secondary" aria-hidden />
-        <h2 className="min-w-0 flex-1 truncate font-heading text-sm">{src.name}</h2>
-        <button
-          type="button"
-          onClick={() => useProjectStore.getState().clearInspector()}
-          aria-label={t("common.closeDetails")}
-          className="rounded-sm p-1 text-text-secondary hover:bg-surface-higher hover:text-text-primary"
-        >
-          <X size={14} aria-hidden />
-        </button>
-      </div>
-
       {/* Meta rows */}
       <dl className="flex flex-col gap-1 border-b border-border px-3 py-2 text-xs">
         <div className="flex justify-between gap-2">
@@ -353,6 +314,7 @@ export function Inspector() {
   const error = useProjectStore((s) => s.inspectorError);
   const selectCode = useProjectStore((s) => s.selectCode);
   const selectFile = useProjectStore((s) => s.selectFile);
+  const clearInspector = useProjectStore((s) => s.clearInspector);
 
   function retry() {
     if (!selection) return;
@@ -398,9 +360,39 @@ export function Inspector() {
     );
   }
 
+  const itemName =
+    details && isCodeDetails(details)
+      ? details.code.name
+      : details && isSourceDetails(details)
+        ? details.source.name
+        : null;
+
   return (
-    <aside className="flex w-72 shrink-0 flex-col overflow-y-auto border-l border-border bg-surface">
-      {body}
+    <aside className="flex w-72 shrink-0 flex-col border-l border-border bg-surface">
+      <BarHeader
+        title={
+          selection ? (
+            <span className="flex items-center gap-1">
+              {selection.kind === "code" ? (
+                <Hash size={11} className="shrink-0 text-text-secondary" aria-hidden />
+              ) : (
+                <FileText size={11} className="shrink-0 text-text-secondary" aria-hidden />
+              )}
+              {itemName ?? t("inspector.details")}
+            </span>
+          ) : (
+            t("inspector.details")
+          )
+        }
+        actions={
+          selection && (
+            <IconButton label={t("common.closeDetails")} size="sm" onClick={clearInspector}>
+              <X size={12} aria-hidden />
+            </IconButton>
+          )
+        }
+      />
+      <div className="min-h-0 flex-1 overflow-y-auto">{body}</div>
     </aside>
   );
 }

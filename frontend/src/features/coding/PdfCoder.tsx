@@ -40,6 +40,7 @@ import {
 import { codeTint } from "@/features/coding/tint";
 import { cn } from "@/lib/utils";
 import { useI18n } from "@/lib/i18n";
+import { ViewBackButton } from "@/components/shell/ViewBackButton";
 import { useProjectStore } from "@/stores/project";
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
@@ -528,6 +529,7 @@ export function PdfCoder({ source }: { source: Source }) {
   return (
     <div className="flex h-full flex-col bg-bg">
       <header className="flex min-h-10 shrink-0 flex-wrap items-center gap-1 border-b border-border bg-surface px-3 py-1">
+        <ViewBackButton />
         <span className="max-w-48 truncate font-medium">{source.name}</span>
         {source.memo && <span className="max-w-48 truncate text-xs text-text-secondary">{source.memo}</span>}
         <div className="flex-1" />

@@ -18,6 +18,7 @@ import {
   Trash2,
 } from "lucide-react";
 import { api } from "@/lib/api";
+import { BarHeader, Button, IconButton, ViewHeader } from "@/components/ui/orchestrator";
 import { JournalEditor, JournalList } from "@/features/journals/JournalView";
 import { useI18n } from "@/lib/i18n";
 import { useProjectStore } from "@/stores/project";
@@ -91,19 +92,22 @@ export function NotesList() {
 
   return (
     <aside className="flex w-72 shrink-0 flex-col border-r border-border bg-surface">
-      <header className="flex h-10 shrink-0 items-center gap-1.5 border-b border-border px-3">
-        <span className="text-sm font-semibold text-text-primary">{t("nav.notes")}</span>
-        <div className="relative" ref={typeMenuRef}>
+      <BarHeader
+        title={t("nav.notes")}
+        count={count}
+        actions={
+          <>
+            <div className="relative" ref={typeMenuRef}>
           <button
             type="button"
             onClick={() => setTypeMenuOpen((o) => !o)}
             aria-expanded={typeMenuOpen}
             aria-haspopup="listbox"
             aria-label={t("notes.tabsAria")}
-            className="flex items-center gap-1 rounded-sm border border-border bg-bg px-1.5 py-0.5 text-xs hover:bg-surface-higher"
+            className="flex items-center gap-0.5 rounded-sm border border-border bg-bg px-1 py-px text-[10px] hover:bg-surface-higher"
           >
             {t(`notes.tab.${notesUi.tab}`)}
-            <ChevronDown size={11} className="text-text-secondary" aria-hidden />
+            <ChevronDown size={9} className="text-text-secondary" aria-hidden />
           </button>
           {typeMenuOpen && (
             <div
@@ -135,31 +139,27 @@ export function NotesList() {
             </div>
           )}
         </div>
-        <span className="rounded-sm bg-surface-higher px-1.5 py-px text-xs font-medium text-text-secondary">
-          {count}
-        </span>
-        <div className="flex-1" />
-        {notesUi.tab === "journal" && (
-          <button
-            type="button"
-            onClick={() => void newEntry()}
-            aria-label={t("journal.newEntry")}
-            title={t("journal.newEntry")}
-            className="rounded-sm p-1 text-text-secondary hover:bg-surface-higher hover:text-text-primary"
-          >
-            <Plus size={14} aria-hidden />
-          </button>
-        )}
-        <button
-          type="button"
-          onClick={() => setNotesUi({ tick: notesUi.tick + 1 })}
-          aria-label={t("common.refresh")}
-          title={t("common.refresh")}
-          className="rounded-sm p-1 text-text-secondary hover:bg-surface-higher hover:text-text-primary"
-        >
-          <RefreshCw size={14} aria-hidden />
-        </button>
-      </header>
+            {notesUi.tab === "journal" && (
+              <Button
+                variant="primaryCompact"
+                icon={<Plus size={10} aria-hidden />}
+                aria-label={t("journal.newEntry")}
+                title={t("journal.newEntry")}
+                onClick={() => void newEntry()}
+              >
+                {t("journal.newEntry")}
+              </Button>
+            )}
+            <IconButton
+              label={t("common.refresh")}
+              size="sm"
+              onClick={() => setNotesUi({ tick: notesUi.tick + 1 })}
+            >
+              <RefreshCw size={12} aria-hidden />
+            </IconButton>
+          </>
+        }
+      />
       <div className="relative shrink-0 px-3 py-2">
         <Search
           size={14}
@@ -189,10 +189,28 @@ export function NotesList() {
 
 /** Center: the per-tab editor (journal entry / annotation / memo). */
 export function NotesEditor() {
+  const { t } = useI18n();
   const tab = useProjectStore((s) => s.notesUi.tab);
-  if (tab === "journal") return <JournalEditor />;
-  if (tab === "annotations") return <AnnotationDetails />;
-  return <MemoEditor />;
+  const name =
+    tab === "journal"
+      ? t("notes.tab.journal")
+      : tab === "annotations"
+        ? t("notes.tab.annotations")
+        : t("notes.tab.memos");
+  return (
+    <div className="flex h-full flex-col">
+      <ViewHeader title={name} />
+      <div className="min-h-0 flex-1">
+        {tab === "journal" ? (
+          <JournalEditor />
+        ) : tab === "annotations" ? (
+          <AnnotationDetails />
+        ) : (
+          <MemoEditor />
+        )}
+      </div>
+    </div>
+  );
 }
 
 // ---------------------------------------------------------------------------

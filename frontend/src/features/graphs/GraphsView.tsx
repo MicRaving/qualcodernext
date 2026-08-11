@@ -34,6 +34,7 @@ import {
 import { api, GRAPH_MODELS, type GraphData } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { useI18n } from "@/lib/i18n";
+import { Button, ViewHeader } from "@/components/ui/orchestrator";
 import { useProjectStore } from "@/stores/project";
 
 const NODE_W = 150;
@@ -270,49 +271,52 @@ export function GraphsMenuBar() {
 
   return (
     <>
-      <h1 className="text-sm font-semibold text-text-primary">{t("graphs.title")}</h1>
-      <select
-        value={graphsUi.grid ?? ""}
-        onChange={(e) =>
-          setGraphsUi({ grid: e.target.value === "" ? null : Number(e.target.value), tick: graphsUi.tick + 1 })
+      <ViewHeader
+        title={t("graphs.title")}
+        actions={
+          <>
+            <select
+              value={graphsUi.grid ?? ""}
+              onChange={(e) =>
+                setGraphsUi({ grid: e.target.value === "" ? null : Number(e.target.value), tick: graphsUi.tick + 1 })
+              }
+              className="h-7 rounded-sm border border-border bg-bg px-1.5 text-xs outline-none focus:border-accent"
+              aria-label="Graph"
+            >
+              <option value="">—</option>
+              {graphsUi.list.map((g) => (
+                <option key={g.grid} value={g.grid}>
+                  {g.name}
+                </option>
+              ))}
+            </select>
+            <Button
+              variant="secondary"
+              icon={<Plus size={12} aria-hidden />}
+              onClick={() => void createGraph()}
+            >
+              {t("graphs.newGraph")}
+            </Button>
+            <Button
+              variant="secondary"
+              icon={<Sparkles size={12} aria-hidden />}
+              onClick={() => setModelOpen(true)}
+            >
+              {t("graphs.models")}
+            </Button>
+            <div className="flex-1" />
+            {graphsUi.grid != null && (
+              <Button
+                variant="danger"
+                icon={<Trash2 size={12} aria-hidden />}
+                onClick={() => void deleteGraph()}
+              >
+                {t("common.delete")}
+              </Button>
+            )}
+          </>
         }
-        className="h-7 rounded-sm border border-border bg-bg px-1.5 text-xs outline-none focus:border-accent"
-        aria-label="Graph"
-      >
-        <option value="">—</option>
-        {graphsUi.list.map((g) => (
-          <option key={g.grid} value={g.grid}>
-            {g.name}
-          </option>
-        ))}
-      </select>
-      <button
-        type="button"
-        onClick={() => void createGraph()}
-        className="flex items-center gap-1 rounded-sm border border-border bg-bg px-2 py-1 text-xs hover:bg-surface-higher"
-      >
-        <Plus size={12} aria-hidden />
-        {t("graphs.newGraph")}
-      </button>
-      <button
-        type="button"
-        onClick={() => setModelOpen(true)}
-        className="flex items-center gap-1 rounded-sm border border-border bg-bg px-2 py-1 text-xs hover:bg-surface-higher"
-      >
-        <Sparkles size={12} aria-hidden />
-        {t("graphs.models")}
-      </button>
-      <div className="flex-1" />
-      {graphsUi.grid != null && (
-        <button
-          type="button"
-          onClick={() => void deleteGraph()}
-          className="flex items-center gap-1 rounded-sm border border-danger/50 px-2 py-1 text-xs text-danger hover:bg-danger/10"
-        >
-          <Trash2 size={12} aria-hidden />
-          {t("common.delete")}
-        </button>
-      )}
+      />
       {modelOpen && (
         <ModelDialog
           onClose={() => setModelOpen(false)}

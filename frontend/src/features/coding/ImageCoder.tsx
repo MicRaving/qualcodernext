@@ -11,6 +11,7 @@ import { api, sourceFileUrl, type CodeTreeItem, type ImageCoding, type Source } 
 import { CodePicker, type PickedCode } from "@/features/coding/CodePicker";
 import { codeTint } from "@/features/coding/tint";
 import { useI18n } from "@/lib/i18n";
+import { ViewBackButton } from "@/components/shell/ViewBackButton";
 import { useProjectStore } from "@/stores/project";
 
 interface DragState {
@@ -281,6 +282,7 @@ export function ImageCoder({ source }: { source: Source }) {
     <div className="flex h-full flex-col bg-bg">
       {/* Toolbar */}
       <header className="flex h-10 shrink-0 items-center gap-2 border-b border-border bg-surface px-3">
+        <ViewBackButton />
         <span className="truncate text-sm font-medium text-text-primary">{source.name}</span>
         <span className="text-xs text-text-secondary">· {t("imageCoder.dragHint")}</span>
         <div className="flex-1" />

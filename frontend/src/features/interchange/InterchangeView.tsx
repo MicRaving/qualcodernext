@@ -7,6 +7,7 @@ import { useEffect, useRef, useState, type ChangeEvent, type FormEvent } from "r
 import { BookMarked, CircleAlert, CircleCheck, Download, HelpCircle, LoaderCircle, Upload } from "lucide-react";
 import { api, ApiError, type InterchangeResult } from "@/lib/api";
 import { useToast } from "@/lib/toast";
+import { Button, Card } from "@/components/ui/orchestrator";
 import { formatImportResult, importLabel } from "@/features/interchange/format";
 import { useProjectStore } from "@/stores/project";
 
@@ -147,7 +148,6 @@ export function InterchangeView({ embedded = false }: { embedded?: boolean }) {
     }
   }
 
-  const cardCls = "rounded-lg border border-border bg-surface p-4";
   const inputCls =
     "h-8 rounded-sm border border-border bg-bg px-2 text-sm outline-none focus:border-accent";
 
@@ -182,7 +182,7 @@ export function InterchangeView({ embedded = false }: { embedded?: boolean }) {
       <div className={embedded ? "p-0" : "min-h-0 flex-1 overflow-y-auto p-4"}>
         <div className="grid max-w-3xl grid-cols-1 gap-4 lg:grid-cols-2">
           {/* Export */}
-          <section className={cardCls}>
+          <Card>
             <h2 className="text-sm font-semibold text-text-primary">Export</h2>
             <p className="mt-1 text-xs leading-relaxed text-text-secondary">
               Exports the codebook, text sources, coded segments and cases in the REFI-QDA
@@ -196,10 +196,10 @@ export function InterchangeView({ embedded = false }: { embedded?: boolean }) {
               <Download size={14} aria-hidden />
               Export project (.qdp)
             </a>
-          </section>
+          </Card>
 
           {/* Import */}
-          <section className={cardCls}>
+          <Card>
             <div className="relative flex items-center gap-1">
               <h2 className="text-sm font-semibold text-text-primary">Import</h2>
               <button
@@ -240,30 +240,31 @@ export function InterchangeView({ embedded = false }: { embedded?: boolean }) {
                 </label>
               )}
               <div className="flex items-center gap-2">
-                <button
+                <Button
+                  variant="primary"
+                  icon={
+                    busy ? (
+                      <LoaderCircle size={14} className="animate-spin" aria-hidden />
+                    ) : (
+                      <Upload size={14} aria-hidden />
+                    )
+                  }
                   type="submit"
                   disabled={busy || !file}
-                  className="flex items-center gap-1.5 rounded-sm bg-accent px-2.5 py-1 text-xs font-medium text-bg hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-50"
                 >
-                  {busy ? (
-                    <LoaderCircle size={14} className="animate-spin" aria-hidden />
-                  ) : (
-                    <Upload size={14} aria-hidden />
-                  )}
                   {busy ? "Importing…" : "Import"}
-                </button>
-                <button
-                  type="button"
+                </Button>
+                <Button
+                  variant="secondary"
+                  icon={<BookMarked size={14} aria-hidden />}
                   onClick={() => void handleZotero()}
                   disabled={busy}
-                  className="flex items-center gap-1.5 rounded-sm border border-border bg-bg px-2.5 py-1 text-xs text-text-secondary hover:bg-surface-higher disabled:cursor-not-allowed disabled:opacity-50"
                 >
-                  <BookMarked size={14} aria-hidden />
                   Import from Zotero
-                </button>
+                </Button>
               </div>
             </form>
-          </section>
+          </Card>
         </div>
       </div>
     </div>

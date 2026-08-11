@@ -8,6 +8,7 @@ import { api, type AiIndexStatus, type AiStatus, type Pseudonym } from "@/lib/ap
 import { errorDetail } from "@/features/ai/format";
 import { InterchangeView } from "@/features/interchange/InterchangeView";
 import { useI18n, LOCALE_NAMES, type Locale } from "@/lib/i18n";
+import { ViewHeader } from "@/components/ui/orchestrator";
 import { useProjectStore } from "@/stores/project";
 
 const inputCls =
@@ -229,9 +230,7 @@ export function SettingsView() {
 
   return (
     <div className="flex h-full flex-col bg-bg">
-      <header className="flex h-10 shrink-0 items-center gap-2 border-b border-border bg-surface px-3">
-        <h1 className="text-sm font-semibold text-text-primary">{t("settings.title")}</h1>
-      </header>
+      <ViewHeader title={t("settings.title")} />
 
       {saveError && (
         <div className="flex shrink-0 items-center gap-2 border-b border-danger bg-danger/10 px-3 py-1.5 text-sm text-danger">

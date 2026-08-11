@@ -31,6 +31,7 @@ export const de: Record<string, string> = {
   "nav.notes": "Notizen",
   "nav.code": "Codieren",
   "nav.codeGo": "Zum Codieren",
+  "nav.codes": "Codes",
   "nav.ai": "KI",
   "nav.settings": "Einstellungen",
 
@@ -483,6 +484,7 @@ export const de: Record<string, string> = {
   "sidebar.contextMenuAria": "Kontextmenü",
 
   // inspector
+  "inspector.details": "Details",
   "inspector.selectHint": "Für Details einen Code oder eine Datei wählen.",
   "inspector.memo": "Memo",
   "inspector.memoAria": "Memo",

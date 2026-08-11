@@ -20,14 +20,10 @@ import {
 } from "lucide-react";
 import { api, type Case, type CaseFileLink } from "@/lib/api";
 import { AttributeEditor } from "@/components/shell/AttributeEditor";
+import { BarHeader, Button, IconButton, SectionLabel, ViewHeader } from "@/components/ui/orchestrator";
 import { cn } from "@/lib/utils";
 import { useI18n } from "@/lib/i18n";
 import { useProjectStore } from "@/stores/project";
-
-const primaryBtnCls =
-  "flex items-center gap-1 rounded-sm bg-accent px-2.5 py-1 text-xs font-medium text-bg hover:bg-accent-hover disabled:opacity-50";
-const iconBtnCls =
-  "rounded-sm p-1 text-text-secondary hover:bg-surface-higher hover:text-text-primary";
 
 /** Left bar: the case list with search + add actions. */
 export function CasesList() {
@@ -107,26 +103,24 @@ export function CasesList() {
 
   return (
     <aside className="flex w-72 shrink-0 flex-col border-r border-border bg-surface">
-      <header className="flex h-10 shrink-0 items-center gap-2 border-b border-border px-3">
-        <h1 className="text-sm font-semibold text-text-primary">{t("nav.cases")}</h1>
-        <span className="rounded-sm bg-surface-higher px-1.5 py-px text-xs font-medium text-text-secondary">
-          {cases.length}
-        </span>
-        <button
-          type="button"
-          onClick={() => void load()}
-          aria-label={t("cases.refreshAria")}
-          title={t("common.refresh")}
-          className={iconBtnCls}
-        >
-          <RefreshCw size={14} aria-hidden />
-        </button>
-        <div className="flex-1" />
-        <button type="button" onClick={() => void addCase()} className={primaryBtnCls}>
-          <Plus size={14} aria-hidden />
-          {t("cases.addCase")}
-        </button>
-      </header>
+      <BarHeader
+        title={t("nav.cases")}
+        count={cases.length}
+        actions={
+          <>
+            <IconButton label={t("cases.refreshAria")} title={t("common.refresh")} size="sm" onClick={() => void load()}>
+              <RefreshCw size={12} aria-hidden />
+            </IconButton>
+            <Button
+              variant="primaryCompact"
+              icon={<Plus size={10} aria-hidden />}
+              onClick={() => void addCase()}
+            >
+              {t("cases.addCase")}
+            </Button>
+          </>
+        }
+      />
       {actionError && (
         <div
           role="alert"
@@ -185,30 +179,29 @@ export function CasesList() {
                 <span className="block truncate text-xs text-text-secondary">{c.date}</span>
               </span>
               <span className="flex shrink-0 gap-0.5">
-                <button
-                  type="button"
+                <IconButton
+                  label={t("cases.renameFor", { name: c.name })}
+                  title={t("cases.renameTitle")}
+                  size="sm"
                   onClick={(e) => {
                     e.stopPropagation();
                     void renameCase(c);
                   }}
-                  aria-label={t("cases.renameFor", { name: c.name })}
-                  title={t("cases.renameTitle")}
-                  className={iconBtnCls}
                 >
                   <Pencil size={13} aria-hidden />
-                </button>
-                <button
-                  type="button"
+                </IconButton>
+                <IconButton
+                  label={t("cases.deleteFor", { name: c.name })}
+                  title={t("common.delete")}
+                  size="sm"
+                  className="hover:text-danger"
                   onClick={(e) => {
                     e.stopPropagation();
                     void deleteCase(c);
                   }}
-                  aria-label={t("cases.deleteFor", { name: c.name })}
-                  title={t("common.delete")}
-                  className={cn(iconBtnCls, "hover:text-danger")}
                 >
                   <Trash2 size={13} aria-hidden />
-                </button>
+                </IconButton>
               </span>
             </div>
           ))
@@ -328,6 +321,7 @@ export function CaseDetails() {
 
   return (
     <section className="flex h-full min-w-0 flex-1 flex-col bg-bg">
+      <ViewHeader title={selected ? selected.name : t("nav.cases")} />
       {actionError && (
         <div className="flex shrink-0 items-center gap-2 border-b border-border bg-surface px-3 py-1.5 text-sm text-danger">
           <CircleAlert size={14} aria-hidden />
@@ -356,9 +350,9 @@ export function CaseDetails() {
           </p>
 
           <section className="mt-4">
-            <h3 className="text-xs font-medium uppercase tracking-wide text-text-secondary">
+            <SectionLabel>
               {t("cases.memo")}
-            </h3>
+            </SectionLabel>
             <textarea
               value={memo}
               onChange={(e) => setMemo(e.target.value)}
@@ -368,22 +362,21 @@ export function CaseDetails() {
               className="mt-1.5 w-full resize-y rounded-sm border border-border bg-surface px-2 py-1.5 text-sm outline-none focus:border-accent"
             />
             <div className="mt-1.5 flex justify-end">
-              <button
-                type="button"
-                onClick={() => void saveMemo()}
-                disabled={memoSaving || memo === selected.memo}
-                className={primaryBtnCls}
-              >
-                {memoSaving && <LoaderCircle size={12} className="animate-spin" aria-hidden />}
-                {t("cases.saveMemo")}
-              </button>
+                <Button
+                  variant="primary"
+                  icon={memoSaving ? <LoaderCircle size={12} className="animate-spin" aria-hidden /> : undefined}
+                  onClick={() => void saveMemo()}
+                  disabled={memoSaving || memo === selected.memo}
+                >
+                  {t("cases.saveMemo")}
+                </Button>
             </div>
           </section>
 
           <section className="mt-5">
-            <h3 className="text-xs font-medium uppercase tracking-wide text-text-secondary">
+            <SectionLabel>
               {t("cases.properties")}
-            </h3>
+            </SectionLabel>
             <div className="mt-1.5 rounded-sm border border-border p-2">
               <AttributeEditor
                 key={selected.caseid}
@@ -403,9 +396,9 @@ export function CaseDetails() {
           </section>
 
           <section className="mt-5">
-            <h3 className="text-xs font-medium uppercase tracking-wide text-text-secondary">
+            <SectionLabel>
               {t("cases.memberFiles", { count: files.length })}
-            </h3>
+            </SectionLabel>
             <div className="mt-1.5 rounded-sm border border-border">
               {filesLoading && files.length === 0 ? (
                 <div className="flex items-center justify-center gap-2 py-4 text-xs text-text-secondary">
@@ -420,15 +413,14 @@ export function CaseDetails() {
                     <li key={f.id} className="flex items-center gap-2 px-3 py-1.5">
                       <FileText size={14} className="shrink-0 text-text-secondary" aria-hidden />
                       <span className="min-w-0 flex-1 truncate text-sm">{f.name}</span>
-                      <button
-                        type="button"
-                        onClick={() => void unlinkFile(f.id)}
-                        aria-label={t("cases.unlinkFor", { name: f.name })}
+                      <IconButton
+                        label={t("cases.unlinkFor", { name: f.name })}
                         title={t("cases.unlink")}
-                        className={iconBtnCls}
+                        size="sm"
+                        onClick={() => void unlinkFile(f.id)}
                       >
                         <Unlink size={13} aria-hidden />
-                      </button>
+                      </IconButton>
                     </li>
                   ))}
                 </ul>
@@ -437,9 +429,9 @@ export function CaseDetails() {
           </section>
 
           <section className="mt-5">
-            <h3 className="text-xs font-medium uppercase tracking-wide text-text-secondary">
+            <SectionLabel>
               {t("cases.linkFiles")}
-            </h3>
+            </SectionLabel>
             <div className="mt-1.5 flex items-center gap-2">
               <select
                 value={linkFid}
@@ -454,15 +446,14 @@ export function CaseDetails() {
                   </option>
                 ))}
               </select>
-              <button
-                type="button"
+              <Button
+                variant="primary"
+                icon={<Link2 size={14} aria-hidden />}
                 onClick={() => void linkFile()}
                 disabled={!linkFid}
-                className={primaryBtnCls}
               >
-                <Link2 size={14} aria-hidden />
                 {t("cases.link")}
-              </button>
+              </Button>
             </div>
             {linkable.length === 0 && (
               <p className="mt-1.5 text-xs text-text-secondary">{t("cases.allLinked")}</p>

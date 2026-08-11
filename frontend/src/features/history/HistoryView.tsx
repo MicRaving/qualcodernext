@@ -7,6 +7,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { CircleAlert, CircleCheck, History, LoaderCircle, RotateCw, Undo2, X } from "lucide-react";
 import { api, type AuditRow, type AuditStatsRow } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
+import { ViewHeader } from "@/components/ui/orchestrator";
 
 const PAGE_SIZE = 100;
 
@@ -119,64 +120,69 @@ export function HistoryView() {
 
   return (
     <div className="flex h-full flex-col bg-bg">
-      <header className="flex h-10 shrink-0 items-center gap-2 border-b border-border bg-surface px-3">
-        <h1 className="flex items-center gap-1.5 text-sm font-semibold text-text-primary">
-          <History size={15} aria-hidden />
-          {t("history.title")}
-        </h1>
-        <div className="flex-1" />
-        <select
-          value={filterAction}
-          onChange={(e) => {
-            setFilterAction(e.target.value);
-            resetAndFilter();
-          }}
-          aria-label={t("history.filterAction")}
-          className={filterCls}
-        >
-          <option value="">{t("history.allActions")}</option>
-          {stats.map((s) => (
-            <option key={s.action} value={s.action}>
-              {actionLabel(s.action, t)} ({s.count})
-            </option>
-          ))}
-        </select>
-        <select
-          value={filterUser}
-          onChange={(e) => {
-            setFilterUser(e.target.value);
-            resetAndFilter();
-          }}
-          aria-label={t("history.filterUser")}
-          className={filterCls}
-        >
-          <option value="">{t("history.allUsers")}</option>
-          {users.map((u) => (
-            <option key={u} value={u}>
-              {u}
-            </option>
-          ))}
-        </select>
-        <button
-          type="button"
-          onClick={() => void load()}
-          disabled={loading}
-          aria-label={t("common.retry")}
-          className="rounded-sm border border-border bg-bg p-1.5 text-text-secondary hover:bg-surface-higher disabled:opacity-50"
-        >
-          <RotateCw size={14} aria-hidden />
-        </button>
-        <button
-          type="button"
-          onClick={() => void handleRedo()}
-          disabled={redoStack.length === 0}
-          title={t("history.redoTitle")}
-          className="flex items-center gap-1 rounded-sm border border-border bg-bg px-2 py-1 text-xs text-text-secondary hover:bg-surface-higher disabled:opacity-40"
-        >
-          <Undo2 size={13} className="scale-x-[-1]" aria-hidden />
-          {t("history.redo")}
-        </button>
-      </header>
+      <ViewHeader
+        title={
+          <span className="flex items-center gap-1.5">
+            <History size={15} aria-hidden />
+            {t("history.title")}
+          </span>
+        }
+        actions={
+          <>
+            <select
+              value={filterAction}
+              onChange={(e) => {
+                setFilterAction(e.target.value);
+                resetAndFilter();
+              }}
+              aria-label={t("history.filterAction")}
+              className={filterCls}
+            >
+              <option value="">{t("history.allActions")}</option>
+              {stats.map((s) => (
+                <option key={s.action} value={s.action}>
+                  {actionLabel(s.action, t)} ({s.count})
+                </option>
+              ))}
+            </select>
+            <select
+              value={filterUser}
+              onChange={(e) => {
+                setFilterUser(e.target.value);
+                resetAndFilter();
+              }}
+              aria-label={t("history.filterUser")}
+              className={filterCls}
+            >
+              <option value="">{t("history.allUsers")}</option>
+              {users.map((u) => (
+                <option key={u} value={u}>
+                  {u}
+                </option>
+              ))}
+            </select>
+            <button
+              type="button"
+              onClick={() => void load()}
+              disabled={loading}
+              aria-label={t("common.retry")}
+              className="rounded-sm border border-border bg-bg p-1.5 text-text-secondary hover:bg-surface-higher disabled:opacity-50"
+            >
+              <RotateCw size={14} aria-hidden />
+            </button>
+            <button
+              type="button"
+              onClick={() => void handleRedo()}
+              disabled={redoStack.length === 0}
+              title={t("history.redoTitle")}
+              className="flex items-center gap-1 rounded-sm border border-border bg-bg px-2 py-1 text-xs text-text-secondary hover:bg-surface-higher disabled:opacity-40"
+            >
+              <Undo2 size={13} className="scale-x-[-1]" aria-hidden />
+              {t("history.redo")}
+            </button>
+          </>
+        }
+      />
 
       {actionMsg && (
         <div className="flex shrink-0 items-center gap-2 border-b border-border bg-surface px-3 py-1.5 text-xs text-success">

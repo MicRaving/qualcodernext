@@ -21,6 +21,7 @@ import {
   UserRound,
 } from "lucide-react";
 import { api, type CodeTreeItem, type Source } from "@/lib/api";
+import { BarHeader, Button } from "@/components/ui/orchestrator";
 import { isPdf } from "@/lib/media";
 import { useToast } from "@/lib/toast";
 import { useI18n } from "@/lib/i18n";
@@ -49,6 +50,7 @@ export function Sidebar() {
 
   const sources = useProjectStore((s) => s.sources);
   const codeTree = useProjectStore((s) => s.codeTree);
+  const codeCount = codeTree.filter((c) => c.kind === "code").length;
   const setView = useProjectStore((s) => s.setView);
   const selectCode = useProjectStore((s) => s.selectCode);
   const selectFile = useProjectStore((s) => s.selectFile);
@@ -543,34 +545,33 @@ export function Sidebar() {
   return (
     <aside className="flex w-64 shrink-0 flex-col border-r border-border bg-surface">
       {view.kind !== "coding" && (
-        <header className="flex h-10 shrink-0 items-center gap-2 border-b border-border px-3">
-          <h1 className="text-sm font-semibold text-text-primary">{t("nav.files")}</h1>
-          <span className="rounded-sm bg-surface-higher px-1.5 py-px text-xs font-medium text-text-secondary">
-            {sources.length}
-          </span>
-        </header>
+        <BarHeader title={t("nav.files")} count={sources.length} />
       )}
       <div className="min-h-0 flex-1 overflow-y-auto p-1">
         {view.kind === "coding" ? (
           <div className="flex flex-col">
-            <div className="flex shrink-0 items-center gap-1 border-b border-border px-1.5 py-1.5">
-              <button
-                type="button"
-                onClick={() => void createCode(null)}
-                className="flex items-center gap-1 rounded-sm border border-border bg-bg px-2 py-0.5 text-xs text-text-secondary hover:bg-surface-higher hover:text-text-primary"
-              >
-                <Plus size={12} aria-hidden />
-                {t("sidebar.addCode")}
-              </button>
-              <button
-                type="button"
-                onClick={() => void createCategory(null)}
-                className="flex items-center gap-1 rounded-sm border border-border bg-bg px-2 py-0.5 text-xs text-text-secondary hover:bg-surface-higher hover:text-text-primary"
-              >
-                <FolderPlus size={12} aria-hidden />
-                {t("sidebar.addCategory")}
-              </button>
-            </div>
+            <BarHeader
+              title={t("nav.codes")}
+              count={codeCount}
+              actions={
+                <>
+                  <Button
+                    variant="primaryCompact"
+                    icon={<Plus size={10} aria-hidden />}
+                    onClick={() => void createCode(null)}
+                  >
+                    {t("sidebar.addCode")}
+                  </Button>
+                  <Button
+                    variant="primaryCompact"
+                    icon={<FolderPlus size={10} aria-hidden />}
+                    onClick={() => void createCategory(null)}
+                  >
+                    {t("sidebar.addCategory")}
+                  </Button>
+                </>
+              }
+            />
             {toolbarError && (
               <p className="shrink-0 px-2 pt-1 text-xs text-danger">{toolbarError}</p>
             )}

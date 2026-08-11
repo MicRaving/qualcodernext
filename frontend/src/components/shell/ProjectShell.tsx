@@ -6,7 +6,6 @@
  */
 import { useEffect, useState } from "react";
 import {
-  ArrowLeft,
   BarChart3,
   Files,
   History,
@@ -136,17 +135,6 @@ export function ProjectShell() {
     <WorkspaceLayout
       ribbon={
         <header className="flex h-11 shrink-0 items-center gap-0.5 border-b border-border bg-surface px-3">
-          {projectOpen && (
-            <button
-              type="button"
-              onClick={() => setView({ kind: "files" })}
-              aria-label={t("coder.back")}
-              title={t("coder.back")}
-              className="mr-1 rounded-sm p-1.5 text-text-secondary hover:bg-surface-higher hover:text-text-primary"
-            >
-              <ArrowLeft size={18} aria-hidden />
-            </button>
-          )}
           {NAV_BUTTONS.map(({ kind, labelKey, icon: Icon }) => {
             const label = t(labelKey);
             return (
