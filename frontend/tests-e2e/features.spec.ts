@@ -425,7 +425,10 @@ test("interchange export and import", async ({ page }) => {
   // Import: the handcrafted REFI-QDA file (code + source + coding + case);
   // the format is detected automatically from the file content.
   await page.getByLabel("Import file").setInputFiles(MINIMAL_QDP);
-  await page.getByRole("button", { name: "Import", exact: true }).click();
+  await page
+    .locator("form")
+    .getByRole("button", { name: "Import", exact: true })
+    .click();
   await expect(
     page.getByRole("status").filter({ hasText: /Codes: \d+/ }).first(),
   ).toBeVisible({ timeout: 20_000 });

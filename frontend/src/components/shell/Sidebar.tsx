@@ -18,10 +18,11 @@ import {
   StickyNote,
   Trash2,
   Unlink,
+  Upload,
   UserRound,
 } from "lucide-react";
 import { api, type CodeTreeItem, type Source } from "@/lib/api";
-import { BarHeader, Button } from "@/components/ui/orchestrator";
+import { BarHeader, Button, LeftBar } from "@/components/ui/orchestrator";
 import { isPdf } from "@/lib/media";
 import { useToast } from "@/lib/toast";
 import { useI18n } from "@/lib/i18n";
@@ -159,18 +160,8 @@ export function Sidebar() {
   }
 
   async function editCodeMemo(item: CodeTreeItem) {
-    const next = window.prompt(t("sidebar.memoPrompt", { name: item.name }), item.memo ?? "");
-    if (next === null) return;
-    setToolbarError(null);
-    try {
-      await api.patchCode(item.id, { memo: next });
-      await useProjectStore.getState().refreshProject();
-      toast.success(t("sidebar.memoSaved"));
-    } catch (e) {
-      const detail = e instanceof Error ? e.message : t("sidebar.memoError");
-      setToolbarError(detail);
-      toast.error(detail);
-    }
+    // The details panel (right bar) hosts the inline memo editor.
+    void selectCode(item.id);
   }
 
   async function mergeCodeInto(item: CodeTreeItem) {
@@ -542,68 +533,90 @@ export function Sidebar() {
     Video: t("sidebar.groupVideo"),
   };
 
-  return (
-    <aside className="flex w-64 shrink-0 flex-col border-r border-border bg-surface">
-      {view.kind !== "coding" && (
-        <BarHeader title={t("nav.files")} count={sources.length} />
-      )}
-      <div className="min-h-0 flex-1 overflow-y-auto p-1">
-        {view.kind === "coding" ? (
-          <div className="flex flex-col">
-            <BarHeader
-              title={t("nav.codes")}
-              count={codeCount}
-              actions={
-                <>
-                  <Button
-                    variant="primaryCompact"
-                    icon={<Plus size={10} aria-hidden />}
-                    onClick={() => void createCode(null)}
-                  >
-                    {t("sidebar.addCode")}
-                  </Button>
-                  <Button
-                    variant="primaryCompact"
-                    icon={<FolderPlus size={10} aria-hidden />}
-                    onClick={() => void createCategory(null)}
-                  >
-                    {t("sidebar.addCategory")}
-                  </Button>
-                </>
-              }
-            />
-            {toolbarError && (
-              <p className="shrink-0 px-2 pt-1 text-xs text-danger">{toolbarError}</p>
-            )}
-            <div className="pt-1">{renderCodeNode("root", 0)}</div>
-          </div>
-        ) : (
-          Object.entries(groups).map(([group, items]) =>
-            items.length === 0 ? null : (
-              <div key={group}>
-                <div className="px-2 py-1 text-xs font-medium text-text-secondary">
-                  {groupLabels[group] ?? group}
-                </div>
-                {items.map((s) => (
-                  <button
-                    key={s.id}
-                    type="button"
-                    onClick={() => setView({ kind: "coding", sourceId: s.id })}
-                    onContextMenu={(e) => {
-                      e.preventDefault();
-                      setMenu({ kind: "file", x: e.clientX, y: e.clientY, source: s });
-                    }}
-                    className="flex w-full items-center gap-1.5 rounded-sm px-2 py-1 text-left text-sm hover:bg-surface-higher"
-                    title={s.memo || s.name}
-                  >
-                    {fileIcon(s.media_type)}
-                    <span className="truncate">{s.name}</span>
-                  </button>
-                ))}
+  function renderFileGroups() {
+    return (
+      <>
+        {Object.entries(groups).map(([group, items]) =>
+          items.length === 0 ? null : (
+            <div key={group}>
+              <div className="px-2 py-1 text-xs font-medium text-text-secondary">
+                {groupLabels[group] ?? group}
               </div>
-            ),
-          )
+              {items.map((s) => (
+                <button
+                  key={s.id}
+                  type="button"
+                  onClick={() => setView({ kind: "coding", sourceId: s.id })}
+                  onContextMenu={(e) => {
+                    e.preventDefault();
+                    setMenu({ kind: "file", x: e.clientX, y: e.clientY, source: s });
+                  }}
+                  className="flex w-full items-center gap-1.5 rounded-sm px-2 py-1 text-left text-sm hover:bg-surface-higher"
+                  title={s.memo || s.name}
+                >
+                  {fileIcon(s.media_type)}
+                  <span className="truncate">{s.name}</span>
+                </button>
+              ))}
+            </div>
+          ),
         )}
+      </>
+    );
+  }
+
+  return (
+    <LeftBar
+      width="sm"
+      header={
+        view.kind !== "coding" ? (
+          <BarHeader
+            title={t("nav.files")}
+            count={sources.length}
+            actions={
+              <Button
+                variant="primaryCompact"
+                icon={<Upload size={10} aria-hidden />}
+                onClick={() => {
+                  setView({ kind: "files" });
+                  useProjectStore.getState().requestImport();
+                }}
+              >
+                {t("files.import")}
+              </Button>
+            }
+          />
+        ) : (
+          <BarHeader
+            title={t("nav.codes")}
+            count={codeCount}
+            actions={
+              <>
+                <Button
+                  variant="primaryCompact"
+                  icon={<Plus size={10} aria-hidden />}
+                  onClick={() => void createCode(null)}
+                >
+                  {t("sidebar.addCode")}
+                </Button>
+                <Button
+                  variant="primaryCompact"
+                  icon={<FolderPlus size={10} aria-hidden />}
+                  onClick={() => void createCategory(null)}
+                >
+                  {t("sidebar.addCategory")}
+                </Button>
+              </>
+            }
+          />
+        )
+      }
+    >
+      {view.kind === "coding" && toolbarError && (
+        <p className="shrink-0 px-2 pt-1 text-xs text-danger">{toolbarError}</p>
+      )}
+      <div className={view.kind === "coding" ? "pt-1" : undefined}>
+        {view.kind === "coding" ? renderCodeNode("root", 0) : renderFileGroups()}
       </div>
 
       {/* Context menu */}
@@ -641,6 +654,7 @@ export function Sidebar() {
           </div>
         </>
       )}
-    </aside>
+    </LeftBar>
   );
 }
+

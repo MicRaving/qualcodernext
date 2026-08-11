@@ -143,6 +143,13 @@ export function FileManager() {
     void loadFilters();
   }, [load, loadFilters]);
 
+  // The left bar's Import button requests the file picker via the store.
+  const importTick = useProjectStore((s) => s.importTick);
+  useEffect(() => {
+    if (importTick === 0) return;
+    fileInputRef.current?.click();
+  }, [importTick]);
+
   const applyFilter = useCallback((f: FileFilter) => {
     try {
       const parsed = JSON.parse(f.filter) as { query?: string };

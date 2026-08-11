@@ -62,6 +62,9 @@ export const en: Record<string, string> = {
 
   // settings
   "settings.title": "Settings",
+  "settings.general": "General",
+  "settings.generalHint": "Appearance, language and file interchange.",
+  "settings.aiProviderOpencodeGo": "Opencode Go (localhost:8080)",
   "settings.appearance": "Appearance",
   "settings.appearanceHint": "Choose the application theme.",
   "settings.aiAssistant": "AI assistant",

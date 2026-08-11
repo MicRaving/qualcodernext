@@ -63,6 +63,9 @@ export const de: Record<string, string> = {
 
   // settings
   "settings.title": "Einstellungen",
+  "settings.general": "Allgemein",
+  "settings.generalHint": "Darstellung, Sprache und Dateiaustausch.",
+  "settings.aiProviderOpencodeGo": "Opencode Go (localhost:8080)",
   "settings.appearance": "Darstellung",
   "settings.appearanceHint": "Wählen Sie das Anwendungs-Design.",
   "settings.aiAssistant": "KI-Assistent",

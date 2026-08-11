@@ -18,7 +18,7 @@ import {
   Trash2,
 } from "lucide-react";
 import { api } from "@/lib/api";
-import { BarHeader, Button, IconButton, ViewHeader } from "@/components/ui/orchestrator";
+import { Button, CountBadge, IconButton, LeftBar, ViewHeader } from "@/components/ui/orchestrator";
 import { JournalEditor, JournalList } from "@/features/journals/JournalView";
 import { useI18n } from "@/lib/i18n";
 import { useProjectStore } from "@/stores/project";
@@ -91,75 +91,75 @@ export function NotesList() {
   }
 
   return (
-    <aside className="flex w-72 shrink-0 flex-col border-r border-border bg-surface">
-      <BarHeader
-        title={t("nav.notes")}
-        count={count}
-        actions={
-          <>
-            <div className="relative" ref={typeMenuRef}>
-          <button
-            type="button"
-            onClick={() => setTypeMenuOpen((o) => !o)}
-            aria-expanded={typeMenuOpen}
-            aria-haspopup="listbox"
-            aria-label={t("notes.tabsAria")}
-            className="flex items-center gap-0.5 rounded-sm border border-border bg-bg px-1 py-px text-[10px] hover:bg-surface-higher"
-          >
-            {t(`notes.tab.${notesUi.tab}`)}
-            <ChevronDown size={9} className="text-text-secondary" aria-hidden />
-          </button>
-          {typeMenuOpen && (
-            <div
-              role="listbox"
+    <LeftBar
+      header={
+        <header className="flex h-10 shrink-0 items-center gap-2 border-b border-border px-3">
+          <div className="relative" ref={typeMenuRef}>
+            <button
+              type="button"
+              onClick={() => setTypeMenuOpen((o) => !o)}
+              aria-expanded={typeMenuOpen}
+              aria-haspopup="listbox"
               aria-label={t("notes.tabsAria")}
-              className="absolute left-0 top-full z-50 mt-1 min-w-36 rounded-md border border-border bg-surface py-1 shadow-lg"
+              className="flex items-center gap-1 rounded-sm border border-border bg-bg px-2 py-1 text-xs font-medium hover:bg-surface-higher"
             >
-              {(["journal", "annotations", "memos"] as NotesTab[]).map((tab) => (
-                <button
-                  key={tab}
-                  type="button"
-                  role="option"
-                  aria-selected={notesUi.tab === tab}
-                  onClick={() => pickTab(tab)}
-                  className={`flex w-full items-center gap-2 px-2 py-1.5 text-left text-sm hover:bg-surface-higher ${
-                    notesUi.tab === tab ? "text-accent" : ""
-                  }`}
-                >
-                  {tab === "journal" ? (
-                    <Hash size={12} aria-hidden />
-                  ) : tab === "annotations" ? (
-                    <StickyNote size={12} aria-hidden />
-                  ) : (
-                    <Hash size={12} aria-hidden />
-                  )}
-                  {t(`notes.tab.${tab}`)}
-                </button>
-              ))}
-            </div>
-          )}
-        </div>
-            {notesUi.tab === "journal" && (
-              <Button
-                variant="primaryCompact"
-                icon={<Plus size={10} aria-hidden />}
-                aria-label={t("journal.newEntry")}
-                title={t("journal.newEntry")}
-                onClick={() => void newEntry()}
+              {t(`notes.tab.${notesUi.tab}`)}
+              <ChevronDown size={11} className="text-text-secondary" aria-hidden />
+            </button>
+            {typeMenuOpen && (
+              <div
+                role="listbox"
+                aria-label={t("notes.tabsAria")}
+                className="absolute left-0 top-full z-50 mt-1 min-w-36 rounded-md border border-border bg-surface py-1 shadow-lg"
               >
-                {t("journal.newEntry")}
-              </Button>
+                {(["journal", "annotations", "memos"] as NotesTab[]).map((tab) => (
+                  <button
+                    key={tab}
+                    type="button"
+                    role="option"
+                    aria-selected={notesUi.tab === tab}
+                    onClick={() => pickTab(tab)}
+                    className={`flex w-full items-center gap-2 px-2 py-1.5 text-left text-sm hover:bg-surface-higher ${
+                      notesUi.tab === tab ? "text-accent" : ""
+                    }`}
+                  >
+                    {tab === "journal" ? (
+                      <Hash size={12} aria-hidden />
+                    ) : tab === "annotations" ? (
+                      <StickyNote size={12} aria-hidden />
+                    ) : (
+                      <Hash size={12} aria-hidden />
+                    )}
+                    {t(`notes.tab.${tab}`)}
+                  </button>
+                ))}
+              </div>
             )}
-            <IconButton
-              label={t("common.refresh")}
-              size="sm"
-              onClick={() => setNotesUi({ tick: notesUi.tick + 1 })}
+          </div>
+          <CountBadge value={count} />
+          <div className="flex-1" />
+          {notesUi.tab === "journal" && (
+            <Button
+              variant="primaryCompact"
+              icon={<Plus size={10} aria-hidden />}
+              aria-label={t("journal.newEntry")}
+              title={t("journal.newEntry")}
+              onClick={() => void newEntry()}
             >
-              <RefreshCw size={12} aria-hidden />
-            </IconButton>
-          </>
-        }
-      />
+              {t("journal.newEntry")}
+            </Button>
+          )}
+          <IconButton
+            label={t("common.refresh")}
+            title={t("common.refresh")}
+            size="sm"
+            onClick={() => setNotesUi({ tick: notesUi.tick + 1 })}
+          >
+            <RefreshCw size={14} aria-hidden />
+          </IconButton>
+        </header>
+      }
+    >
       <div className="relative shrink-0 px-3 py-2">
         <Search
           size={14}
@@ -183,7 +183,7 @@ export function NotesList() {
           <MemoItems />
         )}
       </div>
-    </aside>
+    </LeftBar>
   );
 }
 
@@ -199,7 +199,7 @@ export function NotesEditor() {
         : t("notes.tab.memos");
   return (
     <div className="flex h-full flex-col">
-      <ViewHeader title={name} />
+      <ViewHeader back={false} title={name} />
       <div className="min-h-0 flex-1">
         {tab === "journal" ? (
           <JournalEditor />

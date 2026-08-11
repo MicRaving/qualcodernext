@@ -19,7 +19,7 @@ export function AiView() {
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-bg">
-      <ViewHeader
+      <ViewHeader back={false}
         title="AI"
         actions={
           <div className="flex items-center gap-0.5 rounded-sm border border-border bg-bg p-0.5">

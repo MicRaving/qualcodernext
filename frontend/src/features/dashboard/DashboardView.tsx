@@ -354,7 +354,7 @@ export function DashboardView() {
 
   return (
     <div className="flex h-full flex-col bg-bg">
-      <ViewHeader
+      <ViewHeader back={false}
         title={projectName}
         meta={`Database version ${summary.databaseversion} · created ${summary.project_date}`}
         actions={

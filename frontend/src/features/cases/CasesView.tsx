@@ -20,7 +20,7 @@ import {
 } from "lucide-react";
 import { api, type Case, type CaseFileLink } from "@/lib/api";
 import { AttributeEditor } from "@/components/shell/AttributeEditor";
-import { BarHeader, Button, IconButton, SectionLabel, ViewHeader } from "@/components/ui/orchestrator";
+import { BarHeader, Button, IconButton, LeftBar, SectionLabel, ViewHeader } from "@/components/ui/orchestrator";
 import { cn } from "@/lib/utils";
 import { useI18n } from "@/lib/i18n";
 import { useProjectStore } from "@/stores/project";
@@ -102,25 +102,28 @@ export function CasesList() {
   }
 
   return (
-    <aside className="flex w-72 shrink-0 flex-col border-r border-border bg-surface">
-      <BarHeader
-        title={t("nav.cases")}
-        count={cases.length}
-        actions={
-          <>
-            <IconButton label={t("cases.refreshAria")} title={t("common.refresh")} size="sm" onClick={() => void load()}>
-              <RefreshCw size={12} aria-hidden />
-            </IconButton>
-            <Button
-              variant="primaryCompact"
-              icon={<Plus size={10} aria-hidden />}
-              onClick={() => void addCase()}
-            >
-              {t("cases.addCase")}
-            </Button>
-          </>
-        }
-      />
+    <LeftBar
+      header={
+        <BarHeader
+          title={t("nav.cases")}
+          count={cases.length}
+          actions={
+            <>
+              <IconButton label={t("cases.refreshAria")} title={t("common.refresh")} size="sm" onClick={() => void load()}>
+                <RefreshCw size={14} aria-hidden />
+              </IconButton>
+              <Button
+                variant="primaryCompact"
+                icon={<Plus size={10} aria-hidden />}
+                onClick={() => void addCase()}
+              >
+                {t("cases.addCase")}
+              </Button>
+            </>
+          }
+        />
+      }
+    >
       {actionError && (
         <div
           role="alert"
@@ -212,7 +215,7 @@ export function CasesList() {
           </p>
         )}
       </div>
-    </aside>
+    </LeftBar>
   );
 }
 
@@ -321,7 +324,7 @@ export function CaseDetails() {
 
   return (
     <section className="flex h-full min-w-0 flex-1 flex-col bg-bg">
-      <ViewHeader title={selected ? selected.name : t("nav.cases")} />
+      <ViewHeader back={false} title={selected ? selected.name : t("nav.cases")} />
       {actionError && (
         <div className="flex shrink-0 items-center gap-2 border-b border-border bg-surface px-3 py-1.5 text-sm text-danger">
           <CircleAlert size={14} aria-hidden />

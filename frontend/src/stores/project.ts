@@ -120,6 +120,11 @@ interface ProjectState {
   importState: { done: number; total: number } | null;
   setImportState: (v: { done: number; total: number } | null) => void;
 
+  /** Import-request tick: the left bar's Import button asks the FileManager
+   *  to open its file picker (FileManager watches the tick). */
+  importTick: number;
+  requestImport: () => void;
+
   /** Collaboration sync (Option B: sidecar change files over folder sync). */
   syncStatus: SyncStatus | null;
   setSyncStatus: (v: SyncStatus | null) => void;
@@ -267,6 +272,8 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
 
   importState: null,
   setImportState: (v) => set({ importState: v }),
+  importTick: 0,
+  requestImport: () => set((s) => ({ importTick: s.importTick + 1 })),
 
   syncStatus: null,
   setSyncStatus: (v) => set({ syncStatus: v }),

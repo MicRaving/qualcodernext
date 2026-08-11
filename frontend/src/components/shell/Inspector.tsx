@@ -5,7 +5,7 @@ import { useState, type ReactNode } from "react";
 import { ChevronRight, FileText, Hash, LoaderCircle, Pencil, Trash2, X } from "lucide-react";
 import { api, type CodeDetails, type SourceDetails } from "@/lib/api";
 import { AttributeEditor } from "@/components/shell/AttributeEditor";
-import { BarHeader, IconButton, SectionLabel } from "@/components/ui/orchestrator";
+import { BarHeader, IconButton, LeftBar, SectionLabel } from "@/components/ui/orchestrator";
 import { useI18n } from "@/lib/i18n";
 import { useProjectStore } from "@/stores/project";
 import {
@@ -203,7 +203,6 @@ function CodeDetailsPanel({ details }: { details: CodeDetails }) {
 function FileDetailsPanel({ details }: { details: SourceDetails }) {
   const { t } = useI18n();
   const selectFile = useProjectStore((s) => s.selectFile);
-  const setView = useProjectStore((s) => s.setView);
   const stats = formatStats(details);
   const src = details.source;
 
@@ -292,16 +291,6 @@ function FileDetailsPanel({ details }: { details: SourceDetails }) {
       />
 
       <MemoEditor key={src.id} memo={src.memo} onSave={saveMemo} />
-
-      <div className="sticky bottom-0 border-t border-border bg-surface p-2">
-        <button
-          type="button"
-          onClick={() => setView({ kind: "coding", sourceId: src.id })}
-          className="flex w-full items-center justify-center gap-1.5 rounded-sm bg-accent px-2 py-1.5 text-xs font-medium text-bg hover:bg-accent-hover"
-        >
-          {t("inspector.openInCoder")}
-        </button>
-      </div>
     </div>
   );
 }
@@ -368,31 +357,35 @@ export function Inspector() {
         : null;
 
   return (
-    <aside className="flex w-72 shrink-0 flex-col border-l border-border bg-surface">
-      <BarHeader
-        title={
-          selection ? (
-            <span className="flex items-center gap-1">
-              {selection.kind === "code" ? (
-                <Hash size={11} className="shrink-0 text-text-secondary" aria-hidden />
-              ) : (
-                <FileText size={11} className="shrink-0 text-text-secondary" aria-hidden />
-              )}
-              {itemName ?? t("inspector.details")}
-            </span>
-          ) : (
-            t("inspector.details")
-          )
-        }
-        actions={
-          selection && (
-            <IconButton label={t("common.closeDetails")} size="sm" onClick={clearInspector}>
-              <X size={12} aria-hidden />
-            </IconButton>
-          )
-        }
-      />
-      <div className="min-h-0 flex-1 overflow-y-auto">{body}</div>
-    </aside>
+    <LeftBar
+      borderSide="l"
+      header={
+        <BarHeader
+          title={
+            selection ? (
+              <span className="flex min-w-0 items-center gap-1.5">
+                {selection.kind === "code" ? (
+                  <Hash size={13} className="shrink-0 text-text-secondary" aria-hidden />
+                ) : (
+                  <FileText size={13} className="shrink-0 text-text-secondary" aria-hidden />
+                )}
+                <span className="truncate">{itemName ?? t("inspector.details")}</span>
+              </span>
+            ) : (
+              t("inspector.details")
+            )
+          }
+          actions={
+            selection && (
+              <IconButton label={t("common.closeDetails")} size="sm" onClick={clearInspector}>
+                <X size={14} aria-hidden />
+              </IconButton>
+            )
+          }
+        />
+      }
+    >
+      {body}
+    </LeftBar>
   );
 }

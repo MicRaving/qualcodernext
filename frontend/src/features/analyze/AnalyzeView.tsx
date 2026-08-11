@@ -1,9 +1,7 @@
 import { useState, type ComponentType } from "react";
-import { useI18n } from "@/lib/i18n";
-import { Button, ViewHeader } from "@/components/ui/orchestrator";
+import { ViewHeader } from "@/components/ui/orchestrator";
 import {
   AlignJustify,
-  ArrowLeft,
   BarChart3,
   BookOpen,
   CloudSun,
@@ -222,7 +220,6 @@ const REPORT_COMPONENTS: Record<ReportId, ComponentType> = {
 };
 
 export function AnalyzeView() {
-  const { t } = useI18n();
   const [selected, setSelected] = useState<ReportId | null>(null);
   const meta = selected ? REPORT_META.find((r) => r.id === selected) : undefined;
   const ReportComponent = selected ? REPORT_COMPONENTS[selected] : null;
@@ -232,20 +229,7 @@ export function AnalyzeView() {
       <ViewHeader
         title="Analysis"
         meta={meta ? <span>· {meta.title}</span> : undefined}
-        actions={
-          <>
-            {selected && (
-              <Button
-                variant="secondary"
-                icon={<ArrowLeft size={14} aria-hidden />}
-                aria-label={t("analyze.backToReports")}
-                onClick={() => setSelected(null)}
-              >
-                {t("analyze.backToReports")}
-              </Button>
-            )}
-          </>
-        }
+        back={selected ? () => setSelected(null) : false}
       />
 
       <div className="min-h-0 flex-1 overflow-y-auto p-4">

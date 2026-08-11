@@ -52,6 +52,7 @@ export function SettingsView() {
   const PROVIDER_PRESETS: Record<string, { url: string; model: string }> = {
     ollama: { url: "http://localhost:11434/v1", model: "llama3.2" },
     lmstudio: { url: "http://localhost:1234/v1", model: "" },
+    "opencode-go": { url: "http://localhost:8080/v1", model: "deepseek-v4-flash" },
     gemini: {
       url: "https://generativelanguage.googleapis.com/v1beta/openai",
       model: "gemini-3.6-flash",
@@ -230,7 +231,7 @@ export function SettingsView() {
 
   return (
     <div className="flex h-full flex-col bg-bg">
-      <ViewHeader title={t("settings.title")} />
+      <ViewHeader back={false} title={t("settings.title")} />
 
       {saveError && (
         <div className="flex shrink-0 items-center gap-2 border-b border-danger bg-danger/10 px-3 py-1.5 text-sm text-danger">
@@ -239,28 +240,46 @@ export function SettingsView() {
       )}
 
       <div className="min-h-0 flex-1 overflow-y-auto p-4">
-        <div className="max-w-2xl space-y-4">
-          {/* Appearance */}
+        <div className="max-w-3xl space-y-4">
+          {/* General: appearance + import/export */}
           <section className="rounded-lg border border-border bg-surface p-4">
-            <h2 className="text-sm font-semibold text-text-primary">{t("settings.appearance")}</h2>
-            <p className="mt-1 text-xs text-text-secondary">{t("settings.appearanceHint")}</p>
-            <div className="mt-3 flex items-center gap-2">
-              {themeBtn("light", t("theme.light"))}
-              {themeBtn("dark", t("theme.dark"))}
-            </div>
-            <div className="mt-3 flex items-center gap-2">
-              <span className="text-xs text-text-secondary">{t("ai.language")}</span>
-              <select
-                value={locale}
-                onChange={(e) => setLocale(e.target.value as Locale)}
-                className={inputCls + " !w-40"}
-              >
-                {(Object.keys(LOCALE_NAMES) as Locale[]).map((l) => (
-                  <option key={l} value={l}>
-                    {LOCALE_NAMES[l]}
-                  </option>
-                ))}
-              </select>
+            <h2 className="text-sm font-semibold text-text-primary">{t("settings.general")}</h2>
+            <p className="mt-1 text-xs text-text-secondary">{t("settings.generalHint")}</p>
+
+            <div className="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-2">
+              <div>
+                <h3 className="text-xs font-medium uppercase tracking-wide text-text-secondary">
+                  {t("settings.appearance")}
+                </h3>
+                <div className="mt-2 flex items-center gap-2">
+                  {themeBtn("light", t("theme.light"))}
+                  {themeBtn("dark", t("theme.dark"))}
+                </div>
+                <div className="mt-3 flex items-center gap-2">
+                  <span className="text-xs text-text-secondary">{t("ai.language")}</span>
+                  <select
+                    value={locale}
+                    onChange={(e) => setLocale(e.target.value as Locale)}
+                    className={inputCls + " !w-40"}
+                  >
+                    {(Object.keys(LOCALE_NAMES) as Locale[]).map((l) => (
+                      <option key={l} value={l}>
+                        {LOCALE_NAMES[l]}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              <div>
+                <h3 className="text-xs font-medium uppercase tracking-wide text-text-secondary">
+                  {t("settings.interchange")}
+                </h3>
+                <p className="mt-1 text-xs text-text-secondary">{t("settings.interchangeHint")}</p>
+                <div className="mt-2">
+                  <InterchangeView embedded />
+                </div>
+              </div>
             </div>
           </section>
 
@@ -315,75 +334,78 @@ export function SettingsView() {
                 />
                 {t("settings.aiEnable")}
               </label>
-              <label className="block">
-                <span className="mb-1 block text-xs text-text-secondary">{t("settings.aiProvider")}</span>
-                <select
-                  value={provider}
-                  onChange={(e) => handleProviderChange(e.target.value)}
-                  className={inputCls}
-                >
-                  <option value="ollama">{t("settings.aiProviderOllama")}</option>
-                  <option value="lmstudio">{t("settings.aiProviderLmStudio")}</option>
-                  <option value="gemini">{t("settings.aiProviderGemini")}</option>
-                  <option value="gpt">{t("settings.aiProviderGpt")}</option>
-                  <option value="claude">{t("settings.aiProviderClaude")}</option>
-                  <option value="custom">{t("settings.aiProviderCustom")}</option>
-                </select>
-              </label>
-              <label className="block">
-                <span className="mb-1 block text-xs text-text-secondary">{t("settings.apiBaseUrl")}</span>
-                <input
-                  type="text"
-                  value={apiBase}
-                  onChange={(e) => {
-                    setApiBase(e.target.value);
-                    setProvider((p) =>
-                      p in PROVIDER_PRESETS && PROVIDER_PRESETS[p].url !== e.target.value
-                        ? "custom"
-                        : p,
-                    );
-                  }}
-                  placeholder="https://api.openai.com/v1"
-                  className={inputCls}
-                />
-              </label>
-              <label className="block">
-                <span className="mb-1 block text-xs text-text-secondary">{t("settings.model")}</span>
-                <input
-                  type="text"
-                  value={model}
-                  onChange={(e) => setModel(e.target.value)}
-                  placeholder="gpt-4o-mini"
-                  className={inputCls}
-                />
-              </label>
-              <label className="block">
-                <span className="mb-1 block text-xs text-text-secondary">{t("settings.apiKey")}</span>
-                <input
-                  type="password"
-                  value={apiKey}
-                  onChange={(e) => setApiKey(e.target.value)}
-                  placeholder={t("settings.optional")}
-                  className={inputCls}
-                />
-                {["gemini", "gpt", "claude"].includes(provider) && !apiKey.trim() && (
-                  <span className="mt-1 block text-xs text-warning">
-                    {t("settings.aiKeyRequired")}
-                  </span>
-                )}
-              </label>
-              <label className="block">
-                <span className="mb-1 block text-xs text-text-secondary">{t("ai.mcpPermissions")}</span>
-                <select
-                  value={mcpPermissions}
-                  onChange={(e) => setMcpPermissions(e.target.value)}
-                  className={inputCls}
-                >
-                  <option value="read">{t("ai.mcpRead")}</option>
-                  <option value="write">{t("ai.mcpWrite")}</option>
-                  <option value="full">{t("ai.mcpFull")}</option>
-                </select>
-              </label>
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                <label className="block">
+                  <span className="mb-1 block text-xs text-text-secondary">{t("settings.aiProvider")}</span>
+                  <select
+                    value={provider}
+                    onChange={(e) => handleProviderChange(e.target.value)}
+                    className={inputCls}
+                  >
+                    <option value="ollama">{t("settings.aiProviderOllama")}</option>
+                    <option value="lmstudio">{t("settings.aiProviderLmStudio")}</option>
+                    <option value="opencode-go">{t("settings.aiProviderOpencodeGo")}</option>
+                    <option value="gemini">{t("settings.aiProviderGemini")}</option>
+                    <option value="gpt">{t("settings.aiProviderGpt")}</option>
+                    <option value="claude">{t("settings.aiProviderClaude")}</option>
+                    <option value="custom">{t("settings.aiProviderCustom")}</option>
+                  </select>
+                </label>
+                <label className="block">
+                  <span className="mb-1 block text-xs text-text-secondary">{t("settings.model")}</span>
+                  <input
+                    type="text"
+                    value={model}
+                    onChange={(e) => setModel(e.target.value)}
+                    placeholder="llama3.2"
+                    className={inputCls}
+                  />
+                </label>
+                <label className="block">
+                  <span className="mb-1 block text-xs text-text-secondary">{t("settings.apiBaseUrl")}</span>
+                  <input
+                    type="text"
+                    value={apiBase}
+                    onChange={(e) => {
+                      setApiBase(e.target.value);
+                      setProvider((p) =>
+                        p in PROVIDER_PRESETS && PROVIDER_PRESETS[p].url !== e.target.value
+                          ? "custom"
+                          : p,
+                      );
+                    }}
+                    placeholder="https://api.openai.com/v1"
+                    className={inputCls}
+                  />
+                </label>
+                <label className="block">
+                  <span className="mb-1 block text-xs text-text-secondary">{t("settings.apiKey")}</span>
+                  <input
+                    type="password"
+                    value={apiKey}
+                    onChange={(e) => setApiKey(e.target.value)}
+                    placeholder={t("settings.optional")}
+                    className={inputCls}
+                  />
+                  {["gemini", "gpt", "claude"].includes(provider) && !apiKey.trim() && (
+                    <span className="mt-1 block text-xs text-warning">
+                      {t("settings.aiKeyRequired")}
+                    </span>
+                  )}
+                </label>
+                <label className="block">
+                  <span className="mb-1 block text-xs text-text-secondary">{t("ai.mcpPermissions")}</span>
+                  <select
+                    value={mcpPermissions}
+                    onChange={(e) => setMcpPermissions(e.target.value)}
+                    className={inputCls}
+                  >
+                    <option value="read">{t("ai.mcpRead")}</option>
+                    <option value="write">{t("ai.mcpWrite")}</option>
+                    <option value="full">{t("ai.mcpFull")}</option>
+                  </select>
+                </label>
+              </div>
               <div className="flex items-center gap-2">
                 <button
                   type="submit"
@@ -557,15 +579,6 @@ export function SettingsView() {
                   {t("settings.colourSchemeSaved")}
                 </span>
               )}
-            </div>
-          </section>
-
-          {/* Import / Export */}
-          <section className="rounded-lg border border-border bg-surface p-4">
-            <h2 className="text-sm font-semibold text-text-primary">{t("settings.interchange")}</h2>
-            <p className="mt-1 text-xs text-text-secondary">{t("settings.interchangeHint")}</p>
-            <div className="mt-3">
-              <InterchangeView embedded />
             </div>
           </section>
 

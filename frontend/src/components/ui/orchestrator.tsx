@@ -8,8 +8,16 @@
  *
  * Classes are centralized here so a design change lands in ONE place.
  */
-import type { ButtonHTMLAttributes, HTMLAttributes, ReactNode } from "react";
-import { LoaderCircle, X } from "lucide-react";
+import {
+  useEffect,
+  type ButtonHTMLAttributes,
+  type HTMLAttributes,
+  type InputHTMLAttributes,
+  type ReactNode,
+  type SelectHTMLAttributes,
+  type ThHTMLAttributes,
+} from "react";
+import { ArrowLeft, LoaderCircle, X } from "lucide-react";
 import { ViewBackButton } from "@/components/shell/ViewBackButton";
 import { cls } from "@/components/ui/tokens";
 
@@ -69,8 +77,9 @@ export interface ViewHeaderProps extends Omit<HTMLAttributes<HTMLElement>, "titl
   title: ReactNode;
   /** Secondary meta text after the title (memo, version, date…). */
   meta?: ReactNode;
-  /** Show the uniform back button (default true). */
-  back?: boolean;
+  /** Show the uniform back button (default true); a function overrides
+   *  the default "back to Files" navigation. */
+  back?: boolean | (() => void);
   /** Interaction buttons rendered on the right. */
   actions?: ReactNode;
 }
@@ -79,7 +88,20 @@ export interface ViewHeaderProps extends Omit<HTMLAttributes<HTMLElement>, "titl
 export function ViewHeader({ title, meta, back = true, actions, children, ...rest }: ViewHeaderProps) {
   return (
     <header className={cls.bar} {...rest}>
-      {back && <ViewBackButton />}
+      {back !== false &&
+        (typeof back === "function" ? (
+          <button
+            type="button"
+            onClick={back}
+            aria-label="Back"
+            title="Back"
+            className={cls.ghost}
+          >
+            <ArrowLeft size={16} aria-hidden />
+          </button>
+        ) : (
+          <ViewBackButton />
+        ))}
       <h1 className="min-w-0 truncate text-sm font-semibold text-text-primary">{title}</h1>
       {meta && <span className="hidden min-w-0 truncate text-xs text-text-secondary xl:inline">{meta}</span>}
       <div className="flex-1" />
@@ -95,15 +117,47 @@ export interface BarHeaderProps extends Omit<HTMLAttributes<HTMLElement>, "title
   actions?: ReactNode;
 }
 
-/** Compact left/right bar header (h-5): [title] [count] … [actions]. */
+/** Left/right bar header (h-10, same height as the center header):
+ *  [title] [count] … [actions]. Never part of the scrollable area. */
 export function BarHeader({ title, count, actions, children, ...rest }: BarHeaderProps) {
   return (
-    <header className={cls.compactBar} {...rest}>
-      <h1 className="truncate text-xs font-semibold text-text-primary">{title}</h1>
+    <header className={cls.bar} {...rest}>
+      <h1 className="truncate text-sm font-semibold text-text-primary">{title}</h1>
       {count !== undefined && <CountBadge value={count} />}
       <div className="flex-1" />
       {children ?? actions}
     </header>
+  );
+}
+
+export interface LeftBarProps extends HTMLAttributes<HTMLElement> {
+  width?: "sm" | "md";
+  /** Which side the border sits on (right by default, left for the
+   *  Inspector). */
+  borderSide?: "r" | "l";
+  /** Fixed header row (rendered OUTSIDE the scrollable area). */
+  header?: ReactNode;
+}
+
+/** The uniform left/right bar shell: fixed header + scrollable body. */
+export function LeftBar({
+  width = "md",
+  borderSide = "r",
+  header,
+  children,
+  className = "",
+  ...rest
+}: LeftBarProps) {
+  return (
+    <aside
+      className={`flex ${width === "sm" ? "w-64" : "w-72"} shrink-0 flex-col ${
+        borderSide === "r" ? "border-r" : "border-l"
+      } border-border bg-surface ${className}`}
+      {...rest}
+    >
+      {header}
+      <div className="qc-scroll min-h-0 flex-1 overflow-y-auto">{children}</div>
+    </aside>
   );
 }
 

@@ -64,10 +64,31 @@ export function AvCoder({ source }: { source: Source }) {
   const [playbackRate, setPlaybackRate] = useState(1);
   const [videoVisible, setVideoVisible] = useState(true);
 
-  // Combined transcript / transcribe / speakers panel.
-  const [panelVisible, setPanelVisible] = useState(true);
-  const [panelTab, setPanelTab] = useState<"transcribe" | "transcript" | "speakers">("transcript");
+  // Lower-half panel: the transcript (toggleable like a text coder) or the
+  // speaker-detection UI (opened from the Transcribe flyout).
+  const [transcriptVisible, setTranscriptVisible] = useState(true);
+  const [speakersOpen, setSpeakersOpen] = useState(false);
+  const [transcribeMenuOpen, setTranscribeMenuOpen] = useState(false);
   const subtitleRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!transcribeMenuOpen) return;
+    const onDown = (e: MouseEvent) => {
+      const target = e.target instanceof Node ? e.target : null;
+      if (target && !(target as HTMLElement).closest("[data-transcribe-menu]")) {
+        setTranscribeMenuOpen(false);
+      }
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setTranscribeMenuOpen(false);
+    };
+    document.addEventListener("mousedown", onDown);
+    window.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDown);
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [transcribeMenuOpen]);
 
   // Bookmark + speakers
   const [avBookmarkMs, setAvBookmarkMs] = useState<number | null>(null);
@@ -142,7 +163,8 @@ export function AvCoder({ source }: { source: Source }) {
       const res = await api.speakersMark({ fid, identifiers, custom_regex: customRegex, selected });
       setSpeakers([]);
       setSpeakerTurns([]);
-      setPanelTab("transcript");
+      setSpeakersOpen(false);
+      setTranscriptVisible(true);
       await load();
       await useProjectStore.getState().refreshProject();
       setError(
@@ -249,8 +271,8 @@ export function AvCoder({ source }: { source: Source }) {
         );
         if (done && prev.transcribeJobs.find((j) => j.id === done.id)?.state !== "done") {
           void loadTranscript();
-          setPanelVisible(true);
-          setPanelTab("transcript");
+          setSpeakersOpen(false);
+          setTranscriptVisible(true);
         }
       }
     });
@@ -488,18 +510,59 @@ export function AvCoder({ source }: { source: Source }) {
             {t("avCoder.video")}
           </button>
         )}
+        <div className="relative shrink-0" data-transcribe-menu>
+          <button
+            type="button"
+            onClick={() => setTranscribeMenuOpen((o) => !o)}
+            aria-expanded={transcribeMenuOpen}
+            title={t("transcribe.title")}
+            className="flex items-center gap-1 rounded-sm border border-border bg-bg px-2 py-1 text-xs hover:bg-surface-higher"
+          >
+            <Mic size={12} aria-hidden />
+            {t("transcribe.button")}
+            <ChevronDown size={11} className="text-text-secondary" aria-hidden />
+          </button>
+          {transcribeMenuOpen && (
+            <div className="absolute right-0 top-full z-50 mt-1 min-w-48 rounded-md border border-border bg-surface py-1 shadow-lg">
+              <button
+                type="button"
+                onClick={() => {
+                  setTranscribeMenuOpen(false);
+                  setTranscribeOpen(true);
+                }}
+                className="flex w-full items-center gap-2 px-2 py-1.5 text-left text-sm hover:bg-surface-higher"
+              >
+                <Mic size={13} aria-hidden />
+                {t("transcribe.button")}…
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setTranscribeMenuOpen(false);
+                  setSpeakersOpen(true);
+                }}
+                className="flex w-full items-center gap-2 px-2 py-1.5 text-left text-sm hover:bg-surface-higher"
+              >
+                <Users size={13} aria-hidden />
+                {t("avCoder.markSpeakers")}
+              </button>
+            </div>
+          )}
+        </div>
         <button
           type="button"
-          onClick={() => setPanelVisible((v) => !v)}
-          aria-expanded={panelVisible}
-          title={t("transcribe.title")}
+          onClick={() => {
+            setSpeakersOpen(false);
+            setTranscriptVisible((v) => !v);
+          }}
+          aria-pressed={transcriptVisible}
+          title={t("avCoder.transcript")}
           className={`flex shrink-0 items-center gap-1 rounded-sm border border-border px-2 py-1 text-xs hover:bg-surface-higher ${
-            panelVisible ? "border-accent text-accent" : "bg-bg text-text-secondary"
+            transcriptVisible ? "border-accent text-accent" : "bg-bg text-text-secondary"
           }`}
         >
           <Captions size={12} aria-hidden />
           {t("avCoder.transcript")}
-          <ChevronDown size={11} className="text-text-secondary" aria-hidden />
         </button>
         <div className="flex-1" />
         <button
@@ -662,52 +725,47 @@ export function AvCoder({ source }: { source: Source }) {
         </div>
       )}
 
-      {/* Combined transcript / transcribe / speakers panel */}
-      {panelVisible && (panelTab !== "transcript" || transcript != null) && (
+      {/* Lower half: transcript (like a text coder) or speaker detection */}
+      {(transcriptVisible || speakersOpen) && (
         <div className="flex min-h-0 flex-1 flex-col border-t border-border bg-bg">
           <div className="flex shrink-0 items-center gap-1 border-b border-border bg-surface px-3 py-1.5">
-            <button
-              type="button"
-              onClick={() => setPanelTab("transcribe")}
-              className={`flex items-center gap-1 rounded-sm px-2 py-0.5 text-xs font-medium ${
-                panelTab === "transcribe"
-                  ? "bg-surface-higher text-accent"
-                  : "text-text-secondary hover:text-text-primary"
-              }`}
-            >
-              <Mic size={12} aria-hidden />
-              {t("transcribe.button")}
-            </button>
-            <button
-              type="button"
-              onClick={() => setPanelTab("transcript")}
-              disabled={subtitleSegments.length === 0}
-              className={`flex items-center gap-1 rounded-sm px-2 py-0.5 text-xs font-medium ${
-                panelTab === "transcript"
-                  ? "bg-surface-higher text-accent"
-                  : "text-text-secondary hover:text-text-primary"
-              } disabled:opacity-40`}
-            >
-              <Captions size={12} aria-hidden />
-              {t("avCoder.transcript")}
-            </button>
-            <button
-              type="button"
-              onClick={() => setPanelTab("speakers")}
-              className={`flex items-center gap-1 rounded-sm px-2 py-0.5 text-xs font-medium ${
-                panelTab === "speakers"
-                  ? "bg-surface-higher text-accent"
-                  : "text-text-secondary hover:text-text-primary"
-              }`}
-            >
-              <Users size={12} aria-hidden />
-              {t("avCoder.markSpeakers")}
-            </button>
-            <span className="ml-2 truncate text-xs text-text-secondary">{transcript?.name}</span>
+            {speakersOpen ? (
+              <>
+                <Users size={12} className="text-text-secondary" aria-hidden />
+                <span className="text-xs font-medium text-text-primary">
+                  {t("avCoder.markSpeakers")}
+                </span>
+                <span className="ml-2 truncate text-xs text-text-secondary">{transcript?.name}</span>
+              </>
+            ) : (
+              <>
+                <Captions size={12} className="text-text-secondary" aria-hidden />
+                <span className="text-xs font-medium text-text-primary">
+                  {t("avCoder.transcript")}
+                </span>
+                <span className="ml-2 truncate text-xs text-text-secondary">{transcript?.name}</span>
+              </>
+            )}
             <div className="flex-1" />
+            {speakersOpen && (
+              <button
+                type="button"
+                onClick={() => {
+                  setSpeakersOpen(false);
+                  setTranscriptVisible(true);
+                }}
+                className="flex items-center gap-1 rounded-sm px-2 py-0.5 text-xs font-medium text-text-secondary hover:text-text-primary"
+              >
+                <Captions size={12} aria-hidden />
+                {t("avCoder.transcript")}
+              </button>
+            )}
             <button
               type="button"
-              onClick={() => setPanelVisible(false)}
+              onClick={() => {
+                setSpeakersOpen(false);
+                setTranscriptVisible(false);
+              }}
               aria-label={t("common.close")}
               title={t("common.close")}
               className="rounded-sm p-0.5 text-text-secondary hover:bg-surface-higher hover:text-text-primary"
@@ -716,54 +774,7 @@ export function AvCoder({ source }: { source: Source }) {
             </button>
           </div>
 
-          {panelTab === "transcribe" ? (
-            <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4">
-              <p className="max-w-md text-xs leading-relaxed text-text-secondary">
-                {t("transcribe.panelHint")}
-              </p>
-              <button
-                type="button"
-                onClick={() => setTranscribeOpen(true)}
-                className="mt-3 flex items-center gap-1.5 rounded-sm bg-accent px-3 py-1.5 text-xs font-medium text-[var(--qc-bg)] hover:bg-accent-hover"
-              >
-                <Mic size={13} aria-hidden />
-                {t("transcribe.button")}…
-              </button>
-            </div>
-          ) : panelTab === "transcript" ? (
-            <div
-              ref={subtitleRef}
-              className="min-h-0 flex-1 overflow-y-auto px-4 py-3"
-              role="log"
-              aria-live="off"
-            >
-              {subtitleSegments.length === 0 ? (
-                <p className="py-6 text-center text-sm text-text-secondary">
-                  {t("avCoder.noTranscript")}
-                </p>
-              ) : (
-                subtitleSegments.map((seg, i) => {
-                  const active = activeSubtitle === seg;
-                  return (
-                    <p
-                      key={`${seg.startMs}-${i}`}
-                      data-start={seg.startMs}
-                      className={`rounded-sm px-1.5 py-0.5 text-sm leading-6 ${
-                        active
-                          ? "bg-accent/15 font-medium text-text-primary"
-                          : "text-text-secondary"
-                      }`}
-                    >
-                      <span className="mr-2 font-mono text-[10px] text-text-secondary">
-                        {formatTime(seg.startMs)}
-                      </span>
-                      {seg.text}
-                    </p>
-                  );
-                })
-              )}
-            </div>
-          ) : (
+          {speakersOpen ? (
             <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3">
               <fieldset className="space-y-1">
                 <legend className="mb-1 text-xs font-medium text-text-secondary">
@@ -855,6 +866,39 @@ export function AvCoder({ source }: { source: Source }) {
                   {t("avCoder.speakersMark")}
                 </button>
               </div>
+            </div>
+          ) : (
+            <div
+              ref={subtitleRef}
+              className="min-h-0 flex-1 overflow-y-auto px-4 py-3"
+              role="log"
+              aria-live="off"
+            >
+              {subtitleSegments.length === 0 ? (
+                <p className="py-6 text-center text-sm text-text-secondary">
+                  {t("avCoder.noTranscript")}
+                </p>
+              ) : (
+                subtitleSegments.map((seg, i) => {
+                  const active = activeSubtitle === seg;
+                  return (
+                    <p
+                      key={`${seg.startMs}-${i}`}
+                      data-start={seg.startMs}
+                      className={`rounded-sm px-1.5 py-0.5 text-sm leading-6 ${
+                        active
+                          ? "bg-accent/15 font-medium text-text-primary"
+                          : "text-text-secondary"
+                      }`}
+                    >
+                      <span className="mr-2 font-mono text-[10px] text-text-secondary">
+                        {formatTime(seg.startMs)}
+                      </span>
+                      {seg.text}
+                    </p>
+                  );
+                })
+              )}
             </div>
           )}
         </div>

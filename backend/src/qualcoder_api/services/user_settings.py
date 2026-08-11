@@ -34,6 +34,7 @@ AI_DEFAULTS: dict = {
 AI_PROVIDER_DEFAULTS: dict = {
     "ollama": {"api_base": "http://localhost:11434/v1", "model": "llama3.2"},
     "lmstudio": {"api_base": "http://localhost:1234/v1", "model": ""},
+    "opencode-go": {"api_base": "http://localhost:8080/v1", "model": "deepseek-v4-flash"},
     "gemini": {
         "api_base": "https://generativelanguage.googleapis.com/v1beta/openai",
         "model": "gemini-3.6-flash",

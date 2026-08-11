@@ -120,7 +120,7 @@ export function HistoryView() {
 
   return (
     <div className="flex h-full flex-col bg-bg">
-      <ViewHeader
+      <ViewHeader back={false}
         title={
           <span className="flex items-center gap-1.5">
             <History size={15} aria-hidden />

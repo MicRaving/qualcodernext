@@ -113,6 +113,31 @@ select {
   outline-offset: 1px;
 }
 
+/* Themed scrollbars — thin, quiet, matching the border/surface palette. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--qc-border) transparent;
+}
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background-color: var(--qc-border);
+  border-radius: 4px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background-color: var(--qc-text-secondary);
+}
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
 ::selection {
   background-color: color-mix(in srgb, var(--qc-accent) 30%, transparent);
 }
