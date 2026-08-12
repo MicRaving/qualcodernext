@@ -4,17 +4,10 @@
  * types that have no value yet; saving writes the value.
  */
 import { useCallback, useEffect, useState } from "react";
-import { LoaderCircle, Plus } from "lucide-react";
+import { Check, LoaderCircle, Plus, X } from "lucide-react";
 import { api } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
-
-function SectionLabel({ children }: { children: React.ReactNode }) {
-  return (
-    <div className="mb-1 text-xs font-medium uppercase tracking-wide text-text-secondary">
-      {children}
-    </div>
-  );
-}
+import { IconButton, Input, SectionLabel } from "@/components/ui/orchestrator";
 
 export function AttributeEditor({
   entityId,
@@ -32,6 +25,8 @@ export function AttributeEditor({
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [adding, setAdding] = useState(false);
+  const [newName, setNewName] = useState("");
 
   const reload = useCallback(async () => {
     try {
@@ -72,32 +67,68 @@ export function AttributeEditor({
     }
   }
 
+  async function createType() {
+    const name = newName.trim();
+    if (!name) return;
+    setError(null);
+    try {
+      await api.createAttributeType(name, scope, "text");
+      setAdding(false);
+      setNewName("");
+      await reload();
+      await onChange();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : t("inspector.attributesSaveError"));
+    }
+  }
+
   return (
     <div>
       <div className="mb-1 flex items-center justify-between">
         <SectionLabel>{t("inspector.attributes")}</SectionLabel>
-        <button
-          type="button"
-          onClick={() => {
-            const name = window.prompt(t("inspector.attributesAddType"));
-            if (!name?.trim()) return;
-            void (async () => {
-              try {
-                await api.createAttributeType(name.trim(), scope, "text");
-                await reload();
-                await onChange();
-              } catch (e) {
-                setError(e instanceof Error ? e.message : t("inspector.attributesSaveError"));
-              }
-            })();
-          }}
-          aria-label={t("inspector.attributesAddType")}
+        <IconButton
+          label={t("inspector.attributesAddType")}
           title={t("inspector.attributesAddType")}
-          className="rounded-sm p-1 text-text-secondary hover:bg-surface-higher hover:text-text-primary"
+          size="sm"
+          onClick={() => {
+            setAdding((a) => !a);
+            setNewName("");
+          }}
         >
           <Plus size={12} aria-hidden />
-        </button>
+        </IconButton>
       </div>
+      {adding && (
+        <div className="mb-2 flex items-center gap-1.5">
+          <Input
+            autoFocus
+            value={newName}
+            onChange={(e) => setNewName(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && newName.trim()) void createType();
+            }}
+            placeholder={t("inspector.attributesAddType")}
+            className="min-w-0 flex-1"
+          />
+          <IconButton
+            label={t("common.rename")}
+            title={t("inspector.attributesAddType")}
+            size="md"
+            disabled={!newName.trim()}
+            onClick={() => void createType()}
+          >
+            <Check size={14} aria-hidden />
+          </IconButton>
+          <IconButton
+            label={t("common.cancel")}
+            title={t("common.cancel")}
+            size="md"
+            onClick={() => setAdding(false)}
+          >
+            <X size={14} aria-hidden />
+          </IconButton>
+        </div>
+      )}
       {types.length === 0 ? (
         <p className="text-sm text-text-secondary">{t("inspector.noAttributes")}</p>
       ) : (

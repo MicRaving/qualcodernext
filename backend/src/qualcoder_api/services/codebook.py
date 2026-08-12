@@ -38,7 +38,10 @@ async def import_codebook(
     session_factory: async_sessionmaker, path: str, codername: str
 ) -> dict:
     """Import a plain-text codebook into the open project."""
-    rows = _parse_rows(path)
+    # The file read is blocking; run it off the event loop.
+    import asyncio
+
+    rows = await asyncio.to_thread(_parse_rows, path)
     if not rows:
         raise ValueError("codebook file is empty")
 

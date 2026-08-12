@@ -650,7 +650,6 @@ async def charts_data(session: AsyncSession, kind: str) -> dict:
             text("SELECT cid, name, COALESCE(color, '') FROM code_name ORDER BY name")
         )
     ]
-    {c["cid"]: c for c in codes}
 
     if kind == "cumulative":
         # Total segments per code, accumulated over the ordered code list.
@@ -701,6 +700,11 @@ async def charts_data(session: AsyncSession, kind: str) -> dict:
                     text("SELECT caseid, name FROM cases ORDER BY name")
                 )
             ]
+            # One grouped join instead of a per-case query: case -> files ->
+            # per-file coding counts, all in a single pass.
+            case_fids: dict[int, list[int]] = defaultdict(list)
+            for caseid, fid in await session.execute(text("SELECT caseid, fid FROM case_text")):
+                case_fids[caseid].append(fid)
             case_counts: dict[tuple[int, int], int] = defaultdict(int)
             for fid, cid, n in await session.execute(
                 text(
@@ -711,20 +715,12 @@ async def charts_data(session: AsyncSession, kind: str) -> dict:
                 case_counts[(fid, cid)] += n
             case_series: list[list[dict]] = []
             for label in labels:
-                case_fids = [
-                    r[0]
-                    for r in await session.execute(
-                        text("SELECT fid FROM case_text WHERE caseid = :cid"),
-                        {"cid": label["caseid"]},
-                    )
-                ]
+                fids = case_fids.get(label["caseid"], [])
                 case_series.append(
                     [
                         {
                             "cid": code["cid"],
-                            "count": sum(
-                                case_counts.get((fid, code["cid"]), 0) for fid in case_fids
-                            ),
+                            "count": sum(case_counts.get((fid, code["cid"]), 0) for fid in fids),
                         }
                         for code in codes
                     ]
@@ -805,17 +801,16 @@ async def charts_data(session: AsyncSession, kind: str) -> dict:
                 text("SELECT caseid, name FROM cases ORDER BY name")
             )
         ]
+        # Single grouped join (case -> file -> coding counts) instead of a
+        # per-case, per-file query.
         case_code_counts: dict[tuple[int, int], int] = defaultdict(int)
-        for caseid, fid in await session.execute(
-            text("SELECT caseid, fid FROM case_text")
+        for caseid, cid, n in await session.execute(
+            text(
+                "SELECT cst.caseid, ct.cid, COUNT(*) FROM code_text_visible ct "
+                "JOIN case_text cst ON cst.fid = ct.fid GROUP BY cst.caseid, ct.cid"
+            )
         ):
-            for cid, n in await session.execute(
-                text(
-                    "SELECT cid, COUNT(*) FROM code_text_visible WHERE fid = :fid GROUP BY cid"
-                ),
-                {"fid": fid},
-            ):
-                case_code_counts[(caseid, cid)] += n
+            case_code_counts[(caseid, cid)] += n
         matrix_counts = [
             [case_code_counts.get((case["caseid"], c["cid"]), 0) for c in codes] for case in cases
         ]

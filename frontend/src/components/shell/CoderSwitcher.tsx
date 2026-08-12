@@ -8,7 +8,7 @@
  * the top bar, showing the time since the last successful sync (red on
  * errors); clicking it opens the flyout.
  */
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   BarChart3,
   Check,
@@ -27,6 +27,8 @@ import { api, ApiError } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 import { useProjectStore } from "@/stores/project";
 import { useToast } from "@/lib/toast";
+import { Menu, MenuItem, Modal } from "@/components/ui/orchestrator";
+import { cls } from "@/components/ui/tokens";
 
 const SYNC_POLL_MS = 30_000;
 
@@ -252,8 +254,21 @@ export function CoderSwitcher() {
     setAdding(false);
   }
 
+  /** Flyout position: anchored to the button, clamped inside the window. */
+  const menuPos = useMemo(() => {
+    const el = rootRef.current;
+    if (!el) return undefined;
+    const rect = el.getBoundingClientRect();
+    const width = 260;
+    return {
+      left: Math.max(8, Math.min(rect.right - width, window.innerWidth - width - 8)),
+      top: Math.min(rect.bottom + 4, window.innerHeight - 64),
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
+
   return (
-    <div ref={rootRef} className="relative flex items-center gap-1">
+    <div ref={rootRef} className="relative flex shrink-0 items-center gap-1">
       <button
         type="button"
         onClick={() => setOpen((o) => !o)}
@@ -261,10 +276,13 @@ export function CoderSwitcher() {
         aria-expanded={open}
         aria-label={t("coder.switchAria", { name: coderName })}
         title={t("coder.switchTitle")}
-        className="flex max-w-44 items-center gap-1.5 rounded-sm border border-border bg-bg px-2 py-1 text-xs hover:bg-surface-higher"
+        // Flex row so a long coder name ellipsizes instead of wrapping
+        // the trailing dot/chevron to a second (clipped) line; auto-adapts
+        // to the text width, capped so it never dominates the ribbon.
+        className={`${cls.secondary} flex h-7 min-w-[4.5rem] max-w-[20rem] items-center gap-1 overflow-hidden leading-none`}
       >
         <User size={12} className="shrink-0 text-text-secondary" aria-hidden />
-        <span className="truncate">{coderName}</span>
+        <span className="min-w-0 flex-1 overflow-hidden text-ellipsis whitespace-nowrap">{coderName}</span>
         <span
           role="status"
           aria-label={syncEnabled ? (syncError ? "sync-error" : "sync-on") : "sync-off"}
@@ -276,18 +294,19 @@ export function CoderSwitcher() {
               : undefined
           }
           className={`h-1.5 w-1.5 shrink-0 rounded-full ${
-            syncEnabled ? (syncError ? "bg-danger" : "bg-success") : "bg-transparent"
+            syncEnabled ? (syncError ? "bg-danger" : "bg-success") : "bg-border"
           }`}
-          aria-hidden={!syncEnabled}
         />
         <ChevronDown size={12} className="shrink-0 text-text-secondary" aria-hidden />
       </button>
 
       {open && (
-        <div
+        <Menu
+          position="fixed"
           role="listbox"
           aria-label={t("coder.listAria")}
-          className="absolute right-0 top-full z-50 mt-1 min-w-60 rounded-md border border-border bg-surface py-1 shadow-lg"
+          className="min-w-60 max-h-[calc(100vh-3.5rem)] overflow-y-auto"
+          style={menuPos}
         >
           {coders.map((c) => (
             <div
@@ -351,7 +370,7 @@ export function CoderSwitcher() {
                   }}
                   placeholder={t("coder.newNamePlaceholder")}
                   aria-label={t("coder.newNamePlaceholder")}
-                  className="w-full min-w-0 flex-1 rounded-sm border border-border bg-bg px-2 py-1 text-sm outline-none focus:border-accent"
+                  className="min-w-0 flex-1"
                 />
                 <button
                   type="button"
@@ -393,6 +412,17 @@ export function CoderSwitcher() {
 
           {/* Collaboration sync */}
           <div className="my-1 h-px bg-border" aria-hidden />
+          <button
+            type="button"
+            onClick={() => {
+              void useProjectStore.getState().refreshProject();
+              closeAll();
+            }}
+            className="flex w-full items-center gap-2 px-2 py-1.5 text-left text-sm hover:bg-surface-higher"
+          >
+            <RefreshCw size={13} aria-hidden />
+            {t("common.refresh")}
+          </button>
           <div className="px-2 py-1.5">
             <div className="flex items-center justify-between">
               <span className="text-xs font-medium text-text-primary">{t("sync.title")}</span>
@@ -445,7 +475,7 @@ export function CoderSwitcher() {
                   type="button"
                   onClick={() => void syncNow()}
                   disabled={syncBusy}
-                  className="mt-1 flex items-center gap-1 rounded-sm bg-accent px-2 py-0.5 text-[11px] font-medium text-[var(--qc-bg)] hover:bg-accent-hover disabled:opacity-50"
+                  className={`mt-1 ${cls.primaryCompact}`}
                 >
                   <RefreshCw size={10} className={syncBusy ? "animate-spin" : undefined} aria-hidden />
                   {t("sync.now")}
@@ -453,101 +483,69 @@ export function CoderSwitcher() {
               </div>
             )}
           </div>
-        </div>
+        </Menu>
       )}
 
       {/* Coder context menu (right-click) */}
       {menu && (
-        <div
+        <Menu
+          position="fixed"
+          className="min-w-44"
           role="menu"
           aria-label={t("coder.contextMenu", { name: menu.name })}
-          className="fixed z-50 min-w-44 rounded-md border border-border bg-surface py-1 shadow-lg"
           style={{
             left: Math.min(menu.x, window.innerWidth - 190),
             top: Math.min(menu.y, window.innerHeight - 130),
           }}
         >
-          <button
-            type="button"
-            role="menuitem"
-            onClick={() => void handleRenameCoder(menu.name)}
-            className="flex w-full items-center gap-2 px-2 py-1.5 text-left text-sm hover:bg-surface-higher"
-          >
+          <MenuItem onClick={() => void handleRenameCoder(menu.name)}>
             <Pencil size={13} aria-hidden />
             {t("coder.rename")}
-          </button>
-          <button
-            type="button"
-            role="menuitem"
-            onClick={() => void handleDeleteCoder(menu.name)}
-            className="flex w-full items-center gap-2 px-2 py-1.5 text-left text-sm text-danger hover:bg-surface-higher"
-          >
+          </MenuItem>
+          <MenuItem className="text-danger" onClick={() => void handleDeleteCoder(menu.name)}>
             <Trash2 size={13} aria-hidden />
             {t("coder.delete")}
-          </button>
+          </MenuItem>
           <div className="my-1 h-px bg-border" aria-hidden />
-          <button
-            type="button"
-            role="menuitem"
-            onClick={() => void handleCoderStats(menu.name)}
-            className="flex w-full items-center gap-2 px-2 py-1.5 text-left text-sm hover:bg-surface-higher"
-          >
+          <MenuItem onClick={() => void handleCoderStats(menu.name)}>
             <BarChart3 size={13} aria-hidden />
             {t("coder.statistics")}
-          </button>
-        </div>
+          </MenuItem>
+        </Menu>
       )}
 
       {/* Coder statistics modal */}
       {(stats || statsLoading) && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-bg/70"
-          onMouseDown={(e) => {
-            if (e.target === e.currentTarget) setStats(null);
-          }}
-          role="dialog"
-          aria-modal="true"
-          aria-label={t("coder.statistics")}
+        <Modal
+          open
+          onClose={() => setStats(null)}
+          size="sm"
+          title={t("coder.statisticsTitle", { name: stats?.coder ?? coderName })}
         >
-          <div className="w-80 max-w-[92vw] rounded-lg border border-border bg-surface shadow-xl">
-            <div className="flex items-center justify-between border-b border-border px-4 py-2.5">
-              <h2 className="text-sm font-semibold text-text-primary">
-                {t("coder.statisticsTitle", { name: stats?.coder ?? coderName })}
-              </h2>
-              <button
-                type="button"
-                onClick={() => setStats(null)}
-                aria-label={t("common.close")}
-                className="rounded-sm p-0.5 text-text-secondary hover:bg-surface-higher hover:text-text-primary"
-              >
-                <X size={14} aria-hidden />
-              </button>
-            </div>
-            <div className="max-h-80 overflow-y-auto p-4">
-              {statsLoading ? (
-                <div className="flex items-center justify-center gap-2 py-6 text-text-secondary">
-                  <LoaderCircle size={14} className="animate-spin" aria-hidden />
-                  {t("coder.statsLoading")}
-                </div>
-              ) : (
-                <ul className="space-y-1.5">
-                  {stats?.tables.map((row) => (
-                    <li key={row.entity} className="flex items-center justify-between text-sm">
-                      <span className="text-text-secondary">{row.entity}</span>
-                      <span className="font-medium text-text-primary">{row.count}</span>
-                    </li>
-                  ))}
-                  {stats && (
-                    <li className="mt-2 flex items-center justify-between border-t border-border pt-2 text-sm">
-                      <span className="font-medium text-text-primary">{t("coder.statsTotal")}</span>
-                      <span className="font-bold text-text-primary">{stats.total}</span>
-                    </li>
-                  )}
-                </ul>
-              )}
-            </div>
+          <div className="max-h-80 overflow-y-auto p-4">
+            {statsLoading ? (
+              <div className="flex items-center justify-center gap-2 py-6 text-text-secondary">
+                <LoaderCircle size={14} className="animate-spin" aria-hidden />
+                {t("coder.statsLoading")}
+              </div>
+            ) : (
+              <ul className="space-y-1.5">
+                {stats?.tables.map((row) => (
+                  <li key={row.entity} className="flex items-center justify-between text-sm">
+                    <span className="text-text-secondary">{row.entity}</span>
+                    <span className="font-medium text-text-primary">{row.count}</span>
+                  </li>
+                ))}
+                {stats && (
+                  <li className="mt-2 flex items-center justify-between border-t border-border pt-2 text-sm">
+                    <span className="font-medium text-text-primary">{t("coder.statsTotal")}</span>
+                    <span className="font-bold text-text-primary">{stats.total}</span>
+                  </li>
+                )}
+              </ul>
+            )}
           </div>
-        </div>
+        </Modal>
       )}
     </div>
   );

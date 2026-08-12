@@ -1,23 +1,83 @@
 /**
- * Settings - appearance, language, AI assistant (incl. MCP permissions and
- * the semantic index), pseudonyms and Import/Export.
+ * Settings (right-bar pane) - appearance, language, AI assistant (incl. MCP
+ * permissions + the semantic index), pseudonyms and Import/Export.
+ *
+ * Auto-saves: AI settings are persisted on change (debounced), no Save
+ * button. Sections are separated by simple dividers, not cards.
  */
-import { useCallback, useEffect, useState, type FormEvent } from "react";
-import { Check, LoaderCircle, RotateCw, Save, Trash2 } from "lucide-react";
+import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
+import { Check, HelpCircle, LoaderCircle, Moon, RotateCw, Sun, Trash2 } from "lucide-react";
 import { api, type AiIndexStatus, type AiStatus, type Pseudonym } from "@/lib/api";
 import { errorDetail } from "@/features/ai/format";
 import { InterchangeView } from "@/features/interchange/InterchangeView";
 import { useI18n, LOCALE_NAMES, type Locale } from "@/lib/i18n";
-import { ViewHeader } from "@/components/ui/orchestrator";
+import {
+  BarHeader,
+  Button,
+  ErrorBanner,
+  Field,
+  IconButton,
+  Input,
+  LeftBar,
+  SectionLabel,
+  Select,
+} from "@/components/ui/orchestrator";
 import { useProjectStore } from "@/stores/project";
-
-const inputCls =
-  "h-8 w-full rounded-sm border border-border bg-bg px-2 text-sm outline-none focus:border-accent";
+import { useUpdatesStore } from "@/stores/updates";
+import type { UpdatesSettings } from "@/lib/api";
+import { Download } from "lucide-react";
 
 export function SettingsView() {
   const { t, locale, setLocale } = useI18n();
   const themeMode = useProjectStore((s) => s.themeMode);
   const setThemeMode = useProjectStore((s) => s.setThemeMode);
+
+  // App updates (desktop only — harmless no-op in the plain browser).
+  const updatesStatus = useUpdatesStore((s) => s.status);
+  const updatesInfo = useUpdatesStore((s) => s.info);
+  const updatesProgress = useUpdatesStore((s) => s.progress);
+  const updatesError = useUpdatesStore((s) => s.error);
+  const updatesSettings = useUpdatesStore((s) => s.settings);
+  const [checkInterval, setCheckInterval] = useState<UpdatesSettings["check_interval"]>("daily");
+  const [autoUpdate, setAutoUpdate] = useState(false);
+
+  useEffect(() => {
+    const store = useUpdatesStore.getState();
+    if (!updatesSettings) void store.loadSettings();
+  }, [updatesSettings]);
+
+  useEffect(() => {
+    if (updatesSettings) {
+      setCheckInterval(updatesSettings.check_interval);
+      setAutoUpdate(updatesSettings.auto_update);
+    }
+  }, [updatesSettings]);
+
+  async function toggleAutoUpdate() {
+    const next = !autoUpdate;
+    setAutoUpdate(next);
+    const settings = { check_interval: checkInterval, auto_update: next };
+    try {
+      await useUpdatesStore.getState().saveSettings(settings);
+      if (next) {
+        // Enabling auto-update checks immediately (matches the scheduler).
+        void useUpdatesStore.getState().checkNow();
+      }
+    } catch {
+      /* keep the local toggle; the backend error surfaces on the next load */
+    }
+  }
+
+  async function setIntervalAndSave(interval: UpdatesSettings["check_interval"]) {
+    setCheckInterval(interval);
+    try {
+      await useUpdatesStore
+        .getState()
+        .saveSettings({ check_interval: interval, auto_update: autoUpdate });
+    } catch {
+      /* same as above */
+    }
+  }
 
   const [status, setStatus] = useState<AiStatus | null>(null);
   const [statusError, setStatusError] = useState<string | null>(null);
@@ -29,9 +89,9 @@ export function SettingsView() {
   const [model, setModel] = useState("");
   const [apiKey, setApiKey] = useState("");
   const [mcpPermissions, setMcpPermissions] = useState("read");
-  const [saving, setSaving] = useState(false);
-  const [saved, setSaved] = useState(false);
+  const [models, setModels] = useState<string[]>([]);
   const [saveError, setSaveError] = useState<string | null>(null);
+  const [savedFlash, setSavedFlash] = useState(false);
 
   // Semantic index
   const [indexStatus, setIndexStatus] = useState<AiIndexStatus | null>(null);
@@ -44,15 +104,14 @@ export function SettingsView() {
   const [pseudoName, setPseudoName] = useState("");
   const [pseudoError, setPseudoError] = useState<string | null>(null);
 
-  // Colour scheme
-  const [palette, setPalette] = useState<string[]>([]);
-  const [paletteSaved, setPaletteSaved] = useState(false);
-  const [paletteError, setPaletteError] = useState<string | null>(null);
+
+  // Help popovers
+  const [helpOpen, setHelpOpen] = useState<"interchange" | "index" | null>(null);
 
   const PROVIDER_PRESETS: Record<string, { url: string; model: string }> = {
     ollama: { url: "http://localhost:11434/v1", model: "llama3.2" },
     lmstudio: { url: "http://localhost:1234/v1", model: "" },
-    "opencode-go": { url: "http://localhost:8080/v1", model: "deepseek-v4-flash" },
+    "opencode-go": { url: "https://opencode.ai/zen/go/v1", model: "deepseek-v4-flash" },
     gemini: {
       url: "https://generativelanguage.googleapis.com/v1beta/openai",
       model: "gemini-3.6-flash",
@@ -61,12 +120,20 @@ export function SettingsView() {
     claude: { url: "https://api.anthropic.com/v1", model: "claude-sonnet-4-6" },
   };
 
+  // Track whether the user has touched a field: the initial status fetch
+  // must NOT overwrite an edit made while it was still in flight.
+  const touchedRef = useRef(false);
+  const markTouched = () => {
+    touchedRef.current = true;
+  };
+
   const loadStatus = useCallback(async () => {
     setStatusLoading(true);
     setStatusError(null);
     try {
       const s = await api.aiStatus();
       setStatus(s);
+      if (touchedRef.current) return;
       setEnabled(s.enabled);
       setProvider(s.provider);
       setApiBase(s.base_url);
@@ -78,6 +145,16 @@ export function SettingsView() {
       setStatusLoading(false);
     }
   }, [t]);
+
+  const loadModels = useCallback(async () => {
+    if (!enabled) return;
+    try {
+      const res = await api.aiModels();
+      setModels(res.models);
+    } catch {
+      setModels([]);
+    }
+  }, [enabled]);
 
   const loadIndex = useCallback(async () => {
     try {
@@ -98,75 +175,51 @@ export function SettingsView() {
     }
   }, []);
 
-  const loadPalette = useCallback(async () => {
-    try {
-      const scheme = await api.colorScheme();
-      setPalette(scheme.colors);
-      setPaletteError(null);
-    } catch (e) {
-      setPaletteError(errorDetail(e, t("settings.colourSchemeSaveError")));
-    }
-  }, [t]);
 
   useEffect(() => {
     void loadStatus();
     void loadIndex();
     void loadPseudonyms();
-    void loadPalette();
-  }, [loadStatus, loadIndex, loadPseudonyms, loadPalette]);
+  }, [loadStatus, loadIndex, loadPseudonyms]);
 
-  async function savePalette() {
-    try {
-      await api.saveColorScheme(palette);
-      setPaletteSaved(true);
-      window.setTimeout(() => setPaletteSaved(false), 2000);
-      setPaletteError(null);
-    } catch (e) {
-      setPaletteError(errorDetail(e, t("settings.colourSchemeSaveError")));
-    }
-  }
+  useEffect(() => {
+    void loadModels();
+  }, [loadModels, provider, apiBase]);
 
-  async function resetPalette() {
-    try {
-      const scheme = await api.resetColorScheme();
-      setPalette(scheme.colors);
-      setPaletteError(null);
-    } catch (e) {
-      setPaletteError(errorDetail(e, t("settings.colourSchemeSaveError")));
-    }
-  }
+  /** Auto-save the AI settings (debounced) — no Save button. */
+  const saveTimer = useRef<number | null>(null);
+  useEffect(() => {
+    if (saveTimer.current !== null) window.clearTimeout(saveTimer.current);
+    saveTimer.current = window.setTimeout(() => {
+      setSaveError(null);
+      void api
+        .aiSaveSettings({
+          enabled,
+          provider,
+          api_base: apiBase.trim(),
+          model: model.trim(),
+          api_key: apiKey,
+          mcp_permissions: mcpPermissions,
+        })
+        .then(() => {
+          setSavedFlash(true);
+          window.setTimeout(() => setSavedFlash(false), 2000);
+        })
+        .catch((e) => setSaveError(errorDetail(e, t("settings.aiSaveError"))));
+    }, 600);
+    return () => {
+      if (saveTimer.current !== null) window.clearTimeout(saveTimer.current);
+    };
+  }, [enabled, provider, apiBase, model, apiKey, mcpPermissions, t]);
+
 
   function handleProviderChange(next: string) {
+    markTouched();
     setProvider(next);
     const preset = PROVIDER_PRESETS[next];
     if (preset) {
       setApiBase(preset.url);
       if (preset.model) setModel(preset.model);
-    }
-  }
-
-  async function handleSave(e: FormEvent) {
-    e.preventDefault();
-    if (saving) return;
-    setSaving(true);
-    setSaved(false);
-    setSaveError(null);
-    try {
-      await api.aiSaveSettings({
-        enabled,
-        provider,
-        api_base: apiBase.trim(),
-        model: model.trim(),
-        api_key: apiKey,
-        mcp_permissions: mcpPermissions,
-      });
-      setSaved(true);
-      window.setTimeout(() => setSaved(false), 2000);
-      await loadStatus();
-    } catch (err) {
-      setSaveError(errorDetail(err, t("settings.aiSaveError")));
-    } finally {
-      setSaving(false);
     }
   }
 
@@ -214,381 +267,442 @@ export function SettingsView() {
     }
   }
 
-  const themeBtn = (mode: "light" | "dark", label: string) => (
-    <button
-      type="button"
-      onClick={() => setThemeMode(mode)}
-      className={`rounded-sm border px-3 py-1.5 text-xs font-medium ${
-        themeMode === mode
-          ? "border-accent bg-accent text-[var(--qc-bg)]"
-          : "border-border bg-bg hover:bg-surface-higher"
-      }`}
-      aria-pressed={themeMode === mode}
-    >
-      {label}
-    </button>
-  );
-
   return (
-    <div className="flex h-full flex-col bg-bg">
-      <ViewHeader back={false} title={t("settings.title")} />
+    <LeftBar
+      borderSide="l"
+      width="lg"
+      header={<BarHeader title={t("settings.title")} />}
+    >
+      {saveError && <ErrorBanner>{saveError}</ErrorBanner>}
 
-      {saveError && (
-        <div className="flex shrink-0 items-center gap-2 border-b border-danger bg-danger/10 px-3 py-1.5 text-sm text-danger">
-          <span className="min-w-0 flex-1 truncate">{saveError}</span>
-        </div>
-      )}
-
-      <div className="min-h-0 flex-1 overflow-y-auto p-4">
-        <div className="max-w-3xl space-y-4">
-          {/* General: appearance + import/export */}
-          <section className="rounded-lg border border-border bg-surface p-4">
-            <h2 className="text-sm font-semibold text-text-primary">{t("settings.general")}</h2>
-            <p className="mt-1 text-xs text-text-secondary">{t("settings.generalHint")}</p>
-
-            <div className="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-2">
-              <div>
-                <h3 className="text-xs font-medium uppercase tracking-wide text-text-secondary">
-                  {t("settings.appearance")}
-                </h3>
-                <div className="mt-2 flex items-center gap-2">
-                  {themeBtn("light", t("theme.light"))}
-                  {themeBtn("dark", t("theme.dark"))}
-                </div>
-                <div className="mt-3 flex items-center gap-2">
-                  <span className="text-xs text-text-secondary">{t("ai.language")}</span>
-                  <select
-                    value={locale}
-                    onChange={(e) => setLocale(e.target.value as Locale)}
-                    className={inputCls + " !w-40"}
-                  >
-                    {(Object.keys(LOCALE_NAMES) as Locale[]).map((l) => (
-                      <option key={l} value={l}>
-                        {LOCALE_NAMES[l]}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-              </div>
-
-              <div>
-                <h3 className="text-xs font-medium uppercase tracking-wide text-text-secondary">
-                  {t("settings.interchange")}
-                </h3>
-                <p className="mt-1 text-xs text-text-secondary">{t("settings.interchangeHint")}</p>
-                <div className="mt-2">
-                  <InterchangeView embedded />
-                </div>
-              </div>
-            </div>
-          </section>
-
-          {/* AI assistant */}
-          <section className="rounded-lg border border-border bg-surface p-4">
-            <h2 className="text-sm font-semibold text-text-primary">{t("settings.aiAssistant")}</h2>
-            <div className="mt-2 flex items-center justify-between gap-3">
-              <div className="min-w-0">
-                <p className="text-xs text-text-secondary">{t("settings.aiStatus")}</p>
-                {statusLoading ? (
-                  <p className="mt-0.5 flex items-center gap-1.5 text-xs text-text-secondary">
-                    <LoaderCircle size={12} className="animate-spin" aria-hidden />
-                    {t("settings.aiChecking")}
-                  </p>
-                ) : status ? (
-                  <p className="mt-0.5 text-xs text-text-primary">
-                    {status.configured
-                      ? t("settings.aiStatusConfigured", {
-                          provider: status.provider || t("settings.aiFallbackName"),
-                          model: status.model || t("settings.aiNoModel"),
-                          enabled: status.enabled ? t("settings.aiYes") : t("settings.aiNo"),
-                        })
-                      : t("settings.aiStatusNotConfigured", {
-                          provider: status.provider || t("settings.aiFallbackName"),
-                        })}
-                  </p>
-                ) : (
-                  <p className="mt-0.5 text-xs text-danger">{statusError ?? t("settings.aiStatusUnknown")}</p>
-                )}
-                {status && !status.configured && status.reason && (
-                  <p className="mt-0.5 text-xs text-text-secondary">{status.reason}</p>
-                )}
-              </div>
+      <div className="divide-y divide-border">
+        {/* General: appearance | language, then import/export */}
+        <section className="p-3">
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <SectionLabel>{t("settings.appearance")}</SectionLabel>
               <button
                 type="button"
-                onClick={() => void loadStatus()}
-                disabled={statusLoading}
-                className="flex shrink-0 items-center gap-1 rounded-sm border border-border bg-bg px-2 py-1 text-xs hover:bg-surface-higher disabled:opacity-50"
+                role="switch"
+                aria-checked={themeMode === "dark"}
+                aria-label={t("theme.switchLabel", { theme: themeMode === "dark" ? "light" : "dark" })}
+                onClick={() => setThemeMode(themeMode === "dark" ? "light" : "dark")}
+                className="mt-2 flex items-center gap-2"
               >
-                <RotateCw size={12} aria-hidden />
-                {t("settings.aiCheckStatus")}
+                <span
+                  className={`relative h-4 w-8 rounded-full transition-colors ${
+                    themeMode === "dark" ? "bg-accent" : "bg-border"
+                  }`}
+                >
+                  <span
+                    className="absolute top-0.5 h-3 w-3 rounded-full bg-white transition-all"
+                    style={{ left: themeMode === "dark" ? 18 : 2 }}
+                  />
+                </span>
+                {themeMode === "dark" ? (
+                  <Moon size={14} className="text-text-secondary" aria-hidden />
+                ) : (
+                  <Sun size={14} className="text-text-secondary" aria-hidden />
+                )}
+                <span className="text-xs text-text-primary">
+                  {themeMode === "dark" ? t("theme.dark") : t("theme.light")}
+                </span>
               </button>
             </div>
+            <div>
+              <SectionLabel>{t("ai.language")}</SectionLabel>
+              <Select
+                value={locale}
+                onChange={(e) => setLocale(e.target.value as Locale)}
+                className="mt-2 w-full"
+                aria-label={t("ai.language")}
+              >
+                {(Object.keys(LOCALE_NAMES) as Locale[]).map((l) => (
+                  <option key={l} value={l}>
+                    {LOCALE_NAMES[l]}
+                  </option>
+                ))}
+              </Select>
+            </div>
+          </div>
 
-            <form onSubmit={(e) => void handleSave(e)} className="mt-4 space-y-3">
-              <label className="flex h-8 items-center gap-2 text-sm text-text-primary">
-                <input
-                  type="checkbox"
-                  checked={enabled}
-                  onChange={(e) => setEnabled(e.target.checked)}
-                  className="accent-accent"
+          <div className="mt-2">
+            <InterchangeView embedded />
+          </div>
+        </section>
+
+        {/* AI assistant */}
+        <section className="p-3">
+          <div className="flex items-center justify-between gap-2">
+            <h2 className="text-sm font-semibold text-text-primary">{t("settings.aiAssistant")}</h2>
+            {/* Enable switch, styled like the status toggle */}
+            <button
+              type="button"
+              role="switch"
+              aria-checked={enabled}
+              aria-label={t("settings.aiEnable")}
+              onClick={() => {
+                markTouched();
+                setEnabled((v) => !v);
+              }}
+              className={`flex items-center gap-1 rounded-sm border border-border bg-bg px-2 py-1 text-xs hover:bg-surface-higher ${
+                enabled ? "border-accent text-accent" : "text-text-secondary"
+              }`}
+            >
+              <span
+                className={`relative h-3.5 w-7 rounded-full transition-colors ${
+                  enabled ? "bg-accent" : "bg-border"
+                }`}
+              >
+                <span
+                  className="absolute top-0.5 h-2.5 w-2.5 rounded-full bg-white transition-all"
+                  style={{ left: enabled ? 16 : 2 }}
                 />
-                {t("settings.aiEnable")}
-              </label>
-              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                <label className="block">
-                  <span className="mb-1 block text-xs text-text-secondary">{t("settings.aiProvider")}</span>
-                  <select
-                    value={provider}
-                    onChange={(e) => handleProviderChange(e.target.value)}
-                    className={inputCls}
-                  >
-                    <option value="ollama">{t("settings.aiProviderOllama")}</option>
-                    <option value="lmstudio">{t("settings.aiProviderLmStudio")}</option>
-                    <option value="opencode-go">{t("settings.aiProviderOpencodeGo")}</option>
-                    <option value="gemini">{t("settings.aiProviderGemini")}</option>
-                    <option value="gpt">{t("settings.aiProviderGpt")}</option>
-                    <option value="claude">{t("settings.aiProviderClaude")}</option>
-                    <option value="custom">{t("settings.aiProviderCustom")}</option>
-                  </select>
-                </label>
-                <label className="block">
-                  <span className="mb-1 block text-xs text-text-secondary">{t("settings.model")}</span>
-                  <input
-                    type="text"
-                    value={model}
-                    onChange={(e) => setModel(e.target.value)}
-                    placeholder="llama3.2"
-                    className={inputCls}
-                  />
-                </label>
-                <label className="block">
-                  <span className="mb-1 block text-xs text-text-secondary">{t("settings.apiBaseUrl")}</span>
-                  <input
-                    type="text"
-                    value={apiBase}
-                    onChange={(e) => {
-                      setApiBase(e.target.value);
-                      setProvider((p) =>
-                        p in PROVIDER_PRESETS && PROVIDER_PRESETS[p].url !== e.target.value
-                          ? "custom"
-                          : p,
-                      );
-                    }}
-                    placeholder="https://api.openai.com/v1"
-                    className={inputCls}
-                  />
-                </label>
-                <label className="block">
-                  <span className="mb-1 block text-xs text-text-secondary">{t("settings.apiKey")}</span>
-                  <input
-                    type="password"
-                    value={apiKey}
-                    onChange={(e) => setApiKey(e.target.value)}
-                    placeholder={t("settings.optional")}
-                    className={inputCls}
-                  />
-                  {["gemini", "gpt", "claude"].includes(provider) && !apiKey.trim() && (
-                    <span className="mt-1 block text-xs text-warning">
-                      {t("settings.aiKeyRequired")}
-                    </span>
-                  )}
-                </label>
-                <label className="block">
-                  <span className="mb-1 block text-xs text-text-secondary">{t("ai.mcpPermissions")}</span>
-                  <select
-                    value={mcpPermissions}
-                    onChange={(e) => setMcpPermissions(e.target.value)}
-                    className={inputCls}
-                  >
-                    <option value="read">{t("ai.mcpRead")}</option>
-                    <option value="write">{t("ai.mcpWrite")}</option>
-                    <option value="full">{t("ai.mcpFull")}</option>
-                  </select>
-                </label>
-              </div>
-              <div className="flex items-center gap-2">
-                <button
-                  type="submit"
-                  disabled={saving}
-                  className="flex items-center gap-1.5 rounded-sm bg-accent px-2.5 py-1 text-xs font-medium text-[var(--qc-bg)] hover:bg-accent-hover disabled:opacity-50"
-                >
-                  {saving ? (
-                    <LoaderCircle size={14} className="animate-spin" aria-hidden />
-                  ) : (
-                    <Save size={14} aria-hidden />
-                  )}
-                  {t("settings.save")}
-                </button>
-                {saved && (
-                  <span
-                    role="status"
-                    className="flex items-center gap-1 text-xs font-medium text-success"
-                  >
-                    <Check size={12} aria-hidden />
-                    {t("settings.saved")}
-                  </span>
-                )}
-              </div>
-            </form>
+              </span>
+              {t("settings.aiEnable")}
+            </button>
+          </div>
 
-            {/* Semantic index */}
-            <div className="mt-4 border-t border-border pt-3">
-              <h3 className="text-xs font-semibold text-text-primary">{t("ai.indexSection")}</h3>
-              <p className="mt-0.5 text-xs text-text-secondary">{t("ai.indexHint")}</p>
-              {indexStatus?.indexed ? (
-                <p className="mt-1 text-xs text-text-primary">
-                  {t("ai.indexStatusReady", {
-                    chunks: String(indexStatus.chunks),
-                    model: indexStatus.model,
-                  })}
+          <div className="mt-2 flex items-center justify-between gap-3">
+            <div className="min-w-0">
+              <p className="text-xs text-text-secondary">{t("settings.aiStatus")}</p>
+              {statusLoading ? (
+                <p className="mt-0.5 flex items-center gap-1.5 text-xs text-text-secondary">
+                  <LoaderCircle size={12} className="animate-spin" aria-hidden />
+                  {t("settings.aiChecking")}
+                </p>
+              ) : status ? (
+                <p className="mt-0.5 text-xs text-text-primary">
+                  {status.configured
+                    ? t("settings.aiStatusConfigured", {
+                        provider: status.provider || t("settings.aiFallbackName"),
+                        model: status.model || t("settings.aiNoModel"),
+                        enabled: status.enabled ? t("settings.aiYes") : t("settings.aiNo"),
+                      })
+                    : t("settings.aiStatusNotConfigured", {
+                        provider: status.provider || t("settings.aiFallbackName"),
+                      })}
                 </p>
               ) : (
-                <p className="mt-1 text-xs text-text-secondary">{t("ai.indexStatusNone")}</p>
+                <p className="mt-0.5 text-xs text-danger">{statusError ?? t("settings.aiStatusUnknown")}</p>
               )}
-              {indexError && <p className="mt-1 text-xs text-danger">{indexError}</p>}
-              <div className="mt-2 flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => void buildIndex()}
-                  disabled={indexBusy}
-                  className="flex items-center gap-1.5 rounded-sm border border-border bg-bg px-2.5 py-1 text-xs hover:bg-surface-higher disabled:opacity-50"
+              {status && !status.configured && status.reason && (
+                <p className="mt-0.5 text-xs text-text-secondary">{status.reason}</p>
+              )}
+            </div>
+            <Button
+              variant="secondary"
+              onClick={() => void loadStatus()}
+              disabled={statusLoading}
+              icon={<RotateCw size={12} aria-hidden />}
+            >
+              {t("settings.aiCheckStatus")}
+            </Button>
+          </div>
+
+          <div className="mt-3 grid grid-cols-1 gap-3">
+            <div className="grid grid-cols-2 gap-3">
+              <Field label={t("settings.aiProvider")}>
+                <Select
+                  value={provider}
+                  onChange={(e) => handleProviderChange(e.target.value)}
+                  className="w-full"
                 >
-                  {indexBusy ? (
+                  <option value="ollama">{t("settings.aiProviderOllama")}</option>
+                  <option value="lmstudio">{t("settings.aiProviderLmStudio")}</option>
+                  <option value="opencode-go">{t("settings.aiProviderOpencodeGo")}</option>
+                  <option value="gemini">{t("settings.aiProviderGemini")}</option>
+                  <option value="gpt">{t("settings.aiProviderGpt")}</option>
+                  <option value="claude">{t("settings.aiProviderClaude")}</option>
+                  <option value="custom">{t("settings.aiProviderCustom")}</option>
+                </Select>
+              </Field>
+              <Field label={t("settings.model")}>
+                {models.length > 0 ? (
+                  <Select
+                    value={model}
+                    onChange={(e) => { markTouched(); setModel(e.target.value); }}
+                    className="w-full"
+                  >
+                    {!models.includes(model) && model && <option value={model}>{model}</option>}
+                    {models.map((m) => (
+                      <option key={m} value={m}>
+                        {m}
+                      </option>
+                    ))}
+                  </Select>
+                ) : (
+                  <Input
+                    type="text"
+                    value={model}
+                    onChange={(e) => { markTouched(); setModel(e.target.value); }}
+                    placeholder="llama3.2"
+                    className="w-full"
+                  />
+                )}
+              </Field>
+            </div>
+            <Field label={t("settings.apiBaseUrl")}>
+              <Input
+                type="text"
+                value={apiBase}
+                onChange={(e) => {
+                  markTouched(); setApiBase(e.target.value);
+                  setProvider((p) =>
+                    p in PROVIDER_PRESETS && PROVIDER_PRESETS[p].url !== e.target.value
+                      ? "custom"
+                      : p,
+                  );
+                }}
+                placeholder="https://api.openai.com/v1"
+                className="w-full"
+              />
+            </Field>
+            <div className="grid grid-cols-2 gap-3">
+              <Field label={t("settings.apiKey")}>
+                <Input
+                  type="password"
+                  value={apiKey}
+                  onChange={(e) => setApiKey(e.target.value)}
+                  placeholder={t("settings.optional")}
+                  className="w-full"
+                />
+                {["gemini", "gpt", "claude"].includes(provider) && !apiKey.trim() && (
+                  <span className="mt-1 block text-xs text-warning">
+                    {t("settings.aiKeyRequired")}
+                  </span>
+                )}
+              </Field>
+              <Field label={t("ai.mcpPermissions")}>
+                <Select
+                  value={mcpPermissions}
+                  onChange={(e) => { markTouched(); setMcpPermissions(e.target.value); }}
+                  className="w-full"
+                >
+                  <option value="read">{t("ai.mcpRead")}</option>
+                  <option value="write">{t("ai.mcpWrite")}</option>
+                  <option value="full">{t("ai.mcpFull")}</option>
+                </Select>
+              </Field>
+            </div>
+            {savedFlash && (
+              <p className="flex items-center gap-1.5 text-xs text-success" role="status">
+                <Check size={12} aria-hidden />
+                {t("settings.saved")}
+              </p>
+            )}
+          </div>
+
+          {/* Semantic index — right of the permissions row */}
+          <div className="mt-3 border-t border-border pt-3">
+            <div className="flex items-center gap-1.5">
+              <h3 className="text-xs font-semibold text-text-primary">{t("ai.indexSection")}</h3>
+              <IconButton
+                label={t("ai.indexHint")}
+                title={t("ai.indexHint")}
+                size="sm"
+                aria-expanded={helpOpen === "index"}
+                onClick={() => setHelpOpen(helpOpen === "index" ? null : "index")}
+              >
+                <HelpCircle size={12} aria-hidden />
+              </IconButton>
+            </div>
+            {helpOpen === "index" && (
+              <p className="mt-1 text-xs text-text-secondary">{t("ai.indexHint")}</p>
+            )}
+            {indexStatus?.indexed ? (
+              <p className="mt-1 text-xs text-text-primary">
+                {t("ai.indexStatusReady", {
+                  chunks: String(indexStatus.chunks),
+                  model: indexStatus.model,
+                })}
+              </p>
+            ) : (
+              <p className="mt-1 text-xs text-text-secondary">{t("ai.indexStatusNone")}</p>
+            )}
+            {indexError && <p className="mt-1 text-xs text-danger">{indexError}</p>}
+            <div className="mt-2 flex items-center gap-2">
+              <Button
+                variant="secondary"
+                onClick={() => void buildIndex()}
+                disabled={indexBusy}
+                icon={
+                  indexBusy ? (
                     <LoaderCircle size={12} className="animate-spin" aria-hidden />
                   ) : (
                     <RotateCw size={12} aria-hidden />
-                  )}
-                  {indexStatus?.indexed ? t("ai.indexRebuild") : t("ai.indexBuild")}
-                </button>
-                {indexStatus?.indexed && (
-                  <button
-                    type="button"
-                    onClick={() => void deleteIndex()}
-                    className="flex items-center gap-1 rounded-sm border border-border bg-bg px-2 py-1 text-xs text-danger hover:bg-danger/10"
-                  >
-                    <Trash2 size={12} aria-hidden />
-                    {t("ai.indexDelete")}
-                  </button>
-                )}
-              </div>
-            </div>
-          </section>
-
-          {/* Pseudonyms */}
-          <section className="rounded-lg border border-border bg-surface p-4">
-            <h2 className="text-sm font-semibold text-text-primary">{t("ai.pseudonymsSection")}</h2>
-            <p className="mt-1 text-xs text-text-secondary">{t("ai.pseudonymsHint")}</p>            <form onSubmit={(e) => void addPseudonym(e)} className="mt-3 flex flex-wrap items-end gap-2">
-              <label className="block flex-1">
-                <span className="mb-1 block text-xs text-text-secondary">{t("ai.pseudonymOriginal")}</span>
-                <input
-                  value={pseudoOriginal}
-                  onChange={(e) => setPseudoOriginal(e.target.value)}
-                  placeholder={t("ai.pseudonymOriginalPlaceholder")}
-                  className={inputCls}
-                />
-              </label>
-              <label className="block flex-1">
-                <span className="mb-1 block text-xs text-text-secondary">{t("ai.pseudonymPseudonym")}</span>
-                <input
-                  value={pseudoName}
-                  onChange={(e) => setPseudoName(e.target.value)}
-                  placeholder={t("ai.pseudonymPseudonymPlaceholder")}
-                  className={inputCls}
-                />
-              </label>
-              <button
-                type="submit"
-                disabled={pseudoOriginal.trim().length < 2}
-                className="rounded-sm bg-accent px-2.5 py-1 text-xs font-medium text-[var(--qc-bg)] hover:bg-accent-hover disabled:opacity-40"
+                  )
+                }
               >
-                {t("ai.pseudonymAdd")}
-              </button>
-            </form>
-            {pseudoError && <p className="mt-2 text-xs text-danger">{pseudoError}</p>}
-            {pseudonyms.length === 0 ? (
-              <p className="mt-2 text-xs text-text-secondary">{t("ai.pseudonymNone")}</p>
-            ) : (
-              <div className="mt-3 max-h-48 overflow-auto rounded-sm border border-border bg-bg">
-                <table className="w-full border-collapse">
-                  <tbody>
-                    {pseudonyms.map((p) => (
-                      <tr key={p.original} className="border-b border-border last:border-0">
-                        <td className="px-2 py-1.5 text-sm">{p.original}</td>
-                        <td className="px-2 py-1.5 text-sm text-text-secondary">→ {p.pseudonym}</td>
-                        <td className="px-2 py-1.5 text-right">
-                          <button
-                            type="button"
-                            title={t("ai.pseudonymDelete")}
-                            onClick={() => void removePseudonym(p.original)}
-                            className="rounded-sm p-1 text-text-secondary hover:bg-danger/10 hover:text-danger"
-                          >
-                            <Trash2 size={13} aria-hidden />
-                          </button>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </section>
-
-          {/* Colour scheme */}
-          <section className="rounded-lg border border-border bg-surface p-4">
-            <h2 className="text-sm font-semibold text-text-primary">{t("settings.colourScheme")}</h2>
-            <p className="mt-1 text-xs text-text-secondary">{t("settings.colourSchemeHint")}</p>
-            {paletteError && <p className="mt-1 text-xs text-danger">{paletteError}</p>}
-            <div className="mt-3 grid grid-cols-12 gap-1">
-              {palette.map((color, i) => (
-                <label
-                  key={i}
-                  className="relative h-6 cursor-pointer overflow-hidden rounded-sm border border-border"
-                  style={{ backgroundColor: color }}
-                  title={color}
+                {indexStatus?.indexed ? t("ai.indexRebuild") : t("ai.indexBuild")}
+              </Button>
+              {indexStatus?.indexed && (
+                <Button
+                  variant="danger"
+                  onClick={() => void deleteIndex()}
+                  icon={<Trash2 size={12} aria-hidden />}
                 >
-                  <input
-                    type="color"
-                    value={color}
-                    onChange={(e) =>
-                      setPalette((p) => p.map((c, j) => (j === i ? e.target.value : c)))
-                    }
-                    className="absolute inset-0 h-full w-full cursor-pointer opacity-0"
-                    aria-label={`Colour ${i + 1}`}
-                  />
-                </label>
-              ))}
-            </div>
-            <div className="mt-3 flex items-center gap-2">
-              <button
-                type="button"
-                onClick={() => void savePalette()}
-                className="rounded-sm bg-accent px-2.5 py-1 text-xs font-medium text-[var(--qc-bg)] hover:bg-accent-hover"
-              >
-                {t("settings.colourSchemeSave")}
-              </button>
-              <button
-                type="button"
-                onClick={() => void resetPalette()}
-                className="rounded-sm border border-border bg-bg px-2.5 py-1 text-xs hover:bg-surface-higher"
-              >
-                {t("settings.colourSchemeReset")}
-              </button>
-              {paletteSaved && (
-                <span role="status" className="flex items-center gap-1 text-xs font-medium text-success">
-                  <Check size={12} aria-hidden />
-                  {t("settings.colourSchemeSaved")}
-                </span>
+                  {t("ai.indexDelete")}
+                </Button>
               )}
             </div>
-          </section>
+          </div>
+        </section>
 
-          {/* About */}
-          <section className="rounded-lg border border-border bg-surface p-4">
-            <h2 className="text-sm font-semibold text-text-primary">{t("settings.about")}</h2>
-            <p className="mt-1 text-xs text-text-secondary">{t("settings.aboutText")}</p>
-          </section>
-        </div>
+        {/* Pseudonyms */}
+        <section className="p-3">
+          <h2 className="text-sm font-semibold text-text-primary">{t("ai.pseudonymsSection")}</h2>
+          <form onSubmit={(e) => void addPseudonym(e)} className="mt-2 flex flex-wrap items-end gap-2">
+            <Field label={t("ai.pseudonymOriginal")} className="min-w-0 flex-1">
+              <Input
+                value={pseudoOriginal}
+                onChange={(e) => setPseudoOriginal(e.target.value)}
+                placeholder={t("ai.pseudonymOriginalPlaceholder")}
+                className="w-full"
+              />
+            </Field>
+            <Field label={t("ai.pseudonymPseudonym")} className="min-w-0 flex-1">
+              <Input
+                value={pseudoName}
+                onChange={(e) => setPseudoName(e.target.value)}
+                placeholder={t("ai.pseudonymPseudonymPlaceholder")}
+                className="w-full"
+              />
+            </Field>
+            <Button variant="primary" type="submit" disabled={pseudoOriginal.trim().length < 2}>
+              {t("ai.pseudonymAdd")}
+            </Button>
+          </form>
+          {pseudoError && <p className="mt-2 text-xs text-danger">{pseudoError}</p>}
+          {pseudonyms.length === 0 ? (
+            <p className="mt-2 text-xs text-text-secondary">{t("ai.pseudonymNone")}</p>
+          ) : (
+            <div className="mt-3 max-h-48 overflow-auto rounded-sm border border-border bg-bg">
+              <table className="w-full border-collapse">
+                <tbody>
+                  {pseudonyms.map((p) => (
+                    <tr key={p.original} className="border-b border-border last:border-0">
+                      <td className="px-2 py-1.5 text-sm">{p.original}</td>
+                      <td className="px-2 py-1.5 text-sm text-text-secondary">→ {p.pseudonym}</td>
+                      <td className="px-2 py-1.5 text-right">
+                        <IconButton
+                          label={t("ai.pseudonymDelete")}
+                          title={t("ai.pseudonymDelete")}
+                          size="row"
+                          onClick={() => void removePseudonym(p.original)}
+                          className="hover:bg-danger/10 hover:text-danger"
+                        >
+                          <Trash2 size={13} aria-hidden />
+                        </IconButton>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </section>
+
+        {/* App updates */}
+        <section className="p-3">
+          <h2 className="text-sm font-semibold text-text-primary">{t("settings.updatesSection")}</h2>
+          <div className="mt-2 flex items-center gap-2">
+            <button
+              type="button"
+              role="switch"
+              aria-checked={autoUpdate}
+              aria-label={t("settings.updatesAuto")}
+              onClick={() => void toggleAutoUpdate()}
+              className="flex items-center gap-2"
+            >
+              <span
+                className={`relative h-4 w-8 rounded-full transition-colors ${
+                  autoUpdate ? "bg-accent" : "bg-border"
+                }`}
+              >
+                <span
+                  className="absolute top-0.5 h-3 w-3 rounded-full bg-white transition-all"
+                  style={{ left: autoUpdate ? 18 : 2 }}
+                />
+              </span>
+              <span className="text-xs text-text-primary">{t("settings.updatesAuto")}</span>
+            </button>
+          </div>
+          <div className="mt-2 flex flex-wrap items-end gap-3">
+            <Field label={t("settings.updatesInterval")} className="w-40">
+              <Select
+                value={checkInterval}
+                onChange={(e) => void setIntervalAndSave(e.target.value as UpdatesSettings["check_interval"])}
+                className="w-full"
+              >
+                <option value="daily">{t("settings.updatesIntervalDaily")}</option>
+                <option value="weekly">{t("settings.updatesIntervalWeekly")}</option>
+                <option value="never">{t("settings.updatesIntervalNever")}</option>
+              </Select>
+            </Field>
+            <Button
+              variant="secondary"
+              icon={
+                updatesStatus === "checking" ? (
+                  <LoaderCircle size={12} className="animate-spin" aria-hidden />
+                ) : (
+                  <RotateCw size={12} aria-hidden />
+                )
+              }
+              disabled={updatesStatus === "checking" || updatesStatus === "downloading"}
+              onClick={() => void useUpdatesStore.getState().checkNow()}
+            >
+              {t("settings.updatesCheckNow")}
+            </Button>
+            {updatesStatus === "available" && updatesInfo && (
+              <Button
+                variant="primary"
+                icon={<Download size={12} aria-hidden />}
+                onClick={() => void useUpdatesStore.getState().install()}
+              >
+                {t("settings.updatesInstall")}
+              </Button>
+            )}
+          </div>
+          {updatesStatus === "checking" && (
+            <p className="mt-2 text-xs text-text-secondary">{t("settings.updatesChecking")}</p>
+          )}
+          {updatesStatus === "up-to-date" && (
+            <p className="mt-2 flex items-center gap-1.5 text-xs text-success" role="status">
+              <Check size={12} aria-hidden />
+              {t("settings.updatesUpToDate")}
+            </p>
+          )}
+          {updatesStatus === "available" && updatesInfo && (
+            <p className="mt-2 text-xs text-text-primary">
+              {t("settings.updatesAvailable", { version: updatesInfo.version })}
+            </p>
+          )}
+          {updatesStatus === "downloading" && (
+            <div className="mt-2">
+              <div className="h-1 w-full overflow-hidden rounded-full bg-border">
+                <div className="h-full rounded-full bg-accent transition-all" style={{ width: `${updatesProgress}%` }} />
+              </div>
+              <p className="mt-1 text-xs text-text-secondary">
+                {t("settings.updatesDownloading", { pct: String(updatesProgress) })}
+              </p>
+            </div>
+          )}
+          {updatesStatus === "error" && (
+            <p className="mt-2 text-xs text-danger">
+              {updatesError === "desktop only"
+                ? t("settings.updatesDesktopOnly")
+                : t("settings.updatesError", { detail: updatesError ?? "" })}
+            </p>
+          )}
+        </section>
+
+        {/* About */}
+        <section className="p-3">
+          <h2 className="text-sm font-semibold text-text-primary">{t("settings.about")}</h2>
+          <p className="mt-1 text-xs text-text-secondary">{t("settings.aboutText")}</p>
+        </section>
       </div>
-    </div>
+    </LeftBar>
   );
 }

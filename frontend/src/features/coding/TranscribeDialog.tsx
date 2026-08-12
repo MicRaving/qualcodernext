@@ -1,16 +1,24 @@
 /**
- * TranscribeDialog — configure and START a background transcription.
+ * TranscribeDialog — one panel for both AV tasks: configure and START a
+ * background transcription, or detect and mark speakers in the transcript.
  * The job runs in the queue; progress is shown in the top bar (the dialog
  * closes immediately after starting).
  */
 import { useEffect, useState, type FormEvent } from "react";
-import { CircleAlert, LoaderCircle, Mic, X } from "lucide-react";
-import { api, type TranscribeStatus } from "@/lib/api";
+import { Captions, CircleAlert, LoaderCircle, Mic, Users } from "lucide-react";
+import { api, type SpeakerInfo, type TranscribeStatus } from "@/lib/api";
+import { Button, ErrorBanner, Field, Input, Modal, Select } from "@/components/ui/orchestrator";
 import { useI18n } from "@/lib/i18n";
 import { useProjectStore } from "@/stores/project";
 
-const inputCls =
-  "h-8 w-full rounded-sm border border-border bg-bg px-2 text-sm outline-none focus:border-accent";
+const IDENTIFIER_OPTIONS = [
+  { key: "name", labelKey: "avCoder.speakersName" },
+  { key: "hash", labelKey: "avCoder.speakersHash" },
+  { key: "at", labelKey: "avCoder.speakersAt" },
+  { key: "bracket", labelKey: "avCoder.speakersBracket" },
+  { key: "brace", labelKey: "avCoder.speakersBrace" },
+  { key: "custom", labelKey: "avCoder.speakersCustom" },
+] as const;
 
 interface Props {
   sourceId: number;
@@ -21,6 +29,10 @@ export function TranscribeDialog({ sourceId, onClose }: Props) {
   const { t } = useI18n();
   const codeTree = useProjectStore((s) => s.codeTree);
   const codeOptions = codeTree.filter((c) => c.kind === "code");
+  const source = useProjectStore((s) => s.sources.find((src) => src.id === sourceId));
+  const transcriptId = source?.av_text_id ?? null;
+
+  const [tab, setTab] = useState<"transcribe" | "speakers">("transcribe");
 
   const [status, setStatus] = useState<TranscribeStatus | null>(null);
   const [engine, setEngine] = useState("whisper");
@@ -35,9 +47,17 @@ export function TranscribeDialog({ sourceId, onClose }: Props) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const sourceName = useProjectStore((s) =>
-    s.sources.find((src) => src.id === sourceId)?.name ?? `source ${sourceId}`,
-  );
+  // Speakers tab state.
+  const [identifiers, setIdentifiers] = useState<string[]>(["name"]);
+  const [customRegex, setCustomRegex] = useState("");
+  const [speakers, setSpeakers] = useState<SpeakerInfo[]>([]);
+  const [speakerTurns, setSpeakerTurns] = useState<{ name: string; pos0: number; pos1: number }[]>([]);
+  const [speakerSelected, setSpeakerSelected] = useState<Record<string, boolean>>({});
+  const [speakerBusy, setSpeakerBusy] = useState(false);
+  const [speakerError, setSpeakerError] = useState<string | null>(null);
+  const [speakerDone, setSpeakerDone] = useState<string | null>(null);
+
+  const sourceName = source?.name ?? `source ${sourceId}`;
 
   useEffect(() => {
     api
@@ -87,35 +107,94 @@ export function TranscribeDialog({ sourceId, onClose }: Props) {
     }
   }
 
+  async function detectSpeakers() {
+    setSpeakerBusy(true);
+    setSpeakerError(null);
+    setSpeakerDone(null);
+    try {
+      const fid = transcriptId ?? sourceId;
+      const res = await api.speakersDetect({ fid, identifiers, custom_regex: customRegex });
+      setSpeakers(res.speakers);
+      setSpeakerTurns(res.turns);
+      setSpeakerSelected(Object.fromEntries(res.speakers.map((s) => [s.name, true])));
+    } catch (e) {
+      setSpeakerError(e instanceof Error ? e.message : "Failed to detect speakers");
+    } finally {
+      setSpeakerBusy(false);
+    }
+  }
+
+  async function markSpeakers() {
+    setSpeakerBusy(true);
+    setSpeakerError(null);
+    setSpeakerDone(null);
+    try {
+      const fid = transcriptId ?? sourceId;
+      const selected = Object.entries(speakerSelected)
+        .filter(([, v]) => v)
+        .map(([name]) => name);
+      const res = await api.speakersMark({ fid, identifiers, custom_regex: customRegex, selected });
+      setSpeakers([]);
+      setSpeakerTurns([]);
+      await useProjectStore.getState().refreshProject();
+      setSpeakerDone(
+        t("avCoder.speakersDone", {
+          turns: String(res.turns_marked),
+          codes: String(res.codes_created),
+        }),
+      );
+      setTab("transcribe");
+    } catch (e) {
+      setSpeakerError(e instanceof Error ? e.message : "Failed to mark speakers");
+    } finally {
+      setSpeakerBusy(false);
+    }
+  }
+
   const whisperAvailable = status?.engines.whisper ?? false;
   const noscribeAvailable = status?.engines.noscribe ?? false;
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-bg/70"
-      onMouseDown={(e) => {
-        if (e.target === e.currentTarget && !busy) onClose();
-      }}
-      role="dialog"
-      aria-modal="true"
-      aria-label={t("transcribe.title")}
+    <Modal
+      open
+      onClose={onClose}
+      closeDisabled={busy || speakerBusy}
+      title={t("transcribe.title")}
+      icon={<Mic size={15} aria-hidden />}
+      size="lg"
     >
-      <div className="w-[26rem] max-w-[92vw] rounded-lg border border-border bg-surface shadow-xl">
-        <div className="flex items-center gap-2 border-b border-border px-3 py-2">
-          <Mic size={15} aria-hidden />
-          <span className="text-sm font-semibold text-text-primary">{t("transcribe.title")}</span>
-          <div className="flex-1" />
+      <div className="border-b border-border px-3 py-2">
+        <div className="flex w-fit items-center gap-0.5 rounded-sm border border-border bg-bg p-0.5">
           <button
             type="button"
-            onClick={onClose}
-            disabled={busy}
-            aria-label={t("common.close")}
-            className="rounded-sm p-1 text-text-secondary hover:bg-surface-higher hover:text-text-primary disabled:opacity-40"
+            onClick={() => setTab("transcribe")}
+            aria-pressed={tab === "transcribe"}
+            className={`flex items-center gap-1 rounded-sm px-2 py-1 text-xs font-medium ${
+              tab === "transcribe"
+                ? "bg-surface-higher text-accent"
+                : "text-text-secondary hover:text-text-primary"
+            }`}
           >
-            <X size={14} aria-hidden />
+            <Mic size={12} aria-hidden />
+            {t("transcribe.button")}
+          </button>
+          <button
+            type="button"
+            onClick={() => setTab("speakers")}
+            aria-pressed={tab === "speakers"}
+            className={`flex items-center gap-1 rounded-sm px-2 py-1 text-xs font-medium ${
+              tab === "speakers"
+                ? "bg-surface-higher text-accent"
+                : "text-text-secondary hover:text-text-primary"
+            }`}
+          >
+            <Users size={12} aria-hidden />
+            {t("avCoder.markSpeakers")}
           </button>
         </div>
+      </div>
 
+      {tab === "transcribe" ? (
         <form onSubmit={(ev) => void handleStart(ev)} className="space-y-3 p-3">
           {!whisperAvailable && !noscribeAvailable && (
             <p className="flex items-center gap-1.5 text-xs text-danger">
@@ -124,30 +203,24 @@ export function TranscribeDialog({ sourceId, onClose }: Props) {
             </p>
           )}
 
-          <label className="block">
-            <span className="mb-1 block text-xs text-text-secondary">{t("transcribe.engine")}</span>
-            <select
-              value={engine}
-              onChange={(e) => setEngine(e.target.value)}
-              className={inputCls}
-            >
+          <Field label={t("transcribe.engine")}>
+            <Select value={engine} onChange={(e) => setEngine(e.target.value)} className="w-full">
               <option value="whisper" disabled={!whisperAvailable}>
                 Whisper (faster-whisper)
               </option>
               <option value="noscribe" disabled={!noscribeAvailable}>
                 noScribe
               </option>
-            </select>
-          </label>
+            </Select>
+          </Field>
 
           {engine === "whisper" && (
             <>
-              <label className="block">
-                <span className="mb-1 block text-xs text-text-secondary">{t("transcribe.model")}</span>
-                <select
+              <Field label={t("transcribe.model")}>
+                <Select
                   value={model}
                   onChange={(e) => setModel(e.target.value)}
-                  className={inputCls}
+                  className="w-full"
                 >
                   {(status?.models ?? []).map((m) => (
                     <option key={m} value={m}>
@@ -155,20 +228,17 @@ export function TranscribeDialog({ sourceId, onClose }: Props) {
                       {status?.models_cached.includes(m) ? " ✓" : ""}
                     </option>
                   ))}
-                </select>
-              </label>
-              <label className="block">
-                <span className="mb-1 block text-xs text-text-secondary">
-                  {t("transcribe.language")}
-                </span>
-                <input
+                </Select>
+              </Field>
+              <Field label={t("transcribe.language")}>
+                <Input
                   type="text"
                   value={language}
                   onChange={(e) => setLanguage(e.target.value)}
                   placeholder={t("transcribe.languagePlaceholder")}
-                  className={inputCls}
+                  className="w-full"
                 />
-              </label>
+              </Field>
               <label className="flex items-center gap-2 text-sm text-text-primary">
                 <input
                   type="checkbox"
@@ -187,17 +257,16 @@ export function TranscribeDialog({ sourceId, onClose }: Props) {
                 />
                 {t("transcribe.vad")}
               </label>
-              <label className="block">
-                <span className="mb-1 block text-xs text-text-secondary">{t("transcribe.beamSize")}</span>
-                <input
+              <Field label={t("transcribe.beamSize")}>
+                <Input
                   type="number"
                   min={1}
                   max={10}
                   value={beamSize}
                   onChange={(e) => setBeamSize(Number(e.target.value))}
-                  className={inputCls}
+                  className="w-full"
                 />
-              </label>
+              </Field>
               <label className="flex items-center gap-2 text-sm text-text-primary">
                 <input
                   type="checkbox"
@@ -217,11 +286,11 @@ export function TranscribeDialog({ sourceId, onClose }: Props) {
                 {t("transcribe.segmentCoding")}
               </label>
               {segmentCoding && (
-                <select
+                <Select
                   value={segmentCid}
                   onChange={(e) => setSegmentCid(e.target.value)}
                   aria-label={t("transcribe.segmentCode")}
-                  className={inputCls}
+                  className="w-full"
                 >
                   <option value="">{t("coder.pickCode")}</option>
                   {codeOptions.map((c) => (
@@ -229,7 +298,7 @@ export function TranscribeDialog({ sourceId, onClose }: Props) {
                       {c.name}
                     </option>
                   ))}
-                </select>
+                </Select>
               )}
             </>
           )}
@@ -247,29 +316,134 @@ export function TranscribeDialog({ sourceId, onClose }: Props) {
           </p>
 
           <div className="flex justify-end gap-2 pt-1">
-            <button
-              type="button"
-              onClick={onClose}
-              disabled={busy}
-              className="rounded-sm border border-border bg-bg px-2.5 py-1 text-xs hover:bg-surface-higher disabled:opacity-40"
-            >
+            <Button variant="secondary" onClick={onClose} disabled={busy}>
               {t("common.cancel")}
-            </button>
-            <button
+            </Button>
+            <Button
+              variant="primary"
               type="submit"
               disabled={busy || !whisperAvailable}
-              className="flex items-center gap-1 rounded-sm bg-accent px-2.5 py-1 text-xs font-medium text-[var(--qc-bg)] hover:bg-accent-hover disabled:opacity-40"
+              icon={
+                busy ? (
+                  <LoaderCircle size={12} className="animate-spin" aria-hidden />
+                ) : (
+                  <Mic size={12} aria-hidden />
+                )
+              }
             >
-              {busy ? (
-                <LoaderCircle size={12} className="animate-spin" aria-hidden />
-              ) : (
-                <Mic size={12} aria-hidden />
-              )}
               {t("transcribe.start")}
-            </button>
+            </Button>
           </div>
         </form>
-      </div>
-    </div>
+      ) : (
+        <div className="space-y-3 p-3">
+          {!transcriptId && (
+            <p className="flex items-center gap-1.5 text-xs text-warning">
+              <CircleAlert size={13} aria-hidden />
+              {t("avCoder.speakersNoTranscript")}
+            </p>
+          )}
+
+          <fieldset className="space-y-1">
+            <legend className="text-xs font-medium text-text-secondary">
+              {t("avCoder.speakersIdentifiers")}
+            </legend>
+            {IDENTIFIER_OPTIONS.map((opt) => (
+              <label key={opt.key} className="flex items-center gap-2 text-sm text-text-primary">
+                <input
+                  type="checkbox"
+                  checked={identifiers.includes(opt.key)}
+                  onChange={(e) =>
+                    setIdentifiers((prev) =>
+                      e.target.checked
+                        ? [...prev, opt.key]
+                        : prev.filter((k) => k !== opt.key),
+                    )
+                  }
+                  className="accent-accent"
+                />
+                {t(opt.labelKey)}
+              </label>
+            ))}
+          </fieldset>
+          {identifiers.includes("custom") && (
+            <Input
+              value={customRegex}
+              onChange={(e) => setCustomRegex(e.target.value)}
+              placeholder={t("avCoder.speakersCustomPlaceholder")}
+              className="w-full"
+            />
+          )}
+
+          <Button
+            variant="secondary"
+            onClick={() => void detectSpeakers()}
+            disabled={speakerBusy || identifiers.length === 0}
+            icon={
+              speakerBusy ? (
+                <LoaderCircle size={12} className="animate-spin" aria-hidden />
+              ) : (
+                <Users size={12} aria-hidden />
+              )
+            }
+          >
+            {t("avCoder.speakersDetect")}
+          </Button>
+
+          {speakerError && <p className="text-xs text-danger">{speakerError}</p>}
+          {speakerDone && <ErrorBanner tone="success">{speakerDone}</ErrorBanner>}
+
+          {speakers.length > 0 && (
+            <div className="max-h-56 overflow-auto rounded-sm border border-border bg-bg">
+              <table className="w-full border-collapse">
+                <tbody>
+                  {speakers.map((s) => (
+                    <tr key={s.name} className="border-b border-border last:border-0">
+                      <td className="px-2 py-1.5">
+                        <input
+                          type="checkbox"
+                          checked={speakerSelected[s.name] ?? false}
+                          onChange={(e) =>
+                            setSpeakerSelected((prev) => ({
+                              ...prev,
+                              [s.name]: e.target.checked,
+                            }))
+                          }
+                          className="accent-accent"
+                          aria-label={s.name}
+                        />
+                      </td>
+                      <td className="px-2 py-1.5 text-sm font-medium">{s.name}</td>
+                      <td className="px-2 py-1.5 text-xs text-text-secondary">{s.count} turns</td>
+                      <td className="max-w-40 truncate px-2 py-1.5 text-xs text-text-secondary" title={s.example}>
+                        {s.example}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+          <div className="flex items-center justify-between pt-1">
+            <span className="text-xs text-text-secondary">
+              {speakerTurns.length > 0 ? `${speakerTurns.length} turn(s) detected` : ""}
+            </span>
+            <div className="flex items-center gap-2">
+              <Button variant="secondary" onClick={onClose} disabled={speakerBusy}>
+                {t("common.cancel")}
+              </Button>
+              <Button
+                variant="primary"
+                icon={<Captions size={12} aria-hidden />}
+                onClick={() => void markSpeakers()}
+                disabled={speakerBusy || speakers.length === 0}
+              >
+                {t("avCoder.speakersMark")}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+    </Modal>
   );
 }

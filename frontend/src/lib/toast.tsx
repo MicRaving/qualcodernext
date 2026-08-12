@@ -14,6 +14,7 @@ import {
   type ReactNode,
 } from "react";
 import { CheckCircle2, CircleAlert, Info, X, type LucideIcon } from "lucide-react";
+import { IconButton } from "@/components/ui/orchestrator";
 import {
   addToast,
   removeToast,
@@ -85,14 +86,13 @@ function ToastCard({ toast, onDismiss }: { toast: Toast; onDismiss: (id: number)
       <div className="flex items-start gap-2">
         <Icon size={14} className={`mt-px shrink-0 ${KIND_TEXT[toast.kind]}`} aria-hidden />
         <p className="min-w-0 flex-1 text-sm font-medium text-text-primary">{toast.message}</p>
-        <button
-          type="button"
+        <IconButton
+          label="Dismiss notification"
+          size="sm"
           onClick={() => onDismiss(toast.id)}
-          aria-label="Dismiss notification"
-          className="rounded-sm p-0.5 text-text-secondary hover:bg-surface-higher hover:text-text-primary"
         >
           <X size={12} aria-hidden />
-        </button>
+        </IconButton>
       </div>
     </div>
   );

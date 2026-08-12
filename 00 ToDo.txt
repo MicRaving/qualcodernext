@@ -1,2 +1,1 @@
-Compare the qualcoder4 sources with the qualcoder-rework. Outline all differences, not matter how small. Provide a summary
-Integrate the qualcoder4 features into qualcoder-rework. Do not simply copy code but integrate it into the rework's logic and code. Adhere to principles of good coding. Delegate all parallelizable tasks to subagents
+Update the readme with the current state of the project and features. Include a changelog since 3.8.2. Make sure the app can compile from clean sources. Then create a new branch in my repo and make it the master, push the source code

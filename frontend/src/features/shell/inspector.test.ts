@@ -63,11 +63,11 @@ describe("formatStats", () => {
     expect(stats).toEqual({ primary: "12 codings", secondary: "3 files" });
   });
 
-  it("formats source stats as text / image / av", () => {
+  it("formats source stats as one overall coding count", () => {
     const stats = formatStats(
       makeSourceDetails({ text_codings: 3, image_codings: 0, av_codings: 1 }),
     );
-    expect(stats).toEqual({ primary: "3 text", secondary: "0 image · 1 av" });
+    expect(stats).toEqual({ primary: "4 codings", secondary: "" });
   });
 
   it("handles zero counts", () => {

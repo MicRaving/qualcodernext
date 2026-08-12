@@ -24,7 +24,6 @@ import {
   Map as MapIcon,
   Network,
   Pencil,
-  Plus,
   Save,
   Sparkles,
   Trash2,
@@ -32,10 +31,14 @@ import {
   ZoomOut,
 } from "lucide-react";
 import { api, GRAPH_MODELS, type GraphData } from "@/lib/api";
-import { cn } from "@/lib/utils";
+
 import { useI18n } from "@/lib/i18n";
-import { Button } from "@/components/ui/orchestrator";
-import { ViewBackButton } from "@/components/shell/ViewBackButton";
+import { Button, ErrorBanner, Field, IconButton, Input, LeftBar, BarHeader, Menu, MenuItem, Modal, Select } from "@/components/ui/orchestrator";
+import { InlineNameEdit } from "@/components/ui/InlineNameEdit";
+
+import { RowContextMenu } from "@/features/shell/RowContextMenu";
+import { cls } from "@/components/ui/tokens";
+
 import { useProjectStore } from "@/stores/project";
 
 const NODE_W = 150;
@@ -224,12 +227,97 @@ function buildLines(data: GraphData, nodes: NodeView[]): LineView[] {
 
 const ARROW_MODES = ["solid_with_arrow", "solid_without_arrow", "dotted_with_arrow", "dotted_without_arrow"];
 
-/** Menu bar: graph picker + create/model/delete actions. */
-export function GraphsMenuBar() {
+/** In-app dialog for naming a new graph (no system prompt). */
+function GraphNameDialog({
+  open,
+  onClose,
+  onSubmit,
+}: {
+  open: boolean;
+  onClose: () => void;
+  onSubmit: (name: string) => void;
+}) {
+  const { t } = useI18n();
+  const [name, setName] = useState("");
+  useEffect(() => {
+    if (open) setName("");
+  }, [open]);
+  return (
+    <Modal
+      open={open}
+      onClose={onClose}
+      size="sm"
+      title={t("graphs.newGraph")}
+      ariaLabel={t("graphs.newGraph")}
+    >
+      <div className="p-3">
+        <Field label={t("graphs.graphName")}>
+          <Input
+            autoFocus
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && name.trim()) onSubmit(name.trim());
+            }}
+            placeholder={t("graphs.graphNamePlaceholder")}
+            className="w-full"
+          />
+        </Field>
+        <div className="mt-3 flex justify-end gap-2">
+          <Button variant="secondary" onClick={onClose}>
+            {t("common.cancel")}
+          </Button>
+          <Button variant="primary" disabled={!name.trim()} onClick={() => onSubmit(name.trim())}>
+            {t("graphs.newGraph")}
+          </Button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+/** In-app confirmation dialog (no system confirm). */
+function ConfirmDialog({
+  open,
+  title,
+  message,
+  confirmLabel,
+  onClose,
+  onConfirm,
+}: {
+  open: boolean;
+  title: string;
+  message: string;
+  confirmLabel: string;
+  onClose: () => void;
+  onConfirm: () => void;
+}) {
+  const { t } = useI18n();
+  return (
+    <Modal open={open} onClose={onClose} size="sm" title={title} ariaLabel={title}>
+      <div className="p-3">
+        <p className="text-sm text-text-primary">{message}</p>
+        <div className="mt-3 flex justify-end gap-2">
+          <Button variant="secondary" onClick={onClose}>
+            {t("common.cancel")}
+          </Button>
+          <Button variant="danger" onClick={onConfirm}>
+            {confirmLabel}
+          </Button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+/** The center-contained graph toolbar: title + zoom/connect on the right.
+ *  Graph picking lives in the left bar; the modals are owned here (opened
+ *  from the left bar via the store dialog flag). */
+export function GraphsMenuBar({ actions }: { actions?: ReactNode }) {
   const { t } = useI18n();
   const graphsUi = useProjectStore((s) => s.graphsUi);
   const setGraphsUi = useProjectStore((s) => s.setGraphsUi);
-  const [modelOpen, setModelOpen] = useState(false);
+  const dialog = graphsUi.dialog;
 
   async function loadGraphs() {
     try {
@@ -244,11 +332,10 @@ export function GraphsMenuBar() {
     }
   }
 
-  async function createGraph() {
-    const name = window.prompt("Graph name:");
-    if (!name?.trim()) return;
+  async function createGraph(name: string) {
+    setGraphsUi({ dialog: null });
     try {
-      const graph = await api.createGraph(name.trim());
+      const graph = await api.createGraph(name);
       await loadGraphs();
       setGraphsUi({ grid: graph.grid, tick: graphsUi.tick + 1 });
     } catch {
@@ -259,8 +346,7 @@ export function GraphsMenuBar() {
   async function deleteGraph() {
     const grid = graphsUi.grid;
     if (grid == null) return;
-    const name = graphsUi.list.find((g) => g.grid === grid)?.name ?? "";
-    if (!window.confirm(`Delete graph "${name}"?`)) return;
+    setGraphsUi({ dialog: null });
     try {
       await api.deleteGraph(grid);
       setGraphsUi({ grid: null, tick: graphsUi.tick + 1 });
@@ -270,61 +356,46 @@ export function GraphsMenuBar() {
     }
   }
 
+  const deleteName = graphsUi.list.find((g) => g.grid === graphsUi.grid)?.name ?? "";
+
   return (
-    <>
-      <ViewBackButton />
+    <div className="flex h-10 shrink-0 items-center gap-2 border-b border-border bg-surface px-3">
       <h1 className="text-sm font-semibold text-text-primary">{t("graphs.title")}</h1>
-      <select
-        value={graphsUi.grid ?? ""}
-        onChange={(e) =>
-          setGraphsUi({ grid: e.target.value === "" ? null : Number(e.target.value), tick: graphsUi.tick + 1 })
-        }
-        className="h-7 rounded-sm border border-border bg-bg px-1.5 text-xs outline-none focus:border-accent"
-        aria-label="Graph"
-      >
-        <option value="">—</option>
-        {graphsUi.list.map((g) => (
-          <option key={g.grid} value={g.grid}>
-            {g.name}
-          </option>
-        ))}
-      </select>
-      <Button
-        variant="secondary"
-        icon={<Plus size={12} aria-hidden />}
-        onClick={() => void createGraph()}
-      >
-        {t("graphs.newGraph")}
-      </Button>
-      <Button
-        variant="secondary"
-        icon={<Sparkles size={12} aria-hidden />}
-        onClick={() => setModelOpen(true)}
-      >
-        {t("graphs.models")}
-      </Button>
       <div className="flex-1" />
+      {actions}
       {graphsUi.grid != null && (
         <Button
           variant="danger"
           icon={<Trash2 size={12} aria-hidden />}
-          onClick={() => void deleteGraph()}
+          onClick={() => setGraphsUi({ dialog: "delete" })}
         >
           {t("common.delete")}
         </Button>
       )}
-      {modelOpen && (
+      <GraphNameDialog
+        open={dialog === "name"}
+        onClose={() => setGraphsUi({ dialog: null })}
+        onSubmit={(n) => void createGraph(n)}
+      />
+      <ConfirmDialog
+        open={dialog === "delete"}
+        title={t("graphs.deleteTitle")}
+        message={t("graphs.deleteConfirm", { name: deleteName })}
+        confirmLabel={t("common.delete")}
+        onClose={() => setGraphsUi({ dialog: null })}
+        onConfirm={() => void deleteGraph()}
+      />
+      {dialog === "models" && (
         <ModelDialog
-          onClose={() => setModelOpen(false)}
+          onClose={() => setGraphsUi({ dialog: null })}
           onCreated={(g) => {
-            setModelOpen(false);
-            setGraphsUi({ grid: g, tick: graphsUi.tick + 1 });
+            setGraphsUi({ dialog: null, grid: g, tick: graphsUi.tick + 1 });
             void loadGraphs();
           }}
-          setError={() => undefined}
+          setError={(msg) => setGraphsUi({ error: msg })}
         />
       )}
-    </>
+    </div>
   );
 }
 
@@ -332,34 +403,38 @@ export function GraphsView() {
   const { t } = useI18n();
   const graphsUi = useProjectStore((s) => s.graphsUi);
   const setGraphsUi = useProjectStore((s) => s.setGraphsUi);
+  const data = useProjectStore((s) => s.graphsData);
+  const loading = useProjectStore((s) => s.graphsLoading);
+  const loadGraphData = useProjectStore((s) => s.loadGraphData);
+  const graphConnect = useProjectStore((s) => s.graphConnect);
   const graphs = graphsUi.list;
   const grid = graphsUi.grid;
-  const [data, setData] = useState<GraphData | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const selectedNode = graphsUi.selectedNode;
+  const connectFrom = graphsUi.connectFrom;
+  const zoom = graphsUi.zoom;
+  const error = graphsUi.error;
 
-  // viewport transform
+  // viewport transform (canvas-local)
   const [pan, setPan] = useState({ x: 40, y: 40 });
-  const [zoom, setZoom] = useState(1);
   const panRef = useRef(pan);
   panRef.current = pan;
   const zoomRef = useRef(zoom);
   zoomRef.current = zoom;
 
   // interactions
-  const [selectedNode, setSelectedNode] = useState<string | null>(null);
-  const [selectedLine, setSelectedLine] = useState<string | null>(null);
-  const [connectFrom, setConnectFrom] = useState<string | null>(null);
   const [drag, setDrag] = useState<{ node: string; startX: number; startY: number; origX: number; origY: number } | null>(null);
   const [panDrag, setPanDrag] = useState<{ x: number; y: number; startX: number; startY: number } | null>(null);
   const [addMenu, setAddMenu] = useState<{ x: number; y: number } | null>(null);
+  const [pickAdd, setPickAdd] = useState<{
+    kind: "category" | "code" | "case" | "file" | "free" | "memo";
+    options: { id: number; name: string }[];
+  } | null>(null);
   const [saving, setSaving] = useState(false);
   const svgRef = useRef<SVGSVGElement | null>(null);
 
   const nodes = useMemo(() => (data ? buildNodes(data) : []), [data]);
   const lines = useMemo(() => (data ? buildLines(data, nodes) : []), [data, nodes]);
   const nodeById = useMemo(() => new Map(nodes.map((n) => [n.id, n])), [nodes]);
-  const lineById = useMemo(() => new Map(lines.map((l) => [l.id, l])), [lines]);
 
   const loadGraphs = useCallback(async () => {
     try {
@@ -372,23 +447,9 @@ export function GraphsView() {
         tick: graphsUi.tick + 1,
       });
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to load graphs");
-    } finally {
-      setLoading(false);
+      setGraphsUi({ error: e instanceof Error ? e.message : "Failed to load graphs" });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  const loadGraph = useCallback(async (g: number) => {
-    setLoading(true);
-    setError(null);
-    try {
-      setData(await api.graphData(g));
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to load graph");
-    } finally {
-      setLoading(false);
-    }
   }, []);
 
   useEffect(() => {
@@ -397,18 +458,16 @@ export function GraphsView() {
   }, []);
 
   useEffect(() => {
-    if (grid != null) void loadGraph(grid);
-  }, [grid, loadGraph]);
+    if (grid != null) void loadGraphData(grid);
+  }, [grid, loadGraphData]);
 
-  async function createGraph() {
-    const name = window.prompt("Graph name:");
-    if (!name?.trim()) return;
+  async function createGraph(name: string) {
+    setGraphsUi({ dialog: null });
     try {
-      const graph = await api.createGraph(name.trim());
+      const graph = await api.createGraph(name);
       setGraphsUi({ grid: graph.grid, tick: graphsUi.tick + 1 });
-      await loadGraphs();
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Could not create graph");
+      setGraphsUi({ error: e instanceof Error ? e.message : "Could not create graph" });
     }
   }
 
@@ -428,213 +487,64 @@ export function GraphsView() {
 
   function onNodeMouseDown(e: ReactMouseEvent, node: NodeView) {
     e.stopPropagation();
-    setSelectedNode(node.id);
-    setSelectedLine(null);
+    setGraphsUi({ selectedNode: node.id, selectedLine: null });
     if (connectFrom) {
       // connecting two nodes
       if (connectFrom !== node.id) {
-        void connectNodes(connectFrom, node.id);
+        const [fk, fid] = connectFrom.split(":");
+        const [tk, tid] = node.id.split(":");
+        void graphConnect({ kind: fk, id: Number(fid) }, { kind: tk, id: Number(tid) });
       }
-      setConnectFrom(null);
+      setGraphsUi({ connectFrom: null });
       return;
     }
     setDrag({ node: node.id, startX: e.clientX, startY: e.clientY, origX: node.x, origY: node.y });
   }
 
-  async function connectNodes(a: string, b: string) {
-    if (!data) return;
-    const na = nodeById.get(a);
-    const nb = nodeById.get(b);
-    if (!na || !nb) return;
-    try {
-      if (na.kind === "code" || na.kind === "category") {
-        if (nb.kind === "code" || nb.kind === "category") {
-          await api.graphAddCdctLine(data.graph.grid, {
-            from_node: Number(a.split(":")[1]),
-            to_node: Number(b.split(":")[1]),
-          });
-        } else {
-          await api.graphAddEntityLine(data.graph.grid, {
-            from_kind: na.kind,
-            from_id: na.entityId,
-            to_kind: nb.kind,
-            to_id: nb.entityId,
-          });
-        }
-      } else {
-        await api.graphAddEntityLine(data.graph.grid, {
-          from_kind: na.kind,
-          from_id: na.entityId,
-          to_kind: nb.kind,
-          to_id: nb.entityId,
-        });
-      }
-      await loadGraph(data.graph.grid);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Could not connect nodes");
-    }
-  }
-
-  async function deleteNode() {
-    if (!data || !selectedNode) return;
-    const node = nodeById.get(selectedNode);
-    if (!node || node.kind === "memo") return;
-    if (!window.confirm(`Delete node "${node.label}"?`)) return;
-    try {
-      const id = Number(selectedNode.split(":")[1]);
-      if (node.kind === "category" || node.kind === "code") {
-        await api.graphDeleteCdctItem(data.graph.grid, id);
-      } else if (node.kind === "case") {
-        await api.graphDeleteCaseItem(data.graph.grid, id);
-      } else if (node.kind === "file") {
-        await api.graphDeleteFileItem(data.graph.grid, id);
-      } else if (node.kind === "free") {
-        await api.graphDeleteFreeItem(data.graph.grid, id);
-      }
-      setSelectedNode(null);
-      await loadGraph(data.graph.grid);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Could not delete node");
-    }
-  }
-
-  /* ------------------------------------------------------------- lines */
-
-  async function deleteLine() {
-    if (!data || !selectedLine) return;
-    const line = lineById.get(selectedLine);
-    if (!line || !line.deleteUrl) return;
-    if (!window.confirm("Delete this line?")) return;
-    try {
-      const id = Number(selectedLine.split(":")[1]);
-      if (line.kind === "cdct") {
-        await api.graphDeleteCdctLine(data.graph.grid, id);
-      } else {
-        await api.graphDeleteEntityLine(data.graph.grid, id);
-      }
-      setSelectedLine(null);
-      await loadGraph(data.graph.grid);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Could not delete line");
-    }
-  }
-
-  async function patchLine(body: Record<string, unknown>) {
-    if (!data || !selectedLine) return;
-    const line = lineById.get(selectedLine);
-    if (!line || !line.patchUrl) return;
-    try {
-      await api.patchPath(line.patchUrl, body);
-      await loadGraph(data.graph.grid);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Could not update line");
-    }
-  }
-
   /* ------------------------------------------------------ add node menu */
 
-  async function addCdct(kind: "category" | "code") {
-    if (!data || !addMenu) return;
-    const options =
-      kind === "category"
-        ? data.categories.map((c) => ({ id: c.catid, name: c.name }))
-        : data.codes.map((c) => ({ id: c.cid, name: c.name }));
-    if (options.length === 0) {
-      setError(kind === "category" ? "No categories yet" : "No codes yet");
+  /** Open the in-app picker for adding a node of the given kind. */
+  function openAddPicker(
+    kind: "category" | "code" | "case" | "file" | "free" | "memo",
+  ) {
+    if (!data) return;
+    let options: { id: number; name: string }[] = [];
+    if (kind === "category") options = data.categories.map((c) => ({ id: c.catid, name: c.name }));
+    else if (kind === "code") options = data.codes.map((c) => ({ id: c.cid, name: c.name }));
+    else if (kind === "case") options = data.cases.map((c) => ({ id: c.caseid, name: c.name }));
+    else if (kind === "file") options = data.sources.map((s) => ({ id: s.id, name: s.name }));
+    else if (kind === "memo") options = data.codes.filter((c) => c.memo && c.memo.trim()).map((c) => ({ id: c.cid, name: c.name }));
+    if (options.length === 0 && kind !== "free") {
+      setGraphsUi({ error: "No items to add yet" });
       return;
     }
-    const list = options.map((o) => `${o.name}`).join("\n");
-    const pick = window.prompt(`${kind === "category" ? "Category" : "Code"} name:`, options[0].name);
-    const option = options.find((o) => o.name === pick);
-    if (!option) return;
-    try {
-      await api.graphAddCdctItem(data.graph.grid, {
-        kind,
-        ref_id: option.id,
-        x: addMenu.x,
-        y: addMenu.y,
-      });
-      setAddMenu(null);
-      await loadGraph(data.graph.grid);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Could not add node");
-    }
-    void list;
+    setAddMenu(null);
+    setPickAdd({ kind, options });
   }
 
-  async function addCase() {
+  async function doAddNode(kind: "category" | "code" | "case" | "file" | "free" | "memo", id: number, name: string) {
     if (!data || !addMenu) return;
-    const pick = window.prompt("Case name:", data.cases[0]?.name ?? "");
-    const option = data.cases.find((c) => c.name === pick);
-    if (!option) return;
+    setPickAdd(null);
     try {
-      await api.graphAddCaseItem(data.graph.grid, {
-        caseid: option.caseid,
-        x: addMenu.x,
-        y: addMenu.y,
-      });
-      setAddMenu(null);
-      await loadGraph(data.graph.grid);
+      if (kind === "category" || kind === "code") {
+        await api.graphAddCdctItem(data.graph.grid, { kind, ref_id: id, x: addMenu.x, y: addMenu.y });
+      } else if (kind === "case") {
+        await api.graphAddCaseItem(data.graph.grid, { caseid: id, x: addMenu.x, y: addMenu.y });
+      } else if (kind === "file") {
+        await api.graphAddFileItem(data.graph.grid, { fid: id, x: addMenu.x, y: addMenu.y });
+      } else if (kind === "free") {
+        await api.graphAddFreeItem(data.graph.grid, { x: addMenu.x, y: addMenu.y, free_text: name.trim() });
+      } else {
+        await api.graphAddMemoItem(data.graph.grid, {
+          memo_source_type: "code",
+          memo_source_id: id,
+          x: addMenu.x,
+          y: addMenu.y,
+        });
+      }
+      await loadGraphData(data.graph.grid);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Could not add node");
-    }
-  }
-
-  async function addFile() {
-    if (!data || !addMenu) return;
-    const pick = window.prompt("File name:", data.sources[0]?.name ?? "");
-    const option = data.sources.find((s) => s.name === pick);
-    if (!option) return;
-    try {
-      await api.graphAddFileItem(data.graph.grid, {
-        fid: option.id,
-        x: addMenu.x,
-        y: addMenu.y,
-      });
-      setAddMenu(null);
-      await loadGraph(data.graph.grid);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Could not add node");
-    }
-  }
-
-  async function addFree() {
-    if (!data || !addMenu) return;
-    const text = window.prompt("Free text:");
-    if (!text?.trim()) return;
-    try {
-      await api.graphAddFreeItem(data.graph.grid, {
-        x: addMenu.x,
-        y: addMenu.y,
-        free_text: text.trim(),
-      });
-      setAddMenu(null);
-      await loadGraph(data.graph.grid);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Could not add node");
-    }
-  }
-
-  async function addMemo() {
-    if (!data || !addMenu) return;
-    const codesWithMemo = data.codes.filter((c) => c.memo && c.memo.trim());
-    const pick = window.prompt(
-      "Code with a memo:",
-      codesWithMemo[0]?.name ?? "",
-    );
-    const code = codesWithMemo.find((c) => c.name === pick);
-    if (!code) return;
-    try {
-      await api.graphAddMemoItem(data.graph.grid, {
-        memo_source_type: "code",
-        memo_source_id: code.cid,
-        x: addMenu.x,
-        y: addMenu.y,
-      });
-      setAddMenu(null);
-      await loadGraph(data.graph.grid);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Could not add memo node");
+      setGraphsUi({ error: e instanceof Error ? e.message : "Could not add node" });
     }
   }
 
@@ -647,7 +557,7 @@ export function GraphsView() {
         if (!node) return;
         node.x = drag.origX + (e.clientX - drag.startX) / zoomRef.current;
         node.y = drag.origY + (e.clientY - drag.startY) / zoomRef.current;
-        setData((d) => (d ? { ...d } : d));
+        setGraphsUi({ tick: graphsUi.tick + 1 });
         return;
       }
       if (panDrag) {
@@ -687,16 +597,16 @@ export function GraphsView() {
 
   function onSvgMouseDown(e: ReactMouseEvent) {
     if (e.button !== 0) return;
-    setSelectedNode(null);
-    setSelectedLine(null);
-    setConnectFrom(null);
+    setGraphsUi({ selectedNode: null });
+    setGraphsUi({ selectedLine: null });
+    setGraphsUi({ connectFrom: null });
     setPanDrag({ x: pan.x, y: pan.y, startX: e.clientX, startY: e.clientY });
   }
 
   function onWheel(e: React.WheelEvent) {
     const factor = e.deltaY > 0 ? 0.9 : 1.1;
     const next = Math.min(2.5, Math.max(0.25, zoom * factor));
-    setZoom(next);
+    setGraphsUi({ zoom: next });
     setPan({
       x: e.clientX - (e.clientX - pan.x) * (next / zoom),
       y: e.clientY - (e.clientY - pan.y) * (next / zoom),
@@ -722,16 +632,35 @@ export function GraphsView() {
 
   /* --------------------------------------------------------------- ui */
 
-  const selected = selectedNode ? nodeById.get(selectedNode) : undefined;
-  const selectedL = selectedLine ? lineById.get(selectedLine) : undefined;
-
   return (
     <div className="flex h-full flex-col bg-bg">
-      {error && (
-        <div className="flex shrink-0 items-center gap-2 border-b border-danger bg-danger/10 px-3 py-1.5 text-sm text-danger">
-          <span className="min-w-0 flex-1 truncate">{error}</span>
-        </div>
-      )}
+      <GraphsMenuBar
+        actions={
+          <>
+            <IconButton label="Zoom in" onClick={() => setGraphsUi({ zoom: Math.min(2.5, +(graphsUi.zoom * 1.2).toFixed(2)) })}>
+              <ZoomIn size={16} aria-hidden />
+            </IconButton>
+            <span className="w-10 text-center text-xs text-text-secondary">
+              {Math.round(zoom * 100)}%
+            </span>
+            <IconButton label="Zoom out" onClick={() => setGraphsUi({ zoom: Math.max(0.25, +(graphsUi.zoom / 1.2).toFixed(2)) })}>
+              <ZoomOut size={16} aria-hidden />
+            </IconButton>
+            <IconButton
+              label={t("graphs.connect")}
+              title={t("graphs.connect")}
+              onClick={() => {
+                if (selectedNode) setGraphsUi({ connectFrom: selectedNode });
+              }}
+              disabled={!selectedNode}
+              className={connectFrom ? "bg-accent/20 text-accent" : ""}
+            >
+              <Link2 size={16} aria-hidden />
+            </IconButton>
+          </>
+        }
+      />
+      {error && <ErrorBanner onClose={() => setGraphsUi({ error: null })}>{error}</ErrorBanner>}
 
       <div className="min-h-0 flex-1 overflow-hidden">
         {loading && !data ? (
@@ -745,13 +674,9 @@ export function GraphsView() {
             <p className="text-sm text-text-secondary">
               {graphs.length === 0 ? "No graphs yet — create one or generate a model." : "Select a graph."}
             </p>
-            <button
-              type="button"
-              onClick={() => void createGraph()}
-              className="rounded-sm bg-accent px-3 py-1.5 text-xs font-medium text-[var(--qc-bg)] hover:bg-accent-hover"
-            >
+            <Button variant="primary" onClick={() => setGraphsUi({ dialog: "name" })}>
               {t("graphs.newGraph")}
-            </button>
+            </Button>
           </div>
         ) : (
           <div className="flex h-full">
@@ -795,8 +720,8 @@ export function GraphsView() {
                       key={line.id}
                       onClick={(e) => {
                         e.stopPropagation();
-                        setSelectedLine(line.id);
-                        setSelectedNode(null);
+                        setGraphsUi({ selectedLine: line.id });
+                        setGraphsUi({ selectedNode: null });
                       }}
                       className="cursor-pointer"
                     >
@@ -873,147 +798,6 @@ export function GraphsView() {
                 )}
               </g>
             </svg>
-
-            {/* Inspector */}
-            <div className="flex w-64 shrink-0 flex-col border-l border-border bg-surface">
-              <div className="flex items-center gap-1 border-b border-border px-2 py-1.5">
-                <button
-                  type="button"
-                  onClick={() => setZoom((z) => Math.min(2.5, +(z * 1.2).toFixed(2)))}
-                  className="rounded-sm p-1 text-text-secondary hover:bg-surface-higher"
-                  aria-label="Zoom in"
-                >
-                  <ZoomIn size={14} aria-hidden />
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setZoom((z) => Math.max(0.25, +(z / 1.2).toFixed(2)))}
-                  className="rounded-sm p-1 text-text-secondary hover:bg-surface-higher"
-                  aria-label="Zoom out"
-                >
-                  <ZoomOut size={14} aria-hidden />
-                </button>
-                <span className="px-1 text-xs text-text-secondary">{Math.round(zoom * 100)}%</span>
-                <div className="flex-1" />
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (selectedNode) {
-                      setConnectFrom(selectedNode);
-                    }
-                  }}
-                  disabled={!selectedNode}
-                  title="Connect this node to another (then click the second node)"
-                  className={cn(
-                    "rounded-sm p-1 hover:bg-surface-higher",
-                    connectFrom ? "bg-accent/20 text-accent" : "text-text-secondary",
-                  )}
-                >
-                  <Link2 size={14} aria-hidden />
-                </button>
-              </div>
-
-              <div className="min-h-0 flex-1 overflow-y-auto p-2">
-                {selected ? (
-                  <div className="space-y-2">
-                    <p className="text-sm font-medium">{selected.label}</p>
-                    <p className="text-xs text-text-secondary">
-                      {selected.kind} · ({Math.round(selected.x)}, {Math.round(selected.y)})
-                    </p>
-                    <label className="block">
-                      <span className="mb-0.5 block text-xs text-text-secondary">Label</span>
-                      <input
-                        defaultValue={selected.label}
-                        onBlur={(e) => {
-                          const v = e.target.value.trim();
-                          if (v && v !== selected.label) void patchNode(selected, { displaytext: v });
-                        }}
-                        className="h-7 w-full rounded-sm border border-border bg-bg px-1.5 text-xs outline-none focus:border-accent"
-                      />
-                    </label>
-                    <div className="flex items-center gap-2">
-                      <button
-                        type="button"
-                        onClick={() => void patchNode(selected, { bold: selected.bold ? 0 : 1 })}
-                        className="rounded-sm border border-border bg-bg px-2 py-1 text-xs hover:bg-surface-higher"
-                      >
-                        {selected.bold ? "Bold ✓" : "Bold"}
-                      </button>
-                      {selected.kind !== "memo" && (
-                        <button
-                          type="button"
-                          onClick={() => void patchNode(selected, { font_size: selected.fontSize + 1 })}
-                          className="rounded-sm border border-border bg-bg px-2 py-1 text-xs hover:bg-surface-higher"
-                        >
-                          Font +
-                        </button>
-                      )}
-                      {selected.kind === "free" && (
-                        <button
-                          type="button"
-                          onClick={() => {
-                            const text = window.prompt("Free text:", selected.label);
-                            if (text?.trim()) void patchNode(selected, { free_text: text.trim() });
-                          }}
-                          className="rounded-sm border border-border bg-bg px-2 py-1 text-xs hover:bg-surface-higher"
-                        >
-                          <CaseSensitive size={12} aria-hidden />
-                        </button>
-                      )}
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => void deleteNode()}
-                      className="flex items-center gap-1 rounded-sm border border-danger/50 px-2 py-1 text-xs text-danger hover:bg-danger/10"
-                    >
-                      <Trash2 size={12} aria-hidden />
-                      Delete node
-                    </button>
-                  </div>
-                ) : selectedL ? (
-                  <div className="space-y-2">
-                    <p className="text-sm font-medium">Line</p>
-                    <label className="block">
-                      <span className="mb-0.5 block text-xs text-text-secondary">Label (relation)</span>
-                      <input
-                        defaultValue={selectedL.label}
-                        onBlur={(e) => void patchLine({ label: e.target.value })}
-                        className="h-7 w-full rounded-sm border border-border bg-bg px-1.5 text-xs outline-none focus:border-accent"
-                      />
-                    </label>
-                    <label className="block">
-                      <span className="mb-0.5 block text-xs text-text-secondary">Style</span>
-                      <select
-                        value={selectedL.arrow_mode}
-                        onChange={(e) => void patchLine({ arrow_mode: e.target.value })}
-                        className="h-7 w-full rounded-sm border border-border bg-bg px-1.5 text-xs outline-none focus:border-accent"
-                      >
-                        {ARROW_MODES.map((m) => (
-                          <option key={m} value={m}>
-                            {m.replace(/_/g, " ")}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-                    <button
-                      type="button"
-                      onClick={() => void deleteLine()}
-                      className="flex items-center gap-1 rounded-sm border border-danger/50 px-2 py-1 text-xs text-danger hover:bg-danger/10"
-                    >
-                      <Trash2 size={12} aria-hidden />
-                      Delete line
-                    </button>
-                  </div>
-                ) : (
-                  <div className="space-y-1.5 text-xs text-text-secondary">
-                    <p>Double-click the canvas to add a node.</p>
-                    <p>Drag nodes to move them (positions save automatically).</p>
-                    <p>Select a node, press the link button, then click a second node to draw a relation line.</p>
-                    <p>Select a line to label it or change its arrow style.</p>
-                  </div>
-                )}
-              </div>
-            </div>
           </div>
         )}
       </div>
@@ -1022,45 +806,125 @@ export function GraphsView() {
       {addMenu && (
         <>
           <div className="fixed inset-0 z-30" onClick={() => setAddMenu(null)} aria-hidden />
-          <div
-            className="fixed z-40 min-w-40 rounded-md border border-border bg-surface py-1 shadow-lg"
+          <Menu
+            position="fixed"
+            className="min-w-40"
             style={{ left: addMenu.x, top: addMenu.y }}
             role="menu"
           >
             {(
               [
-                ["Code…", () => void addCdct("code"), <Network key="i" size={14} aria-hidden />],
-                ["Category…", () => void addCdct("category"), <FolderPlus key="i" size={14} aria-hidden />],
-                ["Case…", () => void addCase(), <BookMarked key="i" size={14} aria-hidden />],
-                ["File…", () => void addFile(), <FileText key="i" size={14} aria-hidden />],
-                ["Free text…", () => void addFree(), <CaseSensitive key="i" size={14} aria-hidden />],
-                ["Memo…", () => void addMemo(), <Pencil key="i" size={14} aria-hidden />],
+                ["Code…", () => openAddPicker("code"), <Network key="i" size={14} aria-hidden />],
+                ["Category…", () => openAddPicker("category"), <FolderPlus key="i" size={14} aria-hidden />],
+                ["Case…", () => openAddPicker("case"), <BookMarked key="i" size={14} aria-hidden />],
+                ["File…", () => openAddPicker("file"), <FileText key="i" size={14} aria-hidden />],
+                ["Free text…", () => openAddPicker("free"), <CaseSensitive key="i" size={14} aria-hidden />],
+                ["Memo…", () => openAddPicker("memo"), <Pencil key="i" size={14} aria-hidden />],
               ] as [string, () => void, ReactNode][]
             ).map(([label, run, icon]) => (
-              <button
+              <MenuItem
                 key={label}
-                type="button"
                 role="menuitem"
                 onClick={() => {
                   setAddMenu(null);
                   run();
                 }}
-                className="flex w-full items-center gap-2 px-2 py-1.5 text-left text-sm hover:bg-surface-higher"
               >
                 {icon}
                 {label}
-              </button>
+              </MenuItem>
             ))}
-          </div>
+          </Menu>
         </>
       )}
 
       {saving && (
-        <div className="pointer-events-none fixed inset-0 z-50 flex items-center justify-center">
+        <div className={`pointer-events-none ${cls.modalOverlay}`}>
           <LoaderCircle size={18} className="animate-spin text-text-secondary" aria-hidden />
         </div>
       )}
+      {pickAdd && (
+        <PickNodeDialog
+          kind={pickAdd.kind}
+          options={pickAdd.options}
+          onClose={() => setPickAdd(null)}
+          onAdd={(id, name) => void doAddNode(pickAdd.kind, id, name)}
+        />
+      )}
+      <GraphNameDialog
+        open={graphsUi.dialog === "name"}
+        onClose={() => setGraphsUi({ dialog: null })}
+        onSubmit={(n) => void createGraph(n)}
+      />
     </div>
+  );
+}
+
+/** In-app picker for adding a node to the canvas (no system prompt). */
+function PickNodeDialog({
+  kind,
+  options,
+  onClose,
+  onAdd,
+}: {
+  kind: string;
+  options: { id: number; name: string }[];
+  onClose: () => void;
+  onAdd: (id: number, name: string) => void;
+}) {
+  const { t } = useI18n();
+  const [value, setValue] = useState("");
+  const isFree = kind === "free";
+  return (
+    <Modal open onClose={onClose} size="sm" title={`Add ${kind} node`} ariaLabel={`Add ${kind} node`}>
+      <div className="p-3">
+        {isFree ? (
+          <Field label="Free text">
+            <Input
+              autoFocus
+              value={value}
+              onChange={(e) => setValue(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && value.trim()) onAdd(-1, value);
+              }}
+              placeholder="Free text"
+              className="w-full"
+            />
+          </Field>
+        ) : (
+          <Field label={`${kind} name`}>
+            <Select
+              autoFocus
+              value={value}
+              onChange={(e) => setValue(e.target.value)}
+              className="w-full"
+            >
+              <option value="">—</option>
+              {options.map((o) => (
+                <option key={o.id} value={o.name}>
+                  {o.name}
+                </option>
+              ))}
+            </Select>
+          </Field>
+        )}
+        <div className="mt-3 flex items-center justify-end gap-2">
+          <Button variant="secondary" onClick={onClose}>
+            {t("common.cancel")}
+          </Button>
+          <Button
+            variant="primary"
+            disabled={!value.trim()}
+            onClick={() => {
+              const option = options.find((o) => o.name === value);
+              onAdd(option ? option.id : -1, value);
+            }}
+          >
+            {t("interchange.import")}
+          </Button>
+        </div>
+      </div>
+    </Modal>
   );
 }
 
@@ -1101,9 +965,8 @@ function ModelDialog({
   }
 
   const multi = (values: number[], set: (v: number[]) => void) => (
-    <label className="block">
-      <span className="mb-0.5 block text-xs text-text-secondary">Comma-separated ids</span>
-      <input
+    <Field label="Comma-separated ids">
+      <Input
         value={values.join(",")}
         onChange={(e) =>
           set(
@@ -1113,71 +976,397 @@ function ModelDialog({
               .filter((v) => Number.isFinite(v) && v > 0),
           )
         }
-        className="h-7 w-full rounded-sm border border-border bg-bg px-1.5 text-xs outline-none focus:border-accent"
+        className="w-full"
       />
-    </label>
+    </Field>
   );
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={onClose}>
-      <div
-        className="w-full max-w-md rounded-lg border border-border bg-surface p-4 shadow-xl"
-        onClick={(e) => e.stopPropagation()}
-        role="dialog"
-        aria-label="Generate graph model"
-      >
-        <h2 className="text-sm font-semibold text-text-primary">{t("graphs.models")}</h2>
-        <div className="mt-3 space-y-3">
+    <Modal
+      open
+      onClose={onClose}
+      title={t("graphs.models")}
+      panelClassName="w-full max-w-md"
+      ariaLabel="Generate graph model"
+    >
+      <div className="space-y-3 p-4">
+        <Field label="Model">
+          <Select
+            value={model}
+            onChange={(e) => setModel(e.target.value as (typeof GRAPH_MODELS)[number])}
+            className="w-full"
+          >
+            {GRAPH_MODELS.map((m) => (
+              <option key={m} value={m}>
+                {m.replace(/-/g, " ")}
+              </option>
+            ))}
+          </Select>
+        </Field>
+        <Field label="Graph name">
+          <Input
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            placeholder="e.g. My model"
+            className="w-full"
+          />
+        </Field>
+        {(model === "file-comparison" || model === "file-hierarchy") &&
+          multi(fileIds, setFileIds)}
+        {(model === "case-comparison" || model === "case-hierarchy") &&
+          multi(caseIds, setCaseIds)}
+        <p className="text-[11px] leading-relaxed text-text-secondary">
+          {sources.length} files · {cases.length} cases in the project.
+        </p>
+      </div>
+      <div className="flex items-center justify-end gap-2 border-t border-border px-4 py-2.5">
+        <Button variant="secondary" onClick={onClose}>
+          {t("common.cancel")}
+        </Button>
+        <Button
+          variant="primary"
+          onClick={() => void generate()}
+          disabled={busy || !name.trim()}
+          icon={
+            busy ? (
+              <LoaderCircle size={12} className="animate-spin" aria-hidden />
+            ) : (
+              <Save size={12} aria-hidden />
+            )
+          }
+        >
+          Generate
+        </Button>
+      </div>
+    </Modal>
+  );
+}
+/** Left bar for the graphs view: the graph list + New graph / Models. */
+export function GraphsList() {
+  const { t } = useI18n();
+  const graphsUi = useProjectStore((s) => s.graphsUi);
+  const setGraphsUi = useProjectStore((s) => s.setGraphsUi);
+  const [rowMenu, setRowMenu] = useState<{ x: number; y: number; grid: number; name: string } | null>(null);
+  const [editingId, setEditingId] = useState<number | null>(null);
+
+  async function reloadList() {
+    try {
+      const res = await api.graphs();
+      setGraphsUi({
+        list: res.graphs.map((g) => ({ grid: g.grid, name: g.name })),
+        tick: graphsUi.tick + 1,
+      });
+    } catch {
+      /* keep the cached list */
+    }
+  }
+
+  async function createGraph(name: string) {
+    try {
+      const graph = await api.createGraph(name);
+      setGraphsUi({ grid: graph.grid, tick: graphsUi.tick + 1 });
+      await reloadList();
+      return graph.grid;
+    } catch {
+      return null;
+    }
+  }
+
+  async function renameGraphInline(grid: number, name: string) {
+    // Close the editor synchronously so Tab can move it to the next row.
+    setEditingId(null);
+    try {
+      await api.updateGraph(grid, { name });
+      await reloadList();
+    } catch {
+      /* keep the picker state */
+    }
+  }
+
+  async function deleteGraphRow(grid: number, name: string) {
+    if (!window.confirm(t("graphs.deleteConfirm", { name }))) return;
+    try {
+      await api.deleteGraph(grid);
+      setGraphsUi({ grid: null, tick: graphsUi.tick + 1 });
+      await reloadList();
+    } catch {
+      /* keep the picker state */
+    }
+  }
+
+  return (
+    <LeftBar
+      header={
+        <BarHeader
+          title={t("graphs.title")}
+          actions={
+            <>
+              <Button
+                variant="secondary"
+                icon={<Sparkles size={12} aria-hidden />}
+                onClick={() => setGraphsUi({ dialog: "models" })}
+              >
+                {t("graphs.models")}
+              </Button>
+              <Button
+                variant="primary"
+                icon={<Network size={12} aria-hidden />}
+                onClick={() => {
+                  void createGraph(t("graphs.untitled")).then((grid) => {
+                    if (grid != null) setEditingId(grid);
+                  });
+                }}
+              >
+                {t("common.add")}
+              </Button>
+            </>
+          }
+        />
+      }
+      
+    >
+      {graphsUi.list.length === 0 ? (
+        <p className="px-3 py-6 text-center text-sm text-text-secondary">
+          {t("graphs.noGraphs")}
+        </p>
+      ) : (
+        <div className="divide-y divide-border">
+          {graphsUi.list.map((g) =>
+            editingId === g.grid ? (
+              <div key={g.grid} className="flex w-full items-center gap-2 px-3 py-2">
+                <Network size={14} className="shrink-0 text-text-secondary" aria-hidden />
+                <InlineNameEdit
+                  value={g.name}
+                  placeholder={t("graphs.graphNamePlaceholder")}
+                  onSave={(name) => void renameGraphInline(g.grid, name)}
+                  onCancel={() => setEditingId(null)}
+                  onTab={() => {
+                    const idx = graphsUi.list.findIndex((x) => x.grid === g.grid);
+                    const next = graphsUi.list[idx + 1];
+                    setEditingId(next ? next.grid : null);
+                  }}
+                />
+              </div>
+            ) : (
+              <div key={g.grid} className="group">
+                <button
+                  type="button"
+                  onClick={() => setGraphsUi({ grid: g.grid, tick: graphsUi.tick + 1 })}
+                  onContextMenu={(e) => {
+                    e.preventDefault();
+                    setRowMenu({ x: e.clientX, y: e.clientY, grid: g.grid, name: g.name });
+                  }}
+                  className={`flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-surface-higher ${
+                    graphsUi.grid === g.grid ? "bg-accent/10 text-accent" : "text-text-primary"
+                  }`}
+                >
+                  <Network size={14} className="shrink-0 text-text-secondary" aria-hidden />
+                  <span className="min-w-0 flex-1 truncate">{g.name}</span>
+                  <span className="ml-auto flex shrink-0 gap-0.5 opacity-0 group-hover:opacity-100">
+                    <IconButton
+                      label={t("graphs.renameFor", { name: g.name })}
+                      title={t("graphs.renameFor", { name: g.name })}
+                      size="sm"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setEditingId(g.grid);
+                      }}
+                    >
+                      <Pencil size={13} aria-hidden />
+                    </IconButton>
+                    <IconButton
+                      label={t("graphs.deleteFor", { name: g.name })}
+                      title={t("graphs.deleteFor", { name: g.name })}
+                      size="sm"
+                      className="hover:text-danger"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setGraphsUi({ grid: g.grid, dialog: "delete", tick: graphsUi.tick + 1 });
+                      }}
+                    >
+                      <Trash2 size={13} aria-hidden />
+                    </IconButton>
+                  </span>
+                </button>
+              </div>
+            ),
+          )}
+        </div>
+      )}
+      {rowMenu && (
+        <RowContextMenu
+          x={rowMenu.x}
+          y={rowMenu.y}
+          onClose={() => setRowMenu(null)}
+          items={[
+            {
+              label: t("common.rename"),
+              icon: <Pencil size={14} aria-hidden />,
+              run: () => {
+                setRowMenu(null);
+                setEditingId(rowMenu.grid);
+              },
+            },
+            {
+              label: t("common.delete"),
+              icon: <Trash2 size={14} aria-hidden />,
+              danger: true,
+              run: () => void deleteGraphRow(rowMenu.grid, rowMenu.name),
+            },
+          ]}
+        />
+      )}
+    </LeftBar>
+  );
+}
+
+/** Right-bar inspector for the graphs view (opens automatically): the
+ *  selected node/line editor. */
+export function GraphsInspector() {
+  const { t } = useI18n();
+  const graphsUi = useProjectStore((s) => s.graphsUi);
+  const data = useProjectStore((s) => s.graphsData);
+  const graphPatchNode = useProjectStore((s) => s.graphPatchNode);
+  const graphDeleteNode = useProjectStore((s) => s.graphDeleteNode);
+  const graphPatchLine = useProjectStore((s) => s.graphPatchLine);
+  const graphDeleteLine = useProjectStore((s) => s.graphDeleteLine);
+
+  const nodes = useMemo(() => (data ? buildNodes(data) : []), [data]);
+  const lines = useMemo(() => (data ? buildLines(data, nodes) : []), [data, nodes]);
+  const nodeById = useMemo(() => new Map(nodes.map((n) => [n.id, n])), [nodes]);
+  const lineById = useMemo(() => new Map(lines.map((l) => [l.id, l])), [lines]);
+
+  const selected = graphsUi.selectedNode ? nodeById.get(graphsUi.selectedNode) : undefined;
+  const selectedL = graphsUi.selectedLine ? lineById.get(graphsUi.selectedLine) : undefined;
+
+  async function deleteNode(kind: string, id: number, label: string) {
+    if (kind === "memo") return;
+    if (!window.confirm(`Delete node "${label}"?`)) return;
+    await graphDeleteNode(kind, id);
+  }
+
+  async function deleteLine(kind: string, id: number) {
+    if (!window.confirm("Delete this line?")) return;
+    await graphDeleteLine(kind, id);
+  }
+
+  return (
+    <LeftBar
+      borderSide="l"
+      header={<BarHeader title={t("graphs.title")} />}
+    >
+      {selected ? (
+        <div className="space-y-2 p-2">
+          <p className="text-sm font-medium">{selected.label}</p>
+          <p className="text-xs text-text-secondary">
+            {selected.kind} · ({Math.round(selected.x)}, {Math.round(selected.y)})
+          </p>
           <label className="block">
-            <span className="mb-0.5 block text-xs text-text-secondary">Model</span>
-            <select
-              value={model}
-              onChange={(e) => setModel(e.target.value as (typeof GRAPH_MODELS)[number])}
-              className="h-7 w-full rounded-sm border border-border bg-bg px-1.5 text-xs outline-none focus:border-accent"
-            >
-              {GRAPH_MODELS.map((m) => (
-                <option key={m} value={m}>
-                  {m.replace(/-/g, " ")}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label className="block">
-            <span className="mb-0.5 block text-xs text-text-secondary">Graph name</span>
-            <input
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              placeholder="e.g. My model"
-              className="h-7 w-full rounded-sm border border-border bg-bg px-1.5 text-xs outline-none focus:border-accent"
+            <span className="mb-0.5 block text-xs text-text-secondary">Label</span>
+            <Input
+              key={selected.id}
+              defaultValue={selected.label}
+              onBlur={(e) => {
+                const v = e.target.value.trim();
+                if (v && v !== selected.label) {
+                  const [, id] = selected.id.split(":");
+                  void graphPatchNode(selected.kind, Number(id), { displaytext: v });
+                }
+              }}
+              className="w-full"
             />
           </label>
-          {(model === "file-comparison" || model === "file-hierarchy") &&
-            multi(fileIds, setFileIds)}
-          {(model === "case-comparison" || model === "case-hierarchy") &&
-            multi(caseIds, setCaseIds)}
-          <p className="text-[11px] leading-relaxed text-text-secondary">
-            {sources.length} files · {cases.length} cases in the project.
-          </p>
-        </div>
-        <div className="mt-4 flex items-center justify-end gap-2">
-          <button
-            type="button"
-            onClick={onClose}
-            className="rounded-sm border border-border bg-bg px-3 py-1 text-xs hover:bg-surface-higher"
+          <div className="flex items-center gap-2">
+            <Button
+              variant="secondary"
+              onClick={() => {
+                const [, id] = selected.id.split(":");
+                void graphPatchNode(selected.kind, Number(id), { bold: selected.bold ? 0 : 1 });
+              }}
+            >
+              {selected.bold ? "Bold ✓" : "Bold"}
+            </Button>
+            {selected.kind !== "memo" && (
+              <Button
+                variant="secondary"
+                onClick={() => {
+                  const [, id] = selected.id.split(":");
+                  void graphPatchNode(selected.kind, Number(id), { font_size: selected.fontSize + 1 });
+                }}
+              >
+                Font +
+              </Button>
+            )}
+          </div>
+          <Button
+            variant="danger"
+            className="w-full"
+            onClick={() => {
+              const [, id] = selected.id.split(":");
+              void deleteNode(selected.kind, Number(id), selected.label);
+            }}
           >
-            {t("common.cancel")}
-          </button>
-          <button
-            type="button"
-            onClick={() => void generate()}
-            disabled={busy || !name.trim()}
-            className="flex items-center gap-1.5 rounded-sm bg-accent px-3 py-1 text-xs font-medium text-[var(--qc-bg)] hover:bg-accent-hover disabled:opacity-50"
-          >
-            {busy ? <LoaderCircle size={12} className="animate-spin" aria-hidden /> : <Save size={12} aria-hidden />}
-            Generate
-          </button>
+            <Trash2 size={12} aria-hidden />
+            {t("common.delete")}
+          </Button>
         </div>
-      </div>
-    </div>
+      ) : selectedL ? (
+        <div className="space-y-2 p-2">
+          <p className="text-sm font-medium">Line</p>
+          <label className="block">
+            <span className="mb-0.5 block text-xs text-text-secondary">Label (relation)</span>
+            <Input
+              key={selectedL.id}
+              defaultValue={selectedL.label}
+              onBlur={(e) => {
+                const [, id] = selectedL.id.split(":");
+                void graphPatchLine(selectedL.kind, Number(id), { label: e.target.value });
+              }}
+              className="w-full"
+            />
+          </label>
+          <label className="block">
+            <span className="mb-0.5 block text-xs text-text-secondary">Style</span>
+            <Select
+              value={selectedL.arrow_mode}
+              onChange={(e) => {
+                const [, id] = selectedL.id.split(":");
+                void graphPatchLine(selectedL.kind, Number(id), { arrow_mode: e.target.value });
+              }}
+              className="w-full"
+            >
+              {ARROW_MODES.map((m) => (
+                <option key={m} value={m}>
+                  {m.replace(/_/g, " ")}
+                </option>
+              ))}
+            </Select>
+          </label>
+          <Button
+            variant="danger"
+            className="w-full"
+            onClick={() => {
+              const [, id] = selectedL.id.split(":");
+              void deleteLine(selectedL.kind, Number(id));
+            }}
+          >
+            <Trash2 size={12} aria-hidden />
+            {t("common.delete")}
+          </Button>
+        </div>
+      ) : (
+        <div className="space-y-1.5 p-3 text-xs text-text-secondary">
+          <p>Double-click the canvas to add a node.</p>
+          <p>Drag nodes to move them (positions save automatically).</p>
+          <p>Select a node, press the link button, then click a second node to draw a relation line.</p>
+          <p>Select a line to label it or change its arrow style.</p>
+        </div>
+      )}
+      {graphsUi.error && (
+        <div className="border-t border-border p-2">
+          <p className="text-xs text-danger">{graphsUi.error}</p>
+        </div>
+      )}
+    </LeftBar>
   );
 }

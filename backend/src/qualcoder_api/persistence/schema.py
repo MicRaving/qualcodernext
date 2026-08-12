@@ -78,6 +78,29 @@ _SCHEMA_SQL: list[str] = [
     "entity text, action text, pk_name text, pk_value text, row_json text);",
 ]
 
+# Hot-path indexes (created for new projects; the migration chain adds the
+# same set to existing projects).
+_INDEX_SQL: list[str] = [
+    "CREATE INDEX IF NOT EXISTS idx_source_av_text_id ON source(av_text_id)",
+    "CREATE INDEX IF NOT EXISTS idx_code_text_fid ON code_text(fid)",
+    "CREATE INDEX IF NOT EXISTS idx_code_text_cid ON code_text(cid)",
+    "CREATE INDEX IF NOT EXISTS idx_code_image_id ON code_image(id)",
+    "CREATE INDEX IF NOT EXISTS idx_code_image_cid ON code_image(cid)",
+    "CREATE INDEX IF NOT EXISTS idx_code_av_id ON code_av(id)",
+    "CREATE INDEX IF NOT EXISTS idx_code_av_cid ON code_av(cid)",
+    "CREATE INDEX IF NOT EXISTS idx_annotation_fid ON annotation(fid)",
+    "CREATE INDEX IF NOT EXISTS idx_case_text_caseid ON case_text(caseid)",
+    "CREATE INDEX IF NOT EXISTS idx_case_text_fid ON case_text(fid)",
+    "CREATE INDEX IF NOT EXISTS idx_audit_log_action ON audit_log(action)",
+    "CREATE INDEX IF NOT EXISTS idx_audit_log_user ON audit_log(user)",
+    "CREATE INDEX IF NOT EXISTS idx_audit_log_source ON audit_log(source_id)",
+    "CREATE INDEX IF NOT EXISTS idx_sync_log_user ON sync_log(user)",
+    "CREATE INDEX IF NOT EXISTS idx_code_cat_super ON code_cat(supercatid)",
+    "CREATE INDEX IF NOT EXISTS idx_code_name_cat ON code_name(catid)",
+    "CREATE INDEX IF NOT EXISTS idx_code_name_super ON code_name(supercid)",
+    "CREATE INDEX IF NOT EXISTS idx_attribute_name ON attribute(name)",
+]
+
 # Extra tables/views beyond the v14 core (added at project-open time).
 _CODER_NAMES_SQL = """
     CREATE TABLE IF NOT EXISTS coder_names (
@@ -107,6 +130,8 @@ async def create_new_project_schema(
 
     cur = await conn.cursor()
     for sql in _SCHEMA_SQL:
+        await cur.execute(sql)
+    for sql in _INDEX_SQL:
         await cur.execute(sql)
     await cur.execute(_CODER_NAMES_SQL)
     for view_name in tables.VISIBILITY_VIEWS:

@@ -38,6 +38,35 @@ class IndexRequest(BaseModel):
     rebuild: bool = False
 
 
+@router.get("/models")
+async def ai_models() -> dict:
+    """List the models the configured provider advertises (OpenAI-compatible
+    ``/v1/models``). Local providers (ollama/lmstudio/opencode-go) answer
+    quickly; cloud providers need an API key, so failures return empty."""
+    import httpx
+
+    ai = user_settings.get_ai_settings()
+    api_base = (ai.get("api_base") or "").rstrip("/")
+    if not api_base:
+        return {"models": []}
+    headers = {}
+    api_key = ai.get("api_key") or ""
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+    url = f"{api_base}/models"
+    try:
+        async with httpx.AsyncClient(timeout=3.0) as client:
+            resp = await client.get(url, headers=headers)
+            resp.raise_for_status()
+            data = resp.json()
+        models = sorted(
+            (m.get("id") for m in data.get("data", []) if m.get("id")),
+        )
+        return {"models": models}
+    except Exception:
+        return {"models": []}
+
+
 @router.get("/status")
 async def ai_status() -> dict:
     ai = user_settings.get_ai_settings()

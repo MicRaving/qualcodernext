@@ -42,14 +42,24 @@ async def get_bookmarks(db: DbDep) -> dict:
 
 @router.put("/bookmarks")
 async def set_bookmark(req: BookmarkRequest, db: DbDep) -> dict:
-    return await ProjectRepository(db).set_bookmark(file_id=req.file_id, pos=req.pos)
+    result = await ProjectRepository(db).set_bookmark(file_id=req.file_id, pos=req.pos)
+    await audit.record(
+        db, user=get_codername(), action="bookmark.set", entity="project",
+        detail={"file_id": req.file_id, "pos": req.pos},
+    )
+    return result
 
 
 @router.put("/bookmarks/av")
 async def set_av_bookmark(req: AVBookmarkRequest, db: DbDep) -> dict:
-    return await ProjectRepository(db).set_av_bookmark(
+    result = await ProjectRepository(db).set_av_bookmark(
         file_id=req.file_id, msec=req.msec, textpos=req.textpos
     )
+    await audit.record(
+        db, user=get_codername(), action="bookmark.set", entity="project",
+        detail={"file_id": req.file_id, "msec": req.msec, "textpos": req.textpos},
+    )
+    return result
 
 
 # ----------------------------------------------------------------------
@@ -75,7 +85,7 @@ async def list_pseudonyms(svc: ServiceDep) -> dict:
 
 
 @router.post("/pseudonyms")
-async def add_pseudonym(req: PseudonymAdd, svc: ServiceDep) -> dict:
+async def add_pseudonym(req: PseudonymAdd, svc: ServiceDep, db: DbDep) -> dict:
     from qualcoder_api.services import pseudonyms
 
     if svc.project_path == "":
@@ -84,16 +94,24 @@ async def add_pseudonym(req: PseudonymAdd, svc: ServiceDep) -> dict:
         entry = pseudonyms.add_pseudonym(svc.project_path, req.original, req.pseudonym)
     except ValueError as err:
         raise HTTPException(status_code=422, detail=str(err)) from err
+    await audit.record(
+        db, user=get_codername(), action="pseudonym.add", entity="pseudonym",
+        detail={"original": req.original},
+    )
     return {"pseudonym": entry}
 
 
 @router.delete("/pseudonyms/{original}")
-async def delete_pseudonym(original: str, svc: ServiceDep) -> dict:
+async def delete_pseudonym(original: str, svc: ServiceDep, db: DbDep) -> dict:
     from qualcoder_api.services import pseudonyms
 
     if svc.project_path == "":
         raise HTTPException(status_code=409, detail="no project is open")
     pseudonyms.delete_pseudonym(svc.project_path, original)
+    await audit.record(
+        db, user=get_codername(), action="pseudonym.delete", entity="pseudonym",
+        detail={"original": original},
+    )
     return {"ok": True}
 
 
@@ -136,7 +154,11 @@ async def speakers_mark(req: SpeakersMarkRequest, db: DbDep) -> dict:
         raise HTTPException(status_code=422, detail=str(err)) from err
     await audit.record(
         db, user=owner, action="speakers.mark", entity="code_text",
-        detail={"turns_marked": result.get("turns_marked", 0)},
+        detail={
+            "turns_marked": result.get("turns_marked", 0),
+            "codes_created": result.get("codes_created", 0),
+            "skipped_duplicates": result.get("skipped_duplicates", 0),
+        },
     )
     return result
 
@@ -347,21 +369,47 @@ async def list_filters(db: DbDep) -> dict:
 
 @router.post("/sources/filters", status_code=201)
 async def create_filter(req: FilterCreate, db: DbDep) -> dict:
-    from qualcoder_api.persistence.repositories import _inserted_pk
+    from qualcoder_api.persistence.repositories import _capture, _inserted_pk, _rowdict
 
     result = await db.execute(
         tables.files_filter.insert().values(
             name=req.name, filter=req.filter, owner=resolve_owner(req.owner)
         )
     )
+    filterid = _inserted_pk(result)
     await db.commit()
-    return {"ok": True, "filterid": _inserted_pk(result)}
+    row = (
+        await db.execute(
+            select(tables.files_filter).where(tables.files_filter.c.filterid == filterid)
+        )
+    ).first()
+    if row is not None:
+        await _capture(db, "files_filter", "insert", "filterid", filterid, _rowdict(row))
+        await db.commit()
+    await audit.record(
+        db, user=get_codername(), action="filter.create", entity="files_filter",
+        entity_id=filterid, detail={"name": req.name},
+    )
+    return {"ok": True, "filterid": filterid}
 
 
 @router.delete("/sources/filters/{filterid}", status_code=204)
 async def delete_filter(filterid: int, db: DbDep) -> None:
+    from qualcoder_api.persistence.repositories import _capture, _rowdict
+
+    row = (
+        await db.execute(
+            select(tables.files_filter).where(tables.files_filter.c.filterid == filterid)
+        )
+    ).first()
     await db.execute(delete(tables.files_filter).where(tables.files_filter.c.filterid == filterid))
+    if row is not None:
+        await _capture(db, "files_filter", "delete", "filterid", filterid, _rowdict(row))
     await db.commit()
+    await audit.record(
+        db, user=get_codername(), action="filter.delete", entity="files_filter",
+        entity_id=filterid,
+    )
 
 
 # ----------------------------------------------------------------------

@@ -132,7 +132,6 @@ export const ht: Record<string, string> = {
   "analyze.titleHeatmap": "Kart chalè",
   "analyze.pickCode": "Kòd:",
   "analyze.copyCodebook": "Kopi nan memwa koupe",
-  "analyze.importCodebook": "Enpòte liv kòd",
   "graphs.title": "Graf",
   "graphs.newGraph": "Nouvo graf",
   "graphs.models": "Modèl…",

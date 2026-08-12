@@ -9,17 +9,20 @@
  * Classes are centralized here so a design change lands in ONE place.
  */
 import {
+  useContext,
   useEffect,
   type ButtonHTMLAttributes,
   type HTMLAttributes,
   type InputHTMLAttributes,
   type ReactNode,
   type SelectHTMLAttributes,
+  type TextareaHTMLAttributes,
   type ThHTMLAttributes,
 } from "react";
 import { ArrowLeft, LoaderCircle, X } from "lucide-react";
 import { ViewBackButton } from "@/components/shell/ViewBackButton";
 import { cls } from "@/components/ui/tokens";
+import { BarWidthContext } from "@/components/ui/barWidth";
 
 /* ------------------------------------------------------------------ */
 /* Buttons                                                             */
@@ -50,7 +53,7 @@ export function Button({ variant = "secondary", icon, className = "", children, 
 export interface IconButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
   label: string;
   title?: string;
-  size?: "sm" | "md";
+  size?: "sm" | "md" | "row";
 }
 
 /** Ghost icon button with a mandatory accessible name. */
@@ -60,7 +63,9 @@ export function IconButton({ label, title, size = "md", className = "", children
       type="button"
       aria-label={label}
       title={title ?? label}
-      className={`${size === "sm" ? cls.ghostSmall : cls.ghost} ${className}`}
+      className={`${
+        size === "sm" ? cls.ghostSmall : size === "row" ? cls.ghostRow : cls.ghost
+      } ${className}`}
       {...rest}
     >
       {children}
@@ -82,12 +87,15 @@ export interface ViewHeaderProps extends Omit<HTMLAttributes<HTMLElement>, "titl
   back?: boolean | (() => void);
   /** Interaction buttons rendered on the right. */
   actions?: ReactNode;
+  /** Allow the row to wrap to a second line (coder headers with many
+   *  controls). */
+  wrap?: boolean;
 }
 
 /** Center-view header: [back] [title] [meta] … [actions]. */
-export function ViewHeader({ title, meta, back = true, actions, children, ...rest }: ViewHeaderProps) {
+export function ViewHeader({ title, meta, back = true, actions, wrap = false, children, ...rest }: ViewHeaderProps) {
   return (
-    <header className={cls.bar} {...rest}>
+    <header className={wrap ? cls.barWrap : cls.bar} {...rest}>
       {back !== false &&
         (typeof back === "function" ? (
           <button
@@ -130,34 +138,224 @@ export function BarHeader({ title, count, actions, children, ...rest }: BarHeade
   );
 }
 
+/** Pixel width injected by WorkspaceLayout's border-drag resize (null when
+ *  the bar should use its preset width). */
 export interface LeftBarProps extends HTMLAttributes<HTMLElement> {
-  width?: "sm" | "md";
+  width?: "sm" | "md" | "lg";
+  /** Exact pixel width (overrides the preset widths). */
+  widthPx?: number;
   /** Which side the border sits on (right by default, left for the
    *  Inspector). */
   borderSide?: "r" | "l";
   /** Fixed header row (rendered OUTSIDE the scrollable area). */
   header?: ReactNode;
+  /** Fixed footer row (rendered OUTSIDE the scrollable area, at the very
+   *  bottom). */
+  footer?: ReactNode;
+  /** Wrap children in the scrollable body (default true; set false for
+   *  panes that manage their own scrolling, e.g. the AI chat). */
+  scroll?: boolean;
 }
 
 /** The uniform left/right bar shell: fixed header + scrollable body. */
 export function LeftBar({
   width = "md",
+  widthPx,
   borderSide = "r",
   header,
+  footer,
+  scroll = true,
   children,
   className = "",
+  style,
   ...rest
 }: LeftBarProps) {
+  const ctxWidth = useContext(BarWidthContext);
+  const resolved = ctxWidth ?? widthPx;
   return (
     <aside
-      className={`flex ${width === "sm" ? "w-64" : "w-72"} shrink-0 flex-col ${
+      className={`flex ${
+        width === "sm" ? "w-64" : width === "lg" ? "w-96" : "w-72"
+      } shrink-0 flex-col ${
         borderSide === "r" ? "border-r" : "border-l"
       } border-border bg-surface ${className}`}
+      style={resolved != null ? { ...style, width: resolved } : style}
       {...rest}
     >
       {header}
-      <div className="qc-scroll min-h-0 flex-1 overflow-y-auto">{children}</div>
+      {scroll ? <div className="qc-scroll min-h-0 flex-1 overflow-y-auto">{children}</div> : children}
+      {footer}
     </aside>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/* Inputs                                                              */
+/* ------------------------------------------------------------------ */
+
+export interface InputProps extends InputHTMLAttributes<HTMLInputElement> {
+  className?: string;
+}
+
+export function Input({ className = "", ...rest }: InputProps) {
+  return <input className={`${cls.input} ${className}`} {...rest} />;
+}
+
+export interface SelectProps extends SelectHTMLAttributes<HTMLSelectElement> {
+  className?: string;
+}
+
+export function Select({ className = "", ...rest }: SelectProps) {
+  return <select className={`${cls.select} ${className}`} {...rest} />;
+}
+
+export interface TextareaProps extends TextareaHTMLAttributes<HTMLTextAreaElement> {
+  className?: string;
+}
+
+export function Textarea({ className = "", ...rest }: TextareaProps) {
+  return <textarea className={`${cls.textarea} ${className}`} {...rest} />;
+}
+
+export function Field({ label, children, className = "" }: { label: ReactNode; children: ReactNode; className?: string }) {
+  return (
+    <label className={`block ${className}`}>
+      <span className={cls.fieldLabel}>{label}</span>
+      {children}
+    </label>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/* Modals and menus                                                    */
+/* ------------------------------------------------------------------ */
+
+const MODAL_SIZES = {
+  sm: "w-80 max-w-[92vw]",
+  md: "w-[26rem] max-w-[92vw]",
+  lg: "w-[32rem] max-w-[92vw]",
+  xl: "w-[36rem] max-w-[92vw]",
+} as const;
+
+export interface ModalProps {
+  open: boolean;
+  /** Enables the close X, Escape and backdrop-click dismissal. */
+  onClose?: () => void;
+  /** Title rendered in the default header (with the close X). */
+  title?: ReactNode;
+  /** Small icon before the title. */
+  icon?: ReactNode;
+  /** Panel width; ignored when panelClassName is given. */
+  size?: keyof typeof MODAL_SIZES;
+  /** Replaces the panel class entirely (custom width, pointer-events…). */
+  panelClassName?: string;
+  /** Overrides the overlay classes (e.g. pointer-events-none). */
+  overlayClassName?: string;
+  /** Keeps the X visible but inert and blocks Escape/backdrop (busy forms). */
+  closeDisabled?: boolean;
+  /** Accessible name (falls back to `title` when it is a string). */
+  ariaLabel?: string;
+  children?: ReactNode;
+}
+
+/** The uniform modal: overlay + panel (+ optional header). Handles Escape
+ *  and backdrop-click dismissal itself — views never re-implement it. */
+export function Modal({
+  open,
+  onClose,
+  title,
+  icon,
+  size = "md",
+  panelClassName,
+  overlayClassName = "",
+  closeDisabled = false,
+  ariaLabel,
+  children,
+}: ModalProps) {
+  useEffect(() => {
+    if (!open || !onClose) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && !closeDisabled) onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [open, onClose, closeDisabled]);
+
+  if (!open) return null;
+  return (
+    <div
+      className={`${cls.modalOverlay} ${overlayClassName}`}
+      onMouseDown={(e) => {
+        if (e.target === e.currentTarget && !closeDisabled) onClose?.();
+      }}
+      role="dialog"
+      aria-modal="true"
+      aria-label={typeof title === "string" ? title : ariaLabel}
+    >
+      <div className={`${cls.modalPanel} ${panelClassName ?? MODAL_SIZES[size]}`}>
+        {title !== undefined && (
+          <div className={cls.modalHeader}>
+            {icon}
+            <span className="truncate text-sm font-semibold text-text-primary">{title}</span>
+            <div className="flex-1" />
+            <IconButton
+              label="Close"
+              size="sm"
+              onClick={onClose}
+              disabled={closeDisabled}
+              className="disabled:opacity-40"
+            >
+              <X size={14} aria-hidden />
+            </IconButton>
+          </div>
+        )}
+        {children}
+      </div>
+    </div>
+  );
+}
+
+export function Menu({
+  className = "",
+  position = "absolute",
+  children,
+  ...rest
+}: HTMLAttributes<HTMLDivElement> & { position?: "absolute" | "fixed" }) {
+  return (
+    <div
+      className={`${
+        position === "fixed"
+          ? "fixed z-40 rounded-md border border-border bg-surface py-1 shadow-lg"
+          : cls.menu
+      } ${className}`}
+      {...rest}
+    >
+      {children}
+    </div>
+  );
+}
+
+export interface MenuItemProps extends ButtonHTMLAttributes<HTMLButtonElement> {
+  className?: string;
+}
+
+export function MenuItem({ className = "", children, ...rest }: MenuItemProps) {
+  return (
+    <button type="button" className={`${cls.menuItem} ${className}`} {...rest}>
+      {children}
+    </button>
+  );
+}
+
+export interface TableHeadProps extends ThHTMLAttributes<HTMLTableCellElement> {
+  className?: string;
+}
+
+export function TableHead({ className = "", children, ...rest }: TableHeadProps) {
+  return (
+    <th className={`${cls.tableHead} ${className}`} {...rest}>
+      {children}
+    </th>
   );
 }
 
@@ -180,12 +378,20 @@ export function Card({ children, className = "" }: { children: ReactNode; classN
 export function ErrorBanner({
   children,
   onClose,
+  tone = "danger",
 }: {
   children: ReactNode;
   onClose?: () => void;
+  tone?: "danger" | "warning" | "success";
 }) {
+  const bannerCls =
+    tone === "warning"
+      ? "flex shrink-0 items-center gap-2 border-b border-warning bg-warning/10 px-3 py-1.5 text-sm text-warning"
+      : tone === "success"
+        ? "flex shrink-0 items-center gap-2 border-b border-border bg-surface px-3 py-1.5 text-sm text-success"
+        : "flex shrink-0 items-center gap-2 border-b border-danger bg-danger/10 px-3 py-1.5 text-sm text-danger";
   return (
-    <div className="flex shrink-0 items-center gap-2 border-b border-danger bg-danger/10 px-3 py-1.5 text-sm text-danger">
+    <div className={bannerCls} role="status">
       <span className="min-w-0 flex-1 truncate">{children}</span>
       {onClose && (
         <IconButton label="Dismiss" size="sm" onClick={onClose} className="text-danger hover:text-danger">

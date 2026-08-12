@@ -302,6 +302,8 @@ async def mark_speakers(
     selected_set = {s.strip() for s in (selected or []) if s.strip()}
 
     # Category "📌 Speakers" (create on demand).
+    from qualcoder_api.persistence.repositories import _capture, _inserted_pk, _rowdict
+
     cat_row = (
         await session.execute(
             select(tables.code_cat.c.catid).where(
@@ -319,9 +321,14 @@ async def mark_speakers(
                 supercatid=None,
             )
         )
-        from qualcoder_api.persistence.repositories import _inserted_pk
-
         catid = int(_inserted_pk(result))
+        cat_after = (
+            await session.execute(
+                select(tables.code_cat).where(tables.code_cat.c.catid == catid)
+            )
+        ).first()
+        if cat_after is not None:
+            await _capture(session, "code_cat", "insert", "catid", catid, _rowdict(cat_after))
 
     # Speaker codes (create on demand).
     code_by_name: dict[str, Code] = {}
@@ -343,8 +350,6 @@ async def mark_speakers(
     skipped_duplicates = 0
 
     # Create one code per speaker name (deterministic order).
-    from qualcoder_api.persistence.repositories import _inserted_pk
-
     for name in sorted({t["name"] for t in turns}, key=str.lower):
         if selected_set and name not in selected_set:
             continue
@@ -356,6 +361,13 @@ async def mark_speakers(
                 )
             )
             new_id = int(_inserted_pk(result))
+            code_after = (
+                await session.execute(
+                    select(tables.code_name).where(tables.code_name.c.cid == new_id)
+                )
+            ).first()
+            if code_after is not None:
+                await _capture(session, "code_name", "insert", "cid", new_id, _rowdict(code_after))
             code_by_name[name] = Code.model_validate(
                 {
                     "cid": new_id,
@@ -377,7 +389,7 @@ async def mark_speakers(
         if turn_code is None:
             continue
         try:
-            await session.execute(
+            result = await session.execute(
                 tables.code_text.insert().values(
                     cid=turn_code.cid,
                     fid=turn["fid"],
@@ -386,10 +398,18 @@ async def mark_speakers(
                     pos1=turn["pos1"],
                     owner=SPEAKER_CODER_NAME,
                     memo="",
-                    date="",
+                    date=_now(),
                     important=0,
                 )
             )
+            ctid = int(_inserted_pk(result))
+            coding_after = (
+                await session.execute(
+                    select(tables.code_text).where(tables.code_text.c.ctid == ctid)
+                )
+            ).first()
+            if coding_after is not None:
+                await _capture(session, "code_text", "insert", "ctid", ctid, _rowdict(coding_after))
             marked += 1
         except Exception:
             skipped_duplicates += 1

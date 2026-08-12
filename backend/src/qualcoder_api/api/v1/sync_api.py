@@ -41,6 +41,16 @@ async def put_sync_settings(req: SyncSettingsRequest, svc: ServiceDep) -> dict:
                 svc.session_factory, svc.project_path, user_settings.get_codername()
             )
         )
+    # Record the toggle in the open project's history (best effort).
+    if svc.engine is not None:
+        from qualcoder_api.services import audit
+
+        _, factory = svc._ensure_engine()
+        async with factory() as session:
+            await audit.record(
+                session, user=user_settings.get_codername(), action="sync.toggle",
+                entity="project", detail={"enabled": req.enabled},
+            )
     return saved
 
 

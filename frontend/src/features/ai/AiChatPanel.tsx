@@ -1,13 +1,14 @@
 /**
- * AiChatPanel — chat with the project AI assistant. Supports the upstream
- * chat modes (help, topic exploration, code analysis, text analysis) and
- * prompt-library selection.
+ * AiChatPanel — chat with the project AI assistant. The chat mode and
+ * prompt-library selection live in the pane's top bar (AiView).
  */
 import { useEffect, useRef, useState, type KeyboardEvent } from "react";
-import { CircleAlert, Eraser, LoaderCircle, Send } from "lucide-react";
-import { api, type AiPromptInfo, type AiStatus } from "@/lib/api";
+import { Eraser, LoaderCircle, Send } from "lucide-react";
+import { api, type AiStatus } from "@/lib/api";
 import { errorDetail, welcomeMessage } from "@/features/ai/format";
 import { useI18n } from "@/lib/i18n";
+import { ErrorBanner, IconButton, Textarea } from "@/components/ui/orchestrator";
+import type { AiMode } from "@/features/ai/aiModes";
 
 type ChatRole = "user" | "assistant" | "error";
 
@@ -16,26 +17,18 @@ interface ChatMessage {
   text: string;
 }
 
-const MODES = ["general", "help", "topic_exploration", "code_analysis", "text_analysis"] as const;
-type Mode = (typeof MODES)[number];
-
-const MODE_LABELS: Record<Mode, string> = {
-  general: "ai.modeGeneral",
-  help: "ai.modeHelp",
-  topic_exploration: "ai.modeTopic",
-  code_analysis: "ai.modeCode",
-  text_analysis: "ai.modeText",
-};
-
-export function AiChatPanel() {
+export function AiChatPanel({
+  mode,
+  promptId,
+}: {
+  mode: AiMode;
+  promptId: string;
+}) {
   const { t } = useI18n();
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
   const [waiting, setWaiting] = useState(false);
   const [status, setStatus] = useState<AiStatus | null>(null);
-  const [mode, setMode] = useState<Mode>("general");
-  const [prompts, setPrompts] = useState<AiPromptInfo[]>([]);
-  const [promptId, setPromptId] = useState<string>("");
   const scrollRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
@@ -50,12 +43,6 @@ export function AiChatPanel() {
       .catch(() => {
         if (!cancelled) setStatus(null);
       });
-    api
-      .aiPrompts()
-      .then((res) => {
-        if (!cancelled) setPrompts(res.prompts);
-      })
-      .catch(() => undefined);
     return () => {
       cancelled = true;
     };
@@ -90,54 +77,11 @@ export function AiChatPanel() {
     }
   }
 
-  const modePrompts = prompts.filter((p) => p.mode === mode);
-
   return (
     <div className="flex h-full min-h-0 flex-col bg-bg">
       {disabled && (
-        <div className="flex shrink-0 items-center gap-2 border-b border-warning bg-warning/10 px-3 py-1.5 text-sm text-warning">
-          <CircleAlert size={14} aria-hidden />
-          <span>{welcomeMessage(false)}</span>
-        </div>
+        <ErrorBanner tone="warning">{welcomeMessage(false)}</ErrorBanner>
       )}
-
-      {/* Mode + prompt pickers */}
-      <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-border bg-surface px-3 py-1.5">
-        <label className="flex items-center gap-1.5 text-xs text-text-secondary">
-          {t("ai.modeLabel")}
-          <select
-            value={mode}
-            onChange={(e) => {
-              setMode(e.target.value as Mode);
-              setPromptId("");
-            }}
-            className="h-7 rounded-sm border border-border bg-bg px-1.5 text-xs outline-none focus:border-accent"
-          >
-            {MODES.map((m) => (
-              <option key={m} value={m}>
-                {t(MODE_LABELS[m])}
-              </option>
-            ))}
-          </select>
-        </label>
-        {modePrompts.length > 0 && (
-          <label className="flex items-center gap-1.5 text-xs text-text-secondary">
-            {t("ai.promptLabel")}
-            <select
-              value={promptId}
-              onChange={(e) => setPromptId(e.target.value)}
-              className="h-7 max-w-52 rounded-sm border border-border bg-bg px-1.5 text-xs outline-none focus:border-accent"
-            >
-              <option value="">{t("ai.promptNone")}</option>
-              {modePrompts.map((p) => (
-                <option key={p.id} value={p.id} title={p.description}>
-                  {p.name}
-                </option>
-              ))}
-            </select>
-          </label>
-        )}
-      </div>
 
       {/* Messages */}
       <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto p-3">
@@ -183,7 +127,7 @@ export function AiChatPanel() {
       {/* Input row */}
       <div className="shrink-0 border-t border-border bg-surface p-3">
         <div className="mx-auto flex max-w-2xl items-end gap-2">
-          <textarea
+          <Textarea
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
@@ -191,7 +135,7 @@ export function AiChatPanel() {
             placeholder={t("ai.chatPlaceholder")}
             aria-label={t("ai.messageAria")}
             disabled={disabled}
-            className="min-h-0 flex-1 resize-none rounded-sm border border-border bg-bg px-2 py-1.5 text-sm outline-none focus:border-accent disabled:opacity-50"
+            className="min-h-0 flex-1 resize-none px-2 py-1.5"
           />
           <button
             type="button"
@@ -203,15 +147,14 @@ export function AiChatPanel() {
           >
             <Send size={14} aria-hidden />
           </button>
-          <button
-            type="button"
-            onClick={() => setMessages(status?.enabled ? [{ role: "assistant", text: welcomeMessage(true) }] : [])}
-            aria-label={t("ai.clearAria")}
+          <IconButton
+            label={t("ai.clearAria")}
             title={t("ai.clearTitle")}
-            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-sm border border-border bg-bg text-text-secondary hover:bg-surface-higher hover:text-text-primary"
+            className="h-8 w-8 border border-border bg-bg"
+            onClick={() => setMessages(status?.enabled ? [{ role: "assistant", text: welcomeMessage(true) }] : [])}
           >
             <Eraser size={14} aria-hidden />
-          </button>
+          </IconButton>
         </div>
       </div>
     </div>

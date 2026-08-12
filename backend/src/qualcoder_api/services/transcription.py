@@ -7,12 +7,15 @@ for them; the job registry is in-process (one backend = one instance).
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import threading
 import time
 import uuid
 from pathlib import Path
+
+from qualcoder_api.services import audit
 
 logger = logging.getLogger(__name__)
 
@@ -107,6 +110,7 @@ def start_job(*, source_path: str, options: dict, meta: dict | None = None) -> s
             "segments": 0,
             "result": None,
             "error": None,
+            "live_text": None,
             "started": time.time(),
             **(meta or {}),
         }
@@ -126,6 +130,18 @@ def _set_job(job_id: str, **fields) -> None:
         job.update(fields)
 
 
+def claim_finished_job(job_id: str) -> bool:
+    """Atomically reserve a finished job for finalization. Exactly one
+    caller wins (concurrent polls race otherwise and would both create the
+    transcript source); the loser sees ``consumed`` set and skips."""
+    with _jobs_lock:
+        job = _JOBS.get(job_id)
+        if job is None or job.get("state") != "done" or job.get("consumed"):
+            return False
+        job["consumed"] = True
+        return True
+
+
 def mark_job_consumed(job_id: str, source_id: int | None) -> None:
     """Mark a finished job as finalized (transcript source created)."""
     _set_job(job_id, consumed=True, transcript_source_id=source_id)
@@ -138,6 +154,9 @@ def _run_worker(job_id: str, source_path: str, options: dict) -> None:
             segments = _transcribe_noscribe(job_id, source_path, options)
         else:
             segments = _transcribe_whisper(job_id, source_path, options)
+        # Persist the finished transcript so it survives an app restart even
+        # when nobody polls the job (a sweep on project open finalizes it).
+        persist_finished_job(job_id)
         _set_job(
             job_id,
             state="done",
@@ -149,6 +168,254 @@ def _run_worker(job_id: str, source_path: str, options: dict) -> None:
     except Exception as err:
         logger.exception("transcription failed")
         _set_job(job_id, state="error", error=str(err), message="failed")
+
+
+def persist_finished_job(job_id: str) -> None:
+    """Write the finished job's transcript to the project dir as a sidecar
+    (``_transcripts/<job_id>.json`` + ``.txt``). The API finalizes these on
+    project open or on the next job poll, so completed transcriptions are
+    never lost when the app quits mid-poll."""
+    with _jobs_lock:
+        job = dict(_JOBS.get(job_id) or {})
+    project_path = job.get("project_path")
+    if not project_path or job.get("state") == "error":
+        return
+    segments = job.get("result") or []
+    if not segments:
+        return
+    try:
+        out_dir = Path(project_path) / "_transcripts"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        text = segments_to_text(segments, timestamps=bool(job.get("timestamps", True)))
+        (out_dir / f"{job_id}.txt").write_text(text, encoding="utf-8")
+        sidecar = {
+            "source_id": job.get("source_id"),
+            "transcript_name": job.get("transcript_name", "transcript.txt"),
+            "timestamps": bool(job.get("timestamps", True)),
+            "segment_coding": bool(job.get("segment_coding", False)),
+            "segment_cid": job.get("segment_cid"),
+            "segments": segments,
+        }
+        (out_dir / f"{job_id}.json").write_text(
+            json.dumps(sidecar, ensure_ascii=False), encoding="utf-8"
+        )
+    except Exception:
+        logger.exception("could not persist finished transcript")
+
+
+async def finalize_transcript(
+    *,
+    job_data: dict,
+    project_path: str,
+    session_factory,
+) -> int | None:
+    """Create the transcript source for a finished job, fold it into the AV
+    companion and link ``av_text_id``; optionally codes every segment onto
+    the timeline. Returns the transcript source id (or the companion id)."""
+    import contextlib
+
+    from qualcoder_api.persistence.repositories import CodingRepository, _capture, _rowdict
+    from qualcoder_api.services.import_service import ImportService
+    from qualcoder_api.services.user_settings import get_codername
+
+    segments = job_data.get("result") or []
+    source_id = None
+    if segments and session_factory is not None:
+        transcript = segments_to_text(segments, timestamps=job_data.get("timestamps", True))
+        media_source_id = job_data.get("source_id")
+        tmp_txt = os.path.join(project_path, f"_transcript_{job_data['id']}.txt")
+        with open(tmp_txt, "w", encoding="utf-8") as f:  # noqa: ASYNC230 - small local write
+            f.write(transcript)
+        try:
+            importer = ImportService(project_path, session_factory)
+            source = await importer.import_file(
+                tmp_txt,
+                owner=get_codername(),
+                link=False,
+                filename=job_data.get("transcript_name", "transcript.txt"),
+            )
+        finally:
+            with contextlib.suppress(OSError):
+                os.remove(tmp_txt)
+        if source is None:
+            # Re-transcription: a transcript with the same name already
+            # exists (import returns None on duplicates). Update its text
+            # instead of silently discarding the new result.
+            from sqlalchemy import select, update
+
+            from qualcoder_api.persistence import tables
+
+            transcript_name = job_data.get("transcript_name", "transcript.txt")
+            async with session_factory() as session:
+                existing = (
+                    await session.execute(
+                        select(tables.source).where(tables.source.c.name == transcript_name)
+                    )
+                ).first()
+                if existing is not None:
+                    await session.execute(
+                        update(tables.source)
+                        .where(tables.source.c.id == existing.id)
+                        .values(fulltext=transcript)
+                    )
+                    updated = (
+                        await session.execute(
+                            select(tables.source).where(tables.source.c.id == existing.id)
+                        )
+                    ).first()
+                    if updated is not None:
+                        await _capture(
+                            session, "source", "update", "id", existing.id, _rowdict(updated)
+                        )
+                    media_row = (
+                        await session.execute(
+                            select(tables.source).where(tables.source.c.id == media_source_id)
+                        )
+                    ).first()
+                    if media_row is not None and media_row.av_text_id is None:
+                        await session.execute(
+                            update(tables.source)
+                            .where(tables.source.c.id == media_source_id)
+                            .values(av_text_id=existing.id)
+                        )
+                        media_after = (
+                            await session.execute(
+                                select(tables.source).where(tables.source.c.id == media_source_id)
+                            )
+                        ).first()
+                        if media_after is not None:
+                            await _capture(
+                                session, "source", "update", "id", media_source_id,
+                                _rowdict(media_after),
+                            )
+                    await session.commit()
+                    source_id = existing.id
+        if source is not None:
+            source_id = source.id
+            from sqlalchemy import delete, select, update
+
+            from qualcoder_api.persistence import tables
+
+            async with session_factory() as session:
+                media_row = (
+                    await session.execute(
+                        select(tables.source).where(tables.source.c.id == media_source_id)
+                    )
+                ).first()
+                companion_id = media_row.av_text_id if media_row is not None else None
+                companion_row = None
+                if companion_id is not None:
+                    companion_row = (
+                        await session.execute(
+                            select(tables.source).where(tables.source.c.id == companion_id)
+                        )
+                    ).first()
+                if companion_row is not None:
+                    await session.execute(
+                        update(tables.source)
+                        .where(tables.source.c.id == companion_id)
+                        .values(fulltext=transcript)
+                    )
+                    # Capture the POST-update row — the sidecar is replayed
+                    # by collaborators, so a stale (pre-update) snapshot
+                    # would overwrite their transcript with the old text.
+                    companion_after = (
+                        await session.execute(
+                            select(tables.source).where(tables.source.c.id == companion_id)
+                        )
+                    ).first()
+                    if companion_after is not None:
+                        await _capture(
+                            session, "source", "update", "id", companion_id,
+                            _rowdict(companion_after),
+                        )
+                    dup_row = (
+                        await session.execute(
+                            select(tables.source).where(tables.source.c.id == source_id)
+                        )
+                    ).first()
+                    await session.execute(
+                        update(tables.source)
+                        .where(tables.source.c.id == source_id)
+                        .values(fulltext="")
+                    )
+                    await session.execute(
+                        delete(tables.source).where(tables.source.c.id == source_id)
+                    )
+                    if dup_row is not None:
+                        await _capture(
+                            session, "source", "delete", "id", int(source_id), _rowdict(dup_row)
+                        )
+                    await session.commit()
+                    source_id = companion_id
+                else:
+                    await session.execute(
+                        update(tables.source)
+                        .where(tables.source.c.id == media_source_id)
+                        .values(av_text_id=source_id)
+                    )
+                    media_after = (
+                        await session.execute(
+                            select(tables.source).where(tables.source.c.id == media_source_id)
+                        )
+                    ).first()
+                    if media_after is not None:
+                        await _capture(
+                            session, "source", "update", "id", media_source_id,
+                            _rowdict(media_after),
+                        )
+                    await session.commit()
+        async with session_factory() as session:
+            await audit.record(
+                session,
+                user=get_codername(),
+                action="source.import",
+                entity="source",
+                entity_id=source_id,
+                detail={"name": "transcript", "transcription": True},
+            )
+        if job_data.get("segment_coding") and job_data.get("segment_cid") is not None:
+            async with session_factory() as session:
+                repo = CodingRepository(session)
+                for seg in segments:
+                    await repo.add_av_coding(
+                        id=int(media_source_id or 0),
+                        pos0=int(seg["start"] * 1000),
+                        pos1=int(seg["end"] * 1000),
+                        cid=job_data["segment_cid"],
+                        owner=get_codername(),
+                    )
+    return source_id
+
+
+async def sweep_pending_transcripts(*, project_path: str, session_factory) -> list[dict]:
+    """Finalize transcripts persisted by completed jobs (so transcriptions
+    survive app restarts). Runs on project open; deletes the sidecars."""
+    if not project_path or session_factory is None:
+        return []
+    dir_ = Path(project_path) / "_transcripts"
+    if not dir_.exists():
+        return []
+    finalized: list[dict] = []
+    for sidecar in sorted(dir_.glob("*.json")):
+        try:
+            data = json.loads(sidecar.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        data["id"] = sidecar.stem
+        try:
+            sid = await finalize_transcript(
+                job_data=data,
+                project_path=project_path,
+                session_factory=session_factory,
+            )
+            finalized.append({"job_id": sidecar.stem, "transcript_source_id": sid})
+        except Exception:
+            logger.exception("failed to finalize persisted transcript %s", sidecar.stem)
+            continue
+        sidecar.unlink(missing_ok=True)
+        (dir_ / f"{sidecar.stem}.txt").unlink(missing_ok=True)
+    return finalized
 
 
 def _transcribe_whisper(job_id: str, source_path: str, options: dict) -> list[dict]:
@@ -173,14 +440,21 @@ def _transcribe_whisper(job_id: str, source_path: str, options: dict) -> list[di
     )
     duration = max(float(getattr(info, "duration", 0) or 0), 1.0)
     segments: list[dict] = []
+    live_lines: list[str] = []
     for idx, seg in enumerate(segments_iter):
         segments.append(
             {"start": float(seg.start), "end": float(seg.end), "text": (seg.text or "").strip()}
         )
+        # Live preview: keep the partial transcript on the job so the video
+        # view can show it while the transcription is still running.
+        text = (seg.text or "").strip()
+        if text:
+            live_lines.append(f"{format_timestamp(float(seg.start))} {text}")
         _set_job(
             job_id,
             progress=min(99.0, float(seg.end) / duration * 100.0),
             message=f"transcribing {idx + 1}",
+            live_text="\n".join(live_lines),
         )
     return segments
 

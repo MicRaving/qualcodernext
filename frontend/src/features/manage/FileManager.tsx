@@ -19,23 +19,32 @@ import {
   FileImage,
   FileText,
   Link2,
-  LoaderCircle,
-  MoreHorizontal,
   Pencil,
-  RefreshCw,
   Replace,
-  Search,
   StickyNote,
   Trash2,
   Upload,
   UserRound,
-  X,
 } from "lucide-react";
 import { api, ApiError, type BadLink, type FileFilter, type Source } from "@/lib/api";
-import { isPdf } from "@/lib/media";
 import { cn } from "@/lib/utils";
+import { cls } from "@/components/ui/tokens";
 import { useI18n } from "@/lib/i18n";
-import { ViewHeader } from "@/components/ui/orchestrator";
+import { useToast } from "@/lib/toast";
+import {
+  Button,
+  EmptyState,
+  ErrorBanner,
+  IconButton,
+
+  LoadingState,
+  Menu,
+  MenuItem,
+  Modal,
+  Select,
+  TableHead,
+  ViewHeader,
+} from "@/components/ui/orchestrator";
 import { useProjectStore } from "@/stores/project";
 import {
   filterSources,
@@ -70,7 +79,7 @@ function SortableTh({
   onSort: (key: SortKey) => void;
 }) {
   return (
-    <th className="border-b border-border px-3 py-2 text-left text-xs font-medium uppercase tracking-wide text-text-secondary">
+    <th className={cls.tableHead}>
       <button
         type="button"
         onClick={() => onSort(sortKey)}
@@ -93,11 +102,13 @@ function SortableTh({
 
 export function FileManager() {
   const { t } = useI18n();
+  const toast = useToast();
   const setView = useProjectStore((s) => s.setView);
   const selectFile = useProjectStore((s) => s.selectFile);
   const sources = useProjectStore((s) => s.sources);
 
-  const [query, setQuery] = useState("");
+  const fileQuery = useProjectStore((s) => s.fileQuery);
+  const setFileQuery = useProjectStore((s) => s.setFileQuery);
   const [sortKey, setSortKey] = useState<SortKey>("name");
   const [sortDir, setSortDir] = useState<SortDir>("asc");
   const [loading, setLoading] = useState(true);
@@ -105,6 +116,7 @@ export function FileManager() {
   const [skipped, setSkipped] = useState<string[]>([]);
   const [actionError, setActionError] = useState<string | null>(null);
   const [menu, setMenu] = useState<{ id: number; x: number; y: number } | null>(null);
+  const [selected, setSelected] = useState<Set<number>>(new Set());
   const [linkModal, setLinkModal] = useState(false);
   const [badLinks, setBadLinks] = useState<BadLink[]>([]);
   const [filters, setFilters] = useState<FileFilter[]>([]);
@@ -153,17 +165,17 @@ export function FileManager() {
   const applyFilter = useCallback((f: FileFilter) => {
     try {
       const parsed = JSON.parse(f.filter) as { query?: string };
-      setQuery(parsed.query ?? "");
+      setFileQuery(parsed.query ?? "");
     } catch {
-      setQuery("");
+      setFileQuery("");
     }
-  }, []);
+  }, [setFileQuery]);
 
   async function saveCurrentFilter() {
     const name = window.prompt(t("files.filtersNamePrompt"));
     if (!name?.trim()) return;
     try {
-      const filterJson = JSON.stringify({ query });
+      const filterJson = JSON.stringify({ query: fileQuery });
       await api.createFileFilter(name.trim(), filterJson);
       await loadFilters();
     } catch (e) {
@@ -176,7 +188,7 @@ export function FileManager() {
     try {
       await api.deleteFileFilter(f.filterid);
       setActiveFilter("");
-      setQuery("");
+      setFileQuery("");
       await loadFilters();
     } catch (e) {
       setActionError(e instanceof Error ? e.message : t("files.filtersDelete"));
@@ -238,11 +250,40 @@ export function FileManager() {
     return () => window.removeEventListener("keydown", onKey);
   }, [menu]);
 
-  const filtered = useMemo(() => filterSources(sources, query), [sources, query]);  const rows = useMemo(
+  const filtered = useMemo(() => filterSources(sources, fileQuery), [sources, fileQuery]);  const rows = useMemo(
     () => sortSources(filtered, sortKey, sortDir),
     [filtered, sortKey, sortDir],
   );
   const menuRow = menu ? rows.find((r) => r.id === menu.id) : undefined;
+
+  // Drop selections for rows that left the filtered list.
+  useEffect(() => {
+    const visible = new Set(rows.map((r) => r.id));
+    setSelected((prev) => {
+      if (prev.size === 0) return prev;
+      const next = new Set([...prev].filter((id) => visible.has(id)));
+      return next.size === prev.size ? prev : next;
+    });
+  }, [rows]);
+
+  function toggleSelected(id: number) {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
+      return next;
+    });
+  }
+
+  function toggleSelectAll() {
+    setSelected((prev) => {
+      const allSelected = rows.length > 0 && rows.every((r) => prev.has(r.id));
+      return allSelected ? new Set() : new Set(rows.map((r) => r.id));
+    });
+  }
 
   // Measure the scroll viewport so the visible row window tracks its size.
   useEffect(() => {
@@ -341,6 +382,23 @@ export function FileManager() {
     }
   }
 
+  async function deleteSelected() {
+    if (selected.size === 0) return;
+    const n = selected.size;
+    if (!window.confirm(t("files.deleteSelectedConfirm", { n }))) return;
+    setActionError(null);
+    try {
+      for (const id of selected) {
+        await api.deleteSource(id);
+      }
+      setSelected(new Set());
+      await useProjectStore.getState().refreshProject();
+      toast.success(t("files.deletedSelected", { n }));
+    } catch (e) {
+      setActionError(e instanceof Error ? e.message : t("files.deleteError"));
+    }
+  }
+
   async function assignToCase(row: Source) {
     const name = window.prompt(t("files.assignCasePrompt", { name: row.name }));
     if (name === null) return;
@@ -360,49 +418,21 @@ export function FileManager() {
     }
   }
 
-  function openMenu(e: MouseEvent<HTMLButtonElement>, row: Source) {
-    e.stopPropagation();
-    const rect = e.currentTarget.getBoundingClientRect();
-    setMenu({ id: row.id, x: rect.right, y: rect.bottom + 4 });
-  }
-
   function openMenuAt(e: MouseEvent<HTMLTableRowElement>, row: Source) {
     e.preventDefault();
     setMenu({ id: row.id, x: e.clientX, y: e.clientY });
   }
 
-  const primaryBtnCls =
-    "flex items-center gap-1 rounded-sm bg-accent px-2.5 py-1 text-xs font-medium text-bg hover:bg-accent-hover";
-
   return (
     <div className="flex h-full flex-col bg-bg">
       {/* Header */}
-      <ViewHeader
+      <ViewHeader back={false}
         title={t("nav.files")}
-        meta={
-          <span className="rounded-sm bg-surface-higher px-1.5 py-px text-xs font-medium text-text-secondary">
-            {rows.length}
-          </span>
-        }
         actions={
           <>
-            <div className="relative ml-2">
-          <Search
-            size={14}
-            className="pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 text-text-secondary"
-            aria-hidden
-          />
-          <input
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            placeholder={t("files.searchPlaceholder")}
-            aria-label={t("files.searchAria")}
-            className="h-7 w-56 rounded-sm border border-border bg-bg pl-7 pr-2 text-sm outline-none focus:border-accent"
-          />
-        </div>
-        {filters.length > 0 && (
+            {filters.length > 0 && (
           <div className="flex items-center gap-1">
-            <select
+            <Select
               value={activeFilter}
               onChange={(e) => {
                 const id = e.target.value === "" ? "" : Number(e.target.value);
@@ -410,7 +440,6 @@ export function FileManager() {
                 const f = filters.find((x) => x.filterid === id);
                 if (f) applyFilter(f);
               }}
-              className="h-7 rounded-sm border border-border bg-bg px-1.5 text-xs outline-none focus:border-accent"
               aria-label={t("files.filters")}
             >
               <option value="">{t("files.filtersAll")}</option>
@@ -419,55 +448,48 @@ export function FileManager() {
                   {f.name}
                 </option>
               ))}
-            </select>
-            <button
-              type="button"
-              onClick={() => void saveCurrentFilter()}
+            </Select>
+            <IconButton
+              label={t("files.filtersSave")}
               title={t("files.filtersSave")}
-              className="rounded-sm p-1 text-text-secondary hover:bg-surface-higher hover:text-text-primary"
+              size="sm"
+              onClick={() => void saveCurrentFilter()}
             >
               <StickyNote size={13} aria-hidden />
-            </button>
+            </IconButton>
             {activeFilter !== "" && (
-              <button
-                type="button"
+              <IconButton
+                label={t("files.filtersDelete")}
+                title={t("files.filtersDelete")}
+                size="sm"
                 onClick={() => {
                   const f = filters.find((x) => x.filterid === activeFilter);
                   if (f) void removeFilter(f);
                 }}
-                title={t("files.filtersDelete")}
-                className="rounded-sm p-1 text-text-secondary hover:bg-danger/10 hover:text-danger"
+                className="hover:bg-danger/10 hover:text-danger"
               >
                 <Trash2 size={13} aria-hidden />
-              </button>
+              </IconButton>
             )}
           </div>
         )}
-        <button
-          type="button"
-          onClick={() => void openLinkModal()}
+        {selected.size > 0 && (
+          <Button
+            variant="danger"
+            icon={<Trash2 size={13} aria-hidden />}
+            onClick={() => void deleteSelected()}
+            title={t("files.deleteSelectedConfirm", { n: selected.size })}
+          >
+            {t("files.deleteSelectedButton", { n: selected.size })}
+          </Button>
+        )}
+        <IconButton
+          label={t("files.badLinks")}
           title={t("files.badLinks")}
-          className="rounded-sm p-1.5 text-text-secondary hover:bg-surface-higher hover:text-text-primary"
+          onClick={() => void openLinkModal()}
         >
           <Link2 size={15} aria-hidden />
-        </button>
-        <button
-          type="button"
-          onClick={() => void load()}
-          aria-label={t("files.refreshAria")}
-          title={t("common.refresh")}
-          className="rounded-sm p-1.5 text-text-secondary hover:bg-surface-higher hover:text-text-primary"
-        >
-          <RefreshCw size={16} aria-hidden />
-        </button>
-        <button
-          type="button"
-          onClick={() => fileInputRef.current?.click()}
-          className={primaryBtnCls}
-        >
-          <Upload size={14} aria-hidden />
-          {t("files.import")}
-        </button>
+        </IconButton>
         <input
           ref={fileInputRef}
           type="file"
@@ -482,47 +504,17 @@ export function FileManager() {
 
       {/* Inline notices */}
       {skipped.length > 0 && (
-        <div
-          role="status"
-          className="flex shrink-0 items-center gap-2 border-b border-border bg-surface px-3 py-1.5 text-sm text-warning"
-        >
-          <CircleAlert size={14} aria-hidden />
-          <span className="min-w-0 flex-1 truncate">
-            {t("files.skipped", {
-              names: skipped.map((n) => t("files.duplicate", { name: n })).join(", "),
-            })}
-          </span>
-          <button
-            type="button"
-            onClick={() => setSkipped([])}
-            aria-label={t("common.dismiss")}
-            className="rounded-sm p-0.5 hover:bg-surface-higher"
-          >
-            <X size={14} aria-hidden />
-          </button>
-        </div>
+        <ErrorBanner tone="warning" onClose={() => setSkipped([])}>
+          {t("files.skipped", {
+            names: skipped.map((n) => t("files.duplicate", { name: n })).join(", "),
+          })}
+        </ErrorBanner>
       )}
-      {actionError && (
-        <div className="flex shrink-0 items-center gap-2 border-b border-border bg-surface px-3 py-1.5 text-sm text-danger">
-          <CircleAlert size={14} aria-hidden />
-          <span className="min-w-0 flex-1 truncate">{actionError}</span>
-          <button
-            type="button"
-            onClick={() => setActionError(null)}
-            aria-label={t("common.dismiss")}
-            className="rounded-sm p-0.5 hover:bg-surface-higher"
-          >
-            <X size={14} aria-hidden />
-          </button>
-        </div>
-      )}
+      {actionError && <ErrorBanner onClose={() => setActionError(null)}>{actionError}</ErrorBanner>}
 
       {/* Body */}
       {loading && sources.length === 0 ? (
-        <div className="flex flex-1 items-center justify-center gap-2 text-text-secondary">
-          <LoaderCircle size={16} className="animate-spin" aria-hidden />
-          {t("files.loading")}
-        </div>
+        <LoadingState>{t("files.loading")}</LoadingState>
       ) : loadError ? (
         <div className="flex flex-1 items-center justify-center">
           <div className="max-w-md text-center">
@@ -530,35 +522,26 @@ export function FileManager() {
               <CircleAlert size={16} aria-hidden />
               {loadError}
             </p>
-            <button
-              type="button"
-              onClick={() => void load()}
-              className="mt-3 rounded-sm border border-border bg-surface px-3 py-1.5 text-sm hover:bg-surface-higher"
-            >
+            <Button variant="secondary" className="mt-3" onClick={() => void load()}>
               {t("common.retry")}
-            </button>
+            </Button>
           </div>
         </div>
       ) : sources.length === 0 ? (
-        <div className="flex flex-1 flex-col items-center justify-center gap-3">
-          <p className="text-sm text-text-secondary">
-            {t("files.empty")}
-          </p>
-          <button
-            type="button"
+        <EmptyState>
+          <p className="text-sm text-text-secondary">{t("files.empty")}</p>
+          <Button
+            variant="primary"
+            icon={<Upload size={14} aria-hidden />}
             onClick={() => fileInputRef.current?.click()}
-            className={cn(primaryBtnCls, "px-3 py-1.5 text-sm")}
           >
-            <Upload size={14} aria-hidden />
             {t("files.importFiles")}
-          </button>
-        </div>
+          </Button>
+        </EmptyState>
       ) : rows.length === 0 ? (
-        <div className="flex flex-1 items-center justify-center">
-          <p className="text-sm text-text-secondary">
-            {t("files.noMatch", { query })}
-          </p>
-        </div>
+        <EmptyState>
+          {t("files.noMatch", { query: fileQuery })}
+        </EmptyState>
       ) : (
         <div
           ref={scrollRef}
@@ -568,6 +551,16 @@ export function FileManager() {
           <table className="w-full border-separate border-spacing-0">
             <thead className="sticky top-0 z-10 bg-surface">
               <tr>
+                <th className="w-8 border-b border-border px-1 text-center">
+                  <input
+                    type="checkbox"
+                    checked={rows.length > 0 && rows.every((r) => selected.has(r.id))}
+                    onChange={toggleSelectAll}
+                    className={"h-3.5 w-3.5 shrink-0 cursor-pointer rounded-sm border border-border accent-[var(--qc-accent)]"}
+                    aria-label={t("files.selectAll")}
+                    title={t("files.selectAll")}
+                  />
+                </th>
                 <SortableTh
                   label={t("files.colName")}
                   sortKey="name"
@@ -596,10 +589,7 @@ export function FileManager() {
                   dir={sortDir}
                   onSort={toggleSort}
                 />
-                <th className="border-b border-border px-3 py-2 text-left text-xs font-medium uppercase tracking-wide text-text-secondary">
-                  {t("files.colMemo")}
-                </th>
-                <th className="w-10 border-b border-border" />
+                <TableHead>{t("files.colMemo")}</TableHead>
               </tr>
             </thead>
             <tbody>
@@ -609,7 +599,7 @@ export function FileManager() {
                   aligned. */}
               {start > 0 && (
                 <tr aria-hidden>
-                  <td colSpan={6} className="p-0" style={{ height: start * ROW_HEIGHT }} />
+                  <td colSpan={5} className="p-0" style={{ height: start * ROW_HEIGHT }} />
                 </tr>
               )}
               {rows.slice(start, end).map((row) => (
@@ -620,15 +610,21 @@ export function FileManager() {
                   style={{ height: ROW_HEIGHT }}
                   className="cursor-pointer hover:bg-surface-higher"
                 >
+                  <td className="w-8 border-b border-border px-1 text-center">
+                    <input
+                      type="checkbox"
+                      checked={selected.has(row.id)}
+                      onChange={() => toggleSelected(row.id)}
+                      onClick={(e) => e.stopPropagation()}
+                      className={"h-3.5 w-3.5 shrink-0 cursor-pointer rounded-sm border border-border accent-[var(--qc-accent)]"}
+                    aria-label={t("files.selectRow", { name: row.name })}
+                    title={t("files.selectRow", { name: row.name })}
+                    />
+                  </td>
                   <td className="max-w-64 border-b border-border px-3 py-2">
                     <span className="flex items-center gap-2">
                       {fileIcon(row.media_type)}
                       <span className="truncate font-medium">{row.name}</span>
-                      {isPdf(row.name) && (
-                        <span className="shrink-0 rounded-sm bg-surface-higher px-1 py-px text-[10px] font-medium uppercase text-text-secondary">
-                          {t("files.badgePdf")}
-                        </span>
-                      )}
                     </span>
                   </td>
                   <td className="whitespace-nowrap border-b border-border px-3 py-2 text-text-secondary">
@@ -643,22 +639,11 @@ export function FileManager() {
                   <td className="max-w-64 truncate border-b border-border px-3 py-2 text-text-secondary">
                     {row.memo || <span className="italic">—</span>}
                   </td>
-                  <td className="w-10 border-b border-border px-2 py-2 text-right">
-                    <button
-                      type="button"
-                      onClick={(e) => openMenu(e, row)}
-                      aria-label={t("files.actionsFor", { name: row.name })}
-                      title={t("files.actionsTitle")}
-                      className="rounded-sm p-1 text-text-secondary hover:bg-surface-higher hover:text-text-primary"
-                    >
-                      <MoreHorizontal size={16} aria-hidden />
-                    </button>
-                  </td>
                 </tr>
               ))}
               {end < rows.length && (
                 <tr aria-hidden>
-                  <td colSpan={6} className="p-0" style={{ height: (rows.length - end) * ROW_HEIGHT }} />
+                  <td colSpan={5} className="p-0" style={{ height: (rows.length - end) * ROW_HEIGHT }} />
                 </tr>
               )}
             </tbody>
@@ -674,87 +659,77 @@ export function FileManager() {
             onClick={() => setMenu(null)}
             aria-hidden
           />
-          <div
-            className="fixed z-40 min-w-40 rounded-md border border-border bg-surface py-1 shadow-lg"
+          <Menu
+            position="fixed"
+            className="min-w-40"
             style={{ left: menu.x, top: menu.y, transform: "translateX(-100%)" }}
             role="menu"
             aria-label={t("files.actionsTitle")}
           >
-            <button
-              type="button"
+            <MenuItem
               role="menuitem"
               onClick={() => {
                 setMenu(null);
                 void selectFile(menuRow.id);
               }}
-              className="flex w-full items-center gap-2 px-2 py-1.5 text-left text-sm hover:bg-surface-higher"
             >
               <Info size={14} aria-hidden />
               {t("sidebar.menuDetails")}
-            </button>
-            <button
-              type="button"
+            </MenuItem>
+            <MenuItem
               role="menuitem"
               onClick={() => {
                 setMenu(null);
                 void renameSource(menuRow);
               }}
-              className="flex w-full items-center gap-2 px-2 py-1.5 text-left text-sm hover:bg-surface-higher"
             >
               <Pencil size={14} aria-hidden />
               {t("files.menuRename")}
-            </button>
-            <button
-              type="button"
+            </MenuItem>
+            <MenuItem
               role="menuitem"
               onClick={() => {
                 setMenu(null);
                 void editMemo(menuRow);
               }}
-              className="flex w-full items-center gap-2 px-2 py-1.5 text-left text-sm hover:bg-surface-higher"
             >
               <StickyNote size={14} aria-hidden />
               {t("files.menuEditMemo")}
-            </button>
-            <button
-              type="button"
+            </MenuItem>
+            <MenuItem
               role="menuitem"
+              className="text-danger"
               onClick={() => {
                 setMenu(null);
                 void deleteSource(menuRow);
               }}
-              className="flex w-full items-center gap-2 px-2 py-1.5 text-left text-sm text-danger hover:bg-surface-higher"
             >
               <Trash2 size={14} aria-hidden />
               {t("common.delete")}
-            </button>
-            <button
-              type="button"
+            </MenuItem>
+            <MenuItem
               role="menuitem"
               onClick={() => {
                 setMenu(null);
                 void assignToCase(menuRow);
               }}
-              className="flex w-full items-center gap-2 px-2 py-1.5 text-left text-sm hover:bg-surface-higher"
             >
               <UserRound size={14} aria-hidden />
               {t("files.menuAssignCase")}
-            </button>
+            </MenuItem>
             {menuRow.media_type === "text" && (
-              <button
-                type="button"
+              <MenuItem
                 role="menuitem"
                 onClick={() => {
                   setMenu(null);
                   replaceInputRef.current?.click();
                 }}
-                className="flex w-full items-center gap-2 px-2 py-1.5 text-left text-sm hover:bg-surface-higher"
               >
                 <Replace size={14} aria-hidden />
                 {t("files.menuReplace")}
-              </button>
+              </MenuItem>
             )}
-          </div>
+          </Menu>
         </>
       )}
 
@@ -772,81 +747,51 @@ export function FileManager() {
       />
 
       {/* Broken link repair modal */}
-      {linkModal && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
-          onClick={() => setLinkModal(false)}
-        >
-          <div
-            className="w-full max-w-lg rounded-lg border border-border bg-surface shadow-xl"
-            onClick={(e) => e.stopPropagation()}
-            role="dialog"
-            aria-label={t("files.badLinks")}
-          >
-            <div className="flex items-center justify-between border-b border-border px-4 py-2.5">
-              <h2 className="text-sm font-semibold text-text-primary">{t("files.badLinks")}</h2>
-              <button
-                type="button"
-                onClick={() => setLinkModal(false)}
-                aria-label={t("common.close")}
-                className="rounded-sm p-1 text-text-secondary hover:bg-surface-higher"
-              >
-                <X size={15} aria-hidden />
-              </button>
-            </div>
-            <p className="border-b border-border px-4 py-2 text-xs text-text-secondary">
-              {t("files.badLinksHint")}
+      <Modal
+        open={linkModal}
+        onClose={() => setLinkModal(false)}
+        title={t("files.badLinks")}
+        panelClassName="w-full max-w-lg"
+      >
+        <p className="border-b border-border px-4 py-2 text-xs text-text-secondary">
+          {t("files.badLinksHint")}
+        </p>
+        <div className="max-h-72 overflow-auto">
+          {badLinks.length === 0 ? (
+            <p className="px-4 py-6 text-center text-sm text-text-secondary">
+              {t("files.badLinksEmpty")}
             </p>
-            <div className="max-h-72 overflow-auto">
-              {badLinks.length === 0 ? (
-                <p className="px-4 py-6 text-center text-sm text-text-secondary">
-                  {t("files.badLinksEmpty")}
-                </p>
-              ) : (
-                <table className="w-full border-collapse">
-                  <tbody>
-                    {badLinks.map((link) => (
-                      <tr key={link.id} className="border-b border-border last:border-0">
-                        <td className="max-w-40 truncate px-4 py-2 text-sm font-medium">
-                          {link.name}
-                        </td>
-                        <td className="max-w-48 truncate px-2 py-2 text-xs text-text-secondary">
-                          {link.path}
-                        </td>
-                        <td className="px-2 py-2 text-right">
-                          <button
-                            type="button"
-                            onClick={() => void fixLink(link)}
-                            className="rounded-sm border border-border bg-bg px-2 py-1 text-xs hover:bg-surface-higher"
-                          >
-                            {t("files.badLinksFix")}
-                          </button>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              )}
-            </div>
-            <div className="flex items-center justify-between border-t border-border px-4 py-2.5">
-              <button
-                type="button"
-                onClick={() => void bulkRename()}
-                className="rounded-sm border border-border bg-bg px-2.5 py-1 text-xs hover:bg-surface-higher"
-              >
-                {t("files.bulkRename")}
-              </button>
-              <button
-                type="button"
-                onClick={() => setLinkModal(false)}
-                className="rounded-sm bg-accent px-3 py-1 text-xs font-medium text-[var(--qc-bg)] hover:bg-accent-hover"
-              >
-                {t("common.close")}
-              </button>
-            </div>
-          </div>
+          ) : (
+            <table className="w-full border-collapse">
+              <tbody>
+                {badLinks.map((link) => (
+                  <tr key={link.id} className="border-b border-border last:border-0">
+                    <td className="max-w-40 truncate px-4 py-2 text-sm font-medium">
+                      {link.name}
+                    </td>
+                    <td className="max-w-48 truncate px-2 py-2 text-xs text-text-secondary">
+                      {link.path}
+                    </td>
+                    <td className="px-2 py-2 text-right">
+                      <Button variant="secondary" onClick={() => void fixLink(link)}>
+                        {t("files.badLinksFix")}
+                      </Button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
         </div>
-      )}
+        <div className="flex items-center justify-between border-t border-border px-4 py-2.5">
+          <Button variant="secondary" onClick={() => void bulkRename()}>
+            {t("files.bulkRename")}
+          </Button>
+          <Button variant="primary" onClick={() => setLinkModal(false)}>
+            {t("common.close")}
+          </Button>
+        </div>
+      </Modal>
     </div>
   );
 }

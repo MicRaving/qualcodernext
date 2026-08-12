@@ -40,6 +40,7 @@ async def _run_import(svc, file: UploadFile, codername: str | None, importer, ki
 
 async def _merge_archive(svc, archive_path: str, codername: str | None) -> dict:
     """Merge a zipped ``.qda`` project (``data.qda`` + media folders)."""
+    import asyncio
     import zipfile
 
     if svc.project_path == "" or svc.session_factory is None:
@@ -47,8 +48,10 @@ async def _merge_archive(svc, archive_path: str, codername: str | None) -> dict:
     extracted = archive_path + "_dir"
     try:
         try:
-            with zipfile.ZipFile(archive_path) as archive:
-                archive.extractall(extracted)
+            # Zip extraction is CPU/IO heavy — keep it off the event loop.
+            await asyncio.to_thread(
+                lambda: zipfile.ZipFile(archive_path).extractall(extracted)
+            )
         except zipfile.BadZipFile as err:
             raise HTTPException(status_code=422, detail="not a zip archive") from err
         candidates = [extracted]
@@ -78,9 +81,10 @@ async def _merge_archive(svc, archive_path: str, codername: str | None) -> dict:
     except ValueError as err:
         raise HTTPException(status_code=422, detail=str(err)) from err
     finally:
+        import asyncio
         import shutil
 
-        shutil.rmtree(extracted, ignore_errors=True)
+        await asyncio.to_thread(shutil.rmtree, extracted, True)
 
 
 async def _save_upload(file: UploadFile, svc, prefix: str) -> str:

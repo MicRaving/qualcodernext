@@ -3,10 +3,17 @@
  * manage saved queries.
  */
 import { useCallback, useEffect, useState, type FormEvent } from "react";
-import { CircleAlert, LoaderCircle, Play, Save, Trash2 } from "lucide-react";
+import { LoaderCircle, Play, Save, Trash2 } from "lucide-react";
 import { api, ApiError, type SavedQuery, type SqlResult } from "@/lib/api";
+import { useI18n } from "@/lib/i18n";
 import { useToast } from "@/lib/toast";
-import { cn } from "@/lib/utils";
+import {
+  Button,
+  ErrorBanner,
+  Input,
+  TableHead,
+  Textarea,
+} from "@/components/ui/orchestrator";
 
 function errorDetail(e: unknown): string {
   if (e instanceof ApiError && typeof e.detail === "string") return e.detail;
@@ -14,6 +21,7 @@ function errorDetail(e: unknown): string {
 }
 
 export function SqlReport() {
+  const { t } = useI18n();
   const toast = useToast();
   const [sql, setSql] = useState("");
   const [title, setTitle] = useState("");
@@ -75,7 +83,7 @@ export function SqlReport() {
   }
 
   async function handleDelete(q: SavedQuery) {
-    if (!window.confirm(`Delete saved query "${q.title}"?`)) return;
+    if (!window.confirm(t("analyze.deleteQueryConfirm", { name: q.title }))) return;
     try {
       await api.deleteQuery(q.title);
       setError(null);
@@ -88,14 +96,11 @@ export function SqlReport() {
     }
   }
 
-  const btnCls =
-    "flex items-center gap-1.5 rounded-sm bg-accent px-2.5 py-1 text-xs font-medium text-bg hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-50";
-
   return (
     <div className="flex h-full flex-col">
       {/* Toolbar */}
       <div className="space-y-2 border-b border-border bg-surface p-3">
-        <textarea
+        <Textarea
           value={sql}
           onChange={(e) => setSql(e.target.value)}
           onKeyDown={(e) => {
@@ -106,59 +111,50 @@ export function SqlReport() {
           }}
           rows={6}
           spellCheck={false}
-          placeholder="SELECT source.name, count(*) FROM code_text GROUP BY source.name"
-          aria-label="SQL query"
-          className="w-full resize-y rounded-sm border border-border bg-bg p-2 font-mono text-xs text-text-primary outline-none focus:border-accent"
+          placeholder={t("analyze.sqlPlaceholder")}
+          aria-label={t("analyze.sqlQueryAria")}
+          className="w-full resize-y p-2 font-mono text-xs! text-text-primary"
         />
         <div className="flex flex-wrap items-center gap-2">
-          <button
-            type="button"
+          <Button
+            variant="primary"
             onClick={() => void run(sql)}
             disabled={!sql.trim() || running}
-            className={btnCls}
+            icon={<Play size={14} aria-hidden />}
           >
-            <Play size={14} aria-hidden />
-            Run
-          </button>
+            {t("analyze.run")}
+          </Button>
           {running && (
             <span className="flex items-center gap-1 text-xs text-text-secondary" role="status">
               <LoaderCircle size={12} className="animate-spin" aria-hidden />
-              Running…
+              {t("analyze.running")}
             </span>
           )}
           <span className="flex-1" />
           <form onSubmit={(e) => void handleSave(e)} className="flex items-center gap-2">
-            <input
+            <Input
               value={title}
               onChange={(e) => setTitle(e.target.value)}
-              placeholder="Query title…"
-              aria-label="Query title"
-              className="h-7 w-44 rounded-sm border border-border bg-bg px-2 text-xs outline-none focus:border-accent"
+              placeholder={t("analyze.queryTitlePlaceholder")}
+              aria-label={t("analyze.queryTitleAria")}
+              className="w-44"
             />
-            <button
+            <Button
+              variant="primary"
               type="submit"
               disabled={!title.trim() || !sql.trim() || running}
-              className={btnCls}
+              icon={<Save size={14} aria-hidden />}
             >
-              <Save size={14} aria-hidden />
-              Save query
-            </button>
+              {t("analyze.saveQuery")}
+            </Button>
           </form>
         </div>
       </div>
 
       {/* Notices */}
-      {error && (
-        <div className="flex shrink-0 items-center gap-2 border-b border-border bg-surface px-3 py-1.5 text-sm text-danger">
-          <CircleAlert size={14} aria-hidden />
-          <span className="min-w-0 flex-1 truncate">{error}</span>
-        </div>
-      )}
+      {error && <ErrorBanner>{error}</ErrorBanner>}
       {result?.truncated && (
-        <div className="flex shrink-0 items-center gap-2 border-b border-border bg-surface px-3 py-1.5 text-sm text-warning">
-          <CircleAlert size={14} aria-hidden />
-          Results truncated — refine the query to see all rows.
-        </div>
+        <ErrorBanner tone="warning">Results truncated — refine the query to see all rows.</ErrorBanner>
       )}
 
       {/* Saved queries */}
@@ -168,7 +164,7 @@ export function SqlReport() {
           {savedError ? (
             <span className="text-xs text-danger">{savedError}</span>
           ) : saved.length === 0 ? (
-            <span className="text-xs text-text-secondary">No saved queries yet.</span>
+            <span className="text-xs text-text-secondary">{t("analyze.noSavedQueries")}</span>
           ) : (            saved.map((q) => (
               <span
                 key={q.title}
@@ -188,7 +184,7 @@ export function SqlReport() {
                 <button
                   type="button"
                   onClick={() => void handleDelete(q)}
-                  aria-label={`Delete saved query ${q.title}`}
+                  aria-label={t("analyze.deleteQueryFor", { name: q.title })}
                   title="Delete"
                   className="rounded-sm p-0.5 text-text-secondary hover:bg-surface-higher hover:text-danger"
                 >
@@ -198,15 +194,15 @@ export function SqlReport() {
             ))
           )}
         </div>
-        <button
-          type="button"
+        <Button
+          variant="primary"
+          className="shrink-0"
           onClick={() => void save()}
           disabled={!title.trim() || !sql.trim() || running}
-          className={cn(btnCls, "shrink-0")}
+          icon={<Save size={14} aria-hidden />}
         >
-          <Save size={14} aria-hidden />
-          Save current
-        </button>
+          {t("analyze.saveCurrent")}
+        </Button>
       </div>
 
       {/* Results */}
@@ -216,12 +212,7 @@ export function SqlReport() {
             <thead className="sticky top-0 z-10 bg-surface">
               <tr>
                 {result.columns.map((col) => (
-                  <th
-                    key={col}
-                    className="border-b border-border px-2 py-1.5 text-left text-xs font-medium text-text-secondary"
-                  >
-                    {col}
-                  </th>
+                  <TableHead key={col}>{col}</TableHead>
                 ))}
               </tr>
             </thead>
@@ -231,10 +222,7 @@ export function SqlReport() {
                   {row.map((cell, j) => (
                     <td
                       key={j}
-                      className={cn(
-                        "border-b border-border px-2 py-1.5 text-sm",
-                        j === 0 && "font-medium",
-                      )}
+                      className="border-b border-border px-2 py-1.5 text-sm"
                     >
                       {cell === null ? (
                         <span className="text-text-secondary">NULL</span>

@@ -74,7 +74,11 @@ async def _revert_coding(session: AsyncSession, row: dict, *, undo: bool) -> str
     if (action == "coding.create") == undo:
         await _delete_by_id(session, table, pk, row_id)
         return f"deleted {table} #{row_id}"
-    await _insert_row(session, table, detail)
+    try:
+        await _insert_row(session, table, detail)
+    except Exception as err:
+        # Unique-constraint collisions must surface as a clean 422, not 500.
+        raise UnsupportedAction(f"cannot restore {table} #{row_id}: {err}") from err
     await _sync_capture(session, table, "insert", pk, row_id)
     return f"restored {table} #{row_id}"
 
@@ -127,7 +131,16 @@ async def _revert_code_create(session: AsyncSession, row: dict, *, undo: bool) -
     detail = _detail(row)
     cid = _ensure(detail, "cid")
     if undo:
-        await _delete_by_id(session, "code_name", "cid", cid)
+        # Mirror delete_code: remove the code AND its codings so the undo
+        # of a code.create does not orphan segments.
+        for tbl, col, pk in (
+            ("code_name", "cid", "cid"),
+            ("code_text", "cid", "ctid"),
+            ("code_av", "cid", "avid"),
+            ("code_image", "cid", "imid"),
+        ):
+            await session.execute(text(f"DELETE FROM {tbl} WHERE {col} = :v"), {"v": cid})
+            await _sync_capture(session, tbl, "delete", pk, cid)
         return f"deleted code #{cid} (and its codings)"
     await _insert_row(session, "code_name", detail)
     await _sync_capture(session, "code_name", "insert", "cid", cid)
@@ -147,6 +160,13 @@ async def _revert_entity_create(session: AsyncSession, row: dict, *, undo: bool)
     row_id = _ensure(detail, pk)
     if undo:
         await _delete_by_id(session, table, pk, row_id)
+        if table == "cases":
+            # Do not orphan the case-file links created with the case.
+            await session.execute(text("DELETE FROM case_text WHERE caseid = :v"), {"v": row_id})
+            await session.execute(
+                text("DELETE FROM attribute WHERE attr_type = 'case' AND id = :v"),
+                {"v": row_id},
+            )
         return f"deleted {table} #{row_id}"
     await _insert_row(session, table, detail)
     await _sync_capture(session, table, "insert", pk, row_id)
@@ -189,6 +209,23 @@ async def _revert_update(session: AsyncSession, row: dict, *, undo: bool) -> str
     raise UnsupportedAction(f"no undo for {action}")
 
 
+async def _revert_source_update(session: AsyncSession, row: dict, *, undo: bool) -> str:
+    """source.update (rename/memo): restore the before values (undo) or the
+    after values (redo)."""
+    detail = _detail(row)
+    source_id = row.get("entity_id") or row.get("source_id")
+    if not source_id:
+        raise UnsupportedAction("missing source id")
+    name = detail.get("before_name") if undo else detail.get("after_name")
+    memo = detail.get("before_memo") if undo else detail.get("after_memo")
+    await session.execute(
+        text("UPDATE source SET name = :n, memo = :m WHERE id = :id"),
+        {"n": name, "m": memo, "id": source_id},
+    )
+    await _sync_capture(session, "source", "update", "id", source_id)
+    return f"source #{source_id} {'restored' if undo else 're-applied'}"
+
+
 async def _revert_code_delete(session: AsyncSession, row: dict, *, undo: bool) -> str:
     detail = _detail(row)
     cid = _ensure(detail, "cid")
@@ -205,6 +242,16 @@ async def _revert_source_import(session: AsyncSession, row: dict, *, undo: bool)
     if not source_id:
         raise UnsupportedAction("missing source id")
     if undo:
+        # Remove the source AND everything attached to it (codings,
+        # annotations, case links) so the undo does not orphan rows.
+        for tbl, col in (
+            ("code_text", "fid"),
+            ("code_image", "id"),
+            ("code_av", "id"),
+            ("annotation", "fid"),
+            ("case_text", "fid"),
+        ):
+            await session.execute(text(f"DELETE FROM {tbl} WHERE {col} = :v"), {"v": source_id})
         await _delete_by_id(session, "source", "id", source_id)
         return f"deleted source #{source_id}"
     raise UnsupportedAction("cannot redo a source import")
@@ -219,6 +266,8 @@ async def apply(session: AsyncSession, row: dict, *, undo: bool) -> str:
         return await _revert_annotation(session, row, undo=undo)
     if action == "source.edit":
         return await _revert_edit(session, row, undo=undo)
+    if action == "source.update":
+        return await _revert_source_update(session, row, undo=undo)
     if action == "code.rename":
         return await _revert_rename(session, row, undo=undo)
     if action == "code.create":

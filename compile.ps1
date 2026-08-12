@@ -32,6 +32,8 @@ $backendDir = Join-Path $root "backend"
 $frontendDir = Join-Path $root "frontend"
 $venvPython = Join-Path $backendDir ".venv\Scripts\python.exe"
 $cargoBin = Join-Path $env:USERPROFILE ".cargo\bin"
+# App version (the updater compares it against the manifest's version field).
+$tauriVersion = (Get-Content (Join-Path $frontendDir "src-tauri\tauri.conf.json") -Raw | ConvertFrom-Json).version
 
 # --- PATH setup -----------------------------------------------------------
 # rustup installs cargo to %USERPROFILE%\.cargo\bin; it may not be on the
@@ -78,7 +80,14 @@ if (-not $SkipTauri) {
     Write-Host "`n[2/2] Building the Tauri app + installers..." -ForegroundColor Yellow
 
     # Updater artifacts must be signed; point the build at the private key.
+    # Without the key (fresh checkout — updater.key is gitignored) the tauri
+    # CLI refuses to bundle, so updater artifacts are temporarily disabled in
+    # tauri.conf.json and restored afterwards.
     $updaterKey = Join-Path $root "updater.key"
+    $confPath = Join-Path $frontendDir "src-tauri\tauri.conf.json"
+    $tauriConf = Get-Content $confPath -Raw | ConvertFrom-Json
+    $artifactsEnabled = $tauriConf.bundle.createUpdaterArtifacts
+    $disableArtifacts = $false
     if (Test-Path $updaterKey) {
         $env:TAURI_SIGNING_PRIVATE_KEY_PATH = $updaterKey
         $env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD = ""
@@ -91,8 +100,13 @@ if (-not $SkipTauri) {
             Write-Host "WARNING: could not read updater.key - signing may fail." -ForegroundColor DarkYellow
         }
         Write-Host "Updater signing key found - updater artifacts will be created." -ForegroundColor DarkGray
+    } elseif ($artifactsEnabled) {
+        Write-Host "WARNING: updater.key not found - building WITHOUT updater artifacts." -ForegroundColor DarkYellow
+        $tauriConf.bundle.createUpdaterArtifacts = $false
+        $tauriConf | ConvertTo-Json -Depth 10 | Set-Content $confPath -Encoding utf8
+        $disableArtifacts = $true
     } else {
-        Write-Host "WARNING: updater.key not found - updater artifacts will be skipped." -ForegroundColor DarkYellow
+        Write-Host "WARNING: updater.key not found - updater artifacts are disabled." -ForegroundColor DarkYellow
     }
 
     Push-Location $frontendDir
@@ -101,6 +115,12 @@ if (-not $SkipTauri) {
         if ($LASTEXITCODE -ne 0) { throw "Tauri build failed (exit $LASTEXITCODE)." }
     } finally {
         Pop-Location
+        if ($disableArtifacts) {
+            # Restore the canonical config (updater artifacts on for anyone
+            # who has the signing key).
+            $tauriConf.bundle.createUpdaterArtifacts = $true
+            $tauriConf | ConvertTo-Json -Depth 10 | Set-Content $confPath -Encoding utf8
+        }
     }
 } else {
     Write-Host "`n[2/2] Skipping Tauri build (-SkipTauri)." -ForegroundColor DarkGray
@@ -120,6 +140,43 @@ $report = @(
 foreach ($path in $report) {
     if (Test-Path $path) { Write-Host "  $path" -ForegroundColor Green }
 }
+
+# --- Update manifest -------------------------------------------------------
+# The static update manifest the app's updater endpoint points at
+# (plugins.updater.endpoints). Upload it together with the installers and
+# their .sig files to a GitHub release; the "latest" URL then always serves
+# the newest build. Only emitted when signed updater artifacts exist.
+Write-Host "`n[3/3] Generating the GitHub update manifest..." -ForegroundColor Yellow
+$nsisDir = Join-Path $frontendDir "src-tauri\target\release\bundle\nsis"
+$manifest = $null
+$nsisExe = Get-ChildItem -Path $nsisDir -Filter "*.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
+if ($null -ne $nsisExe) {
+    $sigFile = "$($nsisExe.FullName).sig"
+    if (Test-Path $sigFile) {
+        $signature = (Get-Content $sigFile -Raw).Trim()
+        $name = [System.IO.Path]::GetFileName($nsisExe.FullName)
+        $manifest = @{
+            version  = $tauriVersion
+            notes    = "QualCoder v$tauriVersion"
+            pub_date = (Get-Date).ToUniversalTime().ToString("o")
+            platforms = @{
+                "windows-x86_64" = @{
+                    signature = $signature
+                    url       = "https://github.com/MicRaving/qualcodernext/releases/latest/download/$name"
+                }
+            }
+        }
+    }
+}
+if ($null -ne $manifest) {
+    $manifestPath = Join-Path $nsisDir "qualcoder-latest.json"
+    $manifest | ConvertTo-Json -Depth 5 | Set-Content -Path $manifestPath -Encoding utf8
+    Write-Host "  $manifestPath" -ForegroundColor Green
+} else {
+    Write-Host "  skipped (no signed NSIS bundle found)" -ForegroundColor DarkYellow
+}
+
 Write-Host ""
 Write-Host "Run the app:  frontend\src-tauri\target\release\qualcoder-tauri.exe" -ForegroundColor White
 Write-Host "Install:      the NSIS or MSI package from bundle\nsis or bundle\msi" -ForegroundColor White
+Write-Host "Publish:      upload bundle\nsis\* , bundle\msi\* and qualcoder-latest.json to a GitHub release." -ForegroundColor White

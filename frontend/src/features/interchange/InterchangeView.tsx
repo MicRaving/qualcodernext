@@ -2,13 +2,18 @@
  * Interchange — export the project in REFI-QDA and import interchange files
  * with automatic format detection (REFI-QDA, RQDA, Taguette, RIS, Survey,
  * plain-text codebooks, zipped .qda projects or Zotero references).
+ *
+ * Picking a file shows an import menu (name + detected format + Import);
+ * the embedded Settings variant is chrome-free (no cards, explanations live
+ * behind ? icons).
  */
-import { useEffect, useRef, useState, type ChangeEvent, type FormEvent } from "react";
-import { BookMarked, CircleAlert, CircleCheck, Download, HelpCircle, LoaderCircle, Upload } from "lucide-react";
+import { useEffect, useRef, useState, type ChangeEvent, type ReactNode } from "react";
+import { CircleAlert, CircleCheck, Download, HelpCircle, LoaderCircle } from "lucide-react";
 import { api, ApiError, type InterchangeResult } from "@/lib/api";
-import { useToast } from "@/lib/toast";
-import { Button, Card } from "@/components/ui/orchestrator";
-import { formatImportResult, importLabel } from "@/features/interchange/format";
+import { Button, IconButton, ViewHeader } from "@/components/ui/orchestrator";
+import { cls } from "@/components/ui/tokens";
+import { importLabel } from "@/features/interchange/format";
+import { useI18n } from "@/lib/i18n";
 import { useProjectStore } from "@/stores/project";
 
 const FORMAT_HELP: [string, string][] = [
@@ -25,6 +30,33 @@ const FORMAT_HELP: [string, string][] = [
 function errorDetail(e: unknown): string {
   if (e instanceof ApiError && typeof e.detail === "string") return e.detail;
   return e instanceof Error ? e.message : "Import failed";
+}
+
+/** Best-guess format key for a chosen file name (for the import menu). */
+function detectFormat(name: string): string {
+  const ext = name.split(".").pop()?.toLowerCase() ?? "";
+  if (ext === "qdp" || ext === "qdc") return "refi";
+  if (ext === "rqda") return "rqda";
+  if (ext === "tag" || ext === "json") return "taguette";
+  if (ext === "ris") return "ris";
+  if (ext === "csv") return "survey";
+  if (ext === "zip") return "merge";
+  if (ext === "txt") return "codebook";
+  return "refi";
+}
+
+function FormatHelpList() {
+  return (
+    <ul className="space-y-1.5">
+      {FORMAT_HELP.map(([key, help]) => (
+        <li key={key} className="text-xs leading-relaxed text-text-secondary">
+          {importLabel(key)}
+          {" — "}
+          {help}
+        </li>
+      ))}
+    </ul>
+  );
 }
 
 function FormatHelpPopover({ onClose }: { onClose: () => void }) {
@@ -47,224 +79,199 @@ function FormatHelpPopover({ onClose }: { onClose: () => void }) {
   }, [onClose]);
 
   return (
-    <div
-      ref={rootRef}
-      className="absolute right-0 top-full z-50 mt-1 w-80 rounded-md border border-border bg-surface p-3 shadow-lg"
-      role="dialog"
-      aria-label="Import formats"
-    >
-      <ul className="space-y-1.5">
-        {FORMAT_HELP.map(([kind, help]) => (
-          <li key={kind} className="text-xs leading-relaxed text-text-secondary">
-            <span className="font-medium text-text-primary">{importLabel(kind)}</span>
-            {" — "}
-            {help}
-          </li>
-        ))}
-      </ul>
+    <div ref={rootRef} className={`absolute right-0 top-full z-50 mt-1 w-80 p-3 ${cls.popup}`} role="dialog">
+      <FormatHelpList />
     </div>
   );
 }
 
+/** The counts the backend reports after an import, as [label, value] pairs. */
+function resultCounts(res: InterchangeResult): [string, number][] {
+  const out: [string, number][] = [];
+  if (res.codes !== undefined) out.push(["Codes", res.codes]);
+  if (res.categories !== undefined) out.push(["Categories", res.categories]);
+  if (res.sources !== undefined) out.push(["Files", res.sources]);
+  if (res.codings !== undefined) out.push(["Codings", res.codings]);
+  if (res.cases !== undefined) out.push(["Cases", res.cases]);
+  if (res.references !== undefined) out.push(["References", res.references]);
+  if (res.attributes !== undefined) out.push(["Attributes", res.attributes]);
+  return out;
+}
+
 export function InterchangeView({ embedded = false }: { embedded?: boolean }) {
-  const toast = useToast();
-  const [file, setFile] = useState<File | null>(null);
-  const [qualHeaders, setQualHeaders] = useState("");
-  const [helpOpen, setHelpOpen] = useState(false);
+  const { t } = useI18n();
+  const [helpOpen, setHelpOpen] = useState<null | "export" | "import">(null);
   const [busy, setBusy] = useState(false);
+  const [pending, setPending] = useState<File | null>(null);
   const [result, setResult] = useState<InterchangeResult | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const isCsv = file?.name.toLowerCase().endsWith(".csv") ?? false;
-
+  /** Picking a file shows the import menu (name + format + Import/Cancel). */
   function handleFileChange(e: ChangeEvent<HTMLInputElement>) {
-    setFile(e.target.files?.[0] ?? null);
+    const picked = e.target.files?.[0] ?? null;
+    e.target.value = "";
+    if (!picked || busy) return;
+    setPending(picked);
     setResult(null);
     setError(null);
   }
 
-  async function handleImport(e: FormEvent) {
-    e.preventDefault();
-    if (busy || !file) return;
+  async function runImport() {
+    if (!pending || busy) return;
     setBusy(true);
-    setResult(null);
     setError(null);
-    try {
-      const res = await api.importAuto(
-        file,
-        undefined,
-        isCsv
-          ? qualHeaders
-              .split(",")
-              .map((h) => h.trim())
-              .filter(Boolean)
-          : undefined,
-      );
-      setResult(res);
-      if (!res.ok) {
-        const detail = res.message ?? "Import failed";
-        setError(detail);
-        toast.error(detail);
-      } else {
-        const summary = res.message
-          ? `${res.message} — ${formatImportResult(res)}`
-          : formatImportResult(res);
-        toast.success(summary);
-        if (res.codes !== undefined || res.sources !== undefined || res.cases !== undefined) {
-          void useProjectStore.getState().refreshProject();
-        }
-      }
-    } catch (err) {
-      const detail = errorDetail(err);
-      setError(detail);
-      toast.error(detail);
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function handleZotero() {
-    if (busy) return;
-    setBusy(true);
     setResult(null);
-    setError(null);
     try {
-      const res = await api.importZotero();
+      const res = await api.importAuto(pending);
       setResult(res);
+      setPending(null);
       if (!res.ok) {
-        const detail = res.message ?? "Import failed";
-        setError(detail);
-        toast.error(detail);
-      } else {
-        toast.success(res.message ?? formatImportResult(res));
+        setError(res.message ?? "Import failed");
+      } else if (res.codes !== undefined || res.sources !== undefined || res.cases !== undefined) {
         void useProjectStore.getState().refreshProject();
       }
     } catch (err) {
-      const detail = errorDetail(err);
-      setError(detail);
-      toast.error(detail);
+      setError(errorDetail(err));
+      setPending(null);
     } finally {
       setBusy(false);
     }
   }
 
-  const inputCls =
-    "h-8 rounded-sm border border-border bg-bg px-2 text-sm outline-none focus:border-accent";
+  const pendingCard: ReactNode =
+    pending && !busy ? (
+      <div className="mt-2 rounded-sm border border-border bg-bg p-2">
+        <p className="flex items-center gap-1.5 text-xs font-medium text-text-primary">
+          <Download size={11} className="rotate-180 text-text-secondary" aria-hidden />
+          <span className="min-w-0 flex-1 truncate">{pending.name}</span>
+        </p>
+        <p className="mt-0.5 text-[10px] text-text-secondary">
+          {importLabel(detectFormat(pending.name))}
+        </p>
+        <div className="mt-2 flex items-center justify-end gap-2">
+          <Button variant="secondary" onClick={() => setPending(null)}>
+            {t("common.cancel")}
+          </Button>
+          <Button
+            variant="primary"
+            icon={<Download size={12} className="rotate-180" aria-hidden />}
+            onClick={() => void runImport()}
+          >
+            {t("interchange.import")}
+          </Button>
+        </div>
+      </div>
+    ) : null;
+
+  const statusCard: ReactNode = (
+    <div className="mt-2 min-h-9">
+      {busy ? (
+        <p className="flex items-center gap-1.5 text-xs text-text-secondary" role="status">
+          <LoaderCircle size={12} className="animate-spin" aria-hidden />
+          {t("interchange.importing")}
+        </p>
+      ) : result && result.ok ? (
+        <div className="rounded-sm border border-border bg-bg p-2">
+          <p className="flex items-center gap-1.5 text-xs font-medium text-success">
+            <CircleCheck size={12} aria-hidden />
+            {t("interchange.importComplete")}
+          </p>
+          <ul className="mt-1 grid grid-cols-2 gap-x-3 gap-y-0.5 text-xs text-text-secondary">
+            {resultCounts(result).map(([label, value]) => (
+              <li key={label}>
+                {value} {label}
+              </li>
+            ))}
+          </ul>
+          {result.message && <p className="mt-1 text-xs text-text-secondary">{result.message}</p>}
+        </div>
+      ) : error ? (
+        <p className="flex items-start gap-1.5 text-xs text-danger">
+          <CircleAlert size={12} className="mt-0.5 shrink-0" aria-hidden />
+          <span>{error}</span>
+        </p>
+      ) : null}
+    </div>
+  );
+
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+
+  const filePicker: ReactNode = (
+    <>
+      <input
+        ref={fileInputRef}
+        type="file"
+        onChange={handleFileChange}
+        disabled={busy}
+        className="hidden"
+        aria-label={t("interchange.importFileAria")}
+        data-testid="import-file-input"
+      />
+      <Button
+        variant="primary"
+        className="mt-2"
+        icon={<Download size={14} className="rotate-180" aria-hidden />}
+        onClick={() => fileInputRef.current?.click()}
+        disabled={busy}
+      >
+        {t("interchange.import")}
+      </Button>
+    </>
+  );
 
   return (
     <div className={embedded ? "flex flex-col" : "flex h-full flex-col bg-bg"}>
-      {!embedded && (
-        <header className="flex h-10 shrink-0 items-center gap-2 border-b border-border bg-surface px-3">
-          <h1 className="text-sm font-semibold text-text-primary">Import / Export</h1>
-        </header>
-      )}
-
-      {/* Inline notices */}
-      {result && result.ok && (
-        <div
-          role="status"
-          className="flex shrink-0 items-center gap-2 border-b border-border bg-surface px-3 py-1.5 text-sm text-success"
-        >
-          <CircleCheck size={14} aria-hidden />
-          <span className="min-w-0 flex-1">
-            {result.message ? `${result.message} — ` : ""}
-            {formatImportResult(result)}
-          </span>
-        </div>
-      )}
-      {error && (
-        <div className="flex shrink-0 items-center gap-2 border-b border-border bg-surface px-3 py-1.5 text-sm text-danger">
-          <CircleAlert size={14} aria-hidden />
-          <span className="min-w-0 flex-1 truncate">{error}</span>
-        </div>
-      )}
+      {!embedded && <ViewHeader back={false} title={t("interchange.title")} />}
 
       <div className={embedded ? "p-0" : "min-h-0 flex-1 overflow-y-auto p-4"}>
         <div className="grid max-w-3xl grid-cols-1 gap-4 lg:grid-cols-2">
           {/* Export */}
-          <Card>
-            <h2 className="text-sm font-semibold text-text-primary">Export</h2>
-            <p className="mt-1 text-xs leading-relaxed text-text-secondary">
-              Exports the codebook, text sources, coded segments and cases in the REFI-QDA
-              interchange format.
-            </p>
+          <div className={embedded ? undefined : undefined}>
+            <div className="flex items-center gap-1.5">
+              <h2 className="text-sm font-semibold text-text-primary">{t("interchange.exportSection")}</h2>
+              <IconButton
+                label={t("interchange.exportHelp")}
+                title={t("interchange.exportHelp")}
+                size="sm"
+                aria-expanded={helpOpen === "export"}
+                onClick={() => setHelpOpen(helpOpen === "export" ? null : "export")}
+              >
+                <HelpCircle size={12} aria-hidden />
+              </IconButton>
+            </div>
+            {helpOpen === "export" && (
+              <p className="mt-1 text-xs leading-relaxed text-text-secondary">{t("interchange.exportHelp")}</p>
+            )}
             <a
               href={api.interchange.exportRefiUrl()}
               download
-              className="mt-3 inline-flex items-center gap-1.5 rounded-sm bg-accent px-2.5 py-1 text-xs font-medium text-bg hover:bg-accent-hover"
+              className={`mt-2 inline-flex items-center gap-1.5 ${cls.primary}`}
             >
               <Download size={14} aria-hidden />
-              Export project (.qdp)
+              {t("interchange.exportButton")}
             </a>
-          </Card>
+          </div>
 
           {/* Import */}
-          <Card>
+          <div>
             <div className="relative flex items-center gap-1">
-              <h2 className="text-sm font-semibold text-text-primary">Import</h2>
-              <button
-                type="button"
-                onClick={() => setHelpOpen((o) => !o)}
-                aria-expanded={helpOpen}
-                aria-label="What each format provides"
-                title="What each format provides"
-                className="ml-1 rounded-sm p-0.5 text-text-secondary hover:bg-surface-higher hover:text-text-primary"
+              <h2 className="text-sm font-semibold text-text-primary">{t("interchange.importSection")}</h2>
+              <IconButton
+                label={t("interchange.helpTitle")}
+                title={t("interchange.helpTitle")}
+                size="sm"
+                className="ml-1"
+                onClick={() => setHelpOpen(helpOpen === "import" ? null : "import")}
+                aria-expanded={helpOpen === "import"}
               >
                 <HelpCircle size={14} aria-hidden />
-              </button>
-              {helpOpen && <FormatHelpPopover onClose={() => setHelpOpen(false)} />}
+              </IconButton>
+              {helpOpen === "import" && <FormatHelpPopover onClose={() => setHelpOpen(null)} />}
             </div>
-            <form onSubmit={(e) => void handleImport(e)} className="mt-3 space-y-3">
-              <label className="block">
-                <span className="mb-1 block text-xs text-text-secondary">
-                  File (format is detected automatically)
-                </span>
-                <input
-                  type="file"
-                  onChange={handleFileChange}
-                  className="block w-full text-xs text-text-secondary file:mr-2 file:rounded-sm file:border-0 file:bg-surface-higher file:px-2 file:py-1 file:text-xs file:font-medium file:text-text-primary hover:file:bg-accent-hover hover:file:text-bg"
-                  aria-label="Import file"
-                />
-              </label>
-              {isCsv && (
-                <label className="block">
-                  <span className="mb-1 block text-xs text-text-secondary">
-                    Qualitative columns (comma-separated)
-                  </span>
-                  <input
-                    value={qualHeaders}
-                    onChange={(e) => setQualHeaders(e.target.value)}
-                    placeholder="e.g. answer, comment"
-                    className={inputCls}
-                  />
-                </label>
-              )}
-              <div className="flex items-center gap-2">
-                <Button
-                  variant="primary"
-                  icon={
-                    busy ? (
-                      <LoaderCircle size={14} className="animate-spin" aria-hidden />
-                    ) : (
-                      <Upload size={14} aria-hidden />
-                    )
-                  }
-                  type="submit"
-                  disabled={busy || !file}
-                >
-                  {busy ? "Importing…" : "Import"}
-                </Button>
-                <Button
-                  variant="secondary"
-                  icon={<BookMarked size={14} aria-hidden />}
-                  onClick={() => void handleZotero()}
-                  disabled={busy}
-                >
-                  Import from Zotero
-                </Button>
-              </div>
-            </form>
-          </Card>
+            {filePicker}
+            {pendingCard}
+            {statusCard}
+          </div>
         </div>
       </div>
     </div>

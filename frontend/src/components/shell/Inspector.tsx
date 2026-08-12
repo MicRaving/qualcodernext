@@ -1,11 +1,19 @@
 /**
  * Inspector — right-side details panel for the selected code or file.
  */
-import { useState, type ReactNode } from "react";
-import { ChevronRight, FileText, Hash, LoaderCircle, Pencil, Trash2, X } from "lucide-react";
-import { api, type CodeDetails, type SourceDetails } from "@/lib/api";
-import { AttributeEditor } from "@/components/shell/AttributeEditor";
-import { BarHeader, IconButton, LeftBar, SectionLabel } from "@/components/ui/orchestrator";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { ChevronDown, ChevronRight, FileText, Hash, LoaderCircle, Plus, Trash2, X } from "lucide-react";
+import { api, type Annotation, type CodeDetails, type SourceDetails } from "@/lib/api";
+
+import {
+  BarHeader,
+  Button,
+  IconButton,
+  LeftBar,
+  SectionLabel,
+  Select,
+  Textarea,
+} from "@/components/ui/orchestrator";
 import { useI18n } from "@/lib/i18n";
 import { useProjectStore } from "@/stores/project";
 import {
@@ -35,6 +43,16 @@ function MemoEditor({
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
 
+  // "Edit memo" actions (sidebar context menus) jump straight into edit mode.
+  const memoEditRequest = useProjectStore((s) => s.inspectorMemoEdit);
+  useEffect(() => {
+    if (memoEditRequest) {
+      setEditing(true);
+      setDraft(memo);
+      useProjectStore.getState().setInspectorMemoEdit(false);
+    }
+  }, [memoEditRequest, memo]);
+
   async function handleSave() {
     if (draft == null || saving) return;
     setSaving(true);
@@ -55,25 +73,35 @@ function MemoEditor({
       <div className="px-3 py-2">
         <div className="mb-1 flex items-center justify-between">
           <SectionLabel>{t("inspector.memo")}</SectionLabel>
-          <button
-            type="button"
+          <IconButton
+            label={t("inspector.addMemo")}
+            title={memo.trim() === "" ? t("inspector.addMemo") : t("inspector.editMemo")}
+            size="sm"
             onClick={() => {
               setDraft(memo);
               setEditing(true);
             }}
-            className="flex items-center gap-1 rounded-sm border border-border bg-bg px-1.5 py-0.5 text-xs text-text-secondary hover:bg-surface-higher hover:text-text-primary"
           >
-            <Pencil size={11} aria-hidden />
-            {memo.trim() === "" ? t("inspector.addMemo") : t("inspector.editMemo")}
-          </button>
+            <Plus size={12} aria-hidden />
+          </IconButton>
         </div>
-        <p className="text-sm text-text-primary">
-          {memo.trim() === "" ? (
-            <span className="italic text-text-secondary">{t("common.noMemo")}</span>
-          ) : (
-            <span className="whitespace-pre-wrap">{memo}</span>
-          )}
-        </p>
+        <button
+          type="button"
+          onClick={() => {
+            setDraft(memo);
+            setEditing(true);
+          }}
+          className="block w-full rounded-sm bg-surface-higher px-2 py-1.5 text-left hover:bg-border"
+          title={t("inspector.editMemo")}
+        >
+          <p className="text-sm text-text-primary">
+            {memo.trim() === "" ? (
+              <span className="italic text-text-secondary">{t("common.noMemo")}</span>
+            ) : (
+              <span className="whitespace-pre-wrap">{memo}</span>
+            )}
+          </p>
+        </button>
       </div>
     );
   }
@@ -83,35 +111,33 @@ function MemoEditor({
       <div className="mb-1">
         <SectionLabel>{t("inspector.memo")}</SectionLabel>
       </div>
-      <textarea
+      <Textarea
         autoFocus
         value={draft ?? ""}
         onChange={(e) => setDraft(e.target.value)}
         rows={4}
         aria-label={t("inspector.memoAria")}
-        className="w-full resize-y rounded-sm border border-border bg-bg px-2 py-1 text-sm text-text-primary outline-none focus:border-accent"
+        className="w-full resize-y px-2 py-1 text-text-primary"
       />
       <div className="mt-1.5 flex items-center gap-1.5">
-        <button
-          type="button"
+        <Button
+          variant="primary"
           onClick={() => void handleSave()}
           disabled={saving}
-          className="flex items-center gap-1 rounded-sm bg-accent px-2 py-1 text-xs font-medium text-bg hover:bg-accent-hover disabled:opacity-50"
+          icon={saving ? <LoaderCircle size={10} className="animate-spin" aria-hidden /> : undefined}
         >
-          {saving && <LoaderCircle size={10} className="animate-spin" aria-hidden />}
           {t("common.save")}
-        </button>
-        <button
-          type="button"
+        </Button>
+        <Button
+          variant="secondary"
           onClick={() => {
             setEditing(false);
             setDraft(null);
           }}
           disabled={saving}
-          className="rounded-sm border border-border px-2 py-1 text-xs hover:bg-surface-higher disabled:opacity-50"
         >
           {t("common.cancel")}
-        </button>
+        </Button>
       </div>
       {saveError && <p className="mt-1.5 text-xs text-danger">{saveError}</p>}
     </div>
@@ -203,8 +229,100 @@ function CodeDetailsPanel({ details }: { details: CodeDetails }) {
 function FileDetailsPanel({ details }: { details: SourceDetails }) {
   const { t } = useI18n();
   const selectFile = useProjectStore((s) => s.selectFile);
+  const hiddenCodes = useProjectStore((s) => s.hiddenCodes);
+  const toggleHiddenCode = useProjectStore((s) => s.toggleHiddenCode);
   const stats = formatStats(details);
   const src = details.source;
+
+  // Case assignment
+  const allCases = useProjectStore((s) => s.cases);
+  const assignedIds = new Set(details.cases.map((c) => c.caseid));
+  const unassignedCases = allCases.filter((c) => !assignedIds.has(c.caseid));
+  const [assignCaseId, setAssignCaseId] = useState("");
+  const [caseError, setCaseError] = useState<string | null>(null);
+  /** "Codes used" is collapsed by default. */
+  const [codesCollapsed, setCodesCollapsed] = useState(true);
+
+  // Annotations on this file
+  const [annotations, setAnnotations] = useState<Annotation[]>([]);
+  const [annError, setAnnError] = useState<string | null>(null);
+  const [newAnnMemo, setNewAnnMemo] = useState("");
+  const inspectorNewAnnotation = useProjectStore((s) => s.inspectorNewAnnotation);
+  const setInspectorNewAnnotation = useProjectStore((s) => s.setInspectorNewAnnotation);
+
+  const loadAnnotations = useCallback(async () => {
+    try {
+      setAnnotations(await api.fileAnnotations(src.id));
+      setAnnError(null);
+    } catch (e) {
+      setAnnError(e instanceof Error ? e.message : t("inspector.annotationsLoadError"));
+    }
+  }, [src.id, t]);
+
+  useEffect(() => {
+    void loadAnnotations();
+  }, [loadAnnotations]);
+
+  async function saveNewAnnotation() {
+    const memo = newAnnMemo.trim();
+    if (!memo) return;
+    try {
+      await api.createAnnotation({ fid: src.id, pos0: 0, pos1: 1, memo });
+      setNewAnnMemo("");
+      setInspectorNewAnnotation(false);
+      await loadAnnotations();
+    } catch (e) {
+      setAnnError(e instanceof Error ? e.message : t("inspector.annotationsLoadError"));
+    }
+  }
+
+  async function unassignCase(caseid: number) {
+    setCaseError(null);
+    try {
+      await api.unlinkFileFromCase(caseid, src.id);
+      await selectFile(src.id);
+    } catch (e) {
+      setCaseError(e instanceof Error ? e.message : t("inspector.assignCaseError"));
+    }
+  }
+
+  async function doAssignCase() {
+    if (!assignCaseId) return;
+    setCaseError(null);
+    try {
+      await api.linkFileToCase(Number(assignCaseId), src.id);
+      setAssignCaseId("");
+      await selectFile(src.id);
+    } catch (e) {
+      setCaseError(e instanceof Error ? e.message : t("inspector.assignCaseError"));
+    }
+  }
+
+  /** Inline annotation editing: clicking a card enters edit mode (no
+   *  system prompt). */
+  const [editingAnnId, setEditingAnnId] = useState<number | null>(null);
+  const [editingAnnMemo, setEditingAnnMemo] = useState("");
+
+  async function saveAnnotationEdit(anid: number) {
+    try {
+      await api.updateAnnotation(anid, editingAnnMemo);
+      setEditingAnnId(null);
+      await loadAnnotations();
+    } catch (e) {
+      setAnnError(e instanceof Error ? e.message : t("inspector.annotationsLoadError"));
+    }
+  }
+
+  async function deleteAnnotation(anid: number) {
+    if (!window.confirm(t("coder.deleteAnnotation"))) return;
+    try {
+      await api.deleteAnnotation(anid);
+      if (editingAnnId === anid) setEditingAnnId(null);
+      await loadAnnotations();
+    } catch (e) {
+      setAnnError(e instanceof Error ? e.message : t("inspector.annotationsLoadError"));
+    }
+  }
 
   async function saveMemo(value: string) {
     await api.patchSource(src.id, { memo: value });
@@ -227,68 +345,224 @@ function FileDetailsPanel({ details }: { details: SourceDetails }) {
           <dt className="text-text-secondary">{t("inspector.owner")}</dt>
           <dd className="truncate text-text-primary">{src.owner}</dd>
         </div>
+        <div className="flex justify-between gap-2">
+          <dt className="text-text-secondary">{t("inspector.codings")}</dt>
+          <dd className="truncate text-text-primary">{stats.primary}</dd>
+        </div>
       </dl>
 
-      {/* Stats */}
-      <div className="flex gap-2 border-b border-border px-3 py-2">
-        <div className="flex-1 rounded-sm bg-surface-higher px-2 py-1.5 text-center">
-          <div className="text-sm font-semibold text-text-primary">{stats.primary}</div>
+      {/* Codes used — collapsed by default; click a code to highlight/hide
+          its segments in the open coder. */}
+      <div className="px-3 py-2">
+        <div className="flex items-center justify-between">
+          <SectionLabel>{t("inspector.codesUsed")}</SectionLabel>
+          <IconButton
+            label={codesCollapsed ? t("inspector.expand") : t("inspector.collapse")}
+            title={codesCollapsed ? t("inspector.expand") : t("inspector.collapse")}
+            size="sm"
+            onClick={() => setCodesCollapsed((v) => !v)}
+          >
+            {codesCollapsed ? (
+              <ChevronRight size={12} aria-hidden />
+            ) : (
+              <ChevronDown size={12} aria-hidden />
+            )}
+          </IconButton>
         </div>
-        <div className="flex-1 rounded-sm bg-surface-higher px-2 py-1.5 text-center">
-          <div className="text-sm font-semibold text-text-primary">{stats.secondary}</div>
-        </div>
+        {!codesCollapsed &&
+          (details.codes_used.length === 0 ? (
+            <p className="text-sm text-text-secondary">{t("inspector.noCodings")}</p>
+          ) : (
+            <div className="flex flex-wrap gap-1">
+              {details.codes_used.map((c) => {
+                const hidden = hiddenCodes.includes(c.cid);
+                return (
+                  <button
+                    key={c.cid}
+                    type="button"
+                    onClick={() => toggleHiddenCode(c.cid)}
+                    aria-pressed={hidden}
+                    title={t("inspector.hideInCoder")}
+                    className={`flex items-center gap-1 rounded-sm bg-surface-higher px-1.5 py-0.5 text-xs ${
+                      hidden ? "opacity-40" : "hover:bg-surface-higher"
+                    }`}
+                  >
+                    <span
+                      className="h-2 w-2 shrink-0 rounded-sm border border-border"
+                      style={{ backgroundColor: c.color ?? SWATCH_FALLBACK }}
+                      aria-hidden
+                    />
+                    <span className="max-w-28 truncate">{c.name}</span>
+                    <span className="text-text-secondary">{c.count}</span>
+                  </button>
+                );
+              })}
+            </div>
+          ))}
       </div>
 
-      {/* Codes used */}
+      {/* Cases — with inline assignment from the right bar */}
       <div className="px-3 py-2">
-        <SectionLabel>{t("inspector.codesUsed")}</SectionLabel>
-        {details.codes_used.length === 0 ? (
-          <p className="text-sm text-text-secondary">{t("inspector.noCodings")}</p>
+        <SectionLabel>{t("inspector.cases")}</SectionLabel>
+        {caseError && <p className="mb-1 text-xs text-danger">{caseError}</p>}
+        {details.cases.length === 0 ? (
+          <p className="text-sm text-text-secondary">{t("inspector.noCases")}</p>
         ) : (
-          <div className="flex flex-wrap gap-1">
-            {details.codes_used.map((c) => (
+          <div className="flex flex-col gap-1">
+            {details.cases.map((c) => (
               <span
-                key={c.cid}
-                className="flex items-center gap-1 rounded-sm bg-surface-higher px-1.5 py-0.5 text-xs"
+                key={c.caseid}
+                className="flex w-full items-center gap-1.5 rounded-sm bg-surface-higher px-2 py-1 text-sm text-text-primary"
               >
-                <span
-                  className="h-2 w-2 shrink-0 rounded-sm border border-border"
-                  style={{ backgroundColor: c.color ?? SWATCH_FALLBACK }}
-                  aria-hidden
-                />
-                <span className="max-w-28 truncate">{c.name}</span>
-                <span className="text-text-secondary">{c.count}</span>
+                <span className="min-w-0 flex-1 truncate">{c.name}</span>
+                <IconButton
+                  label={t("inspector.unassignCase", { name: c.name })}
+                  title={t("inspector.unassignCase", { name: c.name })}
+                  size="sm"
+                  className="shrink-0 hover:text-danger"
+                  onClick={() => void unassignCase(c.caseid)}
+                >
+                  <Trash2 size={12} aria-hidden />
+                </IconButton>
               </span>
             ))}
           </div>
         )}
+        <div className="mt-2 flex items-center gap-1.5">
+          <Select
+            value={assignCaseId}
+            onChange={(e) => setAssignCaseId(e.target.value)}
+            aria-label={t("inspector.assignCase")}
+            className="min-w-0 flex-1"
+          >
+            <option value="">{t("inspector.assignCase")}</option>
+            {unassignedCases.map((c) => (
+              <option key={c.caseid} value={c.caseid}>
+                {c.name}
+              </option>
+            ))}
+          </Select>
+          <Button
+            variant="secondary"
+            disabled={!assignCaseId}
+            onClick={() => void doAssignCase()}
+          >
+            {t("inspector.assign")}
+          </Button>
+        </div>
       </div>
 
-      {/* Cases */}
+      {/* Annotations on this file */}
       <div className="px-3 py-2">
-        <SectionLabel>{t("inspector.cases")}</SectionLabel>
-        {details.cases.length === 0 ? (
-          <p className="text-sm text-text-secondary">{t("inspector.noCases")}</p>
+        <div className="mb-1 flex items-center justify-between">
+          <SectionLabel>{t("inspector.annotations")}</SectionLabel>
+          <IconButton
+            label={t("inspector.addAnnotation")}
+            title={t("inspector.addAnnotation")}
+            size="sm"
+            onClick={() => {
+              setNewAnnMemo("");
+              setInspectorNewAnnotation(true);
+            }}
+          >
+            <Plus size={12} aria-hidden />
+          </IconButton>
+        </div>
+        {annError && <p className="mb-1 text-xs text-danger">{annError}</p>}
+        {/* Inline new-annotation editor (opened by "Add annotation") */}
+        {inspectorNewAnnotation && (
+          <div className="mb-2 rounded-sm border border-border bg-bg p-2">
+            <Textarea
+              autoFocus
+              value={newAnnMemo}
+              onChange={(e) => setNewAnnMemo(e.target.value)}
+              placeholder={t("inspector.annotationPrompt")}
+              aria-label={t("inspector.annotationPrompt")}
+              className="min-h-14 w-full resize-none p-1.5"
+            />
+            <div className="mt-1.5 flex items-center justify-end gap-1.5">
+              <Button
+                variant="secondary"
+                onClick={() => setInspectorNewAnnotation(false)}
+              >
+                {t("common.cancel")}
+              </Button>
+              <Button
+                variant="primary"
+                disabled={!newAnnMemo.trim()}
+                onClick={() => void saveNewAnnotation()}
+              >
+                {t("inspector.addAnnotation")}
+              </Button>
+            </div>
+          </div>
+        )}
+        {annotations.length === 0 ? (
+          <p className="text-sm text-text-secondary">{t("inspector.noAnnotations")}</p>
         ) : (
           <ul className="flex flex-col gap-0.5">
-            {details.cases.map((c) => (
-              <li key={c.caseid} className="truncate text-sm text-text-primary">
-                {c.name}
-              </li>
-            ))}
+            {annotations.map((a) => {
+              if (editingAnnId === a.anid) {
+                return (
+                  <li
+                    key={a.anid}
+                    className="rounded-sm border border-border bg-bg p-1.5"
+                  >
+                    <Textarea
+                      autoFocus
+                      value={editingAnnMemo}
+                      onChange={(e) => setEditingAnnMemo(e.target.value)}
+                      placeholder={t("inspector.annotationPrompt")}
+                      aria-label={t("inspector.annotationPrompt")}
+                      className="min-h-14 w-full resize-none p-1.5"
+                    />
+                    <div className="mt-1.5 flex items-center justify-end gap-1.5">
+                      <Button variant="secondary" onClick={() => setEditingAnnId(null)}>
+                        {t("common.cancel")}
+                      </Button>
+                      <Button
+                        variant="primary"
+                        onClick={() => void saveAnnotationEdit(a.anid)}
+                      >
+                        {t("common.save")}
+                      </Button>
+                    </div>
+                  </li>
+                );
+              }
+              return (
+                <li key={a.anid}>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setEditingAnnId(a.anid);
+                      setEditingAnnMemo(a.memo);
+                    }}
+                    title={t("inspector.editAnnotation")}
+                    className="flex w-full items-center gap-1.5 rounded-sm bg-surface-higher px-2 py-1 text-left hover:bg-border"
+                  >
+                    <span className="min-w-0 flex-1 truncate text-sm text-text-primary">
+                      {a.memo || t("common.noMemo")}
+                    </span>
+                    <IconButton
+                      label={t("coder.deleteAnnotation")}
+                      title={t("coder.deleteAnnotation")}
+                      size="sm"
+                      className="shrink-0 hover:text-danger"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        void deleteAnnotation(a.anid);
+                      }}
+                    >
+                      <Trash2 size={11} aria-hidden />
+                    </IconButton>
+                  </button>
+                </li>
+              );
+            })}
           </ul>
         )}
       </div>
-
-      {/* Attributes — editable (file-scope property grid) */}
-      <AttributeEditor
-        entityId={src.id}
-        scope="file"
-        values={details.attributes.map((a) => ({ name: a.name, value: a.value }))}
-        onChange={async () => {
-          await selectFile(src.id);
-        }}
-      />
 
       <MemoEditor key={src.id} memo={src.memo} onSave={saveMemo} />
     </div>

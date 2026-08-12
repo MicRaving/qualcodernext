@@ -149,8 +149,6 @@ export const ro: Record<string, string> = {
   "analyze.titleReferences": "Referințe",
   "analyze.pickCode": "Cod",
   "analyze.copyCodebook": "Copiați în clipboard",
-  "analyze.importCodebook": "Importare codificator",
-  "analyze.deleteReference": "Șterge referința",
   "graphs.title": "Grafice",
   "graphs.newGraph": "Grafic nou",
   "graphs.models": "Modele…",

@@ -277,11 +277,19 @@ class McpService:
         name = str(args.get("name") or "").strip()
         if not name:
             raise McpError(-32602, "name is required")
+        from sqlalchemy import select
+
+        from qualcoder_api.persistence import tables
+
+        old_row = (
+            await session.execute(select(tables.code_name.c.name).where(tables.code_name.c.cid == cid))
+        ).first()
+        old_name = old_row[0] if old_row is not None else None
         code = await CodeRepository(session).rename_code(cid, name)
         if code is None:
             raise McpError(-32002, f"code {cid} not found")
         await audit.record(session, user=get_codername(), action="code.rename", entity="code",
-                           entity_id=cid, detail={"cid": cid, "new_name": name})
+                           entity_id=cid, detail={"cid": cid, "old_name": old_name, "new_name": name})
         return {"code": code.model_dump()}
 
     async def _tool_update_code_memo(self, session: AsyncSession, args: dict) -> dict:

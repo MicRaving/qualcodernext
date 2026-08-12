@@ -54,6 +54,27 @@ async def _capture_row(session: AsyncSession, table, pk_name: str, pk_value: int
     await session.commit()
 
 
+async def _capture_delete(session: AsyncSession, table, pk_name: str, pk_value: int, row) -> None:
+    """Capture a graph row that is about to be deleted (the row is gone by
+    the time a post-delete re-select runs, which silently skipped deletes)."""
+    from qualcoder_api.persistence.repositories import _capture, _rowdict
+
+    if row is not None:
+        await _capture(session, table.name, "delete", pk_name, pk_value, _rowdict(row))
+    await session.commit()
+
+
+async def _record_audit(session: AsyncSession, action: str, entity: str, entity_id: int, detail: dict) -> None:
+    """Record a graph item/line mutation in the audit log."""
+    from qualcoder_api.services import audit
+    from qualcoder_api.services.user_settings import get_codername
+
+    await audit.record(
+        session, user=get_codername(), action=action, entity=entity,
+        entity_id=entity_id, detail=detail,
+    )
+
+
 # ----------------------------------------------------------------------
 # Graph CRUD
 # ----------------------------------------------------------------------
@@ -262,14 +283,11 @@ async def delete_cdct_item(session: AsyncSession, gtextid: int) -> None:
     """Delete a cdct node; also remove cdct lines touching its entity."""
     row = (
         await session.execute(
-            select(
-                tables.gr_cdct_text_item.c.catid,
-                tables.gr_cdct_text_item.c.cid,
-            ).where(tables.gr_cdct_text_item.c.gtextid == gtextid)
+            select(tables.gr_cdct_text_item).where(tables.gr_cdct_text_item.c.gtextid == gtextid)
         )
     ).first()
     if row is not None:
-        catid, cid = row[0], row[1]
+        catid, cid = row.catid, row.cid
         await session.execute(
             delete(tables.gr_cdct_line_item).where(
                 (tables.gr_cdct_line_item.c.fromcatid == catid)
@@ -282,7 +300,7 @@ async def delete_cdct_item(session: AsyncSession, gtextid: int) -> None:
         delete(tables.gr_cdct_text_item).where(tables.gr_cdct_text_item.c.gtextid == gtextid)
     )
     if row is not None:
-        await _capture_row(session, tables.gr_cdct_text_item, "gtextid", gtextid, "delete")
+        await _capture_delete(session, tables.gr_cdct_text_item, "gtextid", gtextid, row)
     await session.commit()
 
 
@@ -326,7 +344,7 @@ async def delete_case_item(session: AsyncSession, gcaseid: int) -> None:
         delete(tables.gr_case_text_item).where(tables.gr_case_text_item.c.gcaseid == gcaseid)
     )
     if row is not None:
-        await _capture_row(session, tables.gr_case_text_item, 'gcaseid', gcaseid, 'delete')
+        await _capture_delete(session, tables.gr_case_text_item, 'gcaseid', gcaseid, row)
     await session.commit()
 
 
@@ -370,7 +388,7 @@ async def delete_file_item(session: AsyncSession, gfileid: int) -> None:
         delete(tables.gr_file_text_item).where(tables.gr_file_text_item.c.gfileid == gfileid)
     )
     if row is not None:
-        await _capture_row(session, tables.gr_file_text_item, 'gfileid', gfileid, 'delete')
+        await _capture_delete(session, tables.gr_file_text_item, 'gfileid', gfileid, row)
     await session.commit()
 
 
@@ -419,7 +437,7 @@ async def delete_free_item(session: AsyncSession, gfreeid: int) -> None:
         delete(tables.gr_free_text_item).where(tables.gr_free_text_item.c.gfreeid == gfreeid)
     )
     if row is not None:
-        await _capture_row(session, tables.gr_free_text_item, 'gfreeid', gfreeid, 'delete')
+        await _capture_delete(session, tables.gr_free_text_item, 'gfreeid', gfreeid, row)
     await session.commit()
 
 
@@ -477,7 +495,7 @@ async def delete_memo_item(session: AsyncSession, gmemoid: int) -> None:
     ).first()
     await session.execute(delete(tables.gr_memo_item).where(tables.gr_memo_item.c.gmemoid == gmemoid))
     if row is not None:
-        await _capture_row(session, tables.gr_memo_item, "gmemoid", gmemoid, "delete")
+        await _capture_delete(session, tables.gr_memo_item, "gmemoid", gmemoid, row)
     await session.commit()
 
 
@@ -564,51 +582,8 @@ async def delete_cdct_line(session: AsyncSession, glineid: int) -> None:
         delete(tables.gr_cdct_line_item).where(tables.gr_cdct_line_item.c.glineid == glineid)
     )
     if row is not None:
-        await _capture_row(session, tables.gr_cdct_line_item, 'glineid', glineid, 'delete')
+        await _capture_delete(session, tables.gr_cdct_line_item, 'glineid', glineid, row)
     await session.commit()
-
-
-async def add_free_line(
-    session: AsyncSession,
-    grid: int,
-    from_node: int,
-    to_node: int,
-    color: str = "#888888",
-    linewidth: float = 1.0,
-    linetype: str = "solid",
-    label: str = "",
-    arrow_mode: str = "solid_with_arrow",
-) -> dict:
-    """Line between free-text nodes (referenced by gfreeid)."""
-    from_row = (
-        await session.execute(
-            select(tables.gr_free_text_item.c.freetextid).where(tables.gr_free_text_item.c.gfreeid == from_node)
-        )
-    ).first()
-    to_row = (
-        await session.execute(
-            select(tables.gr_free_text_item.c.freetextid).where(tables.gr_free_text_item.c.gfreeid == to_node)
-        )
-    ).first()
-    if from_row is None or to_row is None:
-        raise ValueError("both line endpoints must be free-text nodes")
-    gflineid = await _insert(
-        session,
-        tables.gr_free_line_item,
-        {
-            "grid": grid,
-            "fromfreetextid": from_row[0],
-            "tofreetextid": to_row[0],
-            "color": color,
-            "linewidth": linewidth,
-            "linetype": linetype,
-            "label": label,
-            "arrow_mode": arrow_mode,
-        },
-    )
-    return {"gflineid": gflineid, "grid": grid, "from_node": from_node, "to_node": to_node,
-            "color": color, "linewidth": linewidth, "linetype": linetype,
-            "label": label, "arrow_mode": arrow_mode}
 
 
 async def update_free_line(session: AsyncSession, gflineid: int, **fields) -> dict | None:
@@ -635,7 +610,7 @@ async def delete_free_line(session: AsyncSession, gflineid: int) -> None:
         delete(tables.gr_free_line_item).where(tables.gr_free_line_item.c.gflineid == gflineid)
     )
     if row is not None:
-        await _capture_row(session, tables.gr_free_line_item, 'gflineid', gflineid, 'delete')
+        await _capture_delete(session, tables.gr_free_line_item, 'gflineid', gflineid, row)
     await session.commit()
 
 

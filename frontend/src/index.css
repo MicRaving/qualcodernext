@@ -141,3 +141,9 @@ select {
 ::selection {
   background-color: color-mix(in srgb, var(--qc-accent) 30%, transparent);
 }
+
+/* Code hide filter (right-bar Inspector / sidebar clicks): codings of the
+   hidden codes are dimmed in the open coder until toggled back. */
+.qc-seg.qc-seg-hidden {
+  opacity: 0.2;
+}

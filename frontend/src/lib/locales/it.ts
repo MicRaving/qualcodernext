@@ -155,8 +155,6 @@ export const it: Record<string, string> = {
   "analyze.titleReferences": "Bibliografia",
   "analyze.pickCode": "Codice",
   "analyze.copyCodebook": "Copia nella clipboard",
-  "analyze.importCodebook": "Importa il codice di codifica",
-  "analyze.deleteReference": "Elimina il riferimento",
   "graphs.title": "Grafi",
   "graphs.newGraph": "Nuovo grafo",
   "graphs.models": "Modelli…",

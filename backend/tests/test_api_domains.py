@@ -55,9 +55,11 @@ async def test_import_audio_creates_transcription(project_client):
 
     sources = (await client.get("/api/v1/sources")).json()
     names = [s["name"] for s in sources]
-    assert "talk.mp3.txt" in names
-    trans = next(s for s in sources if s["name"] == "talk.mp3.txt")
-    assert trans["media_type"] == "text"
+    # The transcript companion is hidden from the file list (the AV coder
+    # shows it); the media source still links to it.
+    assert "talk.mp3.txt" not in names
+    media = next(s for s in sources if s["name"] == "talk.mp3")
+    assert media["av_text_id"] is not None
 
 
 async def test_import_duplicate_name_rejected(project_client):

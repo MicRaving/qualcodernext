@@ -122,15 +122,25 @@ async def link_file(caseid: int, req: LinkFileRequest, db: DbDep) -> CaseText:
 async def link_span(caseid: int, req: LinkSpanRequest, db: DbDep) -> CaseText:
     if req.pos1 <= req.pos0:
         raise HTTPException(status_code=422, detail="pos1 must be greater than pos0")
-    return await CaseRepository(db).link_text_span(
+    span = await CaseRepository(db).link_text_span(
         caseid=caseid, fid=req.fid, pos0=req.pos0, pos1=req.pos1,
         owner=resolve_owner(req.owner), memo=req.memo,
     )
+    await audit.record(
+        db, user=resolve_owner(req.owner), action="case.link_span", entity="case_text",
+        entity_id=span.id, source_id=req.fid,
+        detail={"caseid": caseid, "pos0": req.pos0, "pos1": req.pos1},
+    )
+    return span
 
 
 @case_router.delete("/{caseid}/files/{fid}", status_code=204)
 async def unlink_file(caseid: int, fid: int, db: DbDep) -> None:
     await CaseRepository(db).unlink_file(caseid=caseid, fid=fid)
+    await audit.record(
+        db, user=get_codername(), action="case.unlink_file", entity="case_text",
+        source_id=fid, detail={"caseid": caseid, "fid": fid},
+    )
 
 
 # ----------------------------------------------------------------------
@@ -339,13 +349,12 @@ async def update_annotation(anid: int, req: AnnotationUpdate, db: DbDep) -> Anno
 
     if req.pos0 is not None and req.pos1 is not None and req.pos1 <= req.pos0:
         raise HTTPException(status_code=422, detail="pos1 must be greater than pos0")
-    fid = (
-        await db.execute(select(tables.annotation.c.fid).where(tables.annotation.c.anid == anid))
+    # A single-row select for the old memo, not the file's whole list.
+    old_memo = (
+        await db.execute(
+            select(tables.annotation.c.memo).where(tables.annotation.c.anid == anid)
+        )
     ).scalar_one_or_none()
-    old_memo = None
-    if fid is not None:
-        old = await AnnotationRepository(db).list_for_file(fid)
-        old_memo = next((a.memo for a in old if a.anid == anid), None)
     annotation = await AnnotationRepository(db).update_annotation(
         anid, **req.model_dump(exclude_none=True)
     )

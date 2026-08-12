@@ -13,39 +13,6 @@ import json
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-ACTION_VOCABULARY = (
-    "coding.create",
-    "coding.delete",
-    "coding.autocode",
-    "coding.undo",
-    "annotation.create",
-    "annotation.update",
-    "annotation.delete",
-    "case.create",
-    "case.update",
-    "case.delete",
-    "case.link_file",
-    "case.unlink_file",
-    "attribute.create",
-    "attribute.delete",
-    "attribute.set_value",
-    "journal.create",
-    "journal.update",
-    "journal.delete",
-    "code.create",
-    "code.rename",
-    "code.delete",
-    "code.merge",
-    "category.create",
-    "category.delete",
-    "category.merge",
-    "source.import",
-    "source.link",
-    "source.delete",
-    "source.edit",
-    "interchange.import",
-)
-
 
 async def record(
     session: AsyncSession,

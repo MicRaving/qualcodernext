@@ -10,10 +10,18 @@
  * - ribbon:    the app top bar (navigation, coder, right-side icons)
  * - menuBar:   the view's function bar (tabs, search, actions)
  * - leftBar:   the view's left panel (sidebar / list)
- * - rightBar:  the details panel (Inspector)
+ * - rightBar:  the details panel (Inspector / panes)
  * - children:  the center view
+ *
+ * The left/right bars are resizable by dragging their inner border; the
+ * pixel width flows through BarWidthContext into the bars themselves, so
+ * their content adapts as they resize.
  */
-import type { ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
+import { BarWidthContext } from "@/components/ui/barWidth";
+
+const MIN_BAR = 200;
+const MAX_BAR = 520;
 
 export function WorkspaceLayout({
   ribbon,
@@ -30,6 +38,58 @@ export function WorkspaceLayout({
   statusBar?: ReactNode;
   children: ReactNode;
 }) {
+  const [leftW, setLeftW] = useState(288);
+  const [rightW, setRightW] = useState(288);
+  const dragRef = useRef<{ side: "left" | "right"; startX: number; startW: number } | null>(null);
+  const [dragging, setDragging] = useState(false);
+
+  function startResize(side: "left" | "right") {
+    return (e: React.MouseEvent) => {
+      e.preventDefault();
+      dragRef.current = {
+        side,
+        startX: e.clientX,
+        startW: side === "left" ? leftW : rightW,
+      };
+      setDragging(true);
+    };
+  }
+
+  useEffect(() => {
+    if (!dragging) return;
+    const onMove = (e: MouseEvent) => {
+      const drag = dragRef.current;
+      if (!drag) return;
+      const delta = e.clientX - drag.startX;
+      const next = drag.side === "left" ? drag.startW + delta : drag.startW - delta;
+      const clamped = Math.min(MAX_BAR, Math.max(MIN_BAR, Math.round(next)));
+      if (drag.side === "left") setLeftW(clamped);
+      else setRightW(clamped);
+    };
+    const onUp = () => {
+      dragRef.current = null;
+      setDragging(false);
+    };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+    return () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+    };
+  }, [dragging]);
+
+  // Keep the bars responsive to window resizing: clamp them so they never
+  // swallow more than a third of the viewport.
+  useEffect(() => {
+    const clamp = () => {
+      const max = Math.max(MIN_BAR, Math.round(window.innerWidth / 3));
+      setLeftW((w) => Math.min(max, Math.max(MIN_BAR, w)));
+      setRightW((w) => Math.min(max, Math.max(MIN_BAR, w)));
+    };
+    window.addEventListener("resize", clamp);
+    return () => window.removeEventListener("resize", clamp);
+  }, []);
+
   return (
     <div className="flex h-full flex-col bg-bg text-text-primary">
       {ribbon}
@@ -39,9 +99,33 @@ export function WorkspaceLayout({
         </div>
       )}
       <div className="flex min-h-0 flex-1">
-        {leftBar}
+        {leftBar && (
+          <div className="relative flex shrink-0">
+            <BarWidthContext.Provider value={leftW}>{leftBar}</BarWidthContext.Provider>
+            <div
+              className={`absolute inset-y-0 -right-1 z-30 w-2 cursor-col-resize ${
+                dragging ? "bg-accent/30" : "hover:bg-accent/30"
+              }`}
+              role="separator"
+              aria-orientation="vertical"
+              onMouseDown={startResize("left")}
+            />
+          </div>
+        )}
         <main className="min-w-0 flex-1 overflow-hidden">{children}</main>
-        {rightBar}
+        {rightBar && (
+          <div className="relative flex shrink-0">
+            <div
+              className={`absolute inset-y-0 -left-1 z-30 w-2 cursor-col-resize ${
+                dragging ? "bg-accent/30" : "hover:bg-accent/30"
+              }`}
+              role="separator"
+              aria-orientation="vertical"
+              onMouseDown={startResize("right")}
+            />
+            <BarWidthContext.Provider value={rightW}>{rightBar}</BarWidthContext.Provider>
+          </div>
+        )}
       </div>
       {statusBar}
     </div>

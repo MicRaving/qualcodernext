@@ -5,22 +5,32 @@
  */
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
-  CircleAlert,
   FileText,
+  Info,
   Link2,
   LoaderCircle,
   Pencil,
-  Plus,
-  RefreshCw,
   Search,
   Trash2,
   Unlink,
   UserRound,
-  X,
+  Users,
 } from "lucide-react";
 import { api, type Case, type CaseFileLink } from "@/lib/api";
 import { AttributeEditor } from "@/components/shell/AttributeEditor";
-import { BarHeader, Button, IconButton, LeftBar, SectionLabel, ViewHeader } from "@/components/ui/orchestrator";
+import { InlineNameEdit } from "@/components/ui/InlineNameEdit";
+
+import {
+  BarHeader,
+  Button,
+  ErrorBanner,
+  IconButton,
+  LeftBar,
+  Menu,
+  MenuItem,
+  SectionLabel,
+  ViewHeader,
+} from "@/components/ui/orchestrator";
 import { cn } from "@/lib/utils";
 import { useI18n } from "@/lib/i18n";
 import { useProjectStore } from "@/stores/project";
@@ -34,6 +44,8 @@ export function CasesList() {
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [caseMenu, setCaseMenu] = useState<{ c: Case; x: number; y: number } | null>(null);
+  const [editingId, setEditingId] = useState<number | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -61,28 +73,23 @@ export function CasesList() {
   }, [cases, casesUi.query]);
 
   async function addCase() {
-    const name = window.prompt(t("cases.newNamePrompt"));
-    if (name === null) return;
-    const trimmed = name.trim();
-    if (!trimmed) return;
     setActionError(null);
     try {
-      const created = await api.createCase(trimmed);
+      const created = await api.createCase(t("cases.untitled"));
       setCasesUi({ selectedId: created.caseid });
       await useProjectStore.getState().refreshProject();
+      setEditingId(created.caseid);
     } catch (e) {
       setActionError(e instanceof Error ? e.message : t("cases.createError"));
     }
   }
 
-  async function renameCase(c: Case) {
-    const next = window.prompt(t("cases.renamePrompt", { name: c.name }), c.name);
-    if (next === null) return;
-    const name = next.trim();
-    if (!name || name === c.name) return;
+  async function saveCaseRename(caseid: number, name: string) {
+    // Close the editor synchronously so Tab can move it to the next row.
+    setEditingId(null);
     setActionError(null);
     try {
-      await api.updateCase(c.caseid, { name });
+      await api.updateCase(caseid, { name });
       await useProjectStore.getState().refreshProject();
     } catch (e) {
       setActionError(e instanceof Error ? e.message : t("cases.renameError"));
@@ -103,42 +110,24 @@ export function CasesList() {
 
   return (
     <LeftBar
+      
       header={
         <BarHeader
           title={t("nav.cases")}
-          count={cases.length}
           actions={
-            <>
-              <IconButton label={t("cases.refreshAria")} title={t("common.refresh")} size="sm" onClick={() => void load()}>
-                <RefreshCw size={14} aria-hidden />
-              </IconButton>
-              <Button
-                variant="primaryCompact"
-                icon={<Plus size={10} aria-hidden />}
-                onClick={() => void addCase()}
-              >
-                {t("cases.addCase")}
-              </Button>
-            </>
+            <Button
+              variant="primary"
+              icon={<Users size={12} aria-hidden />}
+              onClick={() => void addCase()}
+            >
+              {t("common.add")}
+            </Button>
           }
         />
       }
     >
       {actionError && (
-        <div
-          role="alert"
-          className="flex shrink-0 items-center gap-2 border-b border-border bg-danger/10 px-3 py-1.5 text-xs text-danger"
-        >
-          <span className="min-w-0 flex-1 truncate">{actionError}</span>
-          <button
-            type="button"
-            onClick={() => setActionError(null)}
-            aria-label={t("common.dismiss")}
-            className="rounded-sm p-0.5 hover:bg-surface-higher"
-          >
-            <X size={12} aria-hidden />
-          </button>
-        </div>
+        <ErrorBanner onClose={() => setActionError(null)}>{actionError}</ErrorBanner>
       )}
       <div className="relative shrink-0 px-3 py-2">
         <Search
@@ -169,6 +158,10 @@ export function CasesList() {
               role="button"
               tabIndex={0}
               onClick={() => setCasesUi({ selectedId: c.caseid })}
+              onContextMenu={(e) => {
+                e.preventDefault();
+                setCaseMenu({ c, x: e.clientX, y: e.clientY });
+              }}
               onKeyDown={(e) => {
                 if (e.key === "Enter" || e.key === " ") setCasesUi({ selectedId: c.caseid });
               }}
@@ -177,35 +170,51 @@ export function CasesList() {
                 casesUi.selectedId === c.caseid && "bg-accent/10",
               )}
             >
-              <span className="min-w-0 flex-1">
-                <span className="block truncate text-sm font-medium">{c.name}</span>
-                <span className="block truncate text-xs text-text-secondary">{c.date}</span>
-              </span>
-              <span className="flex shrink-0 gap-0.5">
-                <IconButton
-                  label={t("cases.renameFor", { name: c.name })}
-                  title={t("cases.renameTitle")}
-                  size="sm"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    void renameCase(c);
+              {editingId === c.caseid ? (
+                <InlineNameEdit
+                  value={c.name}
+                  placeholder={t("cases.searchPlaceholder")}
+                  onSave={(name) => void saveCaseRename(c.caseid, name)}
+                  onCancel={() => setEditingId(null)}
+                  onTab={() => {
+                    const idx = filtered.findIndex((x) => x.caseid === c.caseid);
+                    const next = filtered[idx + 1];
+                    setEditingId(next ? next.caseid : null);
                   }}
-                >
-                  <Pencil size={13} aria-hidden />
-                </IconButton>
-                <IconButton
-                  label={t("cases.deleteFor", { name: c.name })}
-                  title={t("common.delete")}
-                  size="sm"
-                  className="hover:text-danger"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    void deleteCase(c);
-                  }}
-                >
-                  <Trash2 size={13} aria-hidden />
-                </IconButton>
-              </span>
+                />
+              ) : (
+                <>
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-sm font-medium">{c.name}</span>
+                    <span className="block truncate text-xs text-text-secondary">{c.date}</span>
+                  </span>
+                  <span className="flex shrink-0 gap-0.5">
+                    <IconButton
+                      label={t("cases.renameFor", { name: c.name })}
+                      title={t("cases.renameTitle")}
+                      size="sm"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setEditingId(c.caseid);
+                      }}
+                    >
+                      <Pencil size={13} aria-hidden />
+                    </IconButton>
+                    <IconButton
+                      label={t("cases.deleteFor", { name: c.name })}
+                      title={t("common.delete")}
+                      size="sm"
+                      className="hover:text-danger"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        void deleteCase(c);
+                      }}
+                    >
+                      <Trash2 size={13} aria-hidden />
+                    </IconButton>
+                  </span>
+                </>
+              )}
             </div>
           ))
         )}
@@ -215,6 +224,62 @@ export function CasesList() {
           </p>
         )}
       </div>
+
+      {/* Row context menu (same pattern as files/codes) */}
+      {caseMenu && (
+        <>
+          <div
+            className="fixed inset-0 z-30"
+            onClick={() => setCaseMenu(null)}
+            onContextMenu={(e) => {
+              e.preventDefault();
+              setCaseMenu(null);
+            }}
+            aria-hidden
+          />
+          <Menu
+            position="fixed"
+            className="min-w-40"
+            role="menu"
+            style={{
+              left: Math.min(caseMenu.x, window.innerWidth - 170),
+              top: Math.min(caseMenu.y, window.innerHeight - 140),
+            }}
+          >
+            <MenuItem
+              role="menuitem"
+              onClick={() => {
+                setCaseMenu(null);
+                setCasesUi({ selectedId: caseMenu.c.caseid });
+              }}
+            >
+              <Info size={14} aria-hidden />
+              {t("sidebar.menuDetails")}
+            </MenuItem>
+            <MenuItem
+              role="menuitem"
+              onClick={() => {
+                setCaseMenu(null);
+                setEditingId(caseMenu.c.caseid);
+              }}
+            >
+              <Pencil size={14} aria-hidden />
+              {t("cases.renameTitle")}
+            </MenuItem>
+            <MenuItem
+              role="menuitem"
+              className="text-danger"
+              onClick={() => {
+                setCaseMenu(null);
+                void deleteCase(caseMenu.c);
+              }}
+            >
+              <Trash2 size={14} aria-hidden />
+              {t("common.delete")}
+            </MenuItem>
+          </Menu>
+        </>
+      )}
     </LeftBar>
   );
 }
@@ -326,18 +391,7 @@ export function CaseDetails() {
     <section className="flex h-full min-w-0 flex-1 flex-col bg-bg">
       <ViewHeader back={false} title={selected ? selected.name : t("nav.cases")} />
       {actionError && (
-        <div className="flex shrink-0 items-center gap-2 border-b border-border bg-surface px-3 py-1.5 text-sm text-danger">
-          <CircleAlert size={14} aria-hidden />
-          <span className="min-w-0 flex-1 truncate">{actionError}</span>
-          <button
-            type="button"
-            onClick={() => setActionError(null)}
-            aria-label={t("common.dismiss")}
-            className="rounded-sm p-0.5 hover:bg-surface-higher"
-          >
-            <X size={14} aria-hidden />
-          </button>
-        </div>
+        <ErrorBanner onClose={() => setActionError(null)}>{actionError}</ErrorBanner>
       )}
 
       {!selected ? (

@@ -4,6 +4,39 @@ import { api, initApiBase } from "@/lib/api";
 import { I18nProvider } from "@/lib/i18n";
 import { ToastProvider } from "@/lib/toast";
 import { useProjectStore } from "@/stores/project";
+import { checkIntervalMs, updaterAvailable, useUpdatesStore } from "@/stores/updates";
+
+/** App-update scheduling: load the saved preferences, then check now and on
+ *  the configured cadence when auto-updates are enabled. An available update
+ *  is installed automatically (the setting promises "install automatically");
+ *  manual checks in Settings never install on their own. Runs only in the
+ *  packaged (Tauri) app — plain-browser dev has no updater. */
+function scheduleUpdates() {
+  if (!updaterAvailable()) return;
+  const store = useUpdatesStore.getState();
+  const checkAndInstall = () => {
+    void useUpdatesStore.getState().checkNow().then(() => {
+      const s = useUpdatesStore.getState();
+      if (s.status === "available" && s.settings?.auto_update) void s.install();
+    });
+  };
+  void store.loadSettings().then(() => {
+    const settings = useUpdatesStore.getState().settings;
+    if (!settings?.auto_update) return;
+    checkAndInstall();
+    const ms = checkIntervalMs(settings.check_interval);
+    if (ms != null) {
+      const timer = setInterval(() => {
+        const current = useUpdatesStore.getState().settings;
+        if (current?.auto_update) {
+          checkAndInstall();
+        } else {
+          clearInterval(timer);
+        }
+      }, ms);
+    }
+  });
+}
 
 function App() {
   useEffect(() => {
@@ -11,6 +44,10 @@ function App() {
     const preventContextMenu = (e: MouseEvent) => e.preventDefault();
     window.addEventListener("contextmenu", preventContextMenu);
     return () => window.removeEventListener("contextmenu", preventContextMenu);
+  }, []);
+
+  useEffect(() => {
+    scheduleUpdates();
   }, []);
 
   useEffect(() => {
@@ -33,7 +70,13 @@ function App() {
             const { recent } = await api.recentProjects(3_000);
             useProjectStore.getState().setAutoOpenStage("open");
             for (const path of recent.slice(0, 3)) {
-              const ok = await useProjectStore.getState().openProject(path);
+              // A hanging open (e.g. a large project while the backend is
+              // still warming up) must never freeze the dashboard — give up
+              // after 30s and let the user open it manually.
+              const ok = await Promise.race([
+                useProjectStore.getState().openProject(path),
+                new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 30_000)),
+              ]);
               if (ok) {
                 useProjectStore.getState().setAutoOpening(false);
                 return;

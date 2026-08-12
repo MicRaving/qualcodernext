@@ -134,7 +134,6 @@ export const eo: Record<string, string> = {
   "analyze.titleHeatmap": "Varmeco",
   "analyze.pickCode": "Kodo",
   "analyze.copyCodebook": "Kopiu al tordtabulo",
-  "analyze.importCodebook": "Importa kodolibro",
   "graphs.title": "Grafoj",
   "graphs.newGraph": "Nova grafo",
   "graphs.models": "Modeloj…",

@@ -154,6 +154,28 @@ async def test_undo_rename_and_create(client, open_project):
     assert any(c["kind"] == "code" and c["id"] == cid for c in tree)
 
 
+async def test_undo_redo_code_delete(client, open_project):
+    res = await client.post("/api/v1/codes", json={"name": "Gone"})
+    cid = res.json()["cid"]
+    res = await client.delete(f"/api/v1/codes/{cid}")
+    assert res.status_code == 204
+    tree = (await client.get("/api/v1/codes")).json()
+    assert all(c["id"] != cid for c in tree)
+
+    # Undo the code.delete → the code row is restored.
+    aid = await _find_audit_id(client, "code.delete")
+    res = await client.post("/api/v1/audit/undo", json={"id": aid})
+    assert res.status_code == 200, res.text
+    tree = (await client.get("/api/v1/codes")).json()
+    assert any(c["kind"] == "code" and c["id"] == cid for c in tree)
+
+    # Redo → deleted again.
+    res = await client.post("/api/v1/audit/redo", json={"id": aid})
+    assert res.status_code == 200, res.text
+    tree = (await client.get("/api/v1/codes")).json()
+    assert all(c["id"] != cid for c in tree)
+
+
 async def test_undo_unsupported_action(client, open_project):
     await client.post("/api/v1/codes", json={"name": "S"})
     # Force an unsupported action row (autocode is not undoable).

@@ -83,24 +83,40 @@ export function fetchWithTimeout(
 }
 
 async function request<T>(path: string, init?: RequestInit, timeoutMs = 15_000): Promise<T> {
-  const base = await resolveBase();
-  resolvedBase = base;
-  const res = await fetchWithTimeout(`${base}${path}`, {
-    headers: { "Content-Type": "application/json" },
-    ...init,
-  }, timeoutMs);
-  if (!res.ok) {
-    let detail: unknown;
-    try {
-      detail = (await res.json()).detail;
-    } catch {
-      /* non-JSON error body */
+  const doFetch = async (): Promise<Response> => {
+    const base = await resolveBase();
+    resolvedBase = base;
+    return fetchWithTimeout(`${base}${path}`, {
+      headers: { "Content-Type": "application/json" },
+      ...init,
+    }, timeoutMs);
+  };
+  try {
+    const res = await doFetch();
+    if (!res.ok) {
+      let detail: unknown;
+      try {
+        detail = (await res.json()).detail;
+      } catch {
+        /* non-JSON error body */
+      }
+      const suffix = typeof detail === "string" && detail ? `: ${detail}` : "";
+      throw new ApiError(res.status, `API error ${res.status} on ${path}${suffix}`, detail);
     }
-    const suffix = typeof detail === "string" && detail ? `: ${detail}` : "";
-    throw new ApiError(res.status, `API error ${res.status} on ${path}${suffix}`, detail);
+    if (res.status === 204) return undefined as T;
+    return (await res.json()) as T;
+  } catch (err) {
+    if (err instanceof ApiError) throw err;
+    // Network-level failure (the packaged backend died or its port changed,
+    // the dev backend was restarted…): drop the cached base URL, resolve it
+    // afresh and retry exactly once before giving up.
+    basePromise = null;
+    resolvedBase = null;
+    const res = await doFetch();
+    if (!res.ok) throw new ApiError(res.status, `API error ${res.status} on ${path}`);
+    if (res.status === 204) return undefined as T;
+    return (await res.json()) as T;
   }
-  if (res.status === 204) return undefined as T;
-  return (await res.json()) as T;
 }
 
 /** URL to the raw source file bytes (used as img/video/pdf src). */
@@ -113,10 +129,6 @@ export function thumbnailUrl(sourceId: number, maxSize = 300): string {
   return `${apiBaseSync()}/sources/${sourceId}/thumbnail?max_size=${maxSize}`;
 }
 
-export interface HealthStatus {
-  status: string;
-  version?: string;
-}
 
 export interface ProjectSummary {
   databaseversion: string;
@@ -175,6 +187,15 @@ export interface Code {
   date: string;
   color: string | null;
   supercid?: number | null;
+}
+
+export interface Category {
+  catid: number;
+  name: string;
+  memo: string;
+  owner: string;
+  date: string;
+  supercatid: number | null;
 }
 
 export interface CodeExample {
@@ -266,11 +287,6 @@ export interface CodesBySegmentRow {
   date: string;
 }
 
-export interface ComparisonTable {
-  files: { fid: number; name: string }[];
-  codes: { cid: number; name: string; color: string | null }[];
-  counts: number[][];
-}
 
 export interface CooccurrenceTable {
   codes: { cid: number; name: string; color: string | null }[];
@@ -532,19 +548,6 @@ export interface CodeSummary {
   file_count: number;
 }
 
-export interface CoderFileComparison {
-  coder_a: string;
-  coder_b: string;
-  files: {
-    file_name: string;
-    coder_a_count: number;
-    coder_b_count: number;
-    segments_a: { cid: number; code_name: string; seltext: string; pos0: number; pos1: number }[];
-    segments_b: { cid: number; code_name: string; seltext: string; pos0: number; pos1: number }[];
-  }[];
-  total_a: number;
-  total_b: number;
-}
 
 export interface CodeRelation {
   code_a: string;
@@ -630,14 +633,6 @@ export interface AuditStatsRow {
 
 // --- Transcription -----------------------------------------------------
 
-export interface TranscribeStatus {
-  engines: { whisper: boolean; noscribe: boolean };
-  models_cached: string[];
-  model_dir: string;
-  models: string[];
-  settings: TranscribeSettings;
-}
-
 export interface TranscribeSettings {
   engine: string;
   model: string;
@@ -650,6 +645,15 @@ export interface TranscribeSettings {
   segment_coding: boolean;
 }
 
+export interface TranscribeStatus {
+  engines: { whisper: boolean; noscribe: boolean };
+  models_cached: string[];
+  model_dir: string;
+  models: string[];
+  settings: TranscribeSettings;
+}
+
+
 export interface TranscribeJob {
   id: string;
   state: "running" | "done" | "error";
@@ -658,6 +662,8 @@ export interface TranscribeJob {
   segments: number;
   error: string | null;
   transcript_source_id?: number | null;
+  /** Partial "[mm:ss] text" transcript while the job is still running. */
+  live_text?: string | null;
   result?: { start: number; end: number; text: string }[] | null;
 }
 
@@ -832,6 +838,11 @@ export interface SyncStatus {
   last_error_at: number;
 }
 
+export interface UpdatesSettings {
+  check_interval: "daily" | "weekly" | "never";
+  auto_update: boolean;
+}
+
 export interface SyncResult {
   ok: boolean;
   reason?: string;
@@ -840,8 +851,6 @@ export interface SyncResult {
 }
 
 export const api = {
-  health: () => request<HealthStatus>("/health"),
-
   recentProjects: (timeoutMs?: number) =>
     request<{ recent: string[] }>("/projects", undefined, timeoutMs),
   createProject: (project_path: string, codername?: string) =>
@@ -931,6 +940,8 @@ export const api = {
     }),
   deleteCode: (cid: number) => request<void>(`/codes/${cid}`, { method: "DELETE" }),
   deleteCategory: (catid: number) => request<void>(`/codes/categories/${catid}`, { method: "DELETE" }),
+  patchCategory: (catid: number, body: { name: string }) =>
+    request<Category>(`/codes/categories/${catid}`, { method: "PATCH", body: JSON.stringify(body) }),
   mergeCode: (cid: number, targetCid: number) =>
     request<Code>(`/codes/${cid}/merge`, {
       method: "POST",
@@ -1159,8 +1170,6 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ name, case_or_file, value_type, owner }),
     }),
-  deleteAttributeType: (name: string) =>
-    request<void>(`/attributes/types/${name}`, { method: "DELETE" }),
   attributeValues: () => request<AttributeValue[]>("/attributes/values"),
   setAttributeValue: (
     name: string,
@@ -1192,14 +1201,9 @@ export const api = {
     request<
       (Annotation & { file_name: string })[]
     >("/annotations"),
-  memos: () => request<{ memos: { kind: string; id: number; name: string; memo: string; date: string; owner: string }[] }>("/memos"),
-
-  // --- Reports ---------------------------------------------------------
-
   reports: {
     codeFrequencies: () => request<{ rows: CodeFrequencyRow[] }>("/reports/code-frequencies"),
     codesBySegments: () => request<{ rows: CodesBySegmentRow[] }>("/reports/codes-by-segments"),
-    comparisonTable: () => request<ComparisonTable>("/reports/comparison-table"),
     cooccurrence: () => request<CooccurrenceTable>("/reports/co-occurrence"),
     exactMatches: () => request<{ rows: ExactMatchRow[] }>("/reports/exact-matches"),
     fileSummary: () => request<{ rows: FileSummaryRow[] }>("/reports/file-summary"),
@@ -1213,11 +1217,6 @@ export const api = {
     codeSegments: (cid: number) =>
       request<{ rows: CodeSegmentRow[] }>(`/reports/code-segments/${cid}`),
     codeSummary: (cid: number) => request<CodeSummary>(`/reports/code-summary/${cid}`),
-    coderFileComparison: (coderA: string, coderB: string) =>
-      request<CoderFileComparison>("/reports/coder-file-comparison", {
-        method: "POST",
-        body: JSON.stringify({ coder_a: coderA, coder_b: coderB }),
-      }),
     codeRelations: (owner?: string) =>
       request<{ owner: string; relations: CodeRelation[] }>(
         `/reports/code-relations${owner ? `?owner=${encodeURIComponent(owner)}` : ""}`,
@@ -1235,25 +1234,6 @@ export const api = {
   interchange: {
     exportRefiUrl: () => `${apiBaseSync()}/interchange/export/refi`,
   },
-  importRefi: (file: File, codername?: string) =>
-    importMultipart<InterchangeResult>("/interchange/import/refi", file, codername),
-  importRqda: (file: File, codername?: string) =>
-    importMultipart<InterchangeResult>("/interchange/import/rqda", file, codername),
-  importTaguette: (file: File, codername?: string) =>
-    importMultipart<InterchangeResult>("/interchange/import/taguette", file, codername),
-  importRis: (file: File, codername?: string) =>
-    importMultipart<InterchangeResult>("/interchange/import/ris", file, codername),
-  importSurvey: (file: File, codername?: string, qualitativeHeaders?: string[]) =>
-    importMultipart<InterchangeResult>(
-      "/interchange/import/survey",
-      file,
-      codername,
-      qualitativeHeaders ? { qualitative_headers: qualitativeHeaders.join(",") } : undefined,
-    ),
-  importCodebook: (file: File, codername?: string) =>
-    importMultipart<InterchangeResult>("/interchange/import/codebook", file, codername),
-  importMerge: (file: File, codername?: string) =>
-    importMultipart<InterchangeResult>("/interchange/import/merge", file, codername),
   importAuto: (file: File, codername?: string, qualitativeHeaders?: string[]) =>
     importMultipart<InterchangeResult>(
       "/interchange/import/auto",
@@ -1261,18 +1241,8 @@ export const api = {
       codername,
       qualitativeHeaders ? { qualitative_headers: qualitativeHeaders.join(",") } : undefined,
     ),
-  importZotero: (codername?: string) => {
-    const form = new FormData();
-    if (codername) form.append("codername", codername);
-    return fetch(`${apiBaseSync()}/interchange/import/zotero`, {
-      method: "POST",
-      body: form,
-    }).then(handleJson<InterchangeResult>);
-  },
-
-  // --- AI assistant ---------------------------------------------------
-
   aiStatus: () => request<AiStatus>("/ai/status"),
+  aiModels: () => request<{ models: string[] }>("/ai/models"),
   aiSaveSettings: (body: {
     enabled: boolean;
     provider: string;
@@ -1296,11 +1266,6 @@ export const api = {
   aiIndexStatus: () => request<AiIndexStatus>("/ai/index"),
   aiIndexBuild: () => request<AiIndexStatus>("/ai/index", { method: "POST", body: "{}" }),
   aiIndexDelete: () => request<void>("/ai/index", { method: "DELETE" }),
-  aiMcp: (body: unknown) =>
-    request<unknown>("/ai/mcp", { method: "POST", body: JSON.stringify(body) }),
-
-  // --- SQL console -----------------------------------------------------
-
   sqlRun: (sql: string) =>
     request<SqlResult>("/sql/run", { method: "POST", body: JSON.stringify({ sql }) }),
   savedQueries: () => request<{ rows: SavedQuery[] }>("/sql/saved"),
@@ -1334,11 +1299,6 @@ export const api = {
   // --- Transcription ------------------------------------------------------
 
   transcribeStatus: () => request<TranscribeStatus>("/transcribe/status"),
-  transcribeSaveSettings: (body: Partial<TranscribeSettings>) =>
-    request<TranscribeSettings>("/transcribe/settings", {
-      method: "PUT",
-      body: JSON.stringify(body),
-    }),
   transcribeStart: (body: {
     source_id: number;
     engine?: string;
@@ -1377,22 +1337,12 @@ export const api = {
       method: "POST",
       body: JSON.stringify(body),
     }),
-  graphPatchCdctItem: (grid: number, gtextid: number, body: Record<string, unknown>) =>
-    request<CdctItem>(`/graphs/${grid}/items/cdct/${gtextid}`, {
-      method: "PATCH",
-      body: JSON.stringify(body),
-    }),
   graphDeleteCdctItem: (grid: number, gtextid: number) =>
     request<void>(`/graphs/${grid}/items/cdct/${gtextid}`, { method: "DELETE" }),
 
   graphAddCaseItem: (grid: number, body: { caseid: number; x: number; y: number }) =>
     request<CaseItem>(`/graphs/${grid}/items/case`, {
       method: "POST",
-      body: JSON.stringify(body),
-    }),
-  graphPatchCaseItem: (grid: number, gcaseid: number, body: Record<string, unknown>) =>
-    request<CaseItem>(`/graphs/${grid}/items/case/${gcaseid}`, {
-      method: "PATCH",
       body: JSON.stringify(body),
     }),
   graphDeleteCaseItem: (grid: number, gcaseid: number) =>
@@ -1403,22 +1353,12 @@ export const api = {
       method: "POST",
       body: JSON.stringify(body),
     }),
-  graphPatchFileItem: (grid: number, gfileid: number, body: Record<string, unknown>) =>
-    request<FileItem>(`/graphs/${grid}/items/file/${gfileid}`, {
-      method: "PATCH",
-      body: JSON.stringify(body),
-    }),
   graphDeleteFileItem: (grid: number, gfileid: number) =>
     request<void>(`/graphs/${grid}/items/file/${gfileid}`, { method: "DELETE" }),
 
   graphAddFreeItem: (grid: number, body: { x: number; y: number; free_text: string }) =>
     request<FreeItem>(`/graphs/${grid}/items/free`, {
       method: "POST",
-      body: JSON.stringify(body),
-    }),
-  graphPatchFreeItem: (grid: number, gfreeid: number, body: Record<string, unknown>) =>
-    request<FreeItem>(`/graphs/${grid}/items/free/${gfreeid}`, {
-      method: "PATCH",
       body: JSON.stringify(body),
     }),
   graphDeleteFreeItem: (grid: number, gfreeid: number) =>
@@ -1432,20 +1372,12 @@ export const api = {
       method: "POST",
       body: JSON.stringify(body),
     }),
-  graphDeleteMemoItem: (grid: number, gmemoid: number) =>
-    request<void>(`/graphs/${grid}/items/memo/${gmemoid}`, { method: "DELETE" }),
-
   graphAddCdctLine: (
     grid: number,
     body: { from_node: number; to_node: number; label?: string; arrow_mode?: string },
   ) =>
     request<CdctLine>(`/graphs/${grid}/lines/cdct`, {
       method: "POST",
-      body: JSON.stringify(body),
-    }),
-  graphPatchCdctLine: (grid: number, glineid: number, body: Record<string, unknown>) =>
-    request<CdctLine>(`/graphs/${grid}/lines/cdct/${glineid}`, {
-      method: "PATCH",
       body: JSON.stringify(body),
     }),
   graphDeleteCdctLine: (grid: number, glineid: number) =>
@@ -1457,11 +1389,6 @@ export const api = {
   ) =>
     request<FreeLine>(`/graphs/${grid}/lines/entity`, {
       method: "POST",
-      body: JSON.stringify(body),
-    }),
-  graphPatchEntityLine: (grid: number, gflineid: number, body: Record<string, unknown>) =>
-    request<FreeLine>(`/graphs/${grid}/lines/entity/${gflineid}`, {
-      method: "PATCH",
       body: JSON.stringify(body),
     }),
   graphDeleteEntityLine: (grid: number, gflineid: number) =>
@@ -1494,22 +1421,21 @@ export const api = {
   // --- Code color scheme --------------------------------------------------
 
   colorScheme: () => request<ColorScheme>("/color-scheme"),
-  saveColorScheme: (colors: string[], ranges: { name: string; min: number; max: number }[] = []) =>
-    request<ColorScheme>("/color-scheme", {
-      method: "PUT",
-      body: JSON.stringify({ colors, ranges }),
-    }),
-  resetColorScheme: () => request<ColorScheme>("/color-scheme", { method: "DELETE" }),
-
-  // --- Collaboration sync -----------------------------------------------
-
   syncStatus: () => request<SyncStatus>("/sync/status"),
   syncNow: () => request<SyncResult>("/sync/now", { method: "POST" }),
-  syncSettings: () => request<{ enabled: boolean }>("/sync/settings"),
   setSyncEnabled: (enabled: boolean) =>
     request<{ enabled: boolean }>("/sync/settings", {
       method: "PUT",
       body: JSON.stringify({ enabled }),
+    }),
+
+  // --- App updates -----------------------------------------------------
+
+  updatesSettings: () => request<UpdatesSettings>("/updates/settings"),
+  setUpdatesSettings: (body: UpdatesSettings) =>
+    request<UpdatesSettings>("/updates/settings", {
+      method: "PUT",
+      body: JSON.stringify(body),
     }),
 };
 

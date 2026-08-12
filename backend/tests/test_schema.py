@@ -38,6 +38,7 @@ EXPECTED_TABLES = {
     "files_filter",
     "coder_names",
     "sync_log",
+    "audit_log",
 }
 
 EXPECTED_VIEWS = {

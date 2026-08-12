@@ -69,6 +69,7 @@ async def export_refi_qdp(session_factory: async_sessionmaker, project_name: str
                     tables.code_name.c.name,
                     tables.code_name.c.color,
                     tables.code_name.c.catid,
+                    tables.code_name.c.supercid,
                 )
             )
         ).all()
@@ -122,21 +123,39 @@ async def export_refi_qdp(session_factory: async_sessionmaker, project_name: str
     top_codes = etree.SubElement(codebook, _q("Codes"))
     top_categories = etree.SubElement(codebook, _q("Categories"))
 
+    # Sub-codes (supercid) are expressed by nesting codes inside their
+    # parent code's ``Codes`` element; everything else hangs off the
+    # category tree (or the top-level Codes for uncategorized roots).
     codes_by_cat: dict[int | None, list] = {}
+    codes_by_parent: dict[int | None, list] = {}
     for row in code_rows:
-        codes_by_cat.setdefault(row[3], []).append(row)
+        if row[4] is not None:
+            codes_by_parent.setdefault(row[4], []).append(row)
+        else:
+            codes_by_cat.setdefault(row[3], []).append(row)
     cats_by_super: dict[int | None, list] = {}
     for row in cat_rows:
         cats_by_super.setdefault(row[2], []).append(row)
 
+    visited_codes: set[int] = set()
+
     def add_code(parent: etree.Element, row) -> None:
-        etree.SubElement(
+        if row[0] in visited_codes:
+            # Corrupt supercid cycles must not recurse forever.
+            return
+        visited_codes.add(row[0])
+        code = etree.SubElement(
             parent,
             _q("Code"),
             guid=code_guid[row[0]],
             name=row[1] or "",
             color=row[2] or "#FFFFFF",
         )
+        nested = codes_by_parent.get(row[0], [])
+        if nested:
+            codes_el = etree.SubElement(code, _q("Codes"))
+            for child in nested:
+                add_code(codes_el, child)
 
     def add_category(parent: etree.Element, row) -> None:
         catid = row[0]
@@ -244,7 +263,9 @@ async def import_refi_qdp(
             ).first()
             return row[0] if row else None
 
-        async def import_code(elem: etree.Element, catid: int | None) -> None:
+        async def import_code(
+            elem: etree.Element, catid: int | None, supercid: int | None = None
+        ) -> None:
             name = elem.get("name") or ""
             guid = elem.get("guid")
             cid = await find_code_cid(name)
@@ -254,11 +275,16 @@ async def import_refi_qdp(
                     owner=codername,
                     catid=catid,
                     color=elem.get("color") or "#FFFFFF",
+                    supercid=supercid,
                 )
                 cid = code.cid if code is not None else None
                 counts["codes"] += 1
             if guid and cid is not None:
                 code_guid[guid] = cid
+            # Nested codes (exported as sub-codes) keep their hierarchy.
+            for codes_elem in _children(elem, "Codes"):
+                for code_elem in _children(codes_elem, "Code"):
+                    await import_code(code_elem, catid, supercid=cid)
 
         async def import_category(elem: etree.Element, supercatid: int | None) -> None:
             name = elem.get("name") or ""

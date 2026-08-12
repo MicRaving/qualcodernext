@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -109,6 +110,26 @@ class MemosResponse(BaseModel):
     memos: list[MemoItem] = Field(default_factory=list)
 
 
+class UpdatesSettingsRequest(BaseModel):
+    check_interval: str = "daily"
+    auto_update: bool = False
+
+
+@router.get("/updates/settings", response_model=UpdatesSettingsRequest)
+async def get_updates_settings() -> UpdatesSettingsRequest:
+    """App-update preferences (check cadence, auto-install)."""
+    from qualcoder_api.services.user_settings import get_updates_settings
+
+    return UpdatesSettingsRequest(**get_updates_settings())
+
+
+@router.put("/updates/settings", response_model=UpdatesSettingsRequest)
+async def put_updates_settings(req: UpdatesSettingsRequest) -> UpdatesSettingsRequest:
+    from qualcoder_api.services.user_settings import save_updates_settings
+
+    return UpdatesSettingsRequest(**save_updates_settings(req.model_dump()))
+
+
 @router.get("/memos", response_model=MemosResponse)
 async def list_memos(svc: ServiceDep) -> MemosResponse:
     """File and code memos (Notes workspace)."""
@@ -188,6 +209,16 @@ async def open_project(req: OpenProjectRequest, svc: ServiceDep) -> ProjectRespo
         return ProjectResponse(
             ok=False, project_path=result.project_path, error=result.error, lock_user=result.lock_user
         )
+    # Transcripts finished while the app was closed were persisted by the
+    # worker; finalize them now so they appear in the project.
+    from qualcoder_api.services.transcription import sweep_pending_transcripts
+
+    if svc.session_factory is not None:
+        with contextlib.suppress(Exception):  # pragma: no cover - best effort
+            await sweep_pending_transcripts(
+                project_path=svc.project_path,
+                session_factory=svc.session_factory,
+            )
     return ProjectResponse(
         ok=True,
         project_path=result.project_path,

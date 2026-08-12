@@ -16,16 +16,16 @@ const PROJECT_PATH = path.join(E2E_ROOT, "Study.qda");
 const INTERVIEW_FILE = path.join(E2E_ROOT, "interview.txt");
 
 async function ensureFixtureFiles() {
-  // Fresh state for every run: wipe any leftover test project, then write
-  // the interview fixture that later tests import. A previous run's servers
-  // may still hold handles on the dir (global-setup kills them first, so
-  // this is only a belt-and-braces retry).
+  // Fresh state for every run: wipe OUR project dir, then write the interview
+  // fixture that later tests import. The backend keeps the other specs'
+  // projects (Advanced.qda, Media.qda) open with locked handles, so wiping
+  // E2E_ROOT wholesale fails on Windows — only Study.qda is ours.
   for (let attempt = 0; attempt < 20; attempt++) {
     try {
-      fs.rmSync(E2E_ROOT, { recursive: true, force: true });
+      fs.rmSync(PROJECT_PATH, { recursive: true, force: true });
       break;
     } catch {
-      if (attempt === 19) throw new Error(`Could not wipe ${E2E_ROOT}`);
+      if (attempt === 19) throw new Error(`Could not wipe ${PROJECT_PATH}`);
       await new Promise((r) => setTimeout(r, 250));
     }
   }
@@ -43,34 +43,19 @@ test.beforeAll(async () => {
   await ensureFixtureFiles();
 });
 
-test("app shell (no welcome screen) and theme toggle", async ({ page }) => {
+test("app shell with full dashboard (no welcome screen)", async ({ page }) => {
   await page.goto("/");
 
-  // No welcome hero — the shell renders with only New/Open enabled; the
-  // project nav buttons are present but disabled.
+  // The full dashboard shows without a project: heading, stat placeholders
+  // and New/Open enabled; the project nav buttons are present but disabled.
+  await expect(page.getByRole("heading", { name: "QualCoder" })).toBeVisible();
   await expect(page.getByRole("button", { name: "New project" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Open project" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Dashboard" })).toBeDisabled();
   await expect(page.getByRole("button", { name: "Files", exact: true })).toBeDisabled();
-  await expect(page.locator("h1")).toHaveCount(0);
 
   // No backend status indicator in the top bar during startup.
   await expect(page.getByRole("status")).toHaveCount(0);
-
-  // Theme toggle: flips the `dark` class on <html> and switches its label.
-  const toggle = page.getByRole("button", { name: /Switch to (dark|light) theme/ });
-  await expect(toggle).toBeVisible();
-  const startsDark = (await toggle.getAttribute("aria-label")) === "Switch to light theme";
-
-  await toggle.click();
-
-  if (startsDark) {
-    await expect(page.locator("html")).not.toHaveClass(/dark/);
-    await expect(toggle).toHaveAttribute("aria-label", "Switch to dark theme");
-  } else {
-    await expect(page.locator("html")).toHaveClass(/dark/);
-    await expect(toggle).toHaveAttribute("aria-label", "Switch to light theme");
-  }
 });
 
 test("create project, import a file, autocode it, and run a report", async ({ page }) => {

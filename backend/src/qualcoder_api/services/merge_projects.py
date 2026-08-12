@@ -19,6 +19,8 @@ import aiosqlite
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
+from qualcoder_api.persistence import tables
+
 logger = logging.getLogger(__name__)
 
 
@@ -77,9 +79,53 @@ async def _merge(
     summary: list[str],
 ) -> dict:
     async with session_factory() as session:
+        # Merged rows must reach collaborators: capture each insert/update
+        # into sync_log exactly like every other mutation path does.
+        from sqlalchemy import select as sa_select
+
+        from qualcoder_api.persistence.repositories import _capture, _rowdict
+
+        async def _capture_insert(entity: str, pk_name: str, pk_value, values: dict) -> None:
+            table = getattr(tables, entity)
+            row = (
+                await session.execute(
+                    sa_select(table).where(getattr(table.c, pk_name) == pk_value)
+                )
+            ).first()
+            if row is not None:
+                await _capture(session, entity, "insert", pk_name, pk_value, _rowdict(row))
+
+        async def _capture_matched(entity: str, keys: list[str], values: dict) -> None:
+            """Capture an OR IGNORE insert whose pk is unknown: look the row
+            back up by its natural key."""
+            table = getattr(tables, entity)
+            pk_name = table.primary_key.columns.keys()[0]
+            cond = [getattr(table.c, k) == values[k] for k in keys if k in values]
+            if not cond:
+                return
+            row = (await session.execute(sa_select(table).where(*cond))).first()
+            if row is not None:
+                await _capture(
+                    session, entity, "insert", pk_name, getattr(row, pk_name), _rowdict(row)
+                )
+
+        async def _capture_update_matched(entity: str, keys: list[str], values: dict) -> None:
+            """Capture a merge UPDATE (e.g. attribute values) after the fact."""
+            table = getattr(tables, entity)
+            pk_name = table.primary_key.columns.keys()[0]
+            cond = [getattr(table.c, k) == values[k] for k in keys if k in values]
+            if not cond:
+                return
+            row = (await session.execute(sa_select(table).where(*cond))).first()
+            if row is not None:
+                await _capture(
+                    session, entity, "update", pk_name, getattr(row, pk_name), _rowdict(row)
+                )
+
         # ---- categories --------------------------------------------------
         cat_cols = await _columns(src, "code_cat") if "code_cat" in tables_present else set()
         cat_map: dict[int, int] = {}
+        cats: list[dict] = []
         rows = await session.execute(text("SELECT name FROM code_cat"))
         existing_cats = {r[0] for r in rows}
         if "code_cat" in tables_present and {"catid", "name"} <= cat_cols:
@@ -128,6 +174,10 @@ async def _merge(
                     text("SELECT catid FROM code_cat WHERE name = :n"), {"n": cat["name"]}
                 )
                 cat_map[cat["catid"]] = row.first()[0]
+                await _capture_insert(
+                    "code_cat", "catid", cat_map[cat["catid"]],
+                    {"name": cat["name"], "supercatid": supercatid},
+                )
                 existing_cats.add(cat["name"])
                 summary.append(f"Adding category: {cat['name']}")
         await session.commit()
@@ -146,6 +196,9 @@ async def _merge(
             catid_by_name = {
                 name: catid for catid, name in await session.execute(text("SELECT catid, name FROM code_cat"))
             }
+            # ``cats`` is always defined (possibly empty when the source has
+            # code_name but no code_cat).
+            src_cats: list[dict] = cats
             name_to_cid: dict[str, int] = {}
             for code in codes:
                 if code["name"] in existing_codes:
@@ -155,10 +208,14 @@ async def _merge(
                     first = row.first()
                     if first is not None:
                         name_to_cid[code["name"]] = first[0]
+                        # Map the source cid too, so the source project's
+                        # codings for this already-existing code are merged
+                        # instead of dropped.
+                        code_map[code["cid"]] = first[0]
                     continue
                 catid = None
                 if code.get("catid") is not None:
-                    src_cat = next((c for c in cats if c["catid"] == code["catid"]), None)
+                    src_cat = next((c for c in src_cats if c["catid"] == code["catid"]), None)
                     if src_cat is not None:
                         catid = catid_by_name.get(src_cat["name"])
                 await session.execute(
@@ -179,6 +236,10 @@ async def _merge(
                     text("SELECT cid FROM code_name WHERE name = :n"), {"n": code["name"]}
                 )
                 new_cid = row.first()[0]
+                await _capture_insert(
+                    "code_name", "cid", new_cid,
+                    {"name": code["name"], "catid": catid, "supercid": code.get("supercid")},
+                )
                 code_map[code["cid"]] = new_cid
                 name_to_cid[code["name"]] = new_cid
                 existing_codes.add(code["name"])
@@ -198,6 +259,18 @@ async def _merge(
                         ),
                         {"sup": name_to_cid[parent["name"]], "cid": name_to_cid[code["name"]]},
                     )
+                    updated = (
+                        await session.execute(
+                            sa_select(tables.code_name).where(
+                                tables.code_name.c.cid == name_to_cid[code["name"]]
+                            )
+                        )
+                    ).first()
+                    if updated is not None:
+                        await _capture(
+                            session, "code_name", "update", "cid",
+                            name_to_cid[code["name"]], _rowdict(updated),
+                        )
             await session.commit()
 
         # ---- sources ------------------------------------------------------
@@ -243,6 +316,10 @@ async def _merge(
                 )
                 new_id = row.first()[0]
                 source_map[source["id"]] = new_id
+                await _capture_insert(
+                    "source", "id", new_id,
+                    {"name": source["name"], "mediapath": source.get("mediapath")},
+                )
                 summary.append(f"Adding file: {source['name']}")
                 # Attribute placeholders for destination file attributes.
                 attr_rows = await session.execute(
@@ -255,6 +332,10 @@ async def _merge(
                             "VALUES (:n, 'file', '', :id, :d, :o)"
                         ),
                         {"n": attr_name, "id": new_id, "d": _now(), "o": codername},
+                    )
+                    await _capture_matched(
+                        "attribute", ["name", "attr_type", "id"],
+                        {"name": attr_name, "attr_type": "file", "id": new_id},
                     )
             # av_text_id linking by transcript filename.
             if "av_text_id" in src_cols:
@@ -275,6 +356,18 @@ async def _merge(
                             text("UPDATE source SET av_text_id = :t WHERE id = :id"),
                             {"t": first[0], "id": source_map.get(source["id"])},
                         )
+                        media_after = (
+                            await session.execute(
+                                sa_select(tables.source).where(
+                                    tables.source.c.id == source_map.get(source["id"])
+                                )
+                            )
+                        ).first()
+                        if media_after is not None:
+                            await _capture(
+                                session, "source", "update", "id",
+                                source_map.get(source["id"]), _rowdict(media_after),
+                            )
             await session.commit()
 
         # ---- codings / annotations / journals / stored sql ---------------
@@ -304,6 +397,11 @@ async def _merge(
                                 "important": values.get("important") or 0,
                             },
                         )
+                        await _capture_matched(
+                            "code_text", ["cid", "fid", "pos0", "pos1", "owner"],
+                            {"cid": new_cid, "fid": new_fid, "pos0": values["pos0"],
+                             "pos1": values["pos1"], "owner": values.get("owner") or codername},
+                        )
                     except Exception as err:
                         logger.debug("merge code_text: %s", err)
         if "annotation" in tables_present:
@@ -327,6 +425,10 @@ async def _merge(
                                 "owner": values.get("owner") or codername,
                                 "date": values.get("date") or _now(),
                             },
+                        )
+                        await _capture_matched(
+                            "annotation", ["fid", "pos0", "pos1"],
+                            {"fid": new_fid, "pos0": values["pos0"], "pos1": values["pos1"]},
                         )
                     except Exception as err:
                         logger.debug("merge annotation: %s", err)
@@ -356,6 +458,11 @@ async def _merge(
                                 "pdf_page": values.get("pdf_page"),
                             },
                         )
+                        await _capture_matched(
+                            "code_image", ["cid", "id", "x1", "y1", "width", "height"],
+                            {"cid": new_cid, "id": new_fid, "x1": values["x1"], "y1": values["y1"],
+                             "width": values["width"], "height": values["height"]},
+                        )
                     except Exception as err:
                         logger.debug("merge code_image: %s", err)
         if "code_av" in tables_present:
@@ -379,6 +486,10 @@ async def _merge(
                                 "memo": values.get("memo") or "", "owner": values.get("owner") or codername,
                                 "date": values.get("date") or _now(), "important": values.get("important") or 0,
                             },
+                        )
+                        await _capture_matched(
+                            "code_av", ["cid", "id", "pos0", "pos1"],
+                            {"cid": new_cid, "id": new_fid, "pos0": values["pos0"], "pos1": values["pos1"]},
                         )
                     except Exception as err:
                         logger.debug("merge code_av: %s", err)
@@ -423,6 +534,9 @@ async def _merge(
                                 "ssql": values.get("ssql") or "",
                             },
                         )
+                        await _capture_matched(
+                            "stored_sql", ["title"], {"title": values["title"]}
+                        )
                     except Exception as err:
                         logger.debug("merge stored_sql: %s", err)
         await session.commit()
@@ -454,6 +568,10 @@ async def _merge(
                         text("SELECT caseid FROM cases WHERE name = :n"), {"n": values["name"]}
                     )
                     case_map[values["caseid"]] = row.first()[0]
+                    await _capture_insert(
+                        "cases", "caseid", case_map[values["caseid"]],
+                        {"name": values["name"], "memo": values.get("memo") or ""},
+                    )
                     existing.add(values["name"])
                     summary.append(f"Adding case: {values['name']}")
                     # Case attribute placeholders.
@@ -472,6 +590,10 @@ async def _merge(
                                 "d": _now(),
                                 "o": codername,
                             },
+                        )
+                        await _capture_matched(
+                            "attribute", ["name", "attr_type", "id"],
+                            {"name": attr_name, "attr_type": "case", "id": case_map[values["caseid"]]},
                         )
             if "case_text" in tables_present:
                 ctxt_cols = await _columns(src, "case_text")
@@ -496,6 +618,11 @@ async def _merge(
                                     "owner": values.get("owner") or codername,
                                     "date": values.get("date") or _now(),
                                 },
+                            )
+                            await _capture_matched(
+                                "case_text", ["caseid", "fid", "pos0", "pos1"],
+                                {"caseid": new_caseid, "fid": new_fid,
+                                 "pos0": values["pos0"], "pos1": values["pos1"]},
                             )
                         except Exception as err:
                             logger.debug("merge case_text: %s", err)
@@ -526,6 +653,9 @@ async def _merge(
                             "valuetype": values.get("valuetype") or "text",
                         },
                     )
+                    await _capture_matched(
+                        "attribute_type", ["name"], {"name": values["name"]}
+                    )
                     existing.add(values["name"])
         if "attribute" in tables_present:
             at_cols = await _columns(src, "attribute")
@@ -552,10 +682,16 @@ async def _merge(
                             "attr_type": values["attr_type"],
                         },
                     )
+                    await _capture_update_matched(
+                        "attribute", ["name", "attr_type", "id"],
+                        {"name": values["name"], "attr_type": values["attr_type"], "id": new_id},
+                    )
         await session.commit()
 
     # ---- media files -----------------------------------------------------
     copied = 0
+    import asyncio
+
     for folder_name in ("audio", "documents", "images", "video"):
         source_dir = Path(source_path) / folder_name
         if not source_dir.is_dir():
@@ -565,7 +701,8 @@ async def _merge(
             dest_path = dest_dir / file_.name
             if not dest_path.exists():
                 try:
-                    shutil.copyfile(file_, dest_path)
+                    # Media copies can be large — keep them off the loop.
+                    await asyncio.to_thread(shutil.copyfile, file_, dest_path)
                     copied += 1
                 except (OSError, shutil.SameFileError) as err:
                     summary.append(f"{file_.name} NOT copied: {err}")

@@ -26,9 +26,10 @@ export function formatStats(details: CodeDetails | SourceDetails): {
       secondary: `${details.file_count} files`,
     };
   }
+  const total = details.text_codings + details.image_codings + details.av_codings;
   return {
-    primary: `${details.text_codings} text`,
-    secondary: `${details.image_codings} image · ${details.av_codings} av`,
+    primary: `${total} codings`,
+    secondary: "",
   };
 }
 

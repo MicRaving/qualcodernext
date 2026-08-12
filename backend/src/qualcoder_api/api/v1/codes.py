@@ -320,6 +320,47 @@ async def delete_category(catid: int, db: DbDep) -> None:
     )
 
 
+class CategoryRename(BaseModel):
+    name: str
+
+
+@router.patch("/categories/{catid}", response_model=Category)
+async def rename_category(catid: int, req: CategoryRename, db: DbDep) -> Category:
+    """Rename a category (the code PATCH endpoint only covers codes)."""
+    from sqlalchemy import update as sa_update
+
+    from qualcoder_api.persistence import tables
+
+    name = req.name.strip()
+    if not name:
+        raise HTTPException(status_code=422, detail="category name must not be empty")
+    old = (
+        await db.execute(
+            select(tables.code_cat.c.name).where(tables.code_cat.c.catid == catid)
+        )
+    ).first()
+    if old is None:
+        raise HTTPException(status_code=404, detail="category not found")
+    try:
+        await db.execute(
+            sa_update(tables.code_cat).where(tables.code_cat.c.catid == catid).values(name=name)
+        )
+        await db.commit()
+    except Exception:
+        await db.rollback()
+        raise HTTPException(status_code=409, detail="duplicate category name") from None
+    row = (
+        await db.execute(select(tables.code_cat).where(tables.code_cat.c.catid == catid))
+    ).first()
+    if row is None:
+        raise HTTPException(status_code=404, detail="category not found")
+    await audit.record(
+        db, user=get_codername(), action="category.rename", entity="code_cat",
+        entity_id=catid, detail={"old_name": old[0], "new_name": name},
+    )
+    return Category.model_validate(row._mapping)
+
+
 @router.post("/categories/{catid}/merge", status_code=204)
 async def merge_category(catid: int, req: MergeCategoryRequest, db: DbDep) -> None:
     if catid == req.target_catid:

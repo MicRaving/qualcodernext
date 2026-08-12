@@ -34,7 +34,7 @@ LEGACY_TABLES = [
     "CREATE TABLE journal (jid integer primary key, name text, jentry text, date text, owner text)",
 ]
 
-ALL_VERSIONS = [f"v{v}" for v in range(2, 20)]
+ALL_VERSIONS = [f"v{v}" for v in range(2, 21)]
 
 
 @pytest.fixture

@@ -27,9 +27,17 @@
     "active": true,
     "targets": "all",
     "icon": ["icons/icon.ico", "icons/icon.png"],
-    "createUpdaterArtifacts": false,
+    "createUpdaterArtifacts": true,
     "resources": {
       "resources/backend": "backend"
+    }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEI4QzI3Q0IxMzQ1NERFRTIKUldUaTNsUTBzWHpDdUJsSm5VeEJoQjhFZVZOcWhGSEtDSE1Kamg0dENTOHNucU5UMHRjWlZYUm4K",
+      "endpoints": [
+        "https://github.com/MicRaving/qualcodernext/releases/latest/download/qualcoder-latest.json"
+      ]
     }
   }
 }

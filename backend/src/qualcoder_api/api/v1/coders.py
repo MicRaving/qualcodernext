@@ -16,6 +16,8 @@ from qualcoder_api.services.user_settings import (
 
 router = APIRouter(prefix="/coders", tags=["coders"])
 
+# Must mirror tables.OWNER_TABLES so coder stats/delete/reassign cover every
+# owner column (source, code_name, code_cat, attribute, … included).
 OWNER_TABLES = (
     ("code_text", "owner"),
     ("code_image", "owner"),
@@ -25,6 +27,12 @@ OWNER_TABLES = (
     ("cases", "owner"),
     ("attribute_type", "owner"),
     ("journal", "owner"),
+    ("source", "owner"),
+    ("code_name", "owner"),
+    ("code_cat", "owner"),
+    ("attribute", "owner"),
+    ("manage_files_display", "owner"),
+    ("files_filter", "owner"),
 )
 
 
@@ -76,6 +84,19 @@ async def _coding_counts(svc) -> dict[str, int]:
     return result
 
 
+async def _record_audit(svc, action: str, detail: dict) -> None:
+    """Audit a coder mutation against the open project (best effort)."""
+    from qualcoder_api.services import audit
+
+    if svc.engine is None:
+        return
+    _, factory = svc._ensure_engine()
+    async with factory() as session:
+        await audit.record(
+            session, user=get_codername(), action=action, entity="coder", detail=detail
+        )
+
+
 def _all_coders(svc, counts: dict[str, int]) -> list[str]:
     """The coder list: per-machine coders (settings) merged with every
     owner found in the open project. Projects keep their own coder set
@@ -102,7 +123,7 @@ async def list_coders(svc: ServiceDep) -> CodersResponse:
 
 
 @router.post("", response_model=CodersResponse, status_code=201)
-async def create_coder(req: CoderRequest) -> CodersResponse:
+async def create_coder(req: CoderRequest, svc: ServiceDep) -> CodersResponse:
     name = req.name.strip()
     if not name:
         raise HTTPException(status_code=422, detail="coder name must not be empty")
@@ -110,6 +131,7 @@ async def create_coder(req: CoderRequest) -> CodersResponse:
     if name in names:
         raise HTTPException(status_code=409, detail=f'coder "{name}" already exists')
     set_coders([*names, name])
+    await _record_audit(svc, action="coder.create", detail={"name": name})
     return _response(get_codername(), get_coders(), {})
 
 
@@ -155,7 +177,7 @@ async def rename_coder(name: str, req: RenameCoderRequest, svc: ServiceDep) -> C
             await session.commit()
         # Rename the coder's sync sidecar folder so future exports land in
         # the new name (other raters import them unchanged).
-        from qualcoder_api.services.sync import SYNC_DIR_NAME
+        from qualcoder_api.services.sync import SYNC_DIR_NAME, load_state, save_state
 
         changes_root = svc.project_path and f"{svc.project_path}/{SYNC_DIR_NAME}"
         if changes_root:
@@ -165,11 +187,20 @@ async def rename_coder(name: str, req: RenameCoderRequest, svc: ServiceDep) -> C
 
             if os.path.isdir(old_dir) and not os.path.isdir(new_dir):
                 os.rename(old_dir, new_dir)
+        # Carry the export/import watermarks over to the new name, so the
+        # renamed coder does not re-export its whole backlog from scratch.
+        if svc.project_path:
+            state = load_state(svc.project_path)
+            for bucket in ("exports", "imports"):
+                if bucket in state and name in state[bucket]:
+                    state[bucket][new_name] = state[bucket].pop(name)
+            save_state(svc.project_path, state)
 
     renamed = [new_name if n == name else n for n in names]
     set_coders(renamed)
     if get_codername() == name:
         set_codername(new_name)
+    await _record_audit(svc, action="coder.rename", detail={"from": name, "to": new_name})
     counts = await _coding_counts(svc)
     return _response(get_codername(), renamed, counts)
 
@@ -257,6 +288,10 @@ async def delete_coder(
             await session.commit()
 
     set_coders([n for n in names if n != name])
+    await _record_audit(
+        svc, action="coder.delete", detail={"name": name, "reassign_to": reassign_to}
+    )
+    counts = await _coding_counts(svc)
     return _response(get_codername(), get_coders(), counts)
 
 
@@ -295,4 +330,7 @@ async def set_coder_visibility(name: str, req: VisibilityRequest, svc: ServiceDe
             {"n": name, "v": 1 if req.visible else 0},
         )
         await session.commit()
+    await _record_audit(
+        svc, action="coder.visibility", detail={"name": name, "visible": req.visible}
+    )
     return {"ok": True, "name": name, "visible": req.visible}

@@ -63,8 +63,12 @@ def _json_safe(value):
 async def run_sql(req: RunSqlRequest, db: DbDep) -> dict:
     """Execute a read-only statement and return columns/rows as JSON."""
     _validate_read_only(req.sql)
+    # Cap the rows the database materializes, not just the response: the
+    # client only ever shows MAX_ROWS, so fetching a million-row table is
+    # pure waste (and blocks the request handler).
+    limited_sql = f"{req.sql.rstrip().rstrip(';').rstrip()} LIMIT {MAX_ROWS + 1}"
     try:
-        result = await db.execute(text(req.sql))
+        result = await db.execute(text(limited_sql))
     except (OperationalError, sqlite3.OperationalError) as err:
         raise HTTPException(status_code=422, detail=str(err)) from None
     columns = list(result.keys())
@@ -103,6 +107,9 @@ async def list_saved_queries(db: DbDep) -> dict:
 @router.post("/saved", status_code=201)
 async def create_saved_query(req: SavedQueryCreate, db: DbDep) -> dict:
     """Save a query; the unique title constraint makes duplicates 409."""
+    from qualcoder_api.services import audit
+    from qualcoder_api.services.user_settings import get_codername
+
     try:
         await db.execute(
             insert(tables.stored_sql).values(
@@ -128,12 +135,19 @@ async def create_saved_query(req: SavedQueryCreate, db: DbDep) -> dict:
         },
     )
     await db.commit()
+    await audit.record(
+        db, user=get_codername(), action="sql.save", entity="stored_sql",
+        detail={"title": req.title},
+    )
     return req.model_dump()
 
 
 @router.delete("/saved/{title}", status_code=204)
 async def delete_saved_query(title: str, db: DbDep) -> None:
     """Delete a saved query by title."""
+    from qualcoder_api.services import audit
+    from qualcoder_api.services.user_settings import get_codername
+
     row = (
         await db.execute(
             select(tables.stored_sql).where(tables.stored_sql.c.title == title)
@@ -145,3 +159,7 @@ async def delete_saved_query(title: str, db: DbDep) -> None:
 
         await _capture(db, "stored_sql", "delete", "title", title, _rowdict(row))
     await db.commit()
+    await audit.record(
+        db, user=get_codername(), action="sql.delete", entity="stored_sql",
+        detail={"title": title},
+    )

@@ -118,7 +118,7 @@ async function ensureProjectOpen(page: Page) {
     try {
       await expect(recent).toBeVisible({ timeout: 5_000 });
       await recent.click();
-      await expect(closeBtn).toBeVisible({ timeout: 30_000 });
+      await expect(closeBtn).toBeEnabled({ timeout: 30_000 });
       return;
     } catch {
       /* reload and retry once more */
@@ -203,9 +203,13 @@ test("PDF import and region coding", async ({ page }) => {
   await expect(page.getByText("E2E PDF page")).toBeVisible({ timeout: 20_000 });
   await expect(page.getByRole("button", { name: "Rendered PDF" })).toBeVisible();
 
-  page.once("dialog", (d) => void d.accept("PdfTextCode"));
+  // Create a fresh code via the sidebar (Code → inline name editor).
   await page.getByRole("button", { name: "Code", exact: true }).click();
-  await expect(page.getByRole("button", { name: "PdfTextCode" })).toBeVisible({
+  const pdfCodeInput = page.getByTestId("inline-name-edit");
+  await expect(pdfCodeInput).toBeVisible({ timeout: 10_000 });
+  await pdfCodeInput.fill("PdfTextCode");
+  await pdfCodeInput.press("Enter");
+  await expect(page.getByRole("button", { name: "PdfTextCode", exact: true })).toBeVisible({
     timeout: 10_000,
   });
 
@@ -220,7 +224,7 @@ test("PDF import and region coding", async ({ page }) => {
   await page.mouse.move(lb!.x + lb!.width - 4, y, { steps: 6 });
   await page.mouse.up();
 
-  await page.getByRole("button", { name: "PdfTextCode" }).click();
+  await page.getByRole("button", { name: "PdfTextCode", exact: true }).click();
 
   const tseg = page.locator('span[title="PdfTextCode"]');
   await expect(tseg).toBeVisible({ timeout: 10_000 });
@@ -257,32 +261,29 @@ test("duplicate import shows the skip banner", async ({ page }) => {
 // ---------------------------------------------------------------------------
 
 test("theme preference persists across reload", async ({ page }) => {
+  // The theme is stored in localStorage ("qc-theme") and applied to the
+  // html class on load (the Settings toggle writes the same value).
   await page.goto("/");
-  const toggle = page.getByRole("button", { name: /Switch to (dark|light) theme/ });
-  await expect(toggle).toBeVisible();
-
-  const startsDark = await page.locator("html").evaluate((el) =>
+  const initial = await page.locator("html").evaluate((el) =>
     el.classList.contains("dark"),
   );
+  const target = initial ? "light" : "dark";
 
-  await toggle.click();
-  if (startsDark) {
-    await expect(toggle).toHaveAttribute("aria-label", "Switch to dark theme");
-    await expect(page.locator("html")).not.toHaveClass(/dark/);
-  } else {
-    await expect(toggle).toHaveAttribute("aria-label", "Switch to light theme");
+  await page.evaluate((m) => localStorage.setItem("qc-theme", m), target);
+  await page.reload();
+  if (target === "dark") {
     await expect(page.locator("html")).toHaveClass(/dark/);
+  } else {
+    await expect(page.locator("html")).not.toHaveClass(/dark/);
   }
 
-  // Reload: the choice survives via localStorage ("qc-theme").
+  // Flip back to the initial value: the preference still survives.
+  await page.evaluate((m) => localStorage.setItem("qc-theme", m), initial ? "dark" : "light");
   await page.reload();
-  await expect(toggle).toBeVisible();
-  if (startsDark) {
-    await expect(toggle).toHaveAttribute("aria-label", "Switch to dark theme");
-    await expect(page.locator("html")).not.toHaveClass(/dark/);
-  } else {
-    await expect(toggle).toHaveAttribute("aria-label", "Switch to light theme");
+  if (initial) {
     await expect(page.locator("html")).toHaveClass(/dark/);
+  } else {
+    await expect(page.locator("html")).not.toHaveClass(/dark/);
   }
 });
 

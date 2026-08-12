@@ -11,6 +11,7 @@ import {
   type Case,
   type CodeDetails,
   type CodeTreeItem,
+  type GraphData,
   type ProjectSummary,
   type Source,
   type Journal,
@@ -60,6 +61,22 @@ export type WorkspaceView =
   | { kind: "settings" }
   | { kind: "ai" };
 
+/** Which panel the right bar shows. Inspector is the default; AI, Settings
+ *  and History are toggleable panes driven from the top bar. */
+export type RightPane = "inspector" | "ai" | "settings" | "history";
+
+/** The report screens of the Analysis area (see analyze/registry.ts). */
+export type ReportId =
+  | "code-frequencies"
+  | "code-segments"
+  | "file-code"
+  | "code-relations"
+  | "interrater"
+  | "text-corpus"
+  | "codebook"
+  | "references"
+  | "sql";
+
 export type InspectorSelection = { kind: "code" | "file"; id: number } | null;
 
 /** A background transcription job as tracked by the UI. */
@@ -76,13 +93,19 @@ export interface TranscribeJobInfo {
 interface ProjectState {
   projectOpen: boolean;
   projectName: string;
-  projectPath: string;
+  /** File search query shared by the left sidebar and the center Files
+   *  table (the sidebar box filters both). */
+  fileQuery: string;
+  setFileQuery: (q: string) => void;
   summary: ProjectSummary | null;
   sources: Source[];
   codeTree: CodeTreeItem[];
   cases: Case[];
   journals: Journal[];
   view: WorkspaceView;
+  /** The panel shown in the right bar (Inspector by default). */
+  rightPane: RightPane;
+  setRightPane: (pane: RightPane) => void;
   busy: boolean;
   error: string | null;
 
@@ -99,6 +122,11 @@ interface ProjectState {
    *  selections/rects across coders (and highlighted in the sidebar). */
   activeCodeId: number | null;
   setActiveCode: (cid: number | null) => void;
+
+  /** Codes whose codings are HIDDEN in the open coder (click a code label
+   *  to hide its codings until clicked again; multiple can be hidden). */
+  hiddenCodes: number[];
+  toggleHiddenCode: (cid: number) => void;
 
 
   /** Current coder identity (owner for new codings). */
@@ -135,6 +163,14 @@ interface ProjectState {
   inspectorDetails: CodeDetails | SourceDetails | null;
   inspectorLoading: boolean;
   inspectorError: string | null;
+  /** Set by "Edit memo" actions to make the Inspector's memo editor open
+   *  directly in edit mode. */
+  inspectorMemoEdit: boolean;
+  setInspectorMemoEdit: (v: boolean) => void;
+  /** Set by "Add annotation" actions to open the Inspector's new-annotation
+   *  editor inline. */
+  inspectorNewAnnotation: boolean;
+  setInspectorNewAnnotation: (v: boolean) => void;
 
   /** Per-view workspace UI state (left bar / center coordination). */
   casesUi: { selectedId: number | null; query: string; tick: number };
@@ -144,6 +180,8 @@ interface ProjectState {
     query: string;
     selectedId: number | null;
     selectedKind: "code" | "file" | null;
+    /** Set by "add annotation" so the center editor opens in edit mode. */
+    newAnnotation: boolean;
     tick: number;
   };
   setNotesUi: (
@@ -152,9 +190,13 @@ interface ProjectState {
       query: string;
       selectedId: number | null;
       selectedKind: "code" | "file" | null;
+      newAnnotation: boolean;
       tick: number;
     }>,
   ) => void;
+  /** Analysis area UI state (reports left bar / center coordination). */
+  analyzeUi: { selectedId: ReportId | null };
+  setAnalyzeUi: (patch: Partial<{ selectedId: ReportId | null }>) => void;
   annotationsAll: {
     anid: number;
     fid: number;
@@ -166,31 +208,66 @@ interface ProjectState {
     owner: string;
   }[];
 
-  /** Graph workspace state (shared between the menu bar and the canvas). */
-  graphsUi: { grid: number | null; list: { grid: number; name: string }[]; tick: number };
+  /** Graph workspace state (shared between the left list, the canvas and
+   *  the details inspector). */  graphsUi: {
+    grid: number | null;
+    list: { grid: number; name: string }[];
+    tick: number;
+    selectedNode: string | null;
+    selectedLine: string | null;
+    connectFrom: string | null;
+    zoom: number;
+    /** Which modal the graph chrome opens (owned by the center toolbar). */
+    dialog: null | "name" | "models" | "delete";
+    error: string | null;
+  };
   setGraphsUi: (
     patch: Partial<{
       grid: number | null;
       list: { grid: number; name: string }[];
       tick: number;
+      selectedNode: string | null;
+      selectedLine: string | null;
+      connectFrom: string | null;
+      zoom: number;
+      dialog: null | "name" | "models" | "delete";
+      error: string | null;
     }>,
   ) => void;
+
+  /** Graph canvas data + actions (shared by the center canvas and the
+   *  details inspector in the right bar). */
+  graphsData: GraphData | null;
+  graphsLoading: boolean;
+  loadGraphData: (grid: number) => Promise<void>;
+  graphPatchNode: (kind: string, id: number, body: Record<string, unknown>) => Promise<void>;
+  graphDeleteNode: (kind: string, id: number) => Promise<void>;
+  graphPatchLine: (kind: string, id: number, body: Record<string, unknown>) => Promise<void>;
+  graphDeleteLine: (kind: string, id: number) => Promise<void>;
+  graphConnect: (
+    from: { kind: string; id: number },
+    to: { kind: string; id: number },
+  ) => Promise<void>;
 
   createProject: (path: string) => Promise<boolean>;
   openProject: (path: string) => Promise<boolean>;
   closeProject: () => Promise<void>;
   refreshProject: () => Promise<void>;
   setView: (view: WorkspaceView) => void;
-  clearError: () => void;
   selectCode: (id: number | null) => Promise<void>;
   selectFile: (id: number | null) => Promise<void>;
   clearInspector: () => void;
 }
 
+/** Monotonic guard for the inspector detail fetches (only the LATEST
+ *  selection may write the result — see selectCode/selectFile). */
+let inspectorSelectSeq = 0;
+
 export const useProjectStore = create<ProjectState>((set, get) => ({
   projectOpen: false,
   projectName: "",
-  projectPath: "",
+  fileQuery: "",
+  setFileQuery: (q) => set({ fileQuery: q }),
   summary: null,
   sources: [],
   codeTree: [],
@@ -212,6 +289,14 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
 
   activeCodeId: null,
   setActiveCode: (cid) => set({ activeCodeId: cid }),
+
+  hiddenCodes: [],
+  toggleHiddenCode: (cid) =>
+    set((s) => ({
+      hiddenCodes: s.hiddenCodes.includes(cid)
+        ? s.hiddenCodes.filter((c) => c !== cid)
+        : [...s.hiddenCodes, cid],
+    })),
 
 
   coderName: "default",
@@ -256,6 +341,8 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   },
 
   transcribeJobs: [],
+  rightPane: "inspector",
+  setRightPane: (pane) => set({ rightPane: pane }),
   enqueueTranscribe: (job) =>
     set((s) => ({
       transcribeJobs: [
@@ -303,6 +390,10 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   inspectorDetails: null,
   inspectorLoading: false,
   inspectorError: null,
+  inspectorMemoEdit: false,
+  setInspectorMemoEdit: (v) => set({ inspectorMemoEdit: v }),
+  inspectorNewAnnotation: false,
+  setInspectorNewAnnotation: (v) => set({ inspectorNewAnnotation: v }),
 
   createProject: async (path) => {
     set({ busy: true, error: null });
@@ -313,7 +404,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
         return false;
       }
       await get().refreshProject();
-      set({ projectOpen: true, projectPath: res.project_path, projectName: res.project_name, busy: false });
+      set({ projectOpen: true, projectName: res.project_name, busy: false });
       void get().loadCoders();
       return true;
     } catch (e) {
@@ -331,7 +422,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
         return false;
       }
       await get().refreshProject();
-      set({ projectOpen: true, projectPath: res.project_path, projectName: res.project_name, busy: false });
+      set({ projectOpen: true, projectName: res.project_name, busy: false });
       void get().loadCoders();
       return true;
     } catch (e) {
@@ -349,8 +440,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     set({
       projectOpen: false,
       projectName: "",
-      projectPath: "",
-      summary: null,
+          summary: null,
       sources: [],
       codeTree: [],
       view: { kind: "dashboard" },
@@ -382,18 +472,156 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     set({ view });
     // Opening a file in the coder shows its details in the right bar.
     if (view.kind === "coding" && "sourceId" in view) {
+      set({ rightPane: "inspector" });
       void get().selectFile(view.sourceId);
     }
   },
-  clearError: () => set({ error: null }),
 
   casesUi: { selectedId: null, query: "", tick: 0 },
   setCasesUi: (patch) => set((s) => ({ casesUi: { ...s.casesUi, ...patch } })),
-  notesUi: { tab: "journal", query: "", selectedId: null, selectedKind: null, tick: 0 },
+  notesUi: { tab: "journal", query: "", selectedId: null, selectedKind: null, newAnnotation: false, tick: 0 },
   setNotesUi: (patch) => set((s) => ({ notesUi: { ...s.notesUi, ...patch } })),
+  analyzeUi: { selectedId: "code-frequencies" },
+  setAnalyzeUi: (patch) => set((s) => ({ analyzeUi: { ...s.analyzeUi, ...patch } })),
   annotationsAll: [],
-  graphsUi: { grid: null, list: [], tick: 0 },
+  graphsUi: {
+    grid: null,
+    list: [],
+    tick: 0,
+    selectedNode: null,
+    selectedLine: null,
+    connectFrom: null,
+    zoom: 1,
+    dialog: null,
+    error: null,
+  },
   setGraphsUi: (patch) => set((s) => ({ graphsUi: { ...s.graphsUi, ...patch } })),
+
+  graphsData: null,
+  graphsLoading: false,
+  loadGraphData: async (grid) => {
+    set({ graphsLoading: true, graphsUi: { ...get().graphsUi, error: null } });
+    try {
+      set({ graphsData: await api.graphData(grid) });
+    } catch (e) {
+      set({
+        graphsUi: {
+          ...get().graphsUi,
+          error: e instanceof Error ? e.message : "Failed to load graph",
+        },
+      });
+    } finally {
+      set({ graphsLoading: false });
+    }
+  },
+  graphPatchNode: async (kind, id, body) => {
+    const grid = get().graphsUi.grid;
+    if (grid == null) return;
+    const url =
+      kind === "category" || kind === "code"
+        ? `/graphs/${grid}/cdct/entity/${id}`
+        : kind === "case"
+          ? `/graphs/${grid}/cases/entity/${id}`
+          : kind === "file"
+            ? `/graphs/${grid}/files/entity/${id}`
+            : kind === "free"
+              ? `/graphs/${grid}/free/entity/${id}`
+              : `/graphs/${grid}/memos/entity/${id}`;
+    try {
+      await api.patchPath(url, body);
+    } catch {
+      /* keep local state; the next save retries */
+    }
+  },
+  graphDeleteNode: async (kind, id) => {
+    const grid = get().graphsUi.grid;
+    if (grid == null) return;
+    try {
+      if (kind === "category" || kind === "code") await api.graphDeleteCdctItem(grid, id);
+      else if (kind === "case") await api.graphDeleteCaseItem(grid, id);
+      else if (kind === "file") await api.graphDeleteFileItem(grid, id);
+      else if (kind === "free") await api.graphDeleteFreeItem(grid, id);
+      set({ graphsUi: { ...get().graphsUi, selectedNode: null } });
+      await get().loadGraphData(grid);
+    } catch (e) {
+      set({
+        graphsUi: {
+          ...get().graphsUi,
+          error: e instanceof Error ? e.message : "Could not delete node",
+        },
+      });
+    }
+  },
+  graphPatchLine: async (kind, id, body) => {
+    const grid = get().graphsUi.grid;
+    if (grid == null) return;
+    const url =
+      kind === "cdct"
+        ? `/graphs/${grid}/lines/cdct/${id}`
+        : `/graphs/${grid}/lines/entity/${id}`;
+    try {
+      await api.patchPath(url, body);
+      await get().loadGraphData(grid);
+    } catch (e) {
+      set({
+        graphsUi: {
+          ...get().graphsUi,
+          error: e instanceof Error ? e.message : "Could not update line",
+        },
+      });
+    }
+  },
+  graphDeleteLine: async (kind, id) => {
+    const grid = get().graphsUi.grid;
+    if (grid == null) return;
+    try {
+      if (kind === "cdct") await api.graphDeleteCdctLine(grid, id);
+      else await api.graphDeleteEntityLine(grid, id);
+      set({ graphsUi: { ...get().graphsUi, selectedLine: null } });
+      await get().loadGraphData(grid);
+    } catch (e) {
+      set({
+        graphsUi: {
+          ...get().graphsUi,
+          error: e instanceof Error ? e.message : "Could not delete line",
+        },
+      });
+    }
+  },
+  graphConnect: async (from, to) => {
+    const grid = get().graphsUi.grid;
+    if (grid == null) return;
+    try {
+      if (from.kind === "code" || from.kind === "category") {
+        if (to.kind === "code" || to.kind === "category") {
+          await api.graphAddCdctLine(grid, { from_node: from.id, to_node: to.id });
+        } else {
+          await api.graphAddEntityLine(grid, {
+            from_kind: from.kind,
+            from_id: from.id,
+            to_kind: to.kind,
+            to_id: to.id,
+          });
+        }
+      } else {
+        await api.graphAddEntityLine(grid, {
+          from_kind: from.kind,
+          from_id: from.id,
+          to_kind: to.kind,
+          to_id: to.id,
+        });
+      }
+      set({ graphsUi: { ...get().graphsUi, connectFrom: null } });
+      await get().loadGraphData(grid);
+    } catch (e) {
+      set({
+        graphsUi: {
+          ...get().graphsUi,
+          error: e instanceof Error ? e.message : "Could not connect nodes",
+        },
+      });
+    }
+  },
 
   clearInspector: () =>
     set({
@@ -414,10 +642,17 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       return;
     }
     set({ inspectorSelection: { kind: "code", id }, inspectorLoading: true, inspectorError: null });
+    // Sequence-guard: only the LATEST selection may write the details —
+    // otherwise a slow response for item A overwrites the details of the
+    // item B the user switched to.
+    const seq = ++inspectorSelectSeq;
     try {
       const details = await api.codeDetails(id);
-      set({ inspectorDetails: details, inspectorLoading: false });
+      if (seq === inspectorSelectSeq) {
+        set({ inspectorDetails: details, inspectorLoading: false });
+      }
     } catch (e) {
+      if (seq !== inspectorSelectSeq) return;
       if (e instanceof ApiError && e.status === 404) {
         set({
           inspectorSelection: null,
@@ -445,10 +680,14 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       return;
     }
     set({ inspectorSelection: { kind: "file", id }, inspectorLoading: true, inspectorError: null });
+    const seq = ++inspectorSelectSeq;
     try {
       const details = await api.sourceDetails(id);
-      set({ inspectorDetails: details, inspectorLoading: false });
+      if (seq === inspectorSelectSeq) {
+        set({ inspectorDetails: details, inspectorLoading: false });
+      }
     } catch (e) {
+      if (seq !== inspectorSelectSeq) return;
       if (e instanceof ApiError && e.status === 404) {
         set({
           inspectorSelection: null,

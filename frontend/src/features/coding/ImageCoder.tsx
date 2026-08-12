@@ -11,7 +11,14 @@ import { api, sourceFileUrl, type CodeTreeItem, type ImageCoding, type Source } 
 import { CodePicker, type PickedCode } from "@/features/coding/CodePicker";
 import { codeTint } from "@/features/coding/tint";
 import { useI18n } from "@/lib/i18n";
-import { ViewBackButton } from "@/components/shell/ViewBackButton";
+import {
+  Button,
+  ErrorBanner,
+  IconButton,
+  LoadingState,
+  ViewHeader,
+} from "@/components/ui/orchestrator";
+import { cls } from "@/components/ui/tokens";
 import { useProjectStore } from "@/stores/project";
 
 interface DragState {
@@ -31,6 +38,7 @@ interface RectState {
 export function ImageCoder({ source }: { source: Source }) {
   const { t } = useI18n();
   const activeCodeId = useProjectStore((s) => s.activeCodeId);
+  const hiddenCodes = useProjectStore((s) => s.hiddenCodes);
   const [codings, setCodings] = useState<ImageCoding[]>([]);
   const [codes, setCodes] = useState<CodeTreeItem[]>([]);
   const [loading, setLoading] = useState(true);
@@ -254,11 +262,7 @@ export function ImageCoder({ source }: { source: Source }) {
   }, [drag]);
 
   if (loading) {
-    return (
-      <div className="flex h-full items-center justify-center bg-bg text-text-secondary">
-        <LoaderCircle size={18} className="animate-spin" aria-hidden /> {t("imageCoder.loading")}
-      </div>
-    );
+    return <LoadingState>{t("imageCoder.loading")}</LoadingState>;
   }
 
   if (error && codings.length === 0 && !imageLoaded) {
@@ -266,13 +270,9 @@ export function ImageCoder({ source }: { source: Source }) {
       <div className="flex h-full items-center justify-center bg-bg">
         <div className="text-center">
           <p className="text-danger">{error}</p>
-          <button
-            type="button"
-            onClick={() => void load()}
-            className="mt-3 rounded-sm border border-border bg-surface px-3 py-1.5 text-sm hover:bg-surface-higher"
-          >
+          <Button variant="secondary" className="mt-3" onClick={() => void load()}>
             {t("common.retry")}
-          </button>
+          </Button>
         </div>
       </div>
     );
@@ -281,44 +281,26 @@ export function ImageCoder({ source }: { source: Source }) {
   return (
     <div className="flex h-full flex-col bg-bg">
       {/* Toolbar */}
-      <header className="flex h-10 shrink-0 items-center gap-2 border-b border-border bg-surface px-3">
-        <ViewBackButton />
-        <span className="truncate text-sm font-medium text-text-primary">{source.name}</span>
-        <span className="text-xs text-text-secondary">· {t("imageCoder.dragHint")}</span>
-        <div className="flex-1" />
-        <div className="flex items-center gap-1">
-          <button
-            type="button"
-            onClick={() => setZoom((z) => Math.max(0.1, +(z - 0.1).toFixed(2)))}
-            aria-label={t("imageCoder.zoomOut")}
-            className="rounded-sm p-1 text-text-secondary hover:bg-surface-higher hover:text-text-primary"
-          >
-            <ZoomOut size={16} aria-hidden />
-          </button>
-          <span className="w-10 text-center text-xs text-text-secondary">{Math.round(zoom * 100)}%</span>
-          <button
-            type="button"
-            onClick={() => setZoom((z) => Math.min(3, +(z + 0.1).toFixed(2)))}
-            aria-label={t("imageCoder.zoomIn")}
-            className="rounded-sm p-1 text-text-secondary hover:bg-surface-higher hover:text-text-primary"
-          >
-            <ZoomIn size={16} aria-hidden />
-          </button>
-          <button
-            type="button"
-            onClick={fitZoom}
-            className="ml-1 rounded-sm border border-border bg-bg px-2 py-0.5 text-xs hover:bg-surface-higher"
-          >
-            {t("imageCoder.fit")}
-          </button>
-        </div>
-      </header>
+      <ViewHeader
+        title={source.name}
+        meta={`· ${t("imageCoder.dragHint")}`}
+        actions={
+          <div className="flex items-center gap-1">
+            <IconButton label={t("imageCoder.zoomOut")} onClick={() => setZoom((z) => Math.max(0.1, +(z - 0.1).toFixed(2)))}>
+              <ZoomOut size={16} aria-hidden />
+            </IconButton>
+            <span className="w-10 text-center text-xs text-text-secondary">{Math.round(zoom * 100)}%</span>
+            <IconButton label={t("imageCoder.zoomIn")} onClick={() => setZoom((z) => Math.min(3, +(z + 0.1).toFixed(2)))}>
+              <ZoomIn size={16} aria-hidden />
+            </IconButton>
+            <Button variant="secondary" className="ml-1 py-0.5" onClick={fitZoom}>
+              {t("imageCoder.fit")}
+            </Button>
+          </div>
+        }
+      />
 
-      {error && (
-        <div role="alert" className="border-b border-border bg-danger/10 px-3 py-1.5 text-xs text-danger">
-          {error}
-        </div>
-      )}
+      {error && <ErrorBanner>{error}</ErrorBanner>}
 
       {/* Canvas */}
       <div ref={containerRef} className="min-h-0 flex-1 overflow-auto p-1">
@@ -343,6 +325,7 @@ export function ImageCoder({ source }: { source: Source }) {
           />
 
           {/* Coded regions */}
+          <div>
           {codings.map((coding) => (
             <div
               key={coding.imid}
@@ -351,7 +334,9 @@ export function ImageCoder({ source }: { source: Source }) {
                 setSelected(coding);
               }}
               title={`${nameByCid.get(coding.cid) ?? t("coder.plainCode")}${coding.memo ? ` — ${coding.memo}` : ""}`}
-              className="absolute cursor-pointer border"
+              className={`absolute cursor-pointer border qc-seg ${
+                hiddenCodes.includes(coding.cid) ? "qc-seg-hidden" : ""
+              }`}
               style={{
                 // The wrapper div already applies scale(zoom); children must
                 // use UNSCALED image-space coordinates (fixes double-scaling).
@@ -364,6 +349,7 @@ export function ImageCoder({ source }: { source: Source }) {
               }}
             />
           ))}
+          </div>
 
           {/* Selection preview */}
           {dragRect && (
@@ -390,29 +376,23 @@ export function ImageCoder({ source }: { source: Source }) {
             {selected.memo || t("common.noMemo")} · {Math.round(selected.width)}×{Math.round(selected.height)}px
           </span>
           <div className="flex-1" />
-          <button
-            type="button"
+          <Button
+            variant="secondary"
+            icon={<Pencil size={12} aria-hidden />}
             onClick={() => void handleEditGeometry(selected)}
-            className="flex items-center gap-1 rounded-sm border border-border bg-bg px-2 py-1 text-xs hover:bg-surface-higher"
           >
-            <Pencil size={12} aria-hidden />
             {t("imageCoder.editRegion")}
-          </button>
-          <button
-            type="button"
+          </Button>
+          <Button
+            variant="danger"
+            icon={<Trash2 size={12} aria-hidden />}
             onClick={() => void handleDelete(selected)}
-            className="flex items-center gap-1 rounded-sm border border-danger/50 px-2 py-1 text-xs text-danger hover:bg-danger/10"
           >
-            <Trash2 size={12} aria-hidden />
             {t("common.delete")}
-          </button>
-          <button
-            type="button"
-            onClick={() => setSelected(null)}
-            className="rounded-sm border border-border bg-bg px-2 py-1 text-xs hover:bg-surface-higher"
-          >
+          </Button>
+          <Button variant="secondary" onClick={() => setSelected(null)}>
             {t("common.close")}
-          </button>
+          </Button>
         </div>
       )}
 
@@ -426,7 +406,7 @@ export function ImageCoder({ source }: { source: Source }) {
         onPick={(code) => void handlePick(code)}
       />
       {saving && (
-        <div className="pointer-events-none fixed inset-0 z-50 flex items-center justify-center bg-bg/40">
+        <div className={`pointer-events-none bg-bg/40 ${cls.modalOverlay}`}>
           <LoaderCircle size={20} className="animate-spin text-text-secondary" aria-hidden />
         </div>
       )}

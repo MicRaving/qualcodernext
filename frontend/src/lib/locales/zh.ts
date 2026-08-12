@@ -149,8 +149,6 @@ export const zh: Record<string, string> = {
   "analyze.titleReferences": "参考资料",
   "analyze.pickCode": "代码",
   "analyze.copyCodebook": "复制到剪贴板",
-  "analyze.importCodebook": "进口代码：",
-  "analyze.deleteReference": "删除此引用。",
   "graphs.title": "图表",
   "graphs.newGraph": "新建图表",
   "graphs.models": "模型…",

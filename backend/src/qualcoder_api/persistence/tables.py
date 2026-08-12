@@ -420,6 +420,19 @@ sync_log = Table(
     Column("row_json", Text),  # full row snapshot (JSON)
 )
 
+audit_log = Table(
+    "audit_log",
+    metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("ts", String),
+    Column("user", String),
+    Column("action", String),
+    Column("entity", String),
+    Column("entity_id", Integer),
+    Column("source_id", Integer),
+    Column("detail", Text),
+)
+
 # Tables whose `owner` column feeds the coder_names table.
 OWNER_TABLES = [
     "code_image",

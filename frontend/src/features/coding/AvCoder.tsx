@@ -3,43 +3,63 @@
  *
  * Segment positions (pos0/pos1) are stored in milliseconds.
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   Bookmark,
+  BookmarkCheck,
   Captions,
-  ChevronDown,
+  Check,
+  Code,
   LoaderCircle,
   Mic,
   Music,
   Pause,
   Play,
+  Sparkles,
+  StickyNote,
   Trash2,
-  Users,
   Video,
   X,
 } from "lucide-react";
-import { api, sourceFileUrl, type AVCoding, type CodeTreeItem, type Source, type SpeakerInfo } from "@/lib/api";
+import { api, sourceFileUrl, type AVCoding, type CodeTreeItem, type Coding, type Source } from "@/lib/api";
 import { CodePicker, type PickedCode } from "@/features/coding/CodePicker";
 import { TranscribeDialog } from "@/features/coding/TranscribeDialog";
-import { formatTime, parseTranscript, segmentLeft, secondsToMs, segmentWidth } from "@/features/coding/media";
+import { formatTime, parseTranscript, segmentLeft, secondsToMs, segmentWidth, buildCrAt, rawToRendered, renderedToRaw, stripCr, normalizeCodingPositions } from "@/features/coding/media";
+import { getSelectionOffsets } from "@/features/coding/selection";
 import { codeTint } from "@/features/coding/tint";
+import { cn } from "@/lib/utils";
 import { useI18n } from "@/lib/i18n";
-import { ViewBackButton } from "@/components/shell/ViewBackButton";
+import {
+  Button,
+  ErrorBanner,
+  IconButton,
+  Input,
+  LoadingState,
+  Select,
+  Textarea,
+  ViewHeader,
+} from "@/components/ui/orchestrator";
 import { useProjectStore } from "@/stores/project";
+import { cls } from "@/components/ui/tokens";
 
-const IDENTIFIER_OPTIONS = [
-  { key: "name", labelKey: "avCoder.speakersName" },
-  { key: "hash", labelKey: "avCoder.speakersHash" },
-  { key: "at", labelKey: "avCoder.speakersAt" },
-  { key: "bracket", labelKey: "avCoder.speakersBracket" },
-  { key: "brace", labelKey: "avCoder.speakersBrace" },
-  { key: "custom", labelKey: "avCoder.speakersCustom" },
-] as const;
+/** "[mm:ss]" (or "[hh:mm:ss]") timestamp, matching the stored transcript
+ *  text so selection offsets stay aligned. */
+function transcriptTimestamp(ms: number): string {
+  const total = Math.max(0, Math.floor(ms / 1000));
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const s = total % 60;
+  if (h > 0) {
+    return `[${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}]`;
+  }
+  return `[${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}]`;
+}
 
 export function AvCoder({ source }: { source: Source }) {
   const { t } = useI18n();
   const [transcribeOpen, setTranscribeOpen] = useState(false);
   const activeCodeId = useProjectStore((s) => s.activeCodeId);
+  const hiddenCodes = useProjectStore((s) => s.hiddenCodes);
   const mediaRef = useRef<HTMLVideoElement & HTMLAudioElement>(null);
   const timelineRef = useRef<HTMLDivElement>(null);
 
@@ -63,43 +83,42 @@ export function AvCoder({ source }: { source: Source }) {
   const [transcript, setTranscript] = useState<Source | null>(null);
   const [playbackRate, setPlaybackRate] = useState(1);
   const [videoVisible, setVideoVisible] = useState(true);
+  const [videoH, setVideoH] = useState(260);
+  const [videoDragging, setVideoDragging] = useState(false);
+  const videoResizeRef = useRef<{ startY: number; startH: number } | null>(null);
 
-  // Lower-half panel: the transcript (toggleable like a text coder) or the
-  // speaker-detection UI (opened from the Transcribe flyout).
-  const [transcriptVisible, setTranscriptVisible] = useState(true);
-  const [speakersOpen, setSpeakersOpen] = useState(false);
-  const [transcribeMenuOpen, setTranscribeMenuOpen] = useState(false);
-  const subtitleRef = useRef<HTMLDivElement | null>(null);
+  function startVideoResize(e: React.MouseEvent) {
+    e.preventDefault();
+    videoResizeRef.current = { startY: e.clientY, startH: videoH };
+    setVideoDragging(true);
+  }
 
   useEffect(() => {
-    if (!transcribeMenuOpen) return;
-    const onDown = (e: MouseEvent) => {
-      const target = e.target instanceof Node ? e.target : null;
-      if (target && !(target as HTMLElement).closest("[data-transcribe-menu]")) {
-        setTranscribeMenuOpen(false);
-      }
+    if (!videoDragging) return;
+    const onMove = (e: MouseEvent) => {
+      const drag = videoResizeRef.current;
+      if (!drag) return;
+      setVideoH(Math.min(560, Math.max(100, Math.round(drag.startH + (e.clientY - drag.startY)))));
     };
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setTranscribeMenuOpen(false);
+    const onUp = () => {
+      videoResizeRef.current = null;
+      setVideoDragging(false);
     };
-    document.addEventListener("mousedown", onDown);
-    window.addEventListener("keydown", onKey);
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
     return () => {
-      document.removeEventListener("mousedown", onDown);
-      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
     };
-  }, [transcribeMenuOpen]);
+  }, [videoDragging]);
 
-  // Bookmark + speakers
+  // Lower-half panel: the transcript with text-coder functions
+  const [transcriptVisible, setTranscriptVisible] = useState(true);
+  const [tError, setTError] = useState<string | null>(null);
+
+  // Bookmark
   const [avBookmarkMs, setAvBookmarkMs] = useState<number | null>(null);
   const [avBookmarkFile, setAvBookmarkFile] = useState<number | null>(null);
-  const [identifiers, setIdentifiers] = useState<string[]>(["name"]);
-  const [customRegex, setCustomRegex] = useState("");
-  const [speakers, setSpeakers] = useState<SpeakerInfo[]>([]);
-  const [speakerTurns, setSpeakerTurns] = useState<{ name: string; pos0: number; pos1: number }[]>([]);
-  const [speakerSelected, setSpeakerSelected] = useState<Record<string, boolean>>({});
-  const [speakerBusy, setSpeakerBusy] = useState(false);
-  const [speakerError, setSpeakerError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -136,54 +155,210 @@ export function AvCoder({ source }: { source: Source }) {
     }
   }
 
-  async function detectSpeakers() {
-    setSpeakerBusy(true);
-    setSpeakerError(null);
-    try {
-      const fid = transcriptId ?? source.id;
-      const res = await api.speakersDetect({ fid, identifiers, custom_regex: customRegex });
-      setSpeakers(res.speakers);
-      setSpeakerTurns(res.turns);
-      setSpeakerSelected(Object.fromEntries(res.speakers.map((s) => [s.name, true])));
-    } catch (e) {
-      setSpeakerError(e instanceof Error ? e.message : "Failed to detect speakers");
-    } finally {
-      setSpeakerBusy(false);
+  // Live transcript preview: while a job for this source runs, poll it and
+  // show the partial "[mm:ss] text" output as it is transcribed.
+  const [liveTranscript, setLiveTranscript] = useState<string | null>(null);
+  const runningJobId = useProjectStore((s) =>
+    s.transcribeJobs.find((j) => j.sourceId === source.id && j.state === "running")?.id,
+  );
+  useEffect(() => {
+    if (!runningJobId) {
+      setLiveTranscript(null);
+      return;
     }
-  }
+    let cancelled = false;
+    const poll = async () => {
+      try {
+        const j = await api.transcribeJob(runningJobId);
+        if (!cancelled && j.state === "running" && j.live_text) {
+          setLiveTranscript(j.live_text);
+        } else if (!cancelled && j.state !== "running") {
+          setLiveTranscript(null);
+        }
+      } catch {
+        /* transient — the next poll retries */
+      }
+    };
+    void poll();
+    const timer = setInterval(() => void poll(), 3000);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [runningJobId]);
 
-  async function markSpeakers() {
-    setSpeakerBusy(true);
-    setSpeakerError(null);
-    try {
-      const fid = transcriptId ?? source.id;
-      const selected = Object.entries(speakerSelected)
-        .filter(([, v]) => v)
-        .map(([name]) => name);
-      const res = await api.speakersMark({ fid, identifiers, custom_regex: customRegex, selected });
-      setSpeakers([]);
-      setSpeakerTurns([]);
-      setSpeakersOpen(false);
-      setTranscriptVisible(true);
-      await load();
-      await useProjectStore.getState().refreshProject();
-      setError(
-        t("avCoder.speakersDone", {
-          turns: String(res.turns_marked),
-          codes: String(res.codes_created),
-        }),
-      );
-    } catch (e) {
-      setSpeakerError(e instanceof Error ? e.message : "Failed to mark speakers");
-    } finally {
-      setSpeakerBusy(false);
-    }
-  }
+  /** The exact "[mm:ss] text" lines as stored, BUT with CR characters
+   *  removed: legacy projects store transcripts with CRLF line endings
+   *  while the panel renders "\n"-only lines, so the rendered text and
+   *  the stored text would otherwise disagree by one character per line.
+   *  Stored positions stay in RAW space (crAt converts both ways). */
+  const transcriptRaw = liveTranscript ?? transcript?.fulltext ?? "";
+  const crAt = useMemo(() => buildCrAt(transcriptRaw), [transcriptRaw]);
+  const transcriptText = useMemo(() => stripCr(transcriptRaw), [transcriptRaw]);
 
   const subtitleSegments = useMemo(
-    () => (transcript ? parseTranscript(transcript.fulltext ?? "") : []),
-    [transcript],
+    () => parseTranscript(transcriptText),
+    [transcriptText],
   );
+
+  // --- transcript selection coding (text-coder functions in the view) ---
+  const transcriptTextRef = useRef<HTMLDivElement | null>(null);
+  const [tSel, setTSel] = useState<{ start: number; end: number; left: number; top: number } | null>(null);
+  const [tAnnotateOpen, setTAnnotateOpen] = useState(false);
+  const [tAnnotateMemo, setTAnnotateMemo] = useState("");
+  const [tPickerOpen, setTPickerOpen] = useState(false);
+  const tSelRef = useRef(tSel);
+  tSelRef.current = tSel;
+  /** Which coding gesture the user last performed: a transcript text
+   *  selection or a timeline range mark. Only the LAST intent may react to
+   *  a sidebar code click, so one click never creates two codings. */
+  const codingIntentRef = useRef<"text" | "range" | null>(null);
+
+  function onTranscriptMouseUp() {
+    const container = transcriptTextRef.current;
+    if (!container || transcriptId == null) return;
+    const sel = getSelectionOffsets(container, window.getSelection());
+    if (!sel || sel.start === sel.end) {
+      setTSel(null);
+      return;
+    }
+    const rect = window.getSelection()?.getRangeAt(0).getBoundingClientRect();
+    setTSel({
+      start: sel.start,
+      end: sel.end,
+      left: rect ? rect.left : 0,
+      top: rect ? rect.bottom + 4 : 0,
+    });
+    codingIntentRef.current = "text";
+  }
+
+  async function codeTranscriptSelection(cid: number) {
+    const sel = tSelRef.current;
+    if (!sel || transcriptId == null) return;
+    setTSel(null);
+    try {
+      const pos0 = renderedToRaw(transcriptRaw, crAt, sel.start);
+      const pos1 = renderedToRaw(transcriptRaw, crAt, sel.end);
+      await api.createTextCoding({
+        cid,
+        fid: transcriptId,
+        seltext: transcriptRaw.slice(pos0, pos1),
+        pos0,
+        pos1,
+      });
+      await useProjectStore.getState().refreshProject();
+      await loadTranscriptCodings();
+    } catch (e) {
+      setTError(e instanceof Error ? e.message : t("coder.createError"));
+    }
+  }
+
+  // Clicking a code in the left sidebar codes the selected transcript part.
+  // The listener must always use the LATEST handler: a fresh closure would
+  // capture the first render's transcriptId (null before the transcript
+  // exists), so the highlight reload would silently no-op.
+  const codeTranscriptSelectionRef = useRef(codeTranscriptSelection);
+  codeTranscriptSelectionRef.current = codeTranscriptSelection;
+  useEffect(() => {
+    const onAssign = (e: Event) => {
+      const cid = (e as CustomEvent<{ cid: number }>).detail?.cid;
+      if (typeof cid !== "number") return;
+      setTPickerOpen(false);
+      if (codingIntentRef.current === "text" && tSelRef.current) {
+        void codeTranscriptSelectionRef.current(cid);
+      }
+    };
+    window.addEventListener("qc:assign-code", onAssign);
+    return () => window.removeEventListener("qc:assign-code", onAssign);
+  }, []);
+
+  async function saveTranscriptAnnotation() {
+    const sel = tSelRef.current;
+    if (!sel || transcriptId == null) return;
+    setTSel(null);
+    setTAnnotateOpen(false);
+    setTAnnotateMemo("");
+    try {
+      const pos0 = renderedToRaw(transcriptRaw, crAt, sel.start);
+      const pos1 = renderedToRaw(transcriptRaw, crAt, sel.end);
+      await api.createAnnotation({
+        fid: transcriptId,
+        pos0,
+        pos1,
+        memo: tAnnotateMemo.trim(),
+      });
+      await useProjectStore.getState().refreshProject();
+    } catch (e) {
+      setTError(e instanceof Error ? e.message : t("coder.annotationCreateError"));
+    }
+  }
+
+  // --- transcript autocode ---
+  const [autoOpen, setAutoOpen] = useState(false);
+  const [autoText, setAutoText] = useState("");
+  const [autoCid, setAutoCid] = useState("");
+  const [autoBusy, setAutoBusy] = useState(false);
+  const codeTree = useProjectStore((s) => s.codeTree);
+  const codeOptions = useMemo(() => codeTree.filter((c) => c.kind === "code"), [codeTree]);
+
+  async function runTranscriptAutocode() {
+    const findTexts = autoText.trim().split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+    if (findTexts.length === 0 || !autoCid || transcriptId == null || autoBusy) return;
+    setAutoBusy(true);
+    setTError(null);
+    try {
+      await api.autocode({
+        fid: transcriptId,
+        cid: Number(autoCid),
+        find_texts: findTexts,
+        mode: "all",
+        use_regex: false,
+      });
+      await useProjectStore.getState().refreshProject();
+      await loadTranscriptCodings();
+      setAutoOpen(false);
+      setAutoText("");
+      setAutoCid("");
+    } catch (e) {
+      setTError(e instanceof Error ? e.message : t("coder.autoError"));
+    } finally {
+      setAutoBusy(false);
+    }
+  }
+
+  /** Render the coded subranges of one transcript line (absolute offsets
+   *  include the "[mm:ss] " prefixes). Stored positions are in RAW space
+   *  (CRLF line endings), the rendered line in normalized space.
+   *  Overlapping codings are CLIPPED to the not-yet-rendered portion so
+   *  the line's text is never duplicated in the DOM (duplicated text
+   *  would skew every later selection offset). */
+  function renderCodedLine(textStart: number, text: string): ReactNode {
+    const out: ReactNode[] = [];
+    let cursor = 0;
+    const overlaps = transcriptCodings
+      .map((c) => ({ ...c, r0: rawToRendered(crAt, c.pos0), r1: rawToRendered(crAt, c.pos1) }))
+      .filter((c) => c.r1 > textStart && c.r0 < textStart + text.length)
+      .sort((a, b) => a.r0 - b.r0 || a.r1 - b.r1);
+    for (const c of overlaps) {
+      const s = Math.max(cursor, Math.max(0, c.r0 - textStart));
+      const e = Math.min(text.length, c.r1 - textStart);
+      if (e <= s) continue;
+      if (s > cursor) out.push(text.slice(cursor, s));
+      const color = colorByCid.get(c.cid);
+      out.push(
+        <span
+          key={c.ctid}
+          className="rounded-sm"
+          style={{ backgroundColor: codeTint(color ?? "var(--qc-accent)") }}
+        >
+          {text.slice(s, e)}
+        </span>,
+      );
+      cursor = e;
+    }
+    if (cursor < text.length) out.push(text.slice(cursor));
+    return out;
+  }
 
   const activeSubtitle = useMemo(() => {
     let active: { startMs: number; endMs: number; text: string } | null = null;
@@ -196,7 +371,7 @@ export function AvCoder({ source }: { source: Source }) {
 
   useEffect(() => {
     if (!activeSubtitle) return;
-    subtitleRef.current
+    transcriptTextRef.current
       ?.querySelector(`[data-start="${activeSubtitle.startMs}"]`)
       ?.scrollIntoView({ block: "nearest" });
   }, [activeSubtitle]);
@@ -271,7 +446,6 @@ export function AvCoder({ source }: { source: Source }) {
         );
         if (done && prev.transcribeJobs.find((j) => j.id === done.id)?.state !== "done") {
           void loadTranscript();
-          setSpeakersOpen(false);
           setTranscriptVisible(true);
         }
       }
@@ -283,6 +457,30 @@ export function AvCoder({ source }: { source: Source }) {
     void load();
     void loadTranscript();
   }, [load, loadTranscript]);
+
+  // --- transcript codings (highlight the already coded text) ---
+  const [transcriptCodings, setTranscriptCodings] = useState<Coding[]>([]);
+
+  const loadTranscriptCodings = useCallback(async () => {
+    if (transcriptId == null) {
+      setTranscriptCodings([]);
+      return;
+    }
+    try {
+      const codings = await api.sourceCoding(transcriptId);
+      // Codings created by builds predating the CRLF handling were stored
+      // in rendered space (their seltext then contains text from the
+      // following line); normalize every coding to raw space so the
+      // highlights land where they were marked.
+      setTranscriptCodings(codings.map((c) => normalizeCodingPositions(transcriptRaw, crAt, c)));
+    } catch {
+      setTranscriptCodings([]);
+    }
+  }, [transcriptId, transcriptRaw, crAt]);
+
+  useEffect(() => {
+    void loadTranscriptCodings();
+  }, [loadTranscriptCodings]);
 
   // --- media element wiring --------------------------------------------
 
@@ -302,10 +500,22 @@ export function AvCoder({ source }: { source: Source }) {
       // seek is async) — while a seek is in flight, keep the intended
       // target so a quick mark-start → seek → mark-end sequence is exact.
       const target = seekTargetRef.current;
-      if (target !== null && Date.now() - seekAtRef.current < 1500 && ms < target) {
-        return;
+      if (target !== null) {
+        const within = Date.now() - seekAtRef.current;
+        if (within < 300) {
+          // Right after a seek only the target itself (or a tiny playback
+          // step) can be valid; anything further away is the stale
+          // pre-seek position — a backward seek while paused otherwise
+          // freezes the display at the old position forever.
+          if (Math.abs(ms - target) > 300) return;
+          seekTargetRef.current = null;
+        } else if (within < 1500 && ms < target) {
+          // Forward seek in flight: ignore positions before the target.
+          return;
+        } else {
+          seekTargetRef.current = null;
+        }
       }
-      if (target !== null) seekTargetRef.current = null;
       currentMsRef.current = ms;
       setCurrentMs(ms);
     };
@@ -364,6 +574,10 @@ export function AvCoder({ source }: { source: Source }) {
   function handleSetStart() {
     setStartMark(currentMsRef.current);
     setSelected(null);
+    // Marking a range switches the coding intent away from any transcript
+    // text selection (otherwise one sidebar click could code both).
+    setTSel(null);
+    codingIntentRef.current = "range";
   }
 
   function handleSetEnd() {
@@ -375,6 +589,7 @@ export function AvCoder({ source }: { source: Source }) {
     }
     setPendingStart(startMark);
     setStartMark(null);
+    codingIntentRef.current = "range";
     if (activeCodeId != null) {
       void codeRange(activeCodeId, startMark, now);
     } else {
@@ -408,7 +623,9 @@ export function AvCoder({ source }: { source: Source }) {
       if (typeof cid !== "number") return;
       setPickerOpen(false);
       const start = pendingStartRef.current;
-      if (start !== null) void codeRange(cid, start, currentMs);
+      if (codingIntentRef.current === "range" && start !== null) {
+        void codeRange(cid, start, currentMs);
+      }
     };
     window.addEventListener("qc:assign-code", onAssign);
     return () => window.removeEventListener("qc:assign-code", onAssign);
@@ -439,11 +656,7 @@ export function AvCoder({ source }: { source: Source }) {
   }
 
   if (loading) {
-    return (
-      <div className="flex h-full items-center justify-center bg-bg text-text-secondary">
-        <LoaderCircle size={18} className="animate-spin" aria-hidden /> {t("avCoder.loading")}
-      </div>
-    );
+    return <LoadingState>{t("avCoder.loading")}</LoadingState>;
   }
 
   if (error && codings.length === 0 && !mediaError) {
@@ -451,13 +664,9 @@ export function AvCoder({ source }: { source: Source }) {
       <div className="flex h-full items-center justify-center bg-bg">
         <div className="text-center">
           <p className="text-danger">{error}</p>
-          <button
-            type="button"
-            onClick={() => void load()}
-            className="mt-3 rounded-sm border border-border bg-surface px-3 py-1.5 text-sm hover:bg-surface-higher"
-          >
+          <Button variant="secondary" className="mt-3" onClick={() => void load()}>
             {t("common.retry")}
-          </button>
+          </Button>
         </div>
       </div>
     );
@@ -467,229 +676,414 @@ export function AvCoder({ source }: { source: Source }) {
 
   return (
     <div className="flex h-full flex-col bg-bg">
-      {/* Header: back button + file name + all playback/coding controls */}
-      <header className="flex min-h-10 shrink-0 flex-wrap items-center gap-1.5 border-b border-border bg-surface px-3 py-1">
-        <ViewBackButton />
-        <span className="max-w-40 truncate font-medium">{source.name}</span>
-        {source.memo && (
-          <span className="hidden max-w-40 truncate text-xs text-text-secondary xl:inline">{source.memo}</span>
-        )}
-        <span className="mx-1 h-4 w-px shrink-0 bg-border" aria-hidden />
-        <button
-          type="button"
-          onClick={togglePlay}
-          aria-label={playing ? t("avCoder.pause") : t("avCoder.play")}
-          className="flex h-7 w-7 shrink-0 items-center justify-center rounded-sm bg-accent text-[var(--qc-bg)] hover:bg-accent-hover"
-        >
-          {playing ? <Pause size={14} aria-hidden /> : <Play size={14} aria-hidden />}
-        </button>
-        <span className="shrink-0 font-mono text-xs text-text-primary">{formatTime(currentMs)}</span>
-        <span className="shrink-0 text-xs text-text-secondary">/ {formatTime(durationMs)}</span>
-        <select
-          value={playbackRate}
-          onChange={(e) => setSpeed(Number(e.target.value))}
-          aria-label={t("avCoder.speed")}
-          title={t("avCoder.speedTitle")}
-          className="h-7 shrink-0 rounded-sm border border-border bg-bg px-1 text-xs outline-none focus:border-accent"
-        >
-          {[0.5, 0.75, 1, 1.25, 1.5, 2].map((r) => (
-            <option key={r} value={r}>
-              {r}×
-            </option>
-          ))}
-        </select>
-        {source.media_type === "video" && (
-          <button
-            type="button"
-            onClick={() => setVideoVisible((v) => !v)}
-            className={`flex shrink-0 items-center gap-1 rounded-sm border border-border px-2 py-1 text-xs hover:bg-surface-higher ${
-              videoVisible ? "border-accent text-accent" : "bg-bg text-text-secondary"
-            }`}
-          >
-            <Video size={12} aria-hidden />
-            {t("avCoder.video")}
-          </button>
-        )}
-        <div className="relative shrink-0" data-transcribe-menu>
-          <button
-            type="button"
-            onClick={() => setTranscribeMenuOpen((o) => !o)}
-            aria-expanded={transcribeMenuOpen}
-            title={t("transcribe.title")}
-            className="flex items-center gap-1 rounded-sm border border-border bg-bg px-2 py-1 text-xs hover:bg-surface-higher"
-          >
-            <Mic size={12} aria-hidden />
-            {t("transcribe.button")}
-            <ChevronDown size={11} className="text-text-secondary" aria-hidden />
-          </button>
-          {transcribeMenuOpen && (
-            <div className="absolute right-0 top-full z-50 mt-1 min-w-48 rounded-md border border-border bg-surface py-1 shadow-lg">
-              <button
-                type="button"
-                onClick={() => {
-                  setTranscribeMenuOpen(false);
-                  setTranscribeOpen(true);
-                }}
-                className="flex w-full items-center gap-2 px-2 py-1.5 text-left text-sm hover:bg-surface-higher"
+      {/* Header: back button + file name + transcription/coding controls.
+          Playback lives in the transport bar below the media. */}
+      <ViewHeader
+        wrap
+        title={source.name}
+        meta={source.memo}
+        actions={
+          <>
+            <Button
+              variant="secondary"
+              onClick={() => setTranscribeOpen(true)}
+              title={t("transcribe.title")}
+              className="shrink-0"
+              icon={<Mic size={12} aria-hidden />}
+            >
+              {t("transcribe.button")}
+            </Button>
+            <Button
+              variant="secondary"
+              onClick={() => setTranscriptVisible((v) => !v)}
+              aria-pressed={transcriptVisible}
+              title={t("avCoder.transcript")}
+              className={cn(
+                "shrink-0",
+                transcriptVisible ? "border-accent text-accent" : "bg-bg text-text-secondary",
+              )}
+              icon={<Captions size={12} aria-hidden />}
+            >
+              {t("avCoder.transcript")}
+            </Button>
+            {source.media_type === "video" && (
+              <Button
+                variant="secondary"
+                onClick={() => setVideoVisible((v) => !v)}
+                aria-pressed={videoVisible}
+                title={t("avCoder.video")}
+                className={cn(
+                  "shrink-0",
+                  videoVisible ? "border-accent text-accent" : "bg-bg text-text-secondary",
+                )}
+                icon={<Video size={12} aria-hidden />}
               >
-                <Mic size={13} aria-hidden />
-                {t("transcribe.button")}…
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  setTranscribeMenuOpen(false);
-                  setSpeakersOpen(true);
-                }}
-                className="flex w-full items-center gap-2 px-2 py-1.5 text-left text-sm hover:bg-surface-higher"
-              >
-                <Users size={13} aria-hidden />
-                {t("avCoder.markSpeakers")}
-              </button>
-            </div>
-          )}
-        </div>
-        <button
-          type="button"
-          onClick={() => {
-            setSpeakersOpen(false);
-            setTranscriptVisible((v) => !v);
-          }}
-          aria-pressed={transcriptVisible}
-          title={t("avCoder.transcript")}
-          className={`flex shrink-0 items-center gap-1 rounded-sm border border-border px-2 py-1 text-xs hover:bg-surface-higher ${
-            transcriptVisible ? "border-accent text-accent" : "bg-bg text-text-secondary"
-          }`}
-        >
-          <Captions size={12} aria-hidden />
-          {t("avCoder.transcript")}
-        </button>
-        <div className="flex-1" />
-        <button
-          type="button"
-          onClick={() => void setAvBookmark()}
-          title={t("avCoder.bookmarkSet")}
-          className={`flex shrink-0 items-center gap-1 rounded-sm border border-border px-2 py-1 text-xs hover:bg-surface-higher ${
-            avBookmarkFile === source.id ? "border-accent text-accent" : "bg-bg text-text-secondary"
-          }`}
-        >
-          <Bookmark size={12} aria-hidden />
-          {t("avCoder.bookmarkSet")}
-        </button>
-        <button
-          type="button"
-          onClick={() => void goAvBookmark()}
-          disabled={avBookmarkFile == null}
-          title={t("avCoder.bookmarkGo")}
-          className="flex shrink-0 items-center gap-1 rounded-sm border border-border bg-bg px-2 py-1 text-xs hover:bg-surface-higher disabled:opacity-40"
-        >
-          <Bookmark size={12} className="fill-current" aria-hidden />
-          {t("avCoder.bookmarkGo")}
-        </button>
-        <button
-          type="button"
-          onClick={startMark !== null ? handleSetEnd : handleSetStart}
-          disabled={!durationMs}
-          className={`shrink-0 rounded-sm px-2 py-1 text-xs hover:bg-surface-higher disabled:opacity-50 ${
-            startMark !== null
-              ? "bg-accent font-medium text-[var(--qc-bg)] hover:bg-accent-hover"
-              : "border border-border bg-bg"
-          }`}
-        >
-          {startMark !== null ? t("avCoder.setEndAndCode") : t("avCoder.setStart")}
-        </button>
-        {startMark !== null && (
-          <span className="flex shrink-0 items-center gap-1 text-xs text-accent">
-            {t("avCoder.start", { time: formatTime(startMark) })}
+                {t("avCoder.video")}
+              </Button>
+            )}
+            <div className="flex-1" />
+            <IconButton
+              label={t("avCoder.bookmarkSet")}
+              title={t("avCoder.bookmarkSet")}
+              onClick={() => void setAvBookmark()}
+              className={cn(avBookmarkFile === source.id && "text-accent")}
+            >
+              <Bookmark
+                size={16}
+                className={avBookmarkFile === source.id ? "fill-current" : ""}
+                aria-hidden
+              />
+            </IconButton>
+            <IconButton
+              label={t("avCoder.bookmarkGo")}
+              title={t("avCoder.bookmarkGo")}
+              onClick={() => void goAvBookmark()}
+              disabled={avBookmarkFile == null}
+            >
+              <BookmarkCheck size={16} aria-hidden />
+            </IconButton>
+            <Button
+              variant={startMark !== null ? "primary" : "secondary"}
+              onClick={startMark !== null ? handleSetEnd : handleSetStart}
+              disabled={!durationMs}
+              className="shrink-0"
+            >
+              {startMark !== null ? t("avCoder.setEndAndCode") : t("avCoder.setStart")}
+            </Button>
+            {startMark !== null && (
+              <span className="flex shrink-0 items-center gap-1 text-xs text-accent">
+                {t("avCoder.start", { time: formatTime(startMark) })}
+                <IconButton
+                  label={t("avCoder.clearStart")}
+                  size="sm"
+                  onClick={() => setStartMark(null)}
+                >
+                  <X size={12} aria-hidden />
+                </IconButton>
+              </span>
+            )}
+          </>
+        }
+      />
+
+      {/* Playback + timeline on ONE row: play / time / speed / progress */}
+      {(() => {
+        const transportRow = (
+          <div className="flex shrink-0 items-center gap-1.5 border-b border-border bg-surface px-3 py-1.5">
             <button
               type="button"
-              onClick={() => setStartMark(null)}
-              aria-label={t("avCoder.clearStart")}
-              className="rounded-sm p-0.5 text-text-secondary hover:text-text-primary"
+              onClick={togglePlay}
+              aria-label={playing ? t("avCoder.pause") : t("avCoder.play")}
+              className="flex h-7 w-7 shrink-0 items-center justify-center rounded-sm bg-accent text-[var(--qc-bg)] hover:bg-accent-hover"
             >
-              <X size={12} aria-hidden />
+              {playing ? <Pause size={14} aria-hidden /> : <Play size={14} aria-hidden />}
             </button>
-          </span>
-        )}
-      </header>
-
-      {/* Media */}
-      <div className="shrink-0 border-b border-border bg-surface">
-        {isVideo ? (
-          <video
-            ref={mediaRef}
-            src={sourceFileUrl(source.id)}
-            preload="metadata"
-            aria-label={source.name}
-            className={`block max-h-[55vh] w-full bg-bg ${videoVisible ? "" : "hidden"}`}
-          />
-        ) : (
-          <div className="flex items-center gap-3 px-4 py-6">
-            <Music size={28} className="text-text-secondary" aria-hidden />
-            <div className="min-w-0">
-              <div className="truncate text-sm font-medium text-text-primary">{source.name}</div>
-              <div className="text-xs text-text-secondary">{t("avCoder.audioFile")} · {durationMs ? formatTime(durationMs) : "…"}</div>
+            <span className="shrink-0 font-mono text-xs text-text-primary">{formatTime(currentMs)}</span>
+            <span className="shrink-0 text-xs text-text-secondary">/ {formatTime(durationMs)}</span>
+            <Select
+              value={playbackRate}
+              onChange={(e) => setSpeed(Number(e.target.value))}
+              aria-label={t("avCoder.speed")}
+              title={t("avCoder.speedTitle")}
+              className="shrink-0"
+            >
+              {[0.5, 0.75, 1, 1.25, 1.5, 2].map((r) => (
+                <option key={r} value={r}>
+                  {r}×
+                </option>
+              ))}
+            </Select>
+            <div
+              ref={timelineRef}
+              onClick={handleTimelineClick}
+              className="relative h-7 min-w-0 flex-1 cursor-pointer overflow-hidden rounded-sm border border-border bg-bg"
+              role="slider"
+              aria-label={t("avCoder.timeline")}
+              aria-valuemin={0}
+              aria-valuemax={Math.round(durationMs)}
+              aria-valuenow={Math.round(currentMs)}
+            >
+              {codings.map((coding) => (
+                <div
+                  key={coding.avid}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    seekToMs(coding.pos0);
+                    setSelected(coding);
+                  }}
+                  title={`${nameByCid.get(coding.cid) ?? t("coder.plainCode")} · ${formatTime(coding.pos0)} – ${formatTime(coding.pos1)}`}
+                  className={`absolute top-0 h-full cursor-pointer border qc-seg ${
+                    hiddenCodes.includes(coding.cid) ? "qc-seg-hidden" : ""
+                  }`}
+                  style={{
+                    left: `${segmentLeft(coding.pos0, durationMs)}%`,
+                    width: `${segmentWidth(coding.pos0, coding.pos1, durationMs)}%`,
+                    backgroundColor: codeTint(codeColor(coding)),
+                    borderColor: codeColor(coding),
+                  }}
+                />
+              ))}
+              {durationMs > 0 && (
+                <div
+                  className="pointer-events-none absolute top-0 h-full w-px bg-text-primary"
+                  style={{ left: `${(currentMs / durationMs) * 100}%` }}
+                  aria-hidden
+                />
+              )}
             </div>
           </div>
-        )}
-        {/* hidden audio element must exist in the DOM to play */}
-        {!isVideo && <audio ref={mediaRef} src={sourceFileUrl(source.id)} preload="metadata" className="hidden" />}
-      </div>
+        );
 
-      {mediaError && (
-        <div role="alert" className="border-b border-border bg-danger/10 px-3 py-1.5 text-xs text-danger">
-          {mediaError}
-        </div>
-      )}
-      {error && (
-        <div role="alert" className="border-b border-border bg-danger/10 px-3 py-1.5 text-xs text-danger">
-          {error}
-        </div>
-      )}
+        const transcriptPanel = (
+          <div className="flex min-h-0 flex-1 flex-col bg-bg">
+            <div className="flex shrink-0 items-center gap-1 border-b border-border bg-surface px-3 py-1.5">
+              <Captions size={12} className="text-text-secondary" aria-hidden />
+              <span className="text-xs font-medium text-text-primary">{t("avCoder.transcript")}</span>
+              <span className="ml-2 truncate text-xs text-text-secondary">{transcript?.name}</span>
+              {transcriptId != null && (
+                <span className="ml-1 truncate text-[10px] text-text-secondary">
+                  {t("avCoder.transcriptSelectHint")}
+                </span>
+              )}
+              <div className="flex-1" />
+              {transcriptId != null && (
+                <div className="relative">
+                  <Button
+                    variant="secondary"
+                    className="h-6 px-1.5"
+                    onClick={() => setAutoOpen((o) => !o)}
+                    icon={<Sparkles size={12} aria-hidden />}
+                  >
+                    {t("coder.autocode")}
+                  </Button>
+                  {autoOpen && (
+                    <div className={`absolute right-0 top-full z-40 mt-1 w-64 p-2 ${cls.popup}`}>
+                      <Input
+                        autoFocus
+                        value={autoText}
+                        onChange={(e) => setAutoText(e.target.value)}
+                        placeholder={t("coder.autoPlaceholder")}
+                        className="w-full"
+                      />
+                      <div className="mt-1.5 flex items-center gap-1.5">
+                        <Select
+                          value={autoCid}
+                          onChange={(e) => setAutoCid(e.target.value)}
+                          aria-label={t("coder.pickCode")}
+                          className="min-w-0 flex-1"
+                        >
+                          <option value="">{t("coder.pickCode")}</option>
+                          {codeOptions.map((c) => (
+                            <option key={c.id} value={c.id}>
+                              {c.name}
+                            </option>
+                          ))}
+                        </Select>
+                        <Button
+                          variant="primary"
+                          onClick={() => void runTranscriptAutocode()}
+                          disabled={autoBusy || !autoText.trim() || !autoCid}
+                          icon={
+                            autoBusy ? (
+                              <LoaderCircle size={12} className="animate-spin" aria-hidden />
+                            ) : (
+                              <Sparkles size={12} aria-hidden />
+                            )
+                          }
+                        >
+                          {t("coder.autocode")}
+                        </Button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+              {tError && <span className="text-xs text-danger">{tError}</span>}
+              <IconButton
+                label={t("common.close")}
+                title={t("common.close")}
+                size="sm"
+                onClick={() => setTranscriptVisible(false)}
+              >
+                <X size={14} aria-hidden />
+              </IconButton>
+            </div>
+            <div
+              ref={transcriptTextRef}
+              onMouseUp={onTranscriptMouseUp}
+              className="qc-selectable qc-scroll min-h-0 flex-1 overflow-y-auto px-4 py-3 text-sm leading-6 text-text-primary"
+              role="log"
+              aria-live="off"
+            >
+              {subtitleSegments.length === 0 ? (
+                <p className="py-6 text-center text-sm text-text-secondary">
+                  {t("avCoder.noTranscript")}
+                </p>
+              ) : (
+                (() => {
+                  // Absolute text offsets per line (timestamps included) so
+                  // the coding highlights line up with the stored text.
+                  let lineStart = 0;
+                  return subtitleSegments.map((seg, i) => {
+                    const active = activeSubtitle === seg;
+                    const tsLen = transcriptTimestamp(seg.startMs).length;
+                    const textStart = lineStart + tsLen + 1;
+                    const line = (
+                      <div
+                        data-start={seg.startMs}
+                        onClick={() => {
+                          const sel = window.getSelection();
+                          if (sel && !sel.isCollapsed) return;
+                          setTSel(null);
+                          seekToMs(seg.startMs);
+                        }}
+                        title={t("avCoder.seekTo", { time: formatTime(seg.startMs) })}
+                        className={`flex items-baseline gap-2 rounded-sm ${
+                          active ? "bg-accent/15 font-medium" : ""
+                        }`}
+                      >
+                        <span className="w-14 shrink-0 text-right font-mono text-[10px] text-text-secondary">
+                          {transcriptTimestamp(seg.startMs)}
+                        </span>
+                        <span className="min-w-0 flex-1">
+                          {" "}
+                          {renderCodedLine(textStart, seg.text)}
+                        </span>
+                      </div>
+                    );
+                    lineStart = textStart + seg.text.length + 1;
+                    return (
+                      <Fragment key={`${seg.startMs}-${i}`}>
+                        {i > 0 && "\n"}
+                        {line}
+                      </Fragment>
+                    );
+                  });
+                })()
+              )}
+            </div>
+            {/* Floating selection toolbar (code / annotate) */}
+            {tSel && !tAnnotateOpen && (
+              <div
+                className="fixed z-40 flex items-center gap-1 rounded-md border border-border bg-surface p-1 shadow-lg"
+                style={{ left: Math.min(tSel.left, window.innerWidth - 200), top: tSel.top }}
+                role="toolbar"
+                aria-label={t("coder.selectionActions")}
+              >
+                <Button
+                  variant="primary"
+                  icon={<Code size={12} aria-hidden />}
+                  className="max-w-56"
+                  onClick={() => {
+                    const activeCodeId = useProjectStore.getState().activeCodeId;
+                    if (activeCodeId != null) void codeTranscriptSelection(activeCodeId);
+                    else setTPickerOpen(true);
+                  }}
+                >
+                  <span className="truncate">{t("coder.codeAction")}</span>
+                </Button>
+                <Button
+                  variant="secondary"
+                  icon={<StickyNote size={12} aria-hidden />}
+                  onClick={() => {
+                    setTAnnotateMemo("");
+                    setTAnnotateOpen(true);
+                  }}
+                >
+                  {t("coder.annotate")}
+                </Button>
+              </div>
+            )}
+            {/* Annotate popover */}
+            {tAnnotateOpen && (
+              <div
+                className={`fixed z-40 w-72 p-2 ${cls.popup}`}
+                style={{ left: Math.min(tSel?.left ?? 0, window.innerWidth - 300), top: tSel?.top ?? 0 }}
+                role="dialog"
+                aria-modal="true"
+                aria-label={t("coder.addAnnotation")}
+              >
+                <Textarea
+                  autoFocus
+                  value={tAnnotateMemo}
+                  onChange={(e) => setTAnnotateMemo(e.target.value)}
+                  placeholder={t("coder.annotationMemoPlaceholder")}
+                  className="h-20 w-full resize-none p-1.5"
+                />
+                <div className="mt-2 flex justify-end gap-1.5">
+                  <Button variant="secondary" onClick={() => setTAnnotateOpen(false)}>
+                    {t("common.cancel")}
+                  </Button>
+                  <Button
+                    variant="primary"
+                    icon={<Check size={12} aria-hidden />}
+                    onClick={() => void saveTranscriptAnnotation()}
+                  >
+                    {t("common.save")}
+                  </Button>
+                </div>
+              </div>
+            )}
+            <CodePicker
+              open={tPickerOpen}
+              codes={codes}
+              onClose={() => setTPickerOpen(false)}
+              onPick={(picked) => void codeTranscriptSelection(picked.cid)}
+            />
+          </div>
+        );
 
-      {/* Timeline */}
-      <div className="shrink-0 border-b border-border bg-surface px-3 py-2">
-        <div
-          ref={timelineRef}
-          onClick={handleTimelineClick}
-          className="relative h-8 cursor-pointer overflow-hidden rounded-sm border border-border bg-bg"
-          role="slider"
-          aria-label={t("avCoder.timeline")}
-          aria-valuemin={0}
-          aria-valuemax={Math.round(durationMs)}
-          aria-valuenow={Math.round(currentMs)}
-        >
-          {codings.map((coding) => (
-            <div
-              key={coding.avid}
-              onClick={(e) => {
-                e.stopPropagation();
-                seekToMs(coding.pos0);
-                setSelected(coding);
-              }}
-              title={`${nameByCid.get(coding.cid) ?? t("coder.plainCode")} · ${formatTime(coding.pos0)} – ${formatTime(coding.pos1)}`}
-              className="absolute top-0 h-full cursor-pointer border"
-              style={{
-                left: `${segmentLeft(coding.pos0, durationMs)}%`,
-                width: `${segmentWidth(coding.pos0, coding.pos1, durationMs)}%`,
-                backgroundColor: codeTint(codeColor(coding)),
-                borderColor: codeColor(coding),
-              }}
-            />
-          ))}
-          {durationMs > 0 && (
-            <div
-              className="pointer-events-none absolute top-0 h-full w-px bg-text-primary"
-              style={{ left: `${(currentMs / durationMs) * 100}%` }}
-              aria-hidden
-            />
-          )}
-        </div>
-        <div className="mt-1 flex justify-between text-[10px] text-text-secondary">
-          <span>0:00</span>
-          <span>{durationMs ? formatTime(durationMs) : ""}</span>
-        </div>
-      </div>
+        // Media on top, transport row below it, transcript in the lower
+        // half (video and audio alike — the transcript never hides). The
+        // border between the video and the rest is draggable.
+        return (
+          <>
+            <div className="shrink-0 border-b border-border bg-surface">
+              {isVideo ? (
+                <video
+                  ref={mediaRef}
+                  src={sourceFileUrl(source.id)}
+                  preload="metadata"
+                  aria-label={source.name}
+                  style={videoVisible ? { height: videoH } : undefined}
+                  className={`block max-h-[70vh] w-full bg-bg ${videoVisible ? "" : "hidden"}`}
+                />
+              ) : (
+                <div className="flex items-center gap-3 px-4 py-6">
+                  <Music size={28} className="text-text-secondary" aria-hidden />
+                  <div className="min-w-0">
+                    <div className="truncate text-sm font-medium text-text-primary">{source.name}</div>
+                    <div className="text-xs text-text-secondary">{t("avCoder.audioFile")} · {durationMs ? formatTime(durationMs) : "…"}</div>
+                  </div>
+                </div>
+              )}
+              {!isVideo && <audio ref={mediaRef} src={sourceFileUrl(source.id)} preload="metadata" className="hidden" />}
+            </div>
+            {/* Draggable divider: resize the video / transcript split */}
+            {isVideo && videoVisible && (
+              <div
+                onMouseDown={startVideoResize}
+                className={`h-1 shrink-0 cursor-row-resize border-b border-border ${
+                  videoDragging ? "bg-accent/40" : "bg-surface hover:bg-accent/40"
+                }`}
+                role="separator"
+                aria-orientation="horizontal"
+                aria-label={t("avCoder.resizeVideo")}
+              />
+            )}
+            {transportRow}
+            {transcriptVisible && <div className="flex min-h-0 flex-1 flex-col border-t border-border">{transcriptPanel}</div>}
+            {!transcriptVisible && codings.length === 0 && !selected && (
+              <div className="flex flex-1 items-center justify-center bg-bg text-sm text-text-secondary">
+                {t("avCoder.hint")}
+              </div>
+            )}
+          </>
+        );
+      })()}
+
+      {mediaError && <ErrorBanner>{mediaError}</ErrorBanner>}
+      {error && <ErrorBanner>{error}</ErrorBanner>}
 
       {/* Details panel */}
       {selected && (
@@ -707,207 +1101,16 @@ export function AvCoder({ source }: { source: Source }) {
           </span>
           <span className="truncate text-xs text-text-secondary">{selected.memo || t("common.noMemo")}</span>
           <div className="flex-1" />
-          <button
-            type="button"
+          <Button
+            variant="danger"
+            icon={<Trash2 size={12} aria-hidden />}
             onClick={() => void handleDelete(selected)}
-            className="flex items-center gap-1 rounded-sm border border-danger/50 px-2 py-1 text-xs text-danger hover:bg-danger/10"
           >
-            <Trash2 size={12} aria-hidden />
             {t("common.delete")}
-          </button>
-          <button
-            type="button"
-            onClick={() => setSelected(null)}
-            className="rounded-sm border border-border bg-bg px-2 py-1 text-xs hover:bg-surface-higher"
-          >
+          </Button>
+          <Button variant="secondary" onClick={() => setSelected(null)}>
             {t("common.close")}
-          </button>
-        </div>
-      )}
-
-      {/* Lower half: transcript (like a text coder) or speaker detection */}
-      {(transcriptVisible || speakersOpen) && (
-        <div className="flex min-h-0 flex-1 flex-col border-t border-border bg-bg">
-          <div className="flex shrink-0 items-center gap-1 border-b border-border bg-surface px-3 py-1.5">
-            {speakersOpen ? (
-              <>
-                <Users size={12} className="text-text-secondary" aria-hidden />
-                <span className="text-xs font-medium text-text-primary">
-                  {t("avCoder.markSpeakers")}
-                </span>
-                <span className="ml-2 truncate text-xs text-text-secondary">{transcript?.name}</span>
-              </>
-            ) : (
-              <>
-                <Captions size={12} className="text-text-secondary" aria-hidden />
-                <span className="text-xs font-medium text-text-primary">
-                  {t("avCoder.transcript")}
-                </span>
-                <span className="ml-2 truncate text-xs text-text-secondary">{transcript?.name}</span>
-              </>
-            )}
-            <div className="flex-1" />
-            {speakersOpen && (
-              <button
-                type="button"
-                onClick={() => {
-                  setSpeakersOpen(false);
-                  setTranscriptVisible(true);
-                }}
-                className="flex items-center gap-1 rounded-sm px-2 py-0.5 text-xs font-medium text-text-secondary hover:text-text-primary"
-              >
-                <Captions size={12} aria-hidden />
-                {t("avCoder.transcript")}
-              </button>
-            )}
-            <button
-              type="button"
-              onClick={() => {
-                setSpeakersOpen(false);
-                setTranscriptVisible(false);
-              }}
-              aria-label={t("common.close")}
-              title={t("common.close")}
-              className="rounded-sm p-0.5 text-text-secondary hover:bg-surface-higher hover:text-text-primary"
-            >
-              <X size={14} aria-hidden />
-            </button>
-          </div>
-
-          {speakersOpen ? (
-            <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3">
-              <fieldset className="space-y-1">
-                <legend className="mb-1 text-xs font-medium text-text-secondary">
-                  {t("avCoder.speakersIdentifiers")}
-                </legend>
-                {IDENTIFIER_OPTIONS.map((opt) => (
-                  <label key={opt.key} className="flex items-center gap-2 text-sm text-text-primary">
-                    <input
-                      type="checkbox"
-                      checked={identifiers.includes(opt.key)}
-                      onChange={(e) =>
-                        setIdentifiers((prev) =>
-                          e.target.checked
-                            ? [...prev, opt.key]
-                            : prev.filter((k) => k !== opt.key),
-                        )
-                      }
-                      className="accent-accent"
-                    />
-                    {t(opt.labelKey)}
-                  </label>
-                ))}
-              </fieldset>
-              {identifiers.includes("custom") && (
-                <input
-                  value={customRegex}
-                  onChange={(e) => setCustomRegex(e.target.value)}
-                  placeholder={t("avCoder.speakersCustomPlaceholder")}
-                  className="mt-2 h-8 w-full rounded-sm border border-border bg-bg px-2 text-sm outline-none focus:border-accent"
-                />
-              )}
-              <div className="mt-3 flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => void detectSpeakers()}
-                  disabled={speakerBusy || identifiers.length === 0}
-                  className="rounded-sm border border-border bg-bg px-2.5 py-1 text-xs hover:bg-surface-higher disabled:opacity-50"
-                >
-                  {speakerBusy ? (
-                    <LoaderCircle size={12} className="animate-spin" aria-hidden />
-                  ) : (
-                    <Users size={12} aria-hidden />
-                  )}
-                  {t("avCoder.speakersDetect")}
-                </button>
-              </div>
-              {speakerError && <p className="mt-2 text-xs text-danger">{speakerError}</p>}
-              {speakers.length > 0 && (
-                <div className="mt-3 max-h-56 overflow-auto rounded-sm border border-border bg-bg">
-                  <table className="w-full border-collapse">
-                    <tbody>
-                      {speakers.map((s) => (
-                        <tr key={s.name} className="border-b border-border last:border-0">
-                          <td className="px-2 py-1.5">
-                            <input
-                              type="checkbox"
-                              checked={speakerSelected[s.name] ?? false}
-                              onChange={(e) =>
-                                setSpeakerSelected((prev) => ({
-                                  ...prev,
-                                  [s.name]: e.target.checked,
-                                }))
-                              }
-                              className="accent-accent"
-                              aria-label={s.name}
-                            />
-                          </td>
-                          <td className="px-2 py-1.5 text-sm font-medium">{s.name}</td>
-                          <td className="px-2 py-1.5 text-xs text-text-secondary">{s.count} turns</td>
-                          <td className="max-w-40 truncate px-2 py-1.5 text-xs text-text-secondary" title={s.example}>
-                            {s.example}
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-              <div className="mt-3 flex items-center justify-between">
-                <span className="text-xs text-text-secondary">
-                  {speakerTurns.length > 0 ? `${speakerTurns.length} turn(s) detected` : ""}
-                </span>
-                <button
-                  type="button"
-                  onClick={() => void markSpeakers()}
-                  disabled={speakerBusy || speakers.length === 0}
-                  className="rounded-sm bg-accent px-3 py-1 text-xs font-medium text-[var(--qc-bg)] hover:bg-accent-hover disabled:opacity-50"
-                >
-                  {t("avCoder.speakersMark")}
-                </button>
-              </div>
-            </div>
-          ) : (
-            <div
-              ref={subtitleRef}
-              className="min-h-0 flex-1 overflow-y-auto px-4 py-3"
-              role="log"
-              aria-live="off"
-            >
-              {subtitleSegments.length === 0 ? (
-                <p className="py-6 text-center text-sm text-text-secondary">
-                  {t("avCoder.noTranscript")}
-                </p>
-              ) : (
-                subtitleSegments.map((seg, i) => {
-                  const active = activeSubtitle === seg;
-                  return (
-                    <p
-                      key={`${seg.startMs}-${i}`}
-                      data-start={seg.startMs}
-                      className={`rounded-sm px-1.5 py-0.5 text-sm leading-6 ${
-                        active
-                          ? "bg-accent/15 font-medium text-text-primary"
-                          : "text-text-secondary"
-                      }`}
-                    >
-                      <span className="mr-2 font-mono text-[10px] text-text-secondary">
-                        {formatTime(seg.startMs)}
-                      </span>
-                      {seg.text}
-                    </p>
-                  );
-                })
-              )}
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* Hint */}
-      {codings.length === 0 && !selected && (
-        <div className="flex flex-1 items-center justify-center bg-bg text-sm text-text-secondary">
-          {t("avCoder.hint")}
+          </Button>
         </div>
       )}
 

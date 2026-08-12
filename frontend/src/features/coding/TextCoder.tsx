@@ -14,6 +14,7 @@ import {
 } from "react";
 import {
   Bookmark,
+  BookmarkCheck,
   Check,
   CircleAlert,
   Code,
@@ -29,7 +30,16 @@ import {
   Undo2,
   X,
 } from "lucide-react";
-import { ViewBackButton } from "@/components/shell/ViewBackButton";
+import {
+  Button,
+  ErrorBanner,
+  IconButton,
+  Input,
+  LoadingState,
+  Select,
+  Textarea,
+  ViewHeader,
+} from "@/components/ui/orchestrator";
 import {
   api,
   type Annotation,
@@ -49,6 +59,7 @@ import { getSelectionOffsets, type SelectionOffsets } from "@/features/coding/se
 import { codeTint } from "@/features/coding/tint";
 import { usesPdfCoder } from "@/lib/media";
 import { cn } from "@/lib/utils";
+import { cls } from "@/components/ui/tokens";
 import { useI18n } from "@/lib/i18n";
 import { useProjectStore } from "@/stores/project";
 
@@ -125,6 +136,7 @@ export function TextCoder({
 }) {
   const { t } = useI18n();
   const activeCodeId = useProjectStore((s) => s.activeCodeId);
+  const hiddenCodes = useProjectStore((s) => s.hiddenCodes);
 
   const [source, setSource] = useState<Source | null>(null);
   const [codings, setCodings] = useState<Coding[]>([]);
@@ -730,10 +742,11 @@ export function TextCoder({
           return r.memo ? `${name} — ${r.memo}` : name;
         })
         .join(" | ");
+      const hidden = rows.some((r) => hiddenCodes.includes(r.cid));
       out.push(
         <span
           key={`seg-${i}-${seg.start}`}
-          className="cursor-pointer rounded-sm"
+          className={`cursor-pointer rounded-sm qc-seg ${hidden ? "qc-seg-hidden" : ""}`}
           title={title}
           onClick={() => {
             setSelectedSeg(seg);
@@ -814,12 +827,7 @@ export function TextCoder({
   /* ------------------------------------------------------------------- body */
 
   if (loading) {
-    return (
-      <div className="flex h-full items-center justify-center gap-2 bg-bg text-text-secondary">
-        <LoaderCircle size={16} className="animate-spin" aria-hidden />
-        {t("coder.loading")}
-      </div>
-    );
+    return <LoadingState>{t("coder.loading")}</LoadingState>;
   }
 
   if (loadError) {
@@ -867,146 +875,117 @@ export function TextCoder({
     }
   }
 
-  const toolbarCls =
-    "flex items-center gap-1 rounded-sm border border-border bg-bg px-2 py-1 text-xs hover:bg-surface-higher";
-
   return (
     <div className="flex h-full flex-col bg-bg">
-      <header className="flex h-10 shrink-0 items-center gap-2 border-b border-border bg-surface px-3">
-        <ViewBackButton />
-        <span className="max-w-64 truncate font-medium">{source.name}</span>
-        {source.memo && <span className="max-w-64 truncate text-xs text-text-secondary">{source.memo}</span>}
-        <div className="flex-1" />
-        {saving && (
-          <span className="flex items-center gap-1 text-xs text-text-secondary" role="status">
-            <LoaderCircle size={12} className="animate-spin" aria-hidden />
-            {t("coder.saving")}
-          </span>
-        )}
-        {editMode ? (
+      <ViewHeader
+        wrap
+        title={source.name}
+        meta={source.memo}
+        actions={
           <>
-            <button
-              type="button"
-              onClick={saveEdit}
-              disabled={saving}
-              className="flex items-center gap-1 rounded-sm bg-accent px-2 py-1 text-xs font-medium text-[var(--qc-bg)] hover:bg-accent-hover disabled:opacity-50"
-            >
-              <Save size={12} aria-hidden />
-              {t("common.save")}
-            </button>
-            <button type="button" onClick={toggleEditMode} disabled={saving} className={toolbarCls}>
-              {unsaved ? (
-                <>
-                  <CircleAlert size={12} aria-hidden />
-                  {t("coder.discard")}
-                </>
-              ) : (
-                <>
-                  <X size={12} aria-hidden />
-                  {t("common.cancel")}
-                </>
-              )}
-            </button>
-          </>
-        ) : (
-          <>
-            {onExitPlainText && (
-              <button type="button" onClick={onExitPlainText} className={toolbarCls}>
-                <Rows3 size={12} aria-hidden />
-                {t("pdfCoder.renderedMode")}
-              </button>
+            {saving && (
+              <span className="flex items-center gap-1 text-xs text-text-secondary" role="status">
+                <LoaderCircle size={12} className="animate-spin" aria-hidden />
+                {t("coder.saving")}
+              </span>
             )}
-            <button type="button" onClick={toggleEditMode} className={toolbarCls}>
-              <FilePen size={12} aria-hidden />
-              {t("coder.editMode")}
-            </button>
-            <button
-              type="button"
-              onClick={() => void setBookmark()}
-              title={t("coder.bookmarkSet")}
-              className={cn(toolbarCls, bookmarkFileId === source.id && "border-accent text-accent")}
-            >
-              <Bookmark size={12} aria-hidden />
-              {t("coder.bookmarkSet")}
-            </button>
-            <button
-              type="button"
-              onClick={() => void goBookmark()}
-              disabled={bookmarkFileId == null}
-              title={t("coder.bookmarkGoTitle")}
-              className={cn(toolbarCls, "disabled:opacity-40")}
-            >
-              <Bookmark size={12} className="fill-current" aria-hidden />
-              {t("coder.bookmarkGo")}
-            </button>
-            <button
-              type="button"
-              onClick={unmarkLast}
-              disabled={undoStack.length === 0}
-              title={t("coder.unmarkTitle")}
-              className={cn(toolbarCls, "disabled:opacity-40")}
-            >
-              <Undo2 size={12} aria-hidden />
-              {t("coder.unmarkLast")}
-            </button>
-            <button
-              type="button"
-              onClick={() => setAutoOpen((o) => !o)}
-              className={cn(toolbarCls, autoOpen && "border-accent text-accent")}
-            >
-              <Sparkles size={12} aria-hidden />
-              {t("coder.autocode")}
-            </button>
+            {editMode ? (
+              <>
+                <Button
+                  variant="primary"
+                  icon={<Save size={12} aria-hidden />}
+                  onClick={saveEdit}
+                  disabled={saving}
+                >
+                  {t("common.save")}
+                </Button>
+                <Button
+                  variant="secondary"
+                  icon={unsaved ? <CircleAlert size={12} aria-hidden /> : <X size={12} aria-hidden />}
+                  onClick={toggleEditMode}
+                  disabled={saving}
+                >
+                  {unsaved ? t("coder.discard") : t("common.cancel")}
+                </Button>
+              </>
+            ) : (
+              <>
+                {onExitPlainText && (
+                  <Button variant="secondary" icon={<Rows3 size={12} aria-hidden />} onClick={onExitPlainText}>
+                    {t("pdfCoder.renderedMode")}
+                  </Button>
+                )}
+                <Button variant="secondary" icon={<FilePen size={12} aria-hidden />} onClick={toggleEditMode}>
+                  {t("coder.editMode")}
+                </Button>
+                <IconButton
+                  label={t("coder.bookmarkSet")}
+                  title={t("coder.bookmarkSet")}
+                  onClick={() => void setBookmark()}
+                  className={cn(bookmarkFileId === source.id && "text-accent")}
+                >
+                  <Bookmark
+                    size={16}
+                    className={bookmarkFileId === source.id ? "fill-current" : ""}
+                    aria-hidden
+                  />
+                </IconButton>
+                <IconButton
+                  label={t("coder.bookmarkGo")}
+                  title={t("coder.bookmarkGoTitle")}
+                  onClick={() => void goBookmark()}
+                  disabled={bookmarkFileId == null}
+                >
+                  <BookmarkCheck size={16} aria-hidden />
+                </IconButton>
+                <Button
+                  variant="secondary"
+                  icon={<Undo2 size={12} aria-hidden />}
+                  onClick={unmarkLast}
+                  disabled={undoStack.length === 0}
+                  title={t("coder.unmarkTitle")}
+                >
+                  {t("coder.unmarkLast")}
+                </Button>
+                <Button
+                  variant="secondary"
+                  icon={<Sparkles size={12} aria-hidden />}
+                  onClick={() => setAutoOpen((o) => !o)}
+                  className={cn(autoOpen && "border-accent text-accent")}
+                >
+                  {t("coder.autocode")}
+                </Button>
+              </>
+            )}
           </>
-        )}
-      </header>
+        }
+      />
 
-      {errMsg && (
-        <div className="flex shrink-0 items-center gap-2 border-b border-danger bg-danger/10 px-3 py-1.5 text-sm text-danger">
-          <CircleAlert size={14} aria-hidden />
-          <span className="min-w-0 flex-1 truncate">{errMsg}</span>
-          <button
-            type="button"
-            onClick={() => setErrMsg(null)}
-            aria-label={t("common.dismiss")}
-            className="rounded-sm p-0.5 hover:bg-surface-higher"
-          >
-            <X size={14} aria-hidden />
-          </button>
-        </div>
-      )}
+      {errMsg && <ErrorBanner onClose={() => setErrMsg(null)}>{errMsg}</ErrorBanner>}
 
       {autoOpen && !editMode && (
         <div className="shrink-0 border-b border-border bg-surface px-3 py-2">
           <div className="flex flex-wrap items-end gap-2">
-            <textarea
+            <Textarea
               value={autoText}
               onChange={(e) => setAutoText(e.target.value)}
               placeholder={t("coder.autoPlaceholder")}
-              className="h-14 w-64 resize-none rounded-sm border border-border bg-bg px-2 py-1 text-sm outline-none focus:border-accent"
+              className="h-14 w-64 resize-none px-2 py-1"
             />
-            <select
-              value={autoCid}
-              onChange={(e) => setAutoCid(e.target.value)}
-              className="h-8 rounded-sm border border-border bg-bg px-2 text-sm outline-none focus:border-accent"
-            >
+            <Select value={autoCid} onChange={(e) => setAutoCid(e.target.value)} aria-label={t("coder.pickCode")}>
               <option value="">{t("coder.pickCode")}</option>
               {codeOptions.map((c) => (
                 <option key={c.id} value={c.id}>
                   {c.name}
                 </option>
               ))}
-            </select>
-            <select
-              value={autoMode}
-              onChange={(e) => setAutoMode(e.target.value as "all" | "first" | "last")}
-              className="h-8 rounded-sm border border-border bg-bg px-2 text-sm outline-none focus:border-accent"
-            >
+            </Select>
+            <Select value={autoMode} onChange={(e) => setAutoMode(e.target.value as "all" | "first" | "last")}>
               <option value="all">{t("coder.autoAll")}</option>
               <option value="first">{t("coder.autoFirst")}</option>
               <option value="last">{t("coder.autoLast")}</option>
-            </select>
-            <label className="flex h-8 items-center gap-1.5 text-xs text-text-secondary">
+            </Select>
+            <label className="flex h-7 items-center gap-1.5 text-xs text-text-secondary">
               <input
                 type="checkbox"
                 checked={autoRegex}
@@ -1015,25 +994,26 @@ export function TextCoder({
               />
               {t("coder.autoRegex")}
             </label>
-            <input
+            <Input
               value={autoNewName}
               onChange={(e) => setAutoNewName(e.target.value)}
               placeholder={t("coder.autoNewName")}
-              className="h-8 w-36 rounded-sm border border-border bg-bg px-2 text-sm outline-none focus:border-accent"
+              className="w-36"
             />
-            <button
-              type="button"
+            <Button
+              variant="primary"
+              icon={
+                autoBusy ? (
+                  <LoaderCircle size={12} className="animate-spin" aria-hidden />
+                ) : (
+                  <Sparkles size={12} aria-hidden />
+                )
+              }
               onClick={runAutocode}
               disabled={autoBusy}
-              className="flex h-8 items-center gap-1 rounded-sm bg-accent px-2.5 text-xs font-medium text-[var(--qc-bg)] hover:bg-accent-hover disabled:opacity-50"
             >
-              {autoBusy ? (
-                <LoaderCircle size={12} className="animate-spin" aria-hidden />
-              ) : (
-                <Sparkles size={12} aria-hidden />
-              )}
               {t("coder.autocode")}
-            </button>
+            </Button>
           </div>
           {autoResult && <p className="mt-1 text-xs text-success">{autoResult}</p>}
         </div>
@@ -1097,14 +1077,9 @@ export function TextCoder({
           <div className="flex items-center gap-2">
             <span className="text-xs font-medium text-text-secondary">{t("coder.codingDetails")}</span>
             <div className="flex-1" />
-            <button
-              type="button"
-              onClick={() => setSelectedSeg(null)}
-              aria-label={t("common.closeDetails")}
-              className="rounded-sm p-1 text-text-secondary hover:bg-surface-higher hover:text-text-primary"
-            >
+            <IconButton label={t("common.closeDetails")} size="sm" onClick={() => setSelectedSeg(null)}>
               <X size={14} aria-hidden />
-            </button>
+            </IconButton>
           </div>
           <ul className="mt-1.5 space-y-1.5">
             {segRows.map((r) => {
@@ -1128,15 +1103,15 @@ export function TextCoder({
                   {code?.memo && <span className="truncate text-xs text-text-secondary">{code.memo}</span>}
                   <span className="text-xs text-text-secondary">{r.date}</span>
                   <div className="flex-1" />
-                  <button
-                    type="button"
-                    onClick={() => deleteCoding(r)}
-                    aria-label={t("coder.removeFor", { name: code?.name ?? "code" })}
+                  <IconButton
+                    label={t("coder.removeFor", { name: code?.name ?? "code" })}
                     title={t("coder.removeThis")}
-                    className="rounded-sm p-1 text-text-secondary hover:bg-surface-higher hover:text-danger"
+                    size="sm"
+                    onClick={() => deleteCoding(r)}
+                    className="hover:text-danger"
                   >
                     <Trash2 size={14} aria-hidden />
-                  </button>
+                  </IconButton>
                 </li>
               );
             })}
@@ -1149,14 +1124,9 @@ export function TextCoder({
           <div className="flex items-center gap-2">
             <span className="text-xs font-medium text-text-secondary">{t("coder.annotationDetails")}</span>
             <div className="flex-1" />
-            <button
-              type="button"
-              onClick={() => setSelectedAnnSeg(null)}
-              aria-label={t("common.closeDetails")}
-              className="rounded-sm p-1 text-text-secondary hover:bg-surface-higher hover:text-text-primary"
-            >
+            <IconButton label={t("common.closeDetails")} size="sm" onClick={() => setSelectedAnnSeg(null)}>
               <X size={14} aria-hidden />
-            </button>
+            </IconButton>
           </div>
           <ul className="mt-1.5 space-y-1.5">
             {annRows.map((a) => {
@@ -1165,26 +1135,21 @@ export function TextCoder({
                 <li key={a.anid} className="rounded-sm border border-border bg-bg px-2 py-1.5 text-sm">
                   {editing ? (
                     <div className="flex items-start gap-1.5">
-                      <textarea
+                      <Textarea
                         value={editingAnnMemo.memo}
                         onChange={(e) => setEditingAnnMemo({ anid: a.anid, memo: e.target.value })}
-                        className="min-h-12 w-full resize-none rounded-sm border border-border bg-bg p-1.5 text-sm outline-none focus:border-accent"
+                        className="min-h-12 w-full resize-none p-1.5"
                       />
-                      <button
-                        type="button"
+                      <Button
+                        variant="primary"
+                        icon={<Check size={12} aria-hidden />}
                         onClick={() => updateAnnotationMemo(a.anid, editingAnnMemo.memo)}
-                        className="flex shrink-0 items-center gap-1 rounded-sm bg-accent px-2 py-1 text-xs font-medium text-[var(--qc-bg)] hover:bg-accent-hover"
                       >
-                        <Check size={12} aria-hidden />
                         {t("common.save")}
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setEditingAnnMemo(null)}
-                        className="shrink-0 rounded-sm border border-border bg-bg px-2 py-1 text-xs hover:bg-surface-higher"
-                      >
+                      </Button>
+                      <Button variant="secondary" onClick={() => setEditingAnnMemo(null)}>
                         {t("common.cancel")}
-                      </button>
+                      </Button>
                     </div>
                   ) : (
                     <div className="flex items-center gap-2">
@@ -1192,24 +1157,23 @@ export function TextCoder({
                         {a.memo || <span className="text-text-secondary">{t("coder.noMemoInline")}</span>}
                       </span>
                       <span className="text-xs text-text-secondary">{a.date}</span>
-                      <button
-                        type="button"
-                        onClick={() => setEditingAnnMemo({ anid: a.anid, memo: a.memo })}
-                        aria-label={t("coder.editAnnotationMemo")}
+                      <IconButton
+                        label={t("coder.editAnnotationMemo")}
                         title={t("common.editMemo")}
-                        className="rounded-sm p-1 text-text-secondary hover:bg-surface-higher hover:text-text-primary"
+                        size="sm"
+                        onClick={() => setEditingAnnMemo({ anid: a.anid, memo: a.memo })}
                       >
                         <Pencil size={14} aria-hidden />
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => deleteAnnotation(a)}
-                        aria-label={t("coder.deleteAnnotation")}
+                      </IconButton>
+                      <IconButton
+                        label={t("coder.deleteAnnotation")}
                         title={t("coder.deleteAnnotation")}
-                        className="rounded-sm p-1 text-text-secondary hover:bg-surface-higher hover:text-danger"
+                        size="sm"
+                        onClick={() => deleteAnnotation(a)}
+                        className="hover:text-danger"
                       >
                         <Trash2 size={14} aria-hidden />
-                      </button>
+                      </IconButton>
                     </div>
                   )}
                 </li>
@@ -1227,49 +1191,41 @@ export function TextCoder({
         >
           {annotateOpen ? (
             <div
-              className="w-72 rounded-md border border-border bg-surface p-2 shadow-lg"
+              className={`w-72 p-2 ${cls.popup}`}
               role="dialog"
               aria-modal="true"
               aria-label={t("coder.addAnnotation")}
             >
-              <textarea
+              <Textarea
                 autoFocus
                 value={annotateMemo}
                 onChange={(e) => setAnnotateMemo(e.target.value)}
                 placeholder={t("coder.annotationMemoPlaceholder")}
-                className="h-20 w-full resize-none rounded-sm border border-border bg-bg p-1.5 text-sm outline-none focus:border-accent"
+                className="h-20 w-full resize-none p-1.5"
               />
               <div className="mt-2 flex justify-end gap-1.5">
-                <button
-                  type="button"
-                  onClick={() => setAnnotateOpen(false)}
-                  className="rounded-sm border border-border bg-bg px-2 py-1 text-xs hover:bg-surface-higher"
-                >
+                <Button variant="secondary" onClick={() => setAnnotateOpen(false)}>
                   {t("common.cancel")}
-                </button>
-                <button
-                  type="button"
-                  onClick={saveAnnotation}
-                  className="flex items-center gap-1 rounded-sm bg-accent px-2 py-1 text-xs font-medium text-[var(--qc-bg)] hover:bg-accent-hover"
-                >
-                  <Check size={12} aria-hidden />
+                </Button>
+                <Button variant="primary" icon={<Check size={12} aria-hidden />} onClick={saveAnnotation}>
                   {t("common.save")}
-                </button>
+                </Button>
               </div>
             </div>
           ) : !editMode ? (
             <div
-              className="flex items-center gap-1 rounded-md border border-border bg-surface p-1 shadow-lg"
+              className={`flex items-center gap-1 p-1 ${cls.popup}`}
               role="toolbar"
               aria-label={t("coder.selectionActions")}
             >
-              <button
-                type="button"
+              <Button
+                variant="primary"
+                icon={<Code size={12} aria-hidden />}
+                className="max-w-56"
                 onClick={() => {
                   if (activeCodeId != null) codeSelection(activeCodeId);
                   else setPickerOpen(true);
                 }}
-                className="flex max-w-56 items-center gap-1 rounded-sm bg-accent px-2 py-1 text-xs font-medium text-[var(--qc-bg)] hover:bg-accent-hover"
                 title={
                   activeCodeId != null
                     ? t("coder.codeWithActive", {
@@ -1278,21 +1234,15 @@ export function TextCoder({
                     : t("coder.codeAction")
                 }
               >
-                <Code size={12} aria-hidden />
                 <span className="truncate">
                   {activeCodeId != null
                     ? codeById.get(activeCodeId)?.name ?? t("coder.codeAction")
                     : t("coder.codeAction")}
                 </span>
-              </button>
-              <button
-                type="button"
-                onClick={openAnnotate}
-                className="flex items-center gap-1 rounded-sm border border-border bg-bg px-2 py-1 text-xs hover:bg-surface-higher"
-              >
-                <StickyNote size={12} aria-hidden />
+              </Button>
+              <Button variant="secondary" icon={<StickyNote size={12} aria-hidden />} onClick={openAnnotate}>
                 {t("coder.annotate")}
-              </button>
+              </Button>
             </div>
           ) : null}
         </div>

@@ -3,7 +3,8 @@
  * the right coder based on media type / file extension.
  */
 import { lazy, Suspense, useEffect, useState } from "react";
-import { CircleAlert, LoaderCircle } from "lucide-react";
+import { CircleAlert } from "lucide-react";
+import { Button, LoadingState } from "@/components/ui/orchestrator";
 import { api, type Source } from "@/lib/api";
 import { isPdf } from "@/lib/media";
 import { useI18n } from "@/lib/i18n";
@@ -21,10 +22,7 @@ function LazyPdfCoder({ source }: { source: Source }) {
   return (
     <Suspense
       fallback={
-        <div className="flex h-full items-center justify-center gap-2 bg-bg text-text-secondary">
-          <LoaderCircle size={16} className="animate-spin" aria-hidden />
-          {t("pdfCoder.loadingViewer")}
-        </div>
+        <LoadingState>{t("pdfCoder.loadingViewer")}</LoadingState>
       }
     >
       <PdfCoder source={source} />
@@ -60,12 +58,7 @@ export function CodingWorkspace({ sourceId }: { sourceId: number }) {
   }, [sourceId, reloadTick, t]);
 
   if (loading) {
-    return (
-      <div className="flex h-full items-center justify-center gap-2 bg-bg text-text-secondary">
-        <LoaderCircle size={16} className="animate-spin" aria-hidden />
-        {t("coder.loading")}
-      </div>
-    );
+    return <LoadingState>{t("coder.loading")}</LoadingState>;
   }
 
   if (error) {
@@ -76,13 +69,9 @@ export function CodingWorkspace({ sourceId }: { sourceId: number }) {
             <CircleAlert size={16} aria-hidden />
             {error}
           </p>
-          <button
-            type="button"
-            onClick={() => setReloadTick((t) => t + 1)}
-            className="mt-3 rounded-sm border border-border bg-surface px-3 py-1.5 text-sm hover:bg-surface-higher"
-          >
+          <Button variant="secondary" className="mt-3" onClick={() => setReloadTick((t) => t + 1)}>
             {t("common.retry")}
-          </button>
+          </Button>
         </div>
       </div>
     );

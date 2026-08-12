@@ -111,10 +111,10 @@ async def test_transcribe_job_creates_transcript_source(client, tmp_path, monkey
 
     # The transcript lands in the media source's linked companion
     # ("clip.wav.txt"), which the AvCoder displays below the timeline.
+    # Transcript companions are hidden from the file list.
     sources = (await client.get("/api/v1/sources")).json()
-    transcript = next((s for s in sources if s["id"] == transcript_source_id), None)
-    assert transcript is not None
-    assert transcript["name"] == "clip.wav.txt"
+    assert not any(s["id"] == transcript_source_id for s in sources)
+    assert not any(s["name"] == "clip.wav.txt" for s in sources)
     detail = (await client.get(f"/api/v1/sources/{transcript_source_id}")).json()
     assert "hello world" in (detail["fulltext"] or "")
     # No orphaned second transcript source.

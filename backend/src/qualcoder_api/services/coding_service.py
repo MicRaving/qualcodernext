@@ -514,42 +514,46 @@ async def undo_codings(session: AsyncSession, items: list[dict]) -> int:
 
     Port of the legacy undo_stack insert (cid, fid, seltext, pos0, pos1,
     owner, memo, date, important). Rows that collide with the unique
-    constraint are skipped silently.
+    constraint are skipped without discarding the previously restored rows
+    (each insert runs in its own savepoint).
     """
     restored = 0
     from qualcoder_api.persistence.repositories import _capture, _rowdict
 
     for item in items:
         try:
-            await session.execute(
-                insert(tables.code_text).values(
-                    cid=item["cid"],
-                    fid=item["fid"],
-                    seltext=item["seltext"],
-                    pos0=item["pos0"],
-                    pos1=item["pos1"],
-                    owner=item["owner"],
-                    memo=item.get("memo", ""),
-                    date=item.get("date", _now()),
-                    important=item.get("important", 0),
-                )
-            )
-            await session.flush()
-            row = (
+            # A nested savepoint keeps one failing insert from rolling back
+            # the restores already flushed in this loop.
+            async with session.begin_nested():
                 await session.execute(
-                    select(tables.code_text).where(
-                        tables.code_text.c.cid == item["cid"],
-                        tables.code_text.c.fid == item["fid"],
-                        tables.code_text.c.pos0 == item["pos0"],
-                        tables.code_text.c.pos1 == item["pos1"],
-                        tables.code_text.c.owner == item["owner"],
+                    insert(tables.code_text).values(
+                        cid=item["cid"],
+                        fid=item["fid"],
+                        seltext=item["seltext"],
+                        pos0=item["pos0"],
+                        pos1=item["pos1"],
+                        owner=item["owner"],
+                        memo=item.get("memo", ""),
+                        date=item.get("date", _now()),
+                        important=item.get("important", 0),
                     )
                 )
-            ).first()
-            if row is not None:
-                await _capture(session, "code_text", "insert", "ctid", row.ctid, _rowdict(row))
-            restored += 1
+                await session.flush()
+                row = (
+                    await session.execute(
+                        select(tables.code_text).where(
+                            tables.code_text.c.cid == item["cid"],
+                            tables.code_text.c.fid == item["fid"],
+                            tables.code_text.c.pos0 == item["pos0"],
+                            tables.code_text.c.pos1 == item["pos1"],
+                            tables.code_text.c.owner == item["owner"],
+                        )
+                    )
+                ).first()
+                if row is not None:
+                    await _capture(session, "code_text", "insert", "ctid", row.ctid, _rowdict(row))
+                restored += 1
         except IntegrityError:
-            await session.rollback()
+            continue
     await session.commit()
     return restored

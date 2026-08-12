@@ -149,7 +149,7 @@ async function ensureProjectOpen(page: Page) {
     try {
       await expect(recent).toBeVisible({ timeout: 5_000 });
       await recent.click();
-      await expect(closeBtn).toBeVisible({ timeout: 30_000 });
+      await expect(closeBtn).toBeEnabled({ timeout: 30_000 });
       return;
     } catch {
       /* reload and retry once more */
@@ -164,7 +164,7 @@ async function ensureProjectOpen(page: Page) {
  * rows — target the audio row by its accessible name instead.
  */
 function toneAudioRow(page: Page) {
-  return page.getByRole("row", { name: /^tone\.wav Audio/ });
+  return page.getByRole("row", { name: /tone\.wav Audio/ });
 }
 
 /** Files view → open tone.wav in the AV coder. */
@@ -246,7 +246,7 @@ test("code a segment via the timeline and verify it appears", async ({ page }) =
 
   // The new segment renders as an overlay on the timeline; its tooltip title
   // is "AvCode · m:ss – m:ss".
-  const segment = page.locator('[title*="AvCode"]');
+  const segment = timeline.locator('[title*="AvCode"]');
   await expect(segment).toBeVisible({ timeout: 10_000 });
 });
 
@@ -258,7 +258,8 @@ test("seek via segment click and delete the segment", async ({ page }) => {
 
   // The coded segment persisted; click it (as a user would) to select it —
   // the details panel shows the code name, the mono time range, and Delete.
-  const segment = page.locator('[title*="AvCode"]');
+  const timeline = page.getByRole("slider", { name: "Timeline" });
+  const segment = timeline.locator('[title*="AvCode"]');
   await expect(segment).toBeVisible({ timeout: 20_000 });
   await segment.click();
 
@@ -266,7 +267,7 @@ test("seek via segment click and delete the segment", async ({ page }) => {
     timeout: 10_000,
   });
   await expect(page.getByText(/0:0\d – 0:0\d/)).toBeVisible({ timeout: 10_000 });
-  const deleteBtn = page.getByRole("button", { name: "Delete" });
+  const deleteBtn = page.getByRole("button", { name: "Delete", exact: true });
   await expect(deleteBtn).toBeVisible();
 
   // Deletion asks via window.confirm; accept it.
@@ -275,7 +276,7 @@ test("seek via segment click and delete the segment", async ({ page }) => {
 
   // The segment disappears from the timeline and the details panel closes.
   await expect(segment).toHaveCount(0, { timeout: 10_000 });
-  await expect(page.getByRole("button", { name: "Delete" })).toBeHidden({
+  await expect(page.getByRole("button", { name: "Delete", exact: true })).toBeHidden({
     timeout: 10_000,
   });
 });
@@ -294,15 +295,14 @@ test("transcribe audio with whisper and open the transcript", async ({ page }) =
   await page.setInputFiles("input[type=file]", [SPEECH_WAV]);
   // The importer also creates an empty "speech.wav.txt" transcript
   // companion — target the exact media row.
-  const row = page.getByRole("row", { name: /^speech\.wav\s/ });
+  const row = page.getByRole("row", { name: /speech\.wav\s/ });
   await expect(row).toBeVisible({ timeout: 20_000 });
   await row.click();
 
-  // Open the transcription dialog (Transcribe menu -> Transcribe) and start
+  // Open the transcription dialog (one Transcribe button, tabbed) and start
   // with the tiny model (cached in ~/.qualcoder/models/whisper by the earlier
   // manual smoke run; first use downloads it, which the timeout covers).
   await page.getByRole("button", { name: "Transcribe", exact: true }).click();
-  await page.getByRole("button", { name: "Transcribe…", exact: true }).click();
   const dialog = page.getByRole("dialog", { name: "Transcribe audio/video" });
   await expect(dialog).toBeVisible({ timeout: 10_000 });
   await dialog

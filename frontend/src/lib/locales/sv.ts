@@ -149,8 +149,6 @@ export const sv: Record<string, string> = {
   "analyze.titleReferences": "Källor",
   "analyze.pickCode": "Kod",
   "analyze.copyCodebook": "Kopiera till urklipp",
-  "analyze.importCodebook": "Importera kodbok",
-  "analyze.deleteReference": "Ta bort referens",
   "graphs.title": "Grafer",
   "graphs.newGraph": "Ny graf",
   "graphs.models": "Modeller…",

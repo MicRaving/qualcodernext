@@ -13,16 +13,13 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from qualcoder_api.api.v1.deps import DbDep, ServiceDep
-from qualcoder_api.services import audit
 from qualcoder_api.services.transcription import (
     TRANSCRIPTION_DEFAULTS,
     get_job,
     get_status,
     mark_job_consumed,
-    segments_to_text,
     start_job,
 )
-from qualcoder_api.services.user_settings import get_codername
 
 router = APIRouter(prefix="/transcribe", tags=["transcribe"])
 
@@ -76,6 +73,8 @@ async def transcribe(req: TranscribeRequest, svc: ServiceDep, db: DbDep) -> dict
     from sqlalchemy import select
 
     from qualcoder_api.persistence import tables
+    from qualcoder_api.services import audit
+    from qualcoder_api.services.user_settings import get_codername, get_transcription_settings
 
     if svc.project_path == "":
         raise HTTPException(status_code=409, detail="no project is open")
@@ -85,15 +84,22 @@ async def transcribe(req: TranscribeRequest, svc: ServiceDep, db: DbDep) -> dict
     if row is None:
         raise HTTPException(status_code=404, detail="source not found")
     mediapath = row.mediapath or ""
-    if not mediapath.startswith(("/audio/", "/video/")):
+    if mediapath.startswith(("/audio/", "/video/")):
+        source_path = os.path.join(svc.project_path, mediapath.lstrip("/"))
+    elif mediapath.startswith(("audio:", "video:")):
+        # Linked (external) source: the path is stored verbatim.
+        source_path = mediapath.split(":", 1)[1]
+    else:
         raise HTTPException(status_code=422, detail="source is not audio/video")
-    source_path = os.path.join(svc.project_path, mediapath.lstrip("/"))
     if not os.path.exists(source_path):
         raise HTTPException(status_code=404, detail="media file missing on disk")
 
+    # Request fields override the saved transcription settings, which in
+    # turn override the built-in defaults.
+    saved = get_transcription_settings()
     options = {
-        "engine": req.engine,
-        "model": req.model or TRANSCRIPTION_DEFAULTS["model"],
+        "engine": req.engine or saved.get("engine") or TRANSCRIPTION_DEFAULTS["engine"],
+        "model": req.model or saved.get("model") or TRANSCRIPTION_DEFAULTS["model"],
         "language": req.language,
         "translate": req.translate,
         "beam_size": req.beam_size,
@@ -109,8 +115,14 @@ async def transcribe(req: TranscribeRequest, svc: ServiceDep, db: DbDep) -> dict
         "timestamps": req.timestamps,
         "segment_coding": req.segment_coding,
         "segment_cid": req.segment_cid,
+        "project_path": svc.project_path,
     }
     job_id = start_job(source_path=source_path, options=options, meta=meta)
+    await audit.record(
+        db, user=get_codername(), action="transcribe.start", entity="source",
+        source_id=req.source_id, entity_id=req.source_id,
+        detail={"job_id": job_id, "model": options["model"], "engine": options["engine"]},
+    )
     return {"job_id": job_id}
 
 
@@ -122,126 +134,35 @@ async def job(job_id: str, svc: ServiceDep) -> dict:
     job_data = get_job(job_id)
     if job_data is None:
         raise HTTPException(status_code=404, detail="job not found")
-    if job_data.get("state") != "done" or job_data.get("consumed"):
+    if job_data.get("state") != "done":
         return job_data
+    # Reserve the job atomically: concurrent polls (or a poll racing the
+    # project-open sweep) must not both finalize the same transcript.
+    from qualcoder_api.services.transcription import claim_finished_job
 
-    from qualcoder_api.persistence.repositories import CodingRepository
-    from qualcoder_api.services.import_service import ImportService
+    if not claim_finished_job(job_id):
+        return get_job(job_id) or job_data
 
-    segments = job_data.get("result") or []
-    source_id = None
-    if segments and svc.session_factory is not None:
-        factory = svc.session_factory
-        transcript = segments_to_text(segments, timestamps=job_data.get("timestamps", True))
-        media_source_id = job_data.get("source_id")
-        tmp_txt = os.path.join(svc.project_path, f"_transcript_{job_id}.txt")
-        with open(tmp_txt, "w", encoding="utf-8") as f:  # noqa: ASYNC230 - small local write
-            f.write(transcript)
-        try:
-            importer = ImportService(svc.project_path, svc.session_factory)
-            source = await importer.import_file(
-                tmp_txt,
-                owner=get_codername(),
-                link=False,
-                filename=job_data.get("transcript_name", "transcript.txt"),
-            )
-        finally:
-            with contextlib.suppress(OSError):
-                os.remove(tmp_txt)
-        if source is not None:
-            source_id = source.id
-            # Link the transcript to the media source (the video view shows
-            # it; the importer already created an empty companion for most
-            # AV files — prefer that one over a second source).
-            from qualcoder_api.persistence.repositories import _capture, _rowdict
+    from qualcoder_api.services.transcription import finalize_transcript
 
-            async with factory() as session:
-                from sqlalchemy import delete, select, update
+    try:
+        source_id = await finalize_transcript(
+            job_data=job_data,
+            project_path=svc.project_path,
+            session_factory=svc.session_factory,
+        )
+    except Exception:
+        # Let a later poll retry finalization instead of losing the job.
+        from qualcoder_api.services.transcription import _set_job
 
-                from qualcoder_api.persistence import tables
-
-                media_row = (
-                    await session.execute(
-                        select(tables.source).where(tables.source.c.id == media_source_id)
-                    )
-                ).first()
-                # The companion may have been deleted since it was linked
-                # (deleting a transcript source used to leave a stale
-                # av_text_id behind) — only fold into it when it still
-                # exists, otherwise link the fresh transcript source.
-                companion_id = media_row.av_text_id if media_row is not None else None
-                companion_row = None
-                if companion_id is not None:
-                    companion_row = (
-                        await session.execute(
-                            select(tables.source).where(tables.source.c.id == companion_id)
-                        )
-                    ).first()
-                if companion_row is not None:
-                    # Fold the transcript into the linked companion instead of
-                    # leaving a second, orphaned source behind.
-                    await session.execute(
-                        update(tables.source)
-                        .where(tables.source.c.id == companion_id)
-                        .values(fulltext=transcript)
-                    )
-                    await _capture(
-                        session, "source", "update", "id", companion_id,
-                        _rowdict(companion_row),
-                    )
-                    dup_row = (
-                        await session.execute(
-                            select(tables.source).where(tables.source.c.id == source_id)
-                        )
-                    ).first()
-                    await session.execute(
-                        update(tables.source)
-                        .where(tables.source.c.id == source_id)
-                        .values(fulltext="")
-                    )
-                    await session.execute(
-                        delete(tables.source).where(tables.source.c.id == source_id)
-                    )
-                    if dup_row is not None:
-                        await _capture(
-                            session, "source", "delete", "id", int(source_id), _rowdict(dup_row)
-                        )
-                    await session.commit()
-                    source_id = companion_id
-                else:
-                    await session.execute(
-                        update(tables.source)
-                        .where(tables.source.c.id == media_source_id)
-                        .values(av_text_id=source_id)
-                    )
-                    media_after = (
-                        await session.execute(
-                            select(tables.source).where(tables.source.c.id == media_source_id)
-                        )
-                    ).first()
-                    if media_after is not None:
-                        await _capture(
-                            session, "source", "update", "id", media_source_id,
-                            _rowdict(media_after),
-                        )
-                    await session.commit()
-            async with factory() as session:
-                await audit.record(
-                    session, user=get_codername(), action="source.import", entity="source",
-                    entity_id=source_id,
-                    detail={"name": "transcript", "transcription": True},
-                )
-            if job_data.get("segment_coding") and job_data.get("segment_cid") is not None:
-                async with factory() as session:
-                    repo = CodingRepository(session)
-                    for seg in segments:
-                        await repo.add_av_coding(
-                            id=int(media_source_id or 0),
-                            pos0=int(seg["start"] * 1000),
-                            pos1=int(seg["end"] * 1000),
-                            cid=job_data["segment_cid"],
-                            owner=get_codername(),
-                        )
+        _set_job(job_id, consumed=False)
+        raise
+    # The worker already persisted the transcript sidecar; it is finalized
+    # here, so remove the leftovers.
+    pending_dir = os.path.join(svc.project_path, "_transcripts")
+    for name in (f"{job_id}.json", f"{job_id}.txt"):
+        with contextlib.suppress(OSError):
+            os.remove(os.path.join(pending_dir, name))
 
     mark_job_consumed(job_id, source_id)
     result = get_job(job_id)

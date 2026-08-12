@@ -40,7 +40,14 @@ import {
 import { codeTint } from "@/features/coding/tint";
 import { cn } from "@/lib/utils";
 import { useI18n } from "@/lib/i18n";
-import { ViewBackButton } from "@/components/shell/ViewBackButton";
+import {
+  Button,
+  ErrorBanner,
+  IconButton,
+  Input,
+  LoadingState,
+  ViewHeader,
+} from "@/components/ui/orchestrator";
 import { useProjectStore } from "@/stores/project";
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
@@ -58,6 +65,7 @@ interface PageSize {
 export function PdfCoder({ source }: { source: Source }) {
   const { t } = useI18n();
   const activeCodeId = useProjectStore((s) => s.activeCodeId);
+  const hiddenCodes = useProjectStore((s) => s.hiddenCodes);
 
   const [plainText, setPlainText] = useState(false);
   const [codings, setCodings] = useState<ImageCoding[]>([]);
@@ -454,10 +462,6 @@ export function PdfCoder({ source }: { source: Source }) {
 
   /* ------------------------------------------------------------ rendering */
 
-  const toolbarBtn =
-    "flex h-7 items-center gap-1 rounded-sm border border-border bg-bg px-2 text-xs hover:bg-surface-higher";
-  const toolbarBtnActive = "border-accent text-accent";
-
   if (plainText) {
     return (
       <TextCoder
@@ -469,12 +473,7 @@ export function PdfCoder({ source }: { source: Source }) {
   }
 
   if (loading) {
-    return (
-      <div className="flex h-full items-center justify-center gap-2 bg-bg text-text-secondary">
-        <LoaderCircle size={16} className="animate-spin" aria-hidden />
-        {t("pdfCoder.loading")}
-      </div>
-    );
+    return <LoadingState>{t("pdfCoder.loading")}</LoadingState>;
   }
 
   if (loadError) {
@@ -485,13 +484,9 @@ export function PdfCoder({ source }: { source: Source }) {
             <CircleAlert size={16} aria-hidden />
             {loadError}
           </p>
-          <button
-            type="button"
-            onClick={() => setReloadTick((t) => t + 1)}
-            className="mt-3 rounded-sm border border-border bg-surface px-3 py-1.5 text-sm hover:bg-surface-higher"
-          >
+          <Button variant="secondary" className="mt-3" onClick={() => setReloadTick((t) => t + 1)}>
             {t("common.retry")}
-          </button>
+          </Button>
         </div>
       </div>
     );
@@ -505,130 +500,105 @@ export function PdfCoder({ source }: { source: Source }) {
             <CircleAlert size={16} aria-hidden />
             {pdfError}
           </p>
-          <button
-            type="button"
-            onClick={() => setPdfReloadTick((t) => t + 1)}
-            className="mt-3 rounded-sm border border-border bg-surface px-3 py-1.5 text-sm hover:bg-surface-higher"
-          >
+          <Button variant="secondary" className="mt-3" onClick={() => setPdfReloadTick((t) => t + 1)}>
             {t("common.retry")}
-          </button>
+          </Button>
         </div>
       </div>
     );
   }
 
   if (!pdf) {
-    return (
-      <div className="flex h-full items-center justify-center gap-2 bg-bg text-text-secondary">
-        <LoaderCircle size={16} className="animate-spin" aria-hidden />
-        {t("pdfCoder.loadingDocument")}
-      </div>
-    );
+    return <LoadingState>{t("pdfCoder.loadingDocument")}</LoadingState>;
   }
 
   return (
     <div className="flex h-full flex-col bg-bg">
-      <header className="flex min-h-10 shrink-0 flex-wrap items-center gap-1 border-b border-border bg-surface px-3 py-1">
-        <ViewBackButton />
-        <span className="max-w-48 truncate font-medium">{source.name}</span>
-        {source.memo && <span className="max-w-48 truncate text-xs text-text-secondary">{source.memo}</span>}
-        <div className="flex-1" />
-        <span className="hidden text-xs text-text-secondary lg:inline">
-          {t("pdfCoder.dragHint")}
-        </span>
-
-        <div className="flex flex-wrap items-center gap-1">
-        <button
-          type="button"
-          onClick={() => setZoom("fit")}
-          className={cn(toolbarBtn, zoom === "fit" && toolbarBtnActive)}
-        >
-          {t("pdfCoder.fitWidth")}
-        </button>
-        {([0.5, 0.75, 1, 1.5] as const).map((z) => (
-          <button
-            key={z}
-            type="button"
-            onClick={() => setZoom(z)}
-            className={cn(toolbarBtn, zoom === z && toolbarBtnActive)}
-          >
-            {Math.round(z * 100)}%
-          </button>
-        ))}
-
-        {!continuous && (
+      <ViewHeader
+        wrap
+        title={source.name}
+        meta={source.memo}
+        actions={
           <>
-            <div className="mx-1 h-4 w-px bg-border" aria-hidden />
-            <button
-              type="button"
-              onClick={() => setCurrentPage((p) => clampPage(p - 1))}
-              disabled={currentPage <= 1}
-              aria-label={t("pdfCoder.prevPage")}
-              title={t("pdfCoder.prevPage")}
-              className={cn(toolbarBtn, "disabled:opacity-40")}
-            >
-              <ChevronLeft size={14} aria-hidden />
-            </button>
-            <input
-              type="number"
-              value={currentPage}
-              min={1}
-              max={numPages}
-              onChange={onPageInputChange}
-              aria-label={t("pdfCoder.jumpToPage")}
-              className="h-7 w-14 rounded-sm border border-border bg-bg px-1 text-center text-xs outline-none focus:border-accent"
-            />
-            <span className="text-xs text-text-secondary">/ {numPages}</span>
-            <button
-              type="button"
-              onClick={() => setCurrentPage((p) => clampPage(p + 1))}
-              disabled={currentPage >= numPages}
-              aria-label={t("pdfCoder.nextPage")}
-              title={t("pdfCoder.nextPage")}
-              className={cn(toolbarBtn, "disabled:opacity-40")}
-            >
-              <ChevronRight size={14} aria-hidden />
-            </button>
+            <div className="flex flex-wrap items-center gap-1">
+              <Button
+                variant="secondary"
+                className={cn("h-7", zoom === "fit" && "border-accent text-accent")}
+                onClick={() => setZoom("fit")}
+              >
+                {t("pdfCoder.fitWidth")}
+              </Button>
+              {([0.5, 0.75, 1, 1.5] as const).map((z) => (
+                <Button
+                  key={z}
+                  variant="secondary"
+                  className={cn("h-7", zoom === z && "border-accent text-accent")}
+                  onClick={() => setZoom(z)}
+                >
+                  {Math.round(z * 100)}%
+                </Button>
+              ))}
+
+              {!continuous && (
+                <>
+                  <div className="mx-1 h-4 w-px bg-border" aria-hidden />
+                  <Button
+                    variant="secondary"
+                    className="h-7"
+                    onClick={() => setCurrentPage((p) => clampPage(p - 1))}
+                    disabled={currentPage <= 1}
+                    aria-label={t("pdfCoder.prevPage")}
+                    title={t("pdfCoder.prevPage")}
+                    icon={<ChevronLeft size={14} aria-hidden />}
+                  />
+                  <Input
+                    type="number"
+                    value={currentPage}
+                    min={1}
+                    max={numPages}
+                    onChange={onPageInputChange}
+                    aria-label={t("pdfCoder.jumpToPage")}
+                    className="w-14 text-center"
+                  />
+                  <span className="text-xs text-text-secondary">/ {numPages}</span>
+                  <Button
+                    variant="secondary"
+                    className="h-7"
+                    onClick={() => setCurrentPage((p) => clampPage(p + 1))}
+                    disabled={currentPage >= numPages}
+                    aria-label={t("pdfCoder.nextPage")}
+                    title={t("pdfCoder.nextPage")}
+                    icon={<ChevronRight size={14} aria-hidden />}
+                  />
+                </>
+              )}
+
+              <div className="mx-1 h-4 w-px bg-border" aria-hidden />
+              <Button
+                variant="secondary"
+                className={cn("h-7", continuous && "border-accent text-accent")}
+                onClick={() => setContinuous((c) => !c)}
+                icon={<Rows3 size={12} aria-hidden />}
+              >
+                {t("pdfCoder.continuous")}
+              </Button>
+
+              <div className="mx-1 h-4 w-px bg-border" aria-hidden />
+              <Button
+                variant="secondary"
+                className="h-7 font-medium"
+                onClick={() => setPlainText(true)}
+                title={t("pdfCoder.plainTextHint")}
+                icon={<FileText size={12} aria-hidden />}
+              >
+                {t("pdfCoder.plainText")}
+              </Button>
+            </div>
           </>
-        )}
+        }
+      />
 
-        <div className="mx-1 h-4 w-px bg-border" aria-hidden />
-        <button
-          type="button"
-          onClick={() => setContinuous((c) => !c)}
-          className={cn(toolbarBtn, continuous && toolbarBtnActive)}
-        >
-          <Rows3 size={12} aria-hidden />
-          {t("pdfCoder.continuous")}
-        </button>
-
-        <div className="mx-1 h-4 w-px bg-border" aria-hidden />
-        <button
-          type="button"
-          onClick={() => setPlainText(true)}
-          className={cn(toolbarBtn, "font-medium")}
-          title={t("pdfCoder.plainTextHint")}
-        >
-          <FileText size={12} aria-hidden />
-          {t("pdfCoder.plainText")}
-        </button>
-        </div>
-      </header>
-
-      {errMsg && (
-        <div className="flex shrink-0 items-center gap-2 border-b border-danger bg-danger/10 px-3 py-1.5 text-sm text-danger">
-          <CircleAlert size={14} aria-hidden />
-          <span className="min-w-0 flex-1 truncate">{errMsg}</span>
-          <button
-            type="button"
-            onClick={() => setErrMsg(null)}
-            aria-label={t("common.dismiss")}
-            className="rounded-sm p-0.5 hover:bg-surface-higher"
-          >
-            <X size={14} aria-hidden />
-          </button>
-        </div>
-      )}
+      {errMsg && <ErrorBanner onClose={() => setErrMsg(null)}>{errMsg}</ErrorBanner>}
 
       <div ref={containerRef} className="min-h-0 flex-1 overflow-y-auto bg-bg">
         <div className="mx-auto flex w-max min-w-full flex-col items-center gap-4 p-6">
@@ -652,7 +622,8 @@ export function PdfCoder({ source }: { source: Source }) {
                   <div
                     key={o.key}
                     className={cn(
-                      "absolute cursor-pointer",
+                      "absolute cursor-pointer qc-seg",
+                      hiddenCodes.includes(o.coding.cid) && "qc-seg-hidden",
                       selectedImid === o.key && "outline outline-2 outline-accent",
                     )}
                     style={{
@@ -690,14 +661,13 @@ export function PdfCoder({ source }: { source: Source }) {
           <div className="flex items-center gap-2">
             <span className="text-xs font-medium text-text-secondary">{t("coder.codingDetails")}</span>
             <div className="flex-1" />
-            <button
-              type="button"
+            <IconButton
+              label={t("common.closeDetails")}
+              size="sm"
               onClick={() => setSelectedImid(null)}
-              aria-label={t("common.closeDetails")}
-              className="rounded-sm p-1 text-text-secondary hover:bg-surface-higher hover:text-text-primary"
             >
               <X size={14} aria-hidden />
-            </button>
+            </IconButton>
           </div>
           <ul className="mt-1.5 space-y-1.5">
             <li className="flex items-center gap-2 rounded-sm border border-border bg-bg px-2 py-1.5 text-sm">
@@ -721,24 +691,23 @@ export function PdfCoder({ source }: { source: Source }) {
                 })}
               </span>
               <div className="flex-1" />
-              <button
-                type="button"
-                onClick={() => editRegion(selectedCoding)}
-                aria-label={t("pdfCoder.editRegion")}
+              <IconButton
+                label={t("pdfCoder.editRegion")}
                 title={t("pdfCoder.editRegion")}
-                className="rounded-sm p-1 text-text-secondary hover:bg-surface-higher hover:text-text-primary"
+                size="sm"
+                onClick={() => editRegion(selectedCoding)}
               >
                 <Pencil size={14} aria-hidden />
-              </button>
-              <button
-                type="button"
-                onClick={() => deleteCoding(selectedCoding)}
-                aria-label={t("coder.removeThis")}
+              </IconButton>
+              <IconButton
+                label={t("coder.removeThis")}
                 title={t("coder.removeThis")}
-                className="rounded-sm p-1 text-text-secondary hover:bg-surface-higher hover:text-danger"
+                size="sm"
+                onClick={() => deleteCoding(selectedCoding)}
+                className="hover:text-danger"
               >
                 <Trash2 size={14} aria-hidden />
-              </button>
+              </IconButton>
             </li>
           </ul>
         </div>

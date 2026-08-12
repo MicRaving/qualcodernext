@@ -154,7 +154,6 @@ export const fr: Record<string, string> = {
   "analyze.titleReferences": "Références",
   "analyze.pickCode": "Codeur·se :",
   "analyze.copyCodebook": "Copier dans le presse-papier",
-  "analyze.importCodebook": "Importer une grille de codage",
   "interchange.formatZotero": "Zotero",
   "graphs.title": "Graphes",
   "graphs.newGraph": "Nouveau graphe",

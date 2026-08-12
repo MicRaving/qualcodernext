@@ -149,8 +149,6 @@ export const ja: Record<string, string> = {
   "analyze.titleReferences": "参考文献",
   "analyze.pickCode": "コード",
   "analyze.copyCodebook": "クリップボードにコピー",
-  "analyze.importCodebook": "コードブックのインポート",
-  "analyze.deleteReference": "参照を削除",
   "graphs.title": "グラフ",
   "graphs.newGraph": "新しいグラフ",
   "graphs.models": "モデル…",

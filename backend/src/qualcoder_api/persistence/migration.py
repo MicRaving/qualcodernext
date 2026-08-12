@@ -272,13 +272,36 @@ class MigrationChain:
         )
 
     async def run_all(self, app_version: str, codername: str) -> list[str]:
-        """Run the full legacy chain v2-v18 (v15 = audit_log, v16-v18 rework extensions)."""
+        """Run the full legacy chain v2-v19 plus the v20 index step."""
         applied = await self.migrate_v2_to_v5(app_version, codername)
         applied += await self.migrate_v6_to_v14(app_version)
         applied += await self.migrate_v15()
         applied += await self.migrate_v16_to_v18(app_version)
         applied += await self.migrate_v19(app_version)
+        applied += await self.migrate_v20()
         return applied
+
+    async def migrate_v20(self) -> list[str]:
+        """v20: hot-path indexes (only reports work when something was
+        actually created, so a fully indexed database gets no v20 tag)."""
+        if self.conn is None:
+            return []
+        cur = await self.conn.cursor()
+        from qualcoder_api.persistence.schema import _INDEX_SQL
+
+        created = 0
+        for sql in _INDEX_SQL:
+            # "CREATE INDEX IF NOT EXISTS <name> ON ..." — probe sqlite_master
+            # (rowcount is unreliable for DDL). The name is token 5.
+            index_name = sql.split()[5]
+            await cur.execute(
+                "SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = ?", (index_name,)
+            )
+            if await cur.fetchone() is None:
+                await cur.execute(sql)
+                created += 1
+        await self.conn.commit()
+        return ["v20"] if created else []
 
     async def migrate_v19(self, app_version: str) -> list[str]:
         """v19: sync_log — the change journal used by the collaboration sync

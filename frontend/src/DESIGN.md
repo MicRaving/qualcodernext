@@ -15,15 +15,32 @@ design classes:
 - `Button` — variants `primary` / `primaryCompact` / `secondary` / `danger`
   with an optional `icon` prop.
 - `IconButton` — ghost icon button; `label` (aria-label) and `title` are
-  REQUIRED props.
+  REQUIRED props; `size` is `sm` (p-0.5, toolbar/menu), `md` (p-1.5, bars)
+  or `row` (p-1, list rows).
 - `ViewHeader` — the center-view header (`h-10`): back button + `title` +
-  optional `meta` + `actions` on the right.
-- `BarHeader` — the compact left/right bar header (`h-5`, half of the
-  center bar): `title` + `count` badge + `actions`.
-- `CountBadge`, `SectionLabel`, `Card`, `ErrorBanner`, `LoadingState`,
-  `EmptyState`.
+  optional `meta` + `actions` on the right. `wrap` lets the row flow to a
+  second line (coder headers); `back` can be `false` or a custom handler.
+- `BarHeader` — the left/right bar header (h-10, same height as the center
+  header): `title` + `count` badge + `actions`. Never part of the scrollable
+  area — it sits in `LeftBar`'s `header` slot.
+- `LeftBar` — the uniform left/right bar shell: fixed `header` + a
+  `qc-scroll` scrollable body; `width` `sm` (w-64) / `md` (w-72),
+  `borderSide` `r` / `l`.
+- `Input`, `Select`, `Textarea`, `Field` — form controls built on the
+  `cls.input` / `cls.select` / `cls.textarea` tokens; `Field` renders the
+  label above its control.
+- `Modal` — the uniform dialog: overlay + panel (+ optional header with
+  close X). Handles Escape + backdrop dismissal itself; `closeDisabled`
+  keeps the X inert while a form is busy; `size` sm/md/lg/xl.
+- `Menu` / `MenuItem` — popover dropdowns (absolute under a trigger, or
+  `position="fixed"` for right-click context menus).
+- `TableHead` — the uniform table header cell (uppercase, tracking-wide).
+- `CountBadge`, `SectionLabel`, `Card`, `ErrorBanner` (tone
+  `danger`/`warning`/`success`), `LoadingState`, `EmptyState`.
 
-Style strings live in `frontend/src/components/ui/tokens.ts` (`cls`).
+Style strings live in `frontend/src/components/ui/tokens.ts` (`cls`);
+additional layout tokens there include `popup` (floating panels),
+`row` (list rows), `modal*`, `menu*`, `fieldLabel`, `ghostRow`.
 If a part is missing, add it to the orchestrator — never inline new
 structural classes in a view.
 
@@ -68,19 +85,21 @@ engine. Views never lay themselves out; they fill slots:
 
 ### Left-bar header (all list left bars)
 
-Every left bar starts with a compact header (via `BarHeader`, h-5 — HALF
-the height of the center bar):
+Every left bar is a `LeftBar` whose fixed header (via `BarHeader`, h-10 —
+same height as the center header) sits outside the scrollable area:
 
 ```
-[h-5, border-b border-border, px-2, flex items-center gap-1]
-[ title (h1, text-xs font-semibold) ] [ count badge ] ... [ actions ]
+[h-10, border-b border-border, px-3, flex items-center gap-2]
+[ title (h1, text-sm font-semibold) ] [ count badge ] ... [ actions ]
 ```
 
 - Count badge: `CountBadge` — `rounded-sm bg-surface-higher px-1 py-px text-[10px] font-medium text-text-secondary`.
 - Right-side actions: yellow/accent add or import buttons (`Button
   variant="primaryCompact"`) and ghost icons (`IconButton size="sm"`).
 - List rows below: `border-b border-border`, selected row `bg-accent/10`.
-- Left-bar menus (dropdowns) open below the header: `absolute left-0 top-full z-50 mt-1 rounded-md border border-border bg-surface py-1 shadow-lg`.
+- Left-bar menus (dropdowns) open below the header: `Menu` — `absolute
+  left-0 top-full z-50 mt-1 rounded-md border border-border bg-surface
+  py-1 shadow-lg`.
 
 ### Center-view header (all views)
 
@@ -115,11 +134,12 @@ View-global toolbars (e.g. Graphs) are passed to the orchestrator's
 
 ### Rules
 
-- Every icon-only button MUST have `aria-label` + `title`.
+- Every icon-only button MUST have `aria-label` + `title` (use `IconButton`;
+  its `size` is `sm` p-0.5, `md` p-1.5, `row` p-1).
 - Decorative icons MUST have `aria-hidden`.
 - Disabled: `disabled:opacity-50` (buttons) / `disabled:opacity-40` (rows).
 - Buttons never use shadows; radius is always `rounded-sm` (except cards/panels `rounded-lg`).
-- Row-level inline icon buttons: `rounded-sm p-1 text-text-secondary hover:bg-surface-higher` (size 13–14 icons).
+- Row-level inline icon buttons: `IconButton size="row"` — `rounded-sm p-1 text-text-secondary hover:bg-surface-higher` (size 13–14 icons).
 
 ---
 
@@ -202,36 +222,53 @@ With a project open:
 
 | View | Center header (ViewHeader) | Notes |
 |---|---|---|
-| coding (Text/PDF/Image/AV) | back + file name + coder controls | controls wrap to a second row (`flex-wrap` allowed) |
+| coding (Text/PDF/Image/AV) | back + file name + coder controls | controls wrap to a second row (`wrap` prop on ViewHeader) |
 | files | back + "Files" + count + search/filters/import | |
 | dashboard | back + project name + version + openers | |
 | cases | back + case name | details pane |
 | notes | back + type name | editor pane |
-| analyze | back + "Analysis" + report title + "Back to reports" | |
-| graphs | back + "Graphs" + picker/actions | in the menuBar slot |
+| analyze | back + "Analysis" + report title | the reports left bar is the navigation |
+| graphs | back + "Graphs" + picker/actions | the function bar renders as the FIRST row of the center (like a ViewHeader function bar) |
 | history / ai / settings | back + title + actions | |
 
 ## 8. Left bars per view (registry)
 
 | View | Left bar | Width | Header (BarHeader) |
 |---|---|---|---|
-| coding | Sidebar — code tree (namespace-aware, depth ≤ 64) | w-64 | "Codes" + count + yellow Code/Category |
-| files, dashboard, analyze, graphs, history, ai, settings | Sidebar — file groups | w-64 | "Files" + count |
+| coding | Sidebar — code tree (namespace-aware, depth ≤ 64) | w-72 | "Codes" + count + annotation + yellow Code/Category |
+| files, dashboard, graphs | Sidebar — file groups | w-72 | "Files" + count + yellow Import |
+| analyze | ReportsList — the six merged report screens + Tools group | w-72 | "Reports" + count + refresh |
+| history, ai, settings | — (right-bar panes) | — | — |
 | cases | CasesList | w-72 | "Cases" + count + refresh + yellow Add |
-| notes | NotesList (type dropdown + per-type list) | w-72 | "Notes" + type dropdown + count + actions |
+| notes | NotesList (type dropdown + per-type list) | w-72 | "Notes" + count + type dropdown + actions |
 
+- Every left bar is a `LeftBar` (fixed header + `qc-scroll` body); **all left
+  bars share the w-72 width**, and header buttons use the same heights as the
+  center header (`Button` / `IconButton` — never `primaryCompact`/`sm`).
+- Sidebar rows have a search field below the header (matches file names or
+  code/category names; code search renders a flat match list).
 - The Sidebar's file groups: group label `px-2 py-1 text-xs font-medium
   text-text-secondary`, rows `flex w-full items-center gap-1.5 rounded-sm
   px-2 py-1 text-left text-sm hover:bg-surface-higher` with a 14px type icon.
+- Cases rows support the same right-click context menu as files/codes
+  (Details / Rename / Delete).
 
-## 9. Right bar — Inspector
+## 9. Right bar
 
-- Always present with an open project.
-- Compact header (`BarHeader`, h-5): item icon + name (or "Details") +
-  close button.
+- Always present with an open project. The default panel is the **Inspector**.
+- The top-bar buttons History / AI / Settings **toggle right-bar panes** (the
+  center view keeps whatever it shows); clicking the active button closes the
+  pane. Opening a file in the coder switches back to the Inspector.
+- Pane structure: `LeftBar borderSide="l"` + `BarHeader`; AI is `width="lg"`
+  with a Chat/Search tab toggle in the header; Settings is `width="lg"`
+  with stacked `Card` sections; History is `width="lg"` with a filter bar
+  (action/user selects) under the header and change cards with an undo icon.
+- Inspector: compact header (`BarHeader`, h-10): item icon + name (or
+  "Details") + close button.
 - Empty state: "Select a code or file for details." (centered, secondary).
-- Code details: memo editor (inline textarea + Save), color, category path,
-  counts, recent examples.
+- Code details: highlight toggle ("Highlight in open file" — dims every other
+  code's segments in the open coder via `.qc-highlight-filter`), memo editor
+  (inline textarea + Save), color, category path, counts, recent examples.
 - File details: type/date/owner, memo editor, "Open in coder".
 - Editing a file memo from ANYWHERE opens the Inspector's inline editor
   (never window.prompt + toast).
@@ -247,16 +284,21 @@ With a project open:
 
 ## 12. States
 
-- **Loading**: centered `LoaderCircle 14–16 animate-spin` + `text-text-secondary` label.
-- **Empty**: centered icon 24 + `text-sm text-text-secondary` message.
-- **Error banner** (in-view): `flex shrink-0 items-center gap-2 border-b
-  border-danger bg-danger/10 px-3 py-1.5 text-sm text-danger` with a dismiss X.
-- **Modals/dialogs**: `fixed inset-0 z-50 flex items-center justify-center
-  bg-bg/70`; panel `rounded-lg border border-border bg-surface shadow-xl`,
-  header `border-b border-border px-4 py-2.5`.
-- **Popover menus**: `absolute ... z-50 mt-1 rounded-md border border-border
-  bg-surface py-1 shadow-lg`, items `flex w-full items-center gap-2 px-2
-  py-1.5 text-left text-sm hover:bg-surface-higher`.
+- **Loading**: `LoadingState` — centered `LoaderCircle 16 animate-spin` + `text-text-secondary` label.
+- **Empty**: `EmptyState` — centered icon 24 + `text-sm text-text-secondary` message.
+- **Error banner** (in-view): `ErrorBanner` — `flex shrink-0 items-center gap-2 border-b
+  border-danger bg-danger/10 px-3 py-1.5 text-sm text-danger` with a dismiss X;
+  `tone="warning"` (`border-warning bg-warning/10 text-warning`) and
+  `tone="success"` (`bg-surface text-success`) variants exist.
+- **Modals/dialogs**: the `Modal` primitive — overlay `fixed inset-0 z-50
+  flex items-center justify-center bg-bg/70`; panel `rounded-lg border
+  border-border bg-surface shadow-xl`; header `border-b border-border
+  px-3 py-2`. Escape and backdrop-click close it; busy forms pass
+  `closeDisabled`.
+- **Popover menus**: `Menu` — `absolute ... z-50 mt-1 rounded-md border
+  border-border bg-surface py-1 shadow-lg`, items `MenuItem` — `flex w-full
+  items-center gap-2 px-2 py-1.5 text-left text-sm hover:bg-surface-higher`.
+  Right-click context menus use `position="fixed"`.
 
 ## 13. Cross-cutting rules
 

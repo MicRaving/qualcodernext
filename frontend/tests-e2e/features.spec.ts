@@ -152,7 +152,7 @@ async function ensureProjectOpen(page: Page) {
     try {
       await expect(recent).toBeVisible({ timeout: 5_000 });
       await recent.click();
-      await expect(closeBtn).toBeVisible({ timeout: 30_000 });
+      await expect(closeBtn).toBeEnabled({ timeout: 30_000 });
       return;
     } catch {
       /* reload and retry once more */
@@ -262,10 +262,13 @@ test("sidebar code click codes the selected text", async ({ page }) => {
   const docLine = page.getByText("The sun was shining brightly over the hills.");
   await expect(docLine).toBeVisible({ timeout: 20_000 });
 
-  // Create a fresh code via the sidebar (Code → window.prompt).
-  page.on("dialog", (d) => void d.accept("ClickCode"));
+  // Create a fresh code via the sidebar (Code → inline name editor).
   await page.getByRole("button", { name: "Code", exact: true }).click();
-  await expect(page.getByRole("button", { name: "ClickCode" })).toBeVisible({
+  const codeInput = page.getByTestId("inline-name-edit");
+  await expect(codeInput).toBeVisible({ timeout: 10_000 });
+  await codeInput.fill("ClickCode");
+  await codeInput.press("Enter");
+  await expect(page.getByRole("button", { name: "ClickCode", exact: true })).toBeVisible({
     timeout: 10_000,
   });
 
@@ -281,7 +284,7 @@ test("sidebar code click codes the selected text", async ({ page }) => {
 
   // Click the code in the left bar → the selection is coded with it
   // immediately (no CodePicker modal).
-  await page.getByRole("button", { name: "ClickCode" }).click();
+  await page.getByRole("button", { name: "ClickCode", exact: true }).click();
 
   // The coded segment is clickable and shows the code in the details bar.
   const segment = page.locator('span[title="ClickCode"]');
@@ -314,10 +317,9 @@ test("history view lists project changes and filters", async ({ page }) => {
   });
   await expect(page.getByText("Code created", { exact: true })).toHaveCount(0);
 
-  // A detail drawer opens on a row click (before/after diff for edits).
-  await page.getByText("Coding created", { exact: true }).first().click();
-  await expect(page.getByRole("dialog", { name: "Change details" })).toBeVisible();
-  await page.getByRole("button", { name: "Close", exact: true }).click();
+  // The history pane is toggleable: clicking History again closes it.
+  await page.getByRole("button", { name: "History" }).click();
+  await expect(page.getByRole("heading", { name: "History" })).toHaveCount(0);
 });
 
 // ---------------------------------------------------------------------------
@@ -370,21 +372,25 @@ test("cases and attributes", async ({ page }) => {
   const navButton = (label: string) =>
     page.locator("header").first().getByRole("button", { name: label, exact: true });
 
-  // Add case "FeatureCase" (the view uses window.prompt).
-  page.on("dialog", (d) => void d.accept("FeatureCase"));
+  // Add case "FeatureCase" (the view uses the inline name editor).
   await navButton("Cases").click();
   await expect(page.getByRole("heading", { name: "Cases" }).first()).toBeVisible();
-  await page.getByRole("button", { name: "Add case" }).click();
+  await page.getByRole("button", { name: "Add", exact: true }).first().click();
+  const caseInput = page.getByTestId("inline-name-edit");
+  await expect(caseInput).toBeVisible({ timeout: 15_000 });
+  await caseInput.fill("FeatureCase");
+  await caseInput.press("Enter");
   await expect(page.getByText("FeatureCase").first()).toBeVisible({ timeout: 15_000 });
 
   // Select the case → its Properties panel appears (attributes merged into
-  // the cases view). Create a case-scope property type "Score" via the panel.
+  // the cases view). Create a case-scope property type "Score" via the
+  // inline add form (no system prompt anymore).
   await page.getByText("FeatureCase").first().click();
   const properties = page.getByText("Properties", { exact: true }).first();
   await expect(properties).toBeVisible({ timeout: 15_000 });
-  page.removeAllListeners("dialog");
-  page.on("dialog", (d) => void d.accept("Score"));
   await page.getByRole("button", { name: "Add property type" }).click();
+  await page.getByPlaceholder("Add property type").fill("Score");
+  await page.getByPlaceholder("Add property type").press("Enter");
   const scoreInput = page.getByLabel("Score");
   await expect(scoreInput).toBeVisible({ timeout: 15_000 });
 
@@ -412,7 +418,8 @@ test("interchange export and import", async ({ page }) => {
   // Import/Export lives in Settings now.
   await page.getByRole("button", { name: "Settings" }).click();
   await expect(page.getByRole("heading", { name: "Settings" }).first()).toBeVisible();
-  await expect(page.getByText("Import / Export", { exact: true }).first()).toBeVisible();
+  await expect(page.getByText("Export", { exact: true }).first()).toBeVisible();
+  await expect(page.getByText("Import", { exact: true }).first()).toBeVisible();
 
   // Export: the project downloads as a .qdp attachment.
   const downloadPromise = page.waitForEvent("download");
@@ -423,18 +430,22 @@ test("interchange export and import", async ({ page }) => {
   expect(dlPath).toBeTruthy();
 
   // Import: the handcrafted REFI-QDA file (code + source + coding + case);
-  // the format is detected automatically from the file content.
+  // picking the file shows the import menu, then Import runs it.
+  const settingsPane = page
+    .getByRole("complementary")
+    .filter({ has: page.getByRole("heading", { name: "Settings" }) });
   await page.getByLabel("Import file").setInputFiles(MINIMAL_QDP);
-  await page
-    .locator("form")
+  const importBtn = settingsPane
     .getByRole("button", { name: "Import", exact: true })
-    .click();
-  await expect(
-    page.getByRole("status").filter({ hasText: /Codes: \d+/ }).first(),
-  ).toBeVisible({ timeout: 20_000 });
-  await expect(
-    page.getByRole("status").filter({ hasText: /Cases: 1/ }).first(),
-  ).toBeVisible();
+    .last();
+  await expect(importBtn).toBeVisible();
+  await importBtn.click();
+  const imported = page.getByText("Import complete", { exact: true }).first();
+  await expect(imported).toBeAttached({ timeout: 20_000 });
+  await imported.scrollIntoViewIfNeeded();
+  await expect(imported).toBeVisible();
+  await expect(page.getByText("1 Codes", { exact: true }).first()).toBeVisible();
+  await expect(page.getByText("1 Cases", { exact: true }).first()).toBeVisible();
 });
 
 // ---------------------------------------------------------------------------

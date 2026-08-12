@@ -2,19 +2,21 @@
  * Journal workspace — split into the shell's left bar (JournalList) and
  * center (JournalEditor). Both share the selection via the project store.
  */
-import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  CircleAlert,
+  Info,
   LoaderCircle,
+  Pencil,
   Save,
   ScrollText,
   Trash2,
-  X,
 } from "lucide-react";
 import { api } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { useI18n } from "@/lib/i18n";
-import { Button } from "@/components/ui/orchestrator";
+import { Button, ErrorBanner, IconButton, ViewHeader } from "@/components/ui/orchestrator";
+import { InlineNameEdit } from "@/components/ui/InlineNameEdit";
+import { RowContextMenu } from "@/features/shell/RowContextMenu";
 import { useProjectStore } from "@/stores/project";
 
 /** Left bar: the journal entry list (header lives in the notes left bar). */
@@ -50,6 +52,40 @@ export function JournalList() {
     );
   }, [journals, notesUi.query]);
 
+  const [rowMenu, setRowMenu] = useState<{ x: number; y: number; j: (typeof journals)[number] } | null>(null);
+  const [editingId, setEditingId] = useState<number | null>(null);
+
+  /** The row after the given journal in the visible list (Tab cycles). */
+  function nextEditingId(jid: number): number | null {
+    const idx = filtered.findIndex((j) => j.jid === jid);
+    const next = idx >= 0 ? filtered[idx + 1] : undefined;
+    return next ? next.jid : null;
+  }
+
+  async function renameJournal(j: (typeof journals)[number], name: string) {
+    // Close the editor synchronously so Tab can move it to the next row.
+    setEditingId(null);
+    if (!name || name === j.name) return;
+    try {
+      await api.updateJournal(j.jid, { name, jentry: j.jentry });
+      await load();
+    } catch {
+      /* surface via the list's reload */
+    }
+  }
+
+  async function deleteJournal(j: (typeof journals)[number]) {
+    if (!window.confirm(t("journal.deleteConfirm", { name: j.name }))) return;
+    try {
+      await api.deleteJournal(j.jid);
+      if (notesUi.selectedId === j.jid) setNotesUi({ selectedId: null });
+      if (editingId === j.jid) setEditingId(null);
+      await load();
+    } catch {
+      /* surface via the list's reload */
+    }
+  }
+
   return (
     <div className="min-h-0 flex-1 overflow-auto">
       {loading && journals.length === 0 ? (
@@ -60,23 +96,95 @@ export function JournalList() {
       ) : loadError ? (
         <p className="px-3 py-6 text-center text-sm text-danger">{loadError}</p>
       ) : (
-        filtered.map((j) => (
-          <button
-            key={j.jid}
-            type="button"
-            onClick={() => setNotesUi({ selectedId: j.jid })}
-            className={cn(
-              "block w-full border-b border-border px-3 py-2 text-left hover:bg-surface-higher",
-              notesUi.selectedId === j.jid && "bg-accent/10",
-            )}
-          >
-            <span className="block truncate text-sm font-medium">{j.name}</span>
-            <span className="block truncate text-xs text-text-secondary">{j.date}</span>
-          </button>
-        ))
+        filtered.map((j) => {
+          if (editingId === j.jid) {
+            return (
+              <div key={j.jid} className="border-b border-border px-3 py-2">
+                <InlineNameEdit
+                  value={j.name}
+                  placeholder={t("journal.namePlaceholder")}
+                  onSave={(name) => void renameJournal(j, name)}
+                  onCancel={() => setEditingId(null)}
+                  onTab={() => setEditingId(nextEditingId(j.jid))}
+                />
+              </div>
+            );
+          }
+          return (
+            <div key={j.jid} className="group border-b border-border">
+              <button
+                type="button"
+                onClick={() => setNotesUi({ selectedId: j.jid })}
+                onContextMenu={(e) => {
+                  e.preventDefault();
+                  setRowMenu({ x: e.clientX, y: e.clientY, j });
+                }}
+                className={cn(
+                  "flex w-full items-center gap-1.5 px-3 py-2 text-left hover:bg-surface-higher",
+                  notesUi.selectedId === j.jid && "bg-accent/10",
+                )}
+              >
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-sm font-medium">{j.name}</span>
+                  <span className="block truncate text-xs text-text-secondary">{j.date}</span>
+                </span>
+                <span className="ml-auto flex shrink-0 gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 hover:opacity-100">
+                  <IconButton
+                    label={t("notes.renameFor", { name: j.name })}
+                    title={t("notes.renameFor", { name: j.name })}
+                    size="row"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setEditingId(j.jid);
+                    }}
+                  >
+                    <Pencil size={12} aria-hidden />
+                  </IconButton>
+                  <IconButton
+                    label={t("notes.deleteFor", { name: j.name })}
+                    title={t("common.delete")}
+                    size="row"
+                    className="hover:text-danger"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      void deleteJournal(j);
+                    }}
+                  >
+                    <Trash2 size={12} aria-hidden />
+                  </IconButton>
+                </span>
+              </button>
+            </div>
+          );
+        })
       )}
       {!loading && filtered.length === 0 && (
         <p className="px-3 py-6 text-center text-sm text-text-secondary">{t("journal.empty")}</p>
+      )}
+      {rowMenu && (
+        <RowContextMenu
+          x={rowMenu.x}
+          y={rowMenu.y}
+          onClose={() => setRowMenu(null)}
+          items={[
+            {
+              label: t("sidebar.menuDetails"),
+              icon: <Info size={14} aria-hidden />,
+              run: () => setNotesUi({ selectedId: rowMenu.j.jid }),
+            },
+            {
+              label: t("common.rename"),
+              icon: <Pencil size={14} aria-hidden />,
+              run: () => setEditingId(rowMenu.j.jid),
+            },
+            {
+              label: t("common.delete"),
+              icon: <Trash2 size={14} aria-hidden />,
+              danger: true,
+              run: () => void deleteJournal(rowMenu.j),
+            },
+          ]}
+        />
       )}
     </div>
   );
@@ -93,7 +201,6 @@ export function JournalEditor() {
   const [name, setName] = useState("");
   const [entry, setEntry] = useState("");
   const [saving, setSaving] = useState(false);
-  const entryRef = useRef<HTMLTextAreaElement | null>(null);
 
   const selected = useMemo(
     () => journals.find((j) => j.jid === selectedId) ?? null,
@@ -108,20 +215,36 @@ export function JournalEditor() {
     }
   }, [t]);
 
+  // Reset the draft only when the SELECTED journal changes — a refresh
+  // (e.g. a background transcription finishing) replaces the journals
+  // array with fresh objects, and resetting on that would silently wipe
+  // whatever the user is typing. Unsaved edits are never overwritten.
+  const prevJidRef = useRef<number | null>(null);
+  const dirtyRef = useRef(false);
   useEffect(() => {
-    setName(selected?.name ?? "");
-    setEntry(selected?.jentry ?? "");
-    if (entryRef.current) entryRef.current.style.height = "auto";
+    const j = selected;
+    if (!j) return;
+    if (prevJidRef.current === j.jid) {
+      if (!dirtyRef.current) {
+        setName(j.name);
+        setEntry(j.jentry);
+      }
+      return;
+    }
+    prevJidRef.current = j.jid;
+    dirtyRef.current = false;
+    setName(j.name);
+    setEntry(j.jentry);
   }, [selected]);
 
-  function growTextarea(el: HTMLTextAreaElement) {
-    el.style.height = "auto";
-    el.style.height = `${el.scrollHeight}px`;
+  function handleEntryChange(e: React.ChangeEvent<HTMLTextAreaElement>) {
+    dirtyRef.current = true;
+    setEntry(e.target.value);
   }
 
-  function handleEntryChange(e: ChangeEvent<HTMLTextAreaElement>) {
-    setEntry(e.target.value);
-    growTextarea(e.currentTarget);
+  function handleNameChange(v: string) {
+    dirtyRef.current = true;
+    setName(v);
   }
 
   const dirty = selected != null && (name !== selected.name || entry !== selected.jentry);
@@ -156,18 +279,7 @@ export function JournalEditor() {
   return (
     <section className="flex h-full min-w-0 flex-1 flex-col bg-bg">
       {actionError && (
-        <div className="flex shrink-0 items-center gap-2 border-b border-border bg-surface px-3 py-1.5 text-sm text-danger">
-          <CircleAlert size={14} aria-hidden />
-          <span className="min-w-0 flex-1 truncate">{actionError}</span>
-          <button
-            type="button"
-            onClick={() => setActionError(null)}
-            aria-label={t("common.dismiss")}
-            className="rounded-sm p-0.5 hover:bg-surface-higher"
-          >
-            <X size={14} aria-hidden />
-          </button>
-        </div>
+        <ErrorBanner onClose={() => setActionError(null)}>{actionError}</ErrorBanner>
       )}
 
       {!selected ? (
@@ -176,49 +288,57 @@ export function JournalEditor() {
           <p className="text-sm">{t("journal.selectHint")}</p>
         </div>
       ) : (
-        <div className="min-h-0 flex-1 overflow-y-auto p-4">
-          <div className="flex flex-wrap items-center gap-2">
-            <input
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") void saveEntry();
-              }}
-              placeholder={t("journal.namePlaceholder")}
-              aria-label={t("journal.namePlaceholder")}
-              className="h-7 min-w-0 flex-1 rounded-sm border border-border bg-surface px-2 text-sm outline-none focus:border-accent"
-            />
-            <Button
-              variant="primary"
-              icon={
-                saving ? (
-                  <LoaderCircle size={12} className="animate-spin" aria-hidden />
-                ) : (
-                  <Save size={12} aria-hidden />
-                )
-              }
-              onClick={() => void saveEntry()}
-              disabled={saving || !dirty}
-            >
-              {t("common.save")}
-            </Button>
-            <Button
-              variant="danger"
-              icon={<Trash2 size={12} aria-hidden />}
-              onClick={() => void deleteEntry()}
-            >
-              {t("common.delete")}
-            </Button>
-          </div>
-          <textarea
-            ref={entryRef}
-            value={entry}
-            onChange={handleEntryChange}
-            placeholder={t("journal.entryPlaceholder")}
-            aria-label={t("journal.entryPlaceholder")}
-            className="mt-3 w-full resize-none rounded-sm border border-border bg-surface px-2 py-1.5 text-sm leading-relaxed outline-none focus:border-accent"
+        <>
+          <ViewHeader
+            back={false}
+            title={
+              <input
+                value={name}
+                onChange={(e) => handleNameChange(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") void saveEntry();
+                }}
+                placeholder={t("journal.namePlaceholder")}
+                aria-label={t("journal.namePlaceholder")}
+                className="h-7 w-64 min-w-0 rounded-sm border border-border bg-surface px-2 text-sm font-normal outline-none focus:border-accent"
+              />
+            }
+            actions={
+              <>
+                <Button
+                  variant="primary"
+                  icon={
+                    saving ? (
+                      <LoaderCircle size={12} className="animate-spin" aria-hidden />
+                    ) : (
+                      <Save size={12} aria-hidden />
+                    )
+                  }
+                  onClick={() => void saveEntry()}
+                  disabled={saving || !dirty}
+                >
+                  {t("common.save")}
+                </Button>
+                <Button
+                  variant="danger"
+                  icon={<Trash2 size={12} aria-hidden />}
+                  onClick={() => void deleteEntry()}
+                >
+                  {t("common.delete")}
+                </Button>
+              </>
+            }
           />
-        </div>
+          <div className="flex min-h-0 flex-1 flex-col p-4">
+            <textarea
+              value={entry}
+              onChange={handleEntryChange}
+              placeholder={t("journal.entryPlaceholder")}
+              aria-label={t("journal.entryPlaceholder")}
+              className="min-h-0 w-full flex-1 resize-none rounded-sm border border-border bg-surface px-2 py-1.5 text-sm leading-relaxed outline-none focus:border-accent"
+            />
+          </div>
+        </>
       )}
     </section>
   );

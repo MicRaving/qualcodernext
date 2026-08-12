@@ -29,7 +29,7 @@ import time
 from pathlib import Path
 from typing import Any, cast
 
-from sqlalchemy import delete, insert, text, update
+from sqlalchemy import delete, text, update
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -134,23 +134,25 @@ async def capture(
     if ts is None:
         ts = datetime.datetime.now().astimezone().strftime("%Y-%m-%d %H:%M:%S")
     actor = user or current_user()
-    row_num = (
-        await session.execute(
-            text("SELECT COALESCE(MAX(seq), 0) FROM sync_log WHERE user = :u"),
-            {"u": actor},
-        )
-    ).scalar_one()
+    # Atomic per-user sequence: the SELECT-then-INSERT pair could race on
+    # concurrent requests, so the counter is computed inside the INSERT.
     await session.execute(
-        insert(tables.sync_log).values(
-            ts=ts,
-            user=actor,
-            seq=int(row_num) + 1,
-            entity=entity,
-            action=action,
-            pk_name=pk_name,
-            pk_value=str(pk_value),
-            row_json=json.dumps(row, ensure_ascii=False, default=str),
-        )
+        text(
+            "INSERT INTO sync_log (ts, user, seq, entity, action, pk_name, pk_value, row_json) "
+            "VALUES (:ts, :user, "
+            "(SELECT COALESCE(MAX(seq), 0) + 1 FROM sync_log WHERE user = :user2), "
+            ":entity, :action, :pk_name, :pk_value, :row_json)"
+        ),
+        {
+            "ts": ts,
+            "user": actor,
+            "user2": actor,
+            "entity": entity,
+            "action": action,
+            "pk_name": pk_name,
+            "pk_value": str(pk_value),
+            "row_json": json.dumps(row, ensure_ascii=False, default=str),
+        },
     )
     await session.flush()
 
@@ -395,8 +397,12 @@ async def _replay_one(session: AsyncSession, entry: dict, state: dict) -> str:
                 return "skipped (no-op)"
             except Exception:
                 # PK collision with a DIFFERENT local row: natural-key merge
-                # first, else a fresh local PK + permanent remap.
-                if await _update_by_natural_key(session, entity, insert_row):
+                # first, else a fresh local PK + permanent remap. The pk
+                # column is left out of the natural-key UPDATE so the local
+                # row keeps its own identity (rewriting it would orphan
+                # every reference to the local pk).
+                natural_row = {k: v for k, v in insert_row.items() if k != pk_name}
+                if await _update_by_natural_key(session, entity, natural_row):
                     return "applied (merged by natural key)"
                 new_pk = await _fresh_pk(session, entity, pk_name)
                 insert_row[pk_name] = new_pk
@@ -415,7 +421,8 @@ async def _replay_one(session: AsyncSession, entry: dict, state: dict) -> str:
                 {"pk": _as_pk(local_pk)},
             ))
             if result.rowcount == 0:
-                if await _update_by_natural_key(session, entity, update_row):
+                natural_row = {k: v for k, v in update_row.items() if k != pk_name}
+                if await _update_by_natural_key(session, entity, natural_row):
                     return "applied (merged by natural key)"
                 # Row vanished locally (e.g. replaced) — re-insert the state.
                 try:
@@ -455,6 +462,7 @@ async def import_pending(session: AsyncSession, project_path: str, user: str) ->
             continue
         applied = 0
         conflicts: list[str] = []
+        first_conflict_seq: int | None = None
         async with suspended():
             for entry in sorted(entries, key=lambda e: (e.get("seq", 0),)):
                 outcome = await _replay_one(session, entry, state)
@@ -462,9 +470,18 @@ async def import_pending(session: AsyncSession, project_path: str, user: str) ->
                     applied += 1
                 else:
                     conflicts.append(outcome)
+                    if first_conflict_seq is None:
+                        first_conflict_seq = entry.get("seq", 0)
             await session.commit()
+        if conflicts:
+            # Conflicted entries (and everything after them) must be retried
+            # next cycle — the watermark stops right before the first one
+            # instead of jumping past it.
+            watermark = (first_conflict_seq or 1) - 1
+        else:
+            watermark = max(e.get("seq", 0) for e in entries)
         state.setdefault("imports", {})[rater] = max(
-            _imported_seq(state, rater), max(e.get("seq", 0) for e in entries)
+            _imported_seq(state, rater), watermark
         )
         save_state(project_path, state)
         report[rater] = {"applied": applied, "conflicts": conflicts}

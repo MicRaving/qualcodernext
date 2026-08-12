@@ -137,7 +137,8 @@ async def source_details(source_id: int, db: DbDep) -> SourceDetails:
 
     attr_rows = await db.execute(
         select(tables.attribute.c.name, tables.attribute.c.value, tables.attribute.c.attr_type).where(
-            tables.attribute.c.id == source_id
+            tables.attribute.c.id == source_id,
+            tables.attribute.c.attr_type == "file",
         )
     )
     attributes = [
@@ -247,14 +248,32 @@ async def link_source(req: LinkRequest, db: DbDep, svc: ServiceDep) -> Source:
 
 @router.patch("/{source_id}", response_model=Source)
 async def update_source(source_id: int, req: SourceUpdate, db: DbDep) -> Source:
+    from sqlalchemy import select
+
+    from qualcoder_api.persistence import tables
+
+    old_row = (
+        await db.execute(
+            select(tables.source.c.name, tables.source.c.memo).where(
+                tables.source.c.id == source_id
+            )
+        )
+    ).first()
+    old = dict(old_row._mapping) if old_row is not None else {}
     source = await SourceRepository(db).update_source(
         source_id, **req.model_dump(exclude_none=True)
     )
     if source is None:
         raise HTTPException(status_code=404, detail="source not found")
     await audit.record(
-        db, user=get_codername(), action="source.edit", entity="source",
-        entity_id=source_id, detail={"name": source.name},
+        db, user=get_codername(), action="source.update", entity="source",
+        entity_id=source_id, source_id=source_id,
+        detail={
+            "before_name": old.get("name"),
+            "after_name": source.name,
+            "before_memo": old.get("memo"),
+            "after_memo": source.memo,
+        },
     )
     return source
 

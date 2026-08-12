@@ -91,6 +91,11 @@ async def update_text_coding(ctid: int, req: TextCodingUpdate, db: DbDep) -> Cod
     )
     if coding is None:
         raise HTTPException(status_code=404, detail="coding not found")
+    await audit.record(
+        db, user=get_codername(), action="coding.update", entity="code_text",
+        entity_id=ctid, source_id=coding.fid,
+        detail=coding.model_dump(),
+    )
     return coding
 
 
@@ -291,8 +296,10 @@ async def commit_edit_endpoint(req: CommitEditRequest, db: DbDep) -> dict:
         db, user=get_codername(), action="source.edit", entity="source",
         source_id=req.fid,
         detail={
-            "before": old_text[:400],
-            "after": req.new_text[:400],
+            # The FULL before/after text — the undo path restores the source
+            # from these, so truncating would destroy everything past N chars.
+            "before": old_text,
+            "after": req.new_text,
             "before_length": len(old_text),
             "new_length": len(req.new_text),
         },

@@ -2,7 +2,6 @@
  * Pure helpers for the file manager view — filtering, sorting, type labels.
  */
 import type { Source } from "@/lib/api";
-import { isPdf } from "@/lib/media";
 
 export type SortKey = "name" | "type" | "date" | "owner";
 export type SortDir = "asc" | "desc";
@@ -34,7 +33,7 @@ export function sortSources(sources: Source[], key: SortKey, dir: SortDir): Sour
 
 /** Human-readable media type; filenames ending in .pdf always report "PDF". */
 export function mediaTypeLabel(mediaType: string, name?: string): string {
-  if (name && isPdf(name)) return "PDF";
+  if (name && name.toLowerCase().endsWith(".pdf")) return "PDF";
   switch (mediaType) {
     case "image":
       return "Image";

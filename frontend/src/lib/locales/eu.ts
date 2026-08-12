@@ -136,7 +136,6 @@ export const eu: Record<string, string> = {
   "analyze.titleHeatmap": "Bero-mapa",
   "analyze.pickCode": "Kodea",
   "analyze.copyCodebook": "Kopiatu arbelean",
-  "analyze.importCodebook": "Inportatu kode-liburua",
   "graphs.title": "Grafikoak",
   "graphs.newGraph": "Grafiko berria",
   "graphs.models": "Modeloak…",

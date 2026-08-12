@@ -155,8 +155,6 @@ export const pt: Record<string, string> = {
   "analyze.titleReferences": "Referência",
   "analyze.pickCode": "Código",
   "analyze.copyCodebook": "Cópiar para prancheta",
-  "analyze.importCodebook": "Código importado:",
-  "analyze.deleteReference": "Excluir esta referência.",
   "graphs.title": "Grafos",
   "graphs.newGraph": "Novo grafo",
   "graphs.models": "Modelos…",

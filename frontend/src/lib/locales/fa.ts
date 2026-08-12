@@ -136,7 +136,6 @@ export const fa: Record<string, string> = {
   "analyze.titleHeatmap": "نقشه گرمایی",
   "analyze.pickCode": "کد",
   "analyze.copyCodebook": "کپی برداری برای Clipboard",
-  "analyze.importCodebook": "کد واردات",
   "graphs.title": "نمودارها",
   "graphs.newGraph": "نمودار جدید",
   "graphs.models": "مدل‌ها…",

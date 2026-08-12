@@ -51,7 +51,45 @@ DEFAULT_SETTINGS: dict = {
     "ai": dict(AI_DEFAULTS),
     "transcription": dict(TRANSCRIPTION_DEFAULTS),
     "sync": {"enabled": False},
+    "updates": {"check_interval": "daily", "auto_update": False},
 }
+
+UPDATES_DEFAULTS: dict = {
+    "check_interval": "daily",
+    "auto_update": False,
+}
+
+
+def get_updates_settings(settings: dict | None = None) -> dict:
+    """Return the app-update preferences (check cadence + auto-install)."""
+    settings = settings or load_settings()
+    updates = settings.get("updates")
+    if not isinstance(updates, dict):
+        updates = {}
+    interval = updates.get("check_interval", UPDATES_DEFAULTS["check_interval"])
+    if interval not in ("daily", "weekly", "never"):
+        interval = UPDATES_DEFAULTS["check_interval"]
+    return {
+        "check_interval": interval,
+        "auto_update": bool(updates.get("auto_update", UPDATES_DEFAULTS["auto_update"])),
+    }
+
+
+def save_updates_settings(updates: dict, settings: dict | None = None) -> dict:
+    """Validate and persist the app-update preferences."""
+    settings = settings or load_settings()
+    if not isinstance(updates, dict):
+        raise ValueError("updates settings must be a dict")
+    interval = updates.get("check_interval", UPDATES_DEFAULTS["check_interval"])
+    if interval not in ("daily", "weekly", "never"):
+        interval = UPDATES_DEFAULTS["check_interval"]
+    clean = {
+        "check_interval": interval,
+        "auto_update": bool(updates.get("auto_update", UPDATES_DEFAULTS["auto_update"])),
+    }
+    settings["updates"] = clean
+    save_settings(settings)
+    return dict(clean)
 
 
 def get_sync_settings(settings: dict | None = None) -> dict:

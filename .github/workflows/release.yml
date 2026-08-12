@@ -1,0 +1,97 @@
+name: Release
+
+# Builds the Windows release (backend onedir + Tauri app), signs the updater
+# artifacts and publishes them to a GitHub release together with the static
+# update manifest the app's updater endpoint points at
+# (https://github.com/MicRaving/qualcodernext/releases/latest/download/qualcoder-latest.json).
+#
+# Required repository secret: TAURI_SIGNING_PRIVATE_KEY — the content of
+# updater.key (the app's built-in pubkey lives in tauri.conf.json and must
+# belong to this key, see `npx tauri signer generate`).
+
+on:
+  push:
+    tags: ["v*"]
+
+jobs:
+  release:
+    name: Build + publish Windows release
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Backend deps (incl. PyInstaller for the onedir)
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e "../backend[dev]"
+
+      - name: Frontend deps
+        run: npm ci
+
+      - name: Restore the signing key
+        shell: pwsh
+        run: |
+          if (-not "${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}") {
+            throw "TAURI_SIGNING_PRIVATE_KEY secret is missing - add the content of updater.key."
+          }
+          Set-Content -Path "$env:RUNNER_TEMP\updater.key" -Value "${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}" -NoNewline
+          "TAURI_SIGNING_PRIVATE_KEY_PATH=$env:RUNNER_TEMP\updater.key" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "TAURI_SIGNING_PRIVATE_KEY_PASSWORD=" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Build backend onedir (PyInstaller)
+        working-directory: backend
+        run: python -m PyInstaller --noconfirm qualcoder_backend.spec
+
+      - name: Copy backend into Tauri resources
+        shell: pwsh
+        run: |
+          $target = "src-tauri\resources\backend"
+          Remove-Item $target -Recurse -Force -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Path $target -Force | Out-Null
+          Copy-Item "..\backend\dist\qualcoder-backend\*" $target -Recurse -Force
+
+      - name: Build the Tauri app + signed updater artifacts
+        working-directory: frontend/src-tauri
+        run: npx --yes @tauri-apps/cli@2 build
+
+      - name: Generate the static update manifest (qualcoder-latest.json)
+        shell: pwsh
+        working-directory: frontend/src-tauri/target/release/bundle/nsis
+        run: |
+          $setup = Get-ChildItem -Filter "*setup.exe" | Select-Object -First 1
+          if (-not $setup) { throw "No NSIS setup found" }
+          $sig = Get-Content "$($setup.FullName).sig" -Raw
+          $version = (Get-Content "$env:GITHUB_WORKSPACE\frontend\src-tauri\tauri.conf.json" -Raw | ConvertFrom-Json).version
+          $manifest = @{
+            version  = $version
+            notes    = "QualCoder v$version"
+            pub_date = (Get-Date).ToUniversalTime().ToString("o")
+            platforms = @{
+              "windows-x86_64" = @{
+                signature = $sig.Trim()
+                url       = "https://github.com/MicRaving/qualcodernext/releases/latest/download/$($setup.Name)"
+              }
+            }
+          }
+          $manifest | ConvertTo-Json -Depth 5 | Set-Content -Path "qualcoder-latest.json" -Encoding utf8
+
+      - name: Publish the GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            frontend/src-tauri/target/release/bundle/nsis/*
+            frontend/src-tauri/target/release/bundle/msi/*
+          generate_release_notes: true

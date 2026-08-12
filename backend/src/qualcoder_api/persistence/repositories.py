@@ -263,38 +263,6 @@ class ProjectRepository:
             await self.session.commit()
         return await self.get_bookmarks()
 
-    async def get_casenames(self) -> list[dict]:
-        rows = await self.session.execute(
-            select(
-                tables.cases.c.caseid,
-                tables.cases.c.name,
-                func.ifnull(tables.cases.c.memo, ""),
-                tables.cases.c.date,
-            ).order_by(func.lower(tables.cases.c.name))
-        )
-        return [
-            {"id": r[0], "name": r[1], "memo": r[2], "date": r[3]}
-            for r in rows
-        ]
-
-    async def get_journal_texts(self, journal_ids: list[int] | None = None) -> list[dict]:
-        stmt = select(
-            tables.journal.c.name,
-            tables.journal.c.jid,
-            tables.journal.c.jentry,
-            tables.journal.c.owner,
-            tables.journal.c.date,
-        )
-        if journal_ids is not None:
-            stmt = stmt.where(tables.journal.c.jid.in_(journal_ids))
-        else:
-            stmt = stmt.order_by(tables.journal.c.date.desc())
-        rows = await self.session.execute(stmt)
-        return [
-            {"name": r[0], "jid": r[1], "jentry": r[2], "owner": r[3], "date": r[4]}
-            for r in rows
-        ]
-
     async def update_coder_names(self, current_coder: str) -> None:
         """Refresh the ``coder_names`` table from all owner columns."""
         union_sql = "\nUNION ".join(
@@ -347,9 +315,15 @@ class SourceRepository:
                 tables.source.c.risid,
             )
         )
+        # Transcript companions (another source's av_text_id) stay hidden in
+        # the file view - they are shown inside the AV coder instead.
+        av_refs = await self.session.execute(select(tables.source.c.av_text_id))
+        hidden_ids = {r[0] for r in av_refs if r[0] is not None}
         sources: list[Source] = []
         for row in rows:
             data = dict(row._mapping)
+            if data["id"] in hidden_ids:
+                continue
             data["fulltext"] = None
             sources.append(Source.model_validate(data))
         return sources
@@ -1047,10 +1021,11 @@ class CodingRepository:
         return ImageCoding.model_validate(row._mapping)
 
     async def list_image_codings_for_file(self, source_id: int) -> list[ImageCoding]:
+        # The visibility view keeps hidden coders' segments out (parity with
+        # the text list and every report).
         rows = await self.session.execute(
-            select(tables.code_image)
-            .where(tables.code_image.c.id == source_id)
-            .order_by(tables.code_image.c.imid)
+            text("SELECT * FROM code_image_visible WHERE id = :sid ORDER BY imid"),
+            {"sid": source_id},
         )
         return [ImageCoding.model_validate(_coding_row(r._mapping)) for r in rows]
 
@@ -1134,10 +1109,11 @@ class CodingRepository:
         return AVCoding.model_validate(row._mapping)
 
     async def list_av_codings_for_file(self, source_id: int) -> list[AVCoding]:
+        # The visibility view keeps hidden coders' segments out (parity with
+        # the text list and every report).
         rows = await self.session.execute(
-            select(tables.code_av)
-            .where(tables.code_av.c.id == source_id)
-            .order_by(tables.code_av.c.pos0)
+            text("SELECT * FROM code_av_visible WHERE id = :sid ORDER BY pos0"),
+            {"sid": source_id},
         )
         return [AVCoding.model_validate(_coding_row(r._mapping)) for r in rows]
 
@@ -1347,15 +1323,6 @@ class CaseRepository:
             {"id": r[0], "name": r[1], "mediapath": r[2], "memo": r[3], "date": r[4]}
             for r in rows
         ]
-
-    async def case_text_spans(self, caseid: int) -> list[CaseText]:
-        rows = await self.session.execute(
-            select(tables.case_text)
-            .where(tables.case_text.c.caseid == caseid)
-            .order_by(tables.case_text.c.fid, tables.case_text.c.pos0)
-        )
-        return [CaseText.model_validate(r._mapping) for r in rows]
-
 
 class AttributeRepository:
     """CRUD for attribute types and values."""
