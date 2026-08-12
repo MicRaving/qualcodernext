@@ -346,9 +346,9 @@ test("autocode + SQL report", async ({ page }) => {
 
   await page.getByRole("button", { name: "Autocode" }).first().click();
   const dialog = page.getByRole("dialog", { name: "Autocode" });
-  const searchText = dialog.getByLabel("Search texts");
-  await expect(searchText).toBeVisible();
-  await searchText.fill("rain");
+  const promptBox = dialog.getByLabel("Coding prompt");
+  await expect(promptBox).toBeVisible();
+  await promptBox.fill('"rain"');
   await dialog.getByText("RainCode").click();
   await dialog.getByRole("button", { name: "Autocode" }).click();
   await expect(dialog.getByText(/Autocoded \d+ instances/)).toBeVisible({

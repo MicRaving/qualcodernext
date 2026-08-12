@@ -48,7 +48,7 @@ test("app shell with full dashboard (no welcome screen)", async ({ page }) => {
 
   // The full dashboard shows without a project: heading, stat placeholders
   // and New/Open enabled; the project nav buttons are present but disabled.
-  await expect(page.getByRole("heading", { name: "QualCoder" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "QCnext" })).toBeVisible();
   await expect(page.getByRole("button", { name: "New project" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Open project" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Dashboard" })).toBeDisabled();
@@ -107,9 +107,9 @@ test("create project, import a file, autocode it, and run a report", async ({ pa
 
     await page.getByRole("button", { name: "Autocode" }).first().click();
     const dialog = page.getByRole("dialog", { name: "Autocode" });
-    const searchText = dialog.getByLabel("Search texts");
-    await expect(searchText).toBeVisible();
-    await searchText.fill("happy");
+    const promptBox = dialog.getByLabel("Coding prompt");
+    await expect(promptBox).toBeVisible();
+    await promptBox.fill('"happy"');
     await dialog.getByText("E2E").click();
     await dialog.getByRole("button", { name: "Autocode" }).click();
 

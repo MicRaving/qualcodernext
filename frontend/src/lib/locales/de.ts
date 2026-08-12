@@ -5,7 +5,7 @@
  */
 export const de: Record<string, string> = {
   // app chrome
-  "app.name": "QualCoder",
+  "app.name": "QCnext",
   "app.version": "v4.0 (dev)",
 
   // backend status pill
@@ -353,7 +353,9 @@ export const de: Record<string, string> = {
   "coder.unmarkTitle": "Die letzte entfernte Codierung wiederherstellen",
   "coder.autocode": "Autocode",
   "coder.autoPlaceholder": "Ein Suchtext pro Zeile",
-  "coder.autoTexts": "Suchtexte",
+  "coder.autoPromptLabel": "Codier-Anweisung",
+  "coder.autoPromptPlaceholder": "Beschreibe, was codiert werden soll, z. B.: codiere jede Passage zu…",
+  "coder.autoPrompt": "Codiere jede Passage, die eindeutig zu Folgendem gehört: {names}. Markiere jede Passage mit dem genau passenden Code.",
   "coder.autoMode": "Treffer",
   "coder.autoCodes": "{n} Codes ausgewählt",
   "coder.autoSelectAll": "Alle wählen",

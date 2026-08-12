@@ -316,12 +316,23 @@ export function GraphsMenuBar({ actions }: { actions?: ReactNode }) {
   const setGraphsUi = useProjectStore((s) => s.setGraphsUi);
   const dialog = graphsUi.dialog;
 
-  async function loadGraphs() {
+  async function loadGraphs(preferredGrid?: number | null) {
     try {
       const res = await api.graphs();
+      // Read the CURRENT selection from the store — closures go stale after
+      // a delete, and re-selecting the removed grid would 404 on load.
+      const current = useProjectStore.getState().graphsUi.grid;
+      const grid =
+        preferredGrid !== undefined
+          ? preferredGrid
+          : current != null && res.graphs.some((g) => g.grid === current)
+            ? current
+            : res.graphs.length > 0
+              ? res.graphs[0].grid
+              : null;
       setGraphsUi({
         list: res.graphs.map((g) => ({ grid: g.grid, name: g.name })),
-        grid: graphsUi.grid ?? (res.graphs.length > 0 ? res.graphs[0].grid : null),
+        grid,
         tick: graphsUi.tick + 1,
       });
     } catch {
@@ -470,11 +481,17 @@ export function GraphsView() {
   const loadGraphs = useCallback(async () => {
     try {
       const res = await api.graphs();
+      // Read the CURRENT selection from the store — the closure goes stale
+      // after a delete (re-selecting the removed grid would 404 on load).
+      const current = useProjectStore.getState().graphsUi.grid;
       setGraphsUi({
         list: res.graphs.map((g) => ({ grid: g.grid, name: g.name })),
         grid:
-          graphsUi.grid ??
-          (res.graphs.length > 0 ? res.graphs[0].grid : null),
+          current != null && res.graphs.some((g) => g.grid === current)
+            ? current
+            : res.graphs.length > 0
+              ? res.graphs[0].grid
+              : null,
         tick: graphsUi.tick + 1,
       });
     } catch (e) {

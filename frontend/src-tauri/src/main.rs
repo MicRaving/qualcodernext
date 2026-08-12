@@ -2,7 +2,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
-    qualcoder_tauri_lib::run()
+    qcnext_tauri_lib::run()
 }
 
 // relink-trigger

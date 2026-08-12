@@ -5,7 +5,7 @@ name: Release
 # the repo's TAURI_SIGNING_PRIVATE_KEY secret, publishes the installers to a
 # GitHub release and assembles the static update manifest the app's updater
 # endpoint points at
-# (https://github.com/MicRaving/qualcodernext/releases/latest/download/qualcoder-latest.json).
+# (https://github.com/MicRaving/QCnext/releases/latest/download/qualcoder-latest.json).
 #
 # Required repository secret: TAURI_SIGNING_PRIVATE_KEY — the content of
 # updater.key (the app's built-in pubkey lives in tauri.conf.json and must
@@ -136,7 +136,7 @@ jobs:
           $fragment = @{
             target    = "${{ matrix.target }}"
             signature = $signature
-            url       = "https://github.com/MicRaving/qualcodernext/releases/latest/download/$($file.Name)"
+            url       = "https://github.com/MicRaving/QCnext/releases/latest/download/$($file.Name)"
           }
           $fragment | ConvertTo-Json | Set-Content "$env:RUNNER_TEMP/fragment-${{ matrix.target }}.json"
 

@@ -38,6 +38,20 @@ class IndexRequest(BaseModel):
     rebuild: bool = False
 
 
+def _provider_headers(provider: str, api_key: str) -> dict[str, str]:
+    """Auth headers per provider. Gemini's OpenAI-compat layer rejects the
+    plain Authorization header with a 404; it wants ``x-goog-api-key``."""
+    if provider == "gemini":
+        return {"x-goog-api-key": api_key}
+    if api_key:
+        return {"Authorization": f"Bearer {api_key}"}
+    return {}
+
+
+def _provider_requires_key(provider: str) -> bool:
+    return provider in ("gemini", "gpt", "claude")
+
+
 @router.get("/models")
 async def ai_models() -> dict:
     """List the models the configured provider advertises (OpenAI-compatible
@@ -45,20 +59,22 @@ async def ai_models() -> dict:
     quickly; cloud providers need an API key, so failures return empty.
 
     The list is FILTERED per provider: chat models only, newest generations —
-    Gemini/GPT video, TTS, embedding and image models are dropped.
+    Gemini/GPT video, TTS, embedding and image models are dropped — and
+    deduplicated (Ollama/LM Studio tag variants collapse to one entry).
     """
     import re
 
     import httpx
 
     ai = user_settings.get_ai_settings()
+    provider = ai.get("provider", "custom")
     api_base = (ai.get("api_base") or "").rstrip("/")
     if not api_base:
         return {"models": []}
-    headers = {}
     api_key = ai.get("api_key") or ""
-    if api_key:
-        headers["Authorization"] = f"Bearer {api_key}"
+    if _provider_requires_key(provider) and not api_key.strip():
+        return {"models": []}
+    headers = _provider_headers(provider, api_key)
     url = f"{api_base}/models"
     try:
         async with httpx.AsyncClient(timeout=3.0) as client:
@@ -69,7 +85,6 @@ async def ai_models() -> dict:
         return {"models": []}
     ids = sorted(m.get("id") for m in data.get("data", []) if m.get("id"))
 
-    provider = ai.get("provider", "custom")
     if provider == "gemini":
         keep = re.compile(r"^gemini-[0-9]")
         drop = re.compile(
@@ -86,21 +101,32 @@ async def ai_models() -> dict:
         keep = re.compile(r".+")
         drop = None
 
-    models = [m for m in ids if keep.match(m) and (drop is None or not drop.search(m))]
-    return {"models": models}
+    seen: set[str] = set()
+    models: list[str] = []
+    for m in ids:
+        if not keep.match(m) or (drop is not None and drop.search(m)):
+            continue
+        # Ollama/LM Studio serve tags ("llama3.2:latest"); collapse variants
+        # to the base name so the dropdown shows each model once.
+        base = m.split(":")[0] if provider in ("ollama", "lmstudio") else m
+        if base not in seen:
+            seen.add(base)
+            models.append(base)
+    return {"models": sorted(models)}
 
 
 async def _probe_provider(ai: dict) -> tuple[bool | None, str]:
     """Live reachability check of the configured provider's /v1/models."""
     import httpx
 
+    provider = ai.get("provider", "custom")
     api_base = (ai.get("api_base") or "").rstrip("/")
     if not api_base:
         return None, "no api base configured"
-    headers = {}
     api_key = ai.get("api_key") or ""
-    if api_key:
-        headers["Authorization"] = f"Bearer {api_key}"
+    if _provider_requires_key(provider) and not api_key.strip():
+        return False, "API key required for this provider"
+    headers = _provider_headers(provider, api_key)
     try:
         async with httpx.AsyncClient(timeout=2.5) as client:
             resp = await client.get(f"{api_base}/models", headers=headers)

@@ -1064,9 +1064,10 @@ export const api = {
   autocode: (body: {
     fid: number | null;
     cids: number[];
-    find_texts: string[];
-    mode: string;
-    use_regex: boolean;
+    find_texts?: string[];
+    mode?: string;
+    use_regex?: boolean;
+    prompt?: string;
     suggest?: boolean;
     owner?: string;
   }) =>

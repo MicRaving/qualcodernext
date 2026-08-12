@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "QualCoder",
+  "productName": "QCnext",
   "version": "0.1.0",
-  "identifier": "org.qualcoder.v4",
+  "identifier": "org.qcnext.app",
   "build": {
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://localhost:5173",
@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "QualCoder",
+        "title": "QCnext",
         "width": 1280,
         "height": 800,
         "minWidth": 1024,
@@ -43,7 +43,7 @@
     "updater": {
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEI4QzI3Q0IxMzQ1NERFRTIKUldUaTNsUTBzWHpDdUJsSm5VeEJoQjhFZVZOcWhGSEtDSE1Kamg0dENTOHNucU5UMHRjWlZYUm4K",
       "endpoints": [
-        "https://github.com/MicRaving/qualcodernext/releases/latest/download/qualcoder-latest.json"
+        "https://github.com/MicRaving/QCnext/releases/latest/download/qualcoder-latest.json"
       ]
     }
   }

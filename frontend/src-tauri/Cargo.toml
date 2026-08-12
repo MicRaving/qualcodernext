@@ -1,13 +1,13 @@
 [package]
-name = "qualcoder-tauri"
+name = "qcnext"
 version = "0.1.0"
-description = "QualCoder v4 desktop shell (Tauri 2)"
-authors = ["QualCoder v4"]
+description = "QCnext desktop shell (Tauri 2)"
+authors = ["QCnext"]
 edition = "2021"
 rust-version = "1.77"
 
 [lib]
-name = "qualcoder_tauri_lib"
+name = "qcnext_tauri_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]

@@ -1,4 +1,4 @@
-# QualCoder v4 - compile script (Windows)
+# QCnext - compile script (Windows)
 #
 # Builds the complete distributable:
 #   1. Backend: PyInstaller onefile exe (dist/qualcoder-backend.exe)
@@ -44,7 +44,7 @@ if ((Test-Path (Join-Path $cargoBin "cargo.exe")) -and ($env:PATH -notlike "*$ca
 
 Write-Host ""
 Write-Host "==========================================" -ForegroundColor Cyan
-Write-Host " QualCoder v4 - compile" -ForegroundColor Cyan
+Write-Host " QCnext - compile" -ForegroundColor Cyan
 Write-Host "==========================================" -ForegroundColor Cyan
 
 # --- 1/2 Backend ----------------------------------------------------------
@@ -161,7 +161,7 @@ if ($null -ne $nsisExe) {
             platforms = @{
                 "windows-x86_64" = @{
                     signature = $signature
-                    url       = "https://github.com/MicRaving/qualcodernext/releases/latest/download/$name"
+                    url       = "https://github.com/MicRaving/QCnext/releases/latest/download/$name"
                 }
             }
         }

@@ -2,10 +2,13 @@
  * AutocodeDialog — the shared autocode dialog used by the text, PDF and
  * AV/transcript coders (identical everywhere).
  *
- * Code one or MULTIPLE selected codes from the project; optionally let the
- * AI suggest new codes for important content that fits no existing code.
+ * Code one or MULTIPLE selected codes from the project via a natural-language
+ * CODING PROMPT (prefilled from the selection) that the AI applies to the
+ * document; optionally let the AI suggest NEW codes for content that fits no
+ * existing code. Without an AI assistant the selected code names are matched
+ * literally as a fallback.
  */
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { CheckCircle2, LoaderCircle, Sparkles } from "lucide-react";
 import { api, type AutocodeResponse, type CodeTreeItem } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
@@ -13,7 +16,6 @@ import {
   Button,
   Field,
   Modal,
-  Select,
   Textarea,
 } from "@/components/ui/orchestrator";
 import { errorDetail } from "@/features/ai/format";
@@ -38,10 +40,9 @@ export function AutocodeDialog({
   onDone: (result: AutocodeResult) => void;
 }) {
   const { t } = useI18n();
-  const [findTexts, setFindTexts] = useState("");
+  const [prompt, setPrompt] = useState("");
+  const promptTouched = useRef(false);
   const [selected, setSelected] = useState<Set<number>>(new Set());
-  const [mode, setMode] = useState<"all" | "first" | "last">("all");
-  const [useRegex, setUseRegex] = useState(false);
   const [suggest, setSuggest] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -49,10 +50,9 @@ export function AutocodeDialog({
 
   useEffect(() => {
     if (open) {
-      setFindTexts("");
+      setPrompt("");
+      promptTouched.current = false;
       setSelected(new Set());
-      setMode("all");
-      setUseRegex(false);
       setSuggest(false);
       setError(null);
       setResult(null);
@@ -60,6 +60,20 @@ export function AutocodeDialog({
   }, [open]);
 
   const codeOptions = codes.filter((c) => c.kind === "code");
+  const selectedNames = codeOptions
+    .filter((c) => selected.has(c.id))
+    .map((c) => c.name);
+  const selectedNamesKey = selectedNames.join("|");
+
+  // Prefill the coding prompt from the selection (until the user edits it).
+  useEffect(() => {
+    if (promptTouched.current) return;
+    setPrompt(
+      t("coder.autoPrompt", {
+        names: selectedNamesKey || t("coder.autoNoCodes"),
+      }),
+    );
+  }, [selectedNamesKey, t]);
 
   function toggleCode(cid: number) {
     setSelected((s) => {
@@ -79,12 +93,8 @@ export function AutocodeDialog({
   }
 
   async function run() {
-    const texts = findTexts
-      .split(/\r?\n/)
-      .flatMap((l) => (useRegex ? [l.trim()] : l.split(",")))
-      .map((s) => s.trim())
-      .filter(Boolean);
-    if (texts.length === 0) {
+    const text = prompt.trim();
+    if (!text) {
       setError(t("coder.autoNoText"));
       return;
     }
@@ -98,9 +108,10 @@ export function AutocodeDialog({
       const res: AutocodeResponse = await api.autocode({
         fid,
         cids: [...selected],
-        find_texts: texts,
-        mode,
-        use_regex: useRegex,
+        find_texts: [],
+        mode: "all",
+        use_regex: false,
+        prompt: text,
         suggest,
       });
       setResult({ count: res.count, suggested: res.suggested ?? [] });
@@ -124,51 +135,18 @@ export function AutocodeDialog({
       ariaLabel={t("coder.autocode")}
     >
       <div className="p-3">
-        <Field label={t("coder.autoTexts")}>
+        <Field label={t("coder.autoPromptLabel")}>
           <Textarea
-            value={findTexts}
-            onChange={(e) => setFindTexts(e.target.value)}
-            placeholder={t("coder.autoPlaceholder")}
-            aria-label={t("coder.autoTexts")}
+            value={prompt}
+            onChange={(e) => {
+              promptTouched.current = true;
+              setPrompt(e.target.value);
+            }}
+            placeholder={t("coder.autoPromptPlaceholder")}
+            aria-label={t("coder.autoPromptLabel")}
             className="h-16 w-full resize-none px-2 py-1"
           />
         </Field>
-
-        <div className="mt-2 flex flex-wrap items-end gap-2">
-          <Field label={t("coder.autoMode")} className="w-36">
-            <Select
-              value={mode}
-              onChange={(e) => setMode(e.target.value as typeof mode)}
-              className="w-full"
-            >
-              <option value="all">{t("coder.autoAll")}</option>
-              <option value="first">{t("coder.autoFirst")}</option>
-              <option value="last">{t("coder.autoLast")}</option>
-            </Select>
-          </Field>
-          <label className="flex h-7 items-center gap-1.5 text-xs text-text-secondary">
-            <input
-              type="checkbox"
-              checked={useRegex}
-              onChange={(e) => setUseRegex(e.target.checked)}
-              className="accent-accent"
-            />
-            {t("coder.autoRegex")}
-          </label>
-          <label
-            className="flex h-7 items-center gap-1.5 text-xs text-text-secondary"
-            title={t("coder.autoSuggestHint")}
-          >
-            <input
-              type="checkbox"
-              checked={suggest}
-              onChange={(e) => setSuggest(e.target.checked)}
-              className="accent-accent"
-            />
-            <Sparkles size={12} aria-hidden />
-            {t("coder.autoSuggest")}
-          </label>
-        </div>
 
         <div className="mt-2">
           <div className="flex items-center justify-between">
@@ -214,6 +192,20 @@ export function AutocodeDialog({
           </div>
         </div>
 
+        <label
+          className="mt-2 flex h-7 items-center gap-1.5 text-xs text-text-secondary"
+          title={t("coder.autoSuggestHint")}
+        >
+          <input
+            type="checkbox"
+            checked={suggest}
+            onChange={(e) => setSuggest(e.target.checked)}
+            className="accent-accent"
+          />
+          <Sparkles size={12} aria-hidden />
+          {t("coder.autoSuggest")}
+        </label>
+
         {error && <p className="mt-2 text-xs text-danger">{error}</p>}
 
         {result && (
@@ -243,7 +235,7 @@ export function AutocodeDialog({
               )
             }
             onClick={() => void run()}
-            disabled={busy || !findTexts.trim()}
+            disabled={busy || !prompt.trim()}
           >
             {t("coder.autocode")}
           </Button>

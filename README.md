@@ -55,7 +55,7 @@ in `\\\~/.qualcoder/sync/`).
 
 ## Installation
 
-All releases are available on: [https://github.com/MicRaving/qualcodernext/releases](https://github.com/MicRaving/qualcodernext/releases)
+All releases are available on: [https://github.com/MicRaving/QCnext/releases](https://github.com/MicRaving/QCnext/releases)
 
 * Windows: Download the portable version and unpack it or install the installer from
 * Linux: Install the flatpack (untested)

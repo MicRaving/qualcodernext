@@ -216,10 +216,11 @@ async def delete_av_coding(avid: int, db: DbDep) -> None:
 class AutocodeRequest(BaseModel):
     fid: int | None = None
     cids: list[int]
-    find_texts: list[str]
+    find_texts: list[str] = Field(default_factory=list)
     mode: str = "all"  # all | first | last | code_within_code <cid>
     use_regex: bool = False
     suggest: bool = False
+    prompt: str | None = None
     owner: str | None = None
 
 
@@ -243,20 +244,39 @@ class UndoCodingsRequest(BaseModel):
 
 @router.post("/autocode", status_code=201)
 async def autocode_endpoint(req: AutocodeRequest, db: DbDep) -> dict:
+    from qualcoder_api.services.coding_service import ai_autocode
+
     owner = resolve_owner(req.owner)
     if not req.cids:
         raise HTTPException(status_code=422, detail="at least one code required")
+    if not req.find_texts and not (req.prompt or "").strip():
+        raise HTTPException(status_code=422, detail="search texts or a coding prompt required")
     try:
-        result = await autocode(
-            db,
-            fid=req.fid,
-            cids=req.cids,
-            find_texts=req.find_texts,
-            mode=req.mode,
-            use_regex=req.use_regex,
-            suggest=req.suggest,
-            owner=owner,
-        )
+        prompt = (req.prompt or "").strip()
+        if prompt:
+            if req.fid is None:
+                raise HTTPException(
+                    status_code=422, detail="prompt-based autocode requires a single source"
+                )
+            result = await ai_autocode(
+                db,
+                fid=req.fid,
+                cids=req.cids,
+                prompt=prompt,
+                suggest=req.suggest,
+                owner=owner,
+            )
+        else:
+            result = await autocode(
+                db,
+                fid=req.fid,
+                cids=req.cids,
+                find_texts=req.find_texts,
+                mode=req.mode,
+                use_regex=req.use_regex,
+                suggest=req.suggest,
+                owner=owner,
+            )
     except ValueError:
         raise HTTPException(status_code=422, detail="invalid regex or mode") from None
     await audit.record(
@@ -265,7 +285,7 @@ async def autocode_endpoint(req: AutocodeRequest, db: DbDep) -> dict:
         detail={
             "cids": req.cids,
             "count": result["count"],
-            "find_texts": req.find_texts,
+            "prompt": (req.prompt or "")[:200],
             "suggested": [s["name"] for s in result["suggested"]],
         },
     )

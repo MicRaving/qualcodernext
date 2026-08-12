@@ -66,7 +66,7 @@ ServiceDep = Annotated[ProjectService, Depends(get_service)]
 
 class HealthResponse(BaseModel):
     status: str = "ok"
-    version: str = "4.0.0"
+    version: str = "0.1.0"
 
 
 class CreateProjectRequest(BaseModel):

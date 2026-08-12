@@ -4,7 +4,7 @@
  */
 export const en: Record<string, string> = {
   // app chrome
-  "app.name": "QualCoder",
+  "app.name": "QCnext",
   "app.version": "v4.0 (dev)",
 
   // backend status pill
@@ -323,7 +323,9 @@ export const en: Record<string, string> = {
   "coder.unmarkTitle": "Restore the last unmarked coding",
   "coder.autocode": "Autocode",
   "coder.autoPlaceholder": "One search text per line",
-  "coder.autoTexts": "Search texts",
+  "coder.autoPromptLabel": "Coding prompt",
+  "coder.autoPromptPlaceholder": "Describe what to code, e.g.: code every passage about…",
+  "coder.autoPrompt": "Code every passage that clearly relates to: {names}. Mark each passage with the exact code name that fits best.",
   "coder.autoMode": "Match",
   "coder.autoCodes": "{n} codes selected",
   "coder.autoSelectAll": "Select all",

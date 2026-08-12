@@ -521,6 +521,177 @@ async def autocode(
     return {"created": created, "count": len(created), "suggested": suggested}
 
 
+async def ai_autocode(
+    session: AsyncSession,
+    *,
+    fid: int,
+    cids: list[int],
+    prompt: str,
+    suggest: bool,
+    owner: str,
+) -> dict:
+    """AI-driven autocoding: the LLM applies the coding prompt to the source
+    text and returns coded spans (exact code name + character offsets), which
+    are created as text codings. When the AI assistant is disabled, falls
+    back to literal matches of the selected code names. With ``suggest`` the
+    LLM may propose NEW codes for content that fits none of the selected
+    ones — those are created on the fly.
+    """
+    from qualcoder_api.persistence.repositories import CodeRepository
+    from qualcoder_api.services import user_settings
+    from qualcoder_api.services.ai_service import AiUnavailable
+
+    row = (
+        await session.execute(select(tables.source.c.fulltext).where(tables.source.c.id == fid))
+    ).first()
+    if row is None or not row[0]:
+        return {"created": [], "count": 0, "suggested": []}
+    text = row[0]
+
+    code_rows = (
+        await session.execute(
+            select(tables.code_name.c.cid, tables.code_name.c.name).where(
+                tables.code_name.c.cid.in_(cids)
+            )
+        )
+    ).all()
+    names: dict[int, str] = {row[0]: row[1] for row in code_rows}
+
+    spans: list[tuple[int, int, str, str]] = []
+    # Fallback pins: (start, end) -> the exact code id (deterministic path).
+    created_spans_cid: dict[tuple[int, int], int] = {}
+    ai = user_settings.get_ai_settings()
+    if ai.get("enabled"):
+        try:
+            spans = await _ai_code_spans(session, ai, text, list(names.values()), prompt, suggest)
+        except AiUnavailable:
+            spans = []
+    if not spans:
+        # Fallback without AI: literal matches of the selected code names
+        # plus any quoted terms in the prompt ("…passages about \"family\"…"),
+        # which are coded with the first selected code.
+        first_cid = cids[0] if cids else None
+        terms: list[tuple[str, int]] = [(n, c) for c, n in names.items() if n]
+        terms += [(term, first_cid) for term in re.findall(r'"([^"]{2,})"', prompt) if first_cid is not None]
+        for term, term_cid in terms:
+            if term_cid is None:
+                continue
+            for m in re.finditer(re.escape(term), text):
+                spans.append((m.start(), m.end(), term, ""))
+                created_spans_cid.setdefault((m.start(), m.end()), term_cid)
+
+    repo = CodingRepository(session)
+    code_repo = CodeRepository(session)
+    created: list[dict] = []
+    suggested: list[dict] = []
+    for start, end, code_name, reason in spans:
+        start = max(0, min(start, len(text)))
+        end = max(0, min(end, len(text)))
+        if end <= start or not code_name:
+            continue
+        # The deterministic fallback pins the exact target code; the AI path
+        # resolves by name.
+        target_cid = created_spans_cid.get((start, end))
+        if target_cid is None:
+            target_cid = next((c for c, n in names.items() if n == code_name), None)
+        if target_cid is None:
+            if suggest:
+                new = await code_repo.add_code(name=code_name, owner=owner)
+                if new is None:
+                    continue
+                target_cid = new.cid
+                names[target_cid] = code_name
+                suggested.append({"cid": target_cid, "name": code_name, "reason": reason})
+            else:
+                continue
+        seltext = text[start:end]
+        try:
+            coding = await repo.add_text_coding(
+                cid=target_cid, fid=fid, seltext=seltext, pos0=start, pos1=end, owner=owner, memo=""
+            )
+        except IntegrityError:
+            continue
+        created.append(
+            {
+                "ctid": coding.ctid,
+                "cid": coding.cid,
+                "fid": coding.fid,
+                "seltext": coding.seltext,
+                "pos0": coding.pos0,
+                "pos1": coding.pos1,
+                "owner": coding.owner,
+                "memo": coding.memo,
+                "date": coding.date,
+                "important": coding.important,
+            }
+        )
+    return {"created": created, "count": len(created), "suggested": suggested}
+
+
+async def _ai_code_spans(
+    session: AsyncSession,
+    ai: dict,
+    text: str,
+    code_names: list[str],
+    prompt: str,
+    suggest: bool,
+) -> list[tuple[int, int, str, str]]:
+    """Ask the LLM for coded spans in the (chunked) text. Returns
+    (start, end, code_name, reason) tuples. Raises AiUnavailable when the
+    provider is unreachable."""
+    import json
+
+    from qualcoder_api.services.ai_service import AiService
+
+    # LLM context is limited: autocode the first 6000 characters.
+    chunk = text[:6000]
+    code_list = ", ".join(code_names) if code_names else "(no codes selected)"
+    instruction = (
+        "You are a qualitative coding assistant. Apply the researcher's coding "
+        f"instruction to the text.\n\nCODING INSTRUCTION:\n{prompt}\n\n"
+        f"CODES:\n{code_list}\n\nTEXT:\n{chunk}\n\n"
+        "Return ONLY a JSON array of the coded segments, one per coded span, "
+        'in the form [{"code": "<exact code name>", "start": <character '
+        'offset>, "end": <character offset>, "reason": "<short reason>"}]. '
+        "Offsets are character positions in the TEXT above (start is inclusive, "
+        "end exclusive). Use the listed codes for every span."
+    )
+    if suggest:
+        instruction += (
+            " If some important content clearly fits NONE of the listed codes, "
+            "you MAY add one extra entry with a NEW short code name instead."
+        )
+
+    reply = await AiService(session).chat(ai, instruction, context="", mode="general")
+    text_reply = (reply.get("reply") or "").strip()
+    start = text_reply.find("[")
+    end = text_reply.rfind("]")
+    if start < 0 or end <= start:
+        return []
+    try:
+        parsed = json.loads(text_reply[start : end + 1])
+    except (json.JSONDecodeError, TypeError):
+        return []
+    if not isinstance(parsed, list):
+        return []
+
+    out: list[tuple[int, int, str, str]] = []
+    for item in parsed:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("code") or "").strip()
+        raw_start = item.get("start")
+        raw_end = item.get("end")
+        if not isinstance(raw_start, int) or not isinstance(raw_end, int):
+            continue
+        s0, s1 = raw_start, raw_end
+        reason = str(item.get("reason") or "").strip()
+        if s1 <= s0 or s0 < 0:
+            continue
+        out.append((s0, s1, name, reason))
+    return out
+
+
 async def _suggest_and_create_codes(
     session: AsyncSession,
     rows: Sequence[Any],

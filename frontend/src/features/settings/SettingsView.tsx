@@ -155,7 +155,6 @@ export function SettingsView() {
   }, []);
 
   const loadModels = useCallback(async () => {
-    if (!enabled) return;
     setModelsLoading(true);
     try {
       const res = await api.aiModels();
@@ -165,7 +164,7 @@ export function SettingsView() {
     } finally {
       setModelsLoading(false);
     }
-  }, [enabled]);
+  }, []);
 
   const loadIndex = useCallback(async () => {
     try {
@@ -193,9 +192,20 @@ export function SettingsView() {
     void loadPseudonyms();
   }, [loadStatus, loadIndex, loadPseudonyms]);
 
+  // Model polling: fetch whenever the provider or base URL changes (with the
+  // previous list cleared — no leftover models from other providers), and
+  // refresh periodically while the pane is mounted so newly pulled models
+  // (Ollama/LM Studio) appear on their own.
+  useEffect(() => {
+    setModels([]);
+    void loadModels();
+  }, [provider, apiBase, loadModels]);
+
   useEffect(() => {
     void loadModels();
-  }, [loadModels, provider, apiBase]);
+    const timer = window.setInterval(() => void loadModels(), 60_000);
+    return () => window.clearInterval(timer);
+  }, [loadModels]);
 
   /** Probe the configured provider; the button shows OK/broken for 3s. */
   async function checkService() {
