@@ -82,11 +82,10 @@ if (-not $SkipTauri) {
     # Updater artifacts must be signed; point the build at the private key.
     # Without the key (fresh checkout — updater.key is gitignored) the tauri
     # CLI refuses to bundle, so updater artifacts are temporarily disabled in
-    # tauri.conf.json and restored afterwards.
+    # tauri.conf.json and restored afterwards (text-level patch to keep the
+    # file byte-identical afterwards).
     $updaterKey = Join-Path $root "updater.key"
     $confPath = Join-Path $frontendDir "src-tauri\tauri.conf.json"
-    $tauriConf = Get-Content $confPath -Raw | ConvertFrom-Json
-    $artifactsEnabled = $tauriConf.bundle.createUpdaterArtifacts
     $disableArtifacts = $false
     if (Test-Path $updaterKey) {
         $env:TAURI_SIGNING_PRIVATE_KEY_PATH = $updaterKey
@@ -100,10 +99,10 @@ if (-not $SkipTauri) {
             Write-Host "WARNING: could not read updater.key - signing may fail." -ForegroundColor DarkYellow
         }
         Write-Host "Updater signing key found - updater artifacts will be created." -ForegroundColor DarkGray
-    } elseif ($artifactsEnabled) {
+    } elseif ((Get-Content $confPath -Raw) -match '"createUpdaterArtifacts"\s*:\s*true') {
         Write-Host "WARNING: updater.key not found - building WITHOUT updater artifacts." -ForegroundColor DarkYellow
-        $tauriConf.bundle.createUpdaterArtifacts = $false
-        $tauriConf | ConvertTo-Json -Depth 10 | Set-Content $confPath -Encoding utf8
+        (Get-Content $confPath -Raw) -replace '"createUpdaterArtifacts"\s*:\s*true', '"createUpdaterArtifacts": false' |
+            Set-Content $confPath -Encoding utf8 -NoNewline
         $disableArtifacts = $true
     } else {
         Write-Host "WARNING: updater.key not found - updater artifacts are disabled." -ForegroundColor DarkYellow
@@ -118,8 +117,8 @@ if (-not $SkipTauri) {
         if ($disableArtifacts) {
             # Restore the canonical config (updater artifacts on for anyone
             # who has the signing key).
-            $tauriConf.bundle.createUpdaterArtifacts = $true
-            $tauriConf | ConvertTo-Json -Depth 10 | Set-Content $confPath -Encoding utf8
+            (Get-Content $confPath -Raw) -replace '"createUpdaterArtifacts"\s*:\s*false', '"createUpdaterArtifacts": true' |
+                Set-Content $confPath -Encoding utf8 -NoNewline
         }
     }
 } else {
