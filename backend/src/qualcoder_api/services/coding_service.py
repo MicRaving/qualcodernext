@@ -11,7 +11,9 @@ from __future__ import annotations
 
 import datetime
 import re
+from collections.abc import Sequence
 from copy import deepcopy
+from typing import Any
 
 from diff_match_patch import diff_match_patch
 from sqlalchemy import delete, insert, or_, select, update
@@ -379,19 +381,21 @@ async def autocode(
     session: AsyncSession,
     *,
     fid: int | None,
-    cid: int,
+    cids: list[int],
     find_texts: list[str],
     mode: str = "all",
     use_regex: bool = False,
     owner: str,
-) -> list[dict]:
-    """Autocode matching text spans in one source (or all text sources).
+    suggest: bool = False,
+) -> dict:
+    """Autocode matching text spans in one source (or all text sources) for
+    ANY of the given codes. ``mode`` is "all", "first", "last" or
+    ``"code_within_code <cid>"``. Regex compile errors raise ValueError;
+    duplicate inserts are skipped silently.
 
-    Port of the legacy ``CodeText.auto_code`` loop. ``mode`` is "all",
-    "first", "last" or ``"code_within_code <cid>"`` — the last keeps only
-    matches that fall inside a coded segment of the given code (same file
-    and owner). Regex compile errors raise :class:`ValueError`. Duplicate
-    inserts are skipped silently.
+    With ``suggest`` enabled and the AI assistant configured, the service
+    additionally scans the NOT-yet-coded text for important content that no
+    existing code covers and creates new codes for it ("AI suggested").
     """
     within_cid: int | None = None
     if mode.startswith("code_within_code"):
@@ -455,58 +459,164 @@ async def autocode(
 
     created: list[dict] = []
     repo = CodingRepository(session)
-    for index, find_txt in enumerate(patterns):
-        for file_id, file_text in rows:
-            if file_text is None:
-                continue
-            emojis = _emoji_list(file_text)
-            if use_regex:
-                matches = [(m.start(), m.end()) for m in regexes[index].finditer(file_text)]
-            else:
-                matches = [(m.start(), m.end()) for m in re.finditer(re.escape(find_txt), file_text)]
-            if mode == "first" and len(matches) > 1:
-                matches = matches[:1]
-            if mode == "last" and len(matches) > 1:
-                matches = matches[-1:]
-            for start, end in matches:
-                if within_cid is not None and not _inside(start, end, file_id):
+    coded_spans: dict[int, list[tuple[int, int]]] = {}
+    for cid in cids:
+        for index, find_txt in enumerate(patterns):
+            for file_id, file_text in rows:
+                if file_text is None:
                     continue
-                pos0, pos1 = start, end
-                seltext = file_text[start:end] if use_regex else find_txt
-                # Emoji positions from the Qt UI count UTF-16 code units;
-                # add each preceding emoji's extra length to pos0/pos1.
-                for emo in emojis:
-                    if emo["match_end"] < pos0:
-                        pos0 += emo["match_end"] - emo["match_start"]
-                        pos1 += emo["match_end"] - emo["match_start"]
-                try:
-                    coding = await repo.add_text_coding(
-                        cid=cid,
-                        fid=file_id,
-                        seltext=seltext,
-                        pos0=pos0,
-                        pos1=pos1,
-                        owner=owner,
-                        memo="",
+                emojis = _emoji_list(file_text)
+                if use_regex:
+                    matches = [(m.start(), m.end()) for m in regexes[index].finditer(file_text)]
+                else:
+                    matches = [(m.start(), m.end()) for m in re.finditer(re.escape(find_txt), file_text)]
+                if mode == "first" and len(matches) > 1:
+                    matches = matches[:1]
+                if mode == "last" and len(matches) > 1:
+                    matches = matches[-1:]
+                for start, end in matches:
+                    if within_cid is not None and not _inside(start, end, file_id):
+                        continue
+                    pos0, pos1 = start, end
+                    seltext = file_text[start:end] if use_regex else find_txt
+                    # Emoji positions from the Qt UI count UTF-16 code units;
+                    # add each preceding emoji's extra length to pos0/pos1.
+                    for emo in emojis:
+                        if emo["match_end"] < pos0:
+                            pos0 += emo["match_end"] - emo["match_start"]
+                            pos1 += emo["match_end"] - emo["match_start"]
+                    try:
+                        coding = await repo.add_text_coding(
+                            cid=cid,
+                            fid=file_id,
+                            seltext=seltext,
+                            pos0=pos0,
+                            pos1=pos1,
+                            owner=owner,
+                            memo="",
+                        )
+                    except IntegrityError:
+                        # Possible a duplicate entry (unique cid,fid,pos0,pos1,owner)
+                        continue
+                    coded_spans.setdefault(file_id, []).append((pos0, pos1))
+                    created.append(
+                        {
+                            "ctid": coding.ctid,
+                            "cid": coding.cid,
+                            "fid": coding.fid,
+                            "seltext": coding.seltext,
+                            "pos0": coding.pos0,
+                            "pos1": coding.pos1,
+                            "owner": coding.owner,
+                            "memo": coding.memo,
+                            "date": coding.date,
+                            "important": coding.important,
+                        }
                     )
-                except IntegrityError:
-                    # Possible a duplicate entry (unique cid,fid,pos0,pos1,owner)
-                    continue
-                created.append(
-                    {
-                        "ctid": coding.ctid,
-                        "cid": coding.cid,
-                        "fid": coding.fid,
-                        "seltext": coding.seltext,
-                        "pos0": coding.pos0,
-                        "pos1": coding.pos1,
-                        "owner": coding.owner,
-                        "memo": coding.memo,
-                        "date": coding.date,
-                        "important": coding.important,
-                    }
-                )
-    return created
+
+    suggested: list[dict] = []
+    if suggest:
+        suggested = await _suggest_and_create_codes(session, rows, coded_spans, owner)
+
+    return {"created": created, "count": len(created), "suggested": suggested}
+
+
+async def _suggest_and_create_codes(
+    session: AsyncSession,
+    rows: Sequence[Any],
+    coded_spans: dict[int, list[tuple[int, int]]],
+    owner: str,
+) -> list[dict]:
+    """Ask the AI for important topics in the still-uncoded text and create
+    a new code for each. Returns [{cid, name, reason}] (empty when the AI
+    assistant is disabled/unconfigured or nothing important is found)."""
+    from qualcoder_api.persistence.repositories import CodeRepository
+    from qualcoder_api.services import user_settings
+    from qualcoder_api.services.ai_service import AiService, AiUnavailable
+
+    ai = user_settings.get_ai_settings()
+    if not ai.get("enabled"):
+        return []
+
+    # Existing code names (the AI must not propose duplicates).
+    existing_rows = (
+        await session.execute(select(tables.code_name.c.name))
+    ).all()
+    existing = {str(r[0]).strip().lower() for r in existing_rows if r[0]}
+
+    # The still-uncoded text: cut out everything a pattern already coded.
+    chunks: list[str] = []
+    for file_id, file_text in rows:
+        if not file_text:
+            continue
+        text = file_text
+        parts: list[str] = []
+        pos = 0
+        for s0, s1 in sorted(coded_spans.get(file_id, [])):
+            if s0 > pos:
+                parts.append(text[pos:s0])
+            pos = max(pos, s1)
+        if pos < len(text):
+            parts.append(text[pos:])
+        chunk = "\n".join(parts).strip()
+        if chunk:
+            chunks.append(chunk[:6000])
+    if not chunks:
+        return []
+
+    prompt = (
+        "You are helping a qualitative researcher with coding. Below is a text "
+        "excerpt and the names of the codes that already exist in the project.\n\n"
+        "EXISTING CODES:\n"
+        + (", ".join(sorted(existing)) if existing else "(none)")
+        + "\n\nTEXT:\n"
+        + "\n---\n".join(chunks)[:8000]
+        + "\n\nFind the up to THREE most important topics in the text that are "
+        "NOT covered by any existing code. For each, propose a short new code "
+        "name (2-4 words max) and a one-line reason. Reply with ONLY a JSON "
+        "array, no markdown: [{\"name\": \"...\", \"reason\": \"...\"}]"
+    )
+    try:
+        service = AiService(session)
+        reply = await service.chat(ai, prompt, context="", mode="general")
+    except (AiUnavailable, Exception):
+        return []
+
+    import json
+
+    text = (reply.get("reply") or "").strip()
+    start = text.find("[")
+    end = text.rfind("]")
+    if start < 0 or end <= start:
+        return []
+    try:
+        proposals = json.loads(text[start : end + 1])
+    except (json.JSONDecodeError, TypeError):
+        return []
+    if not isinstance(proposals, list):
+        return []
+
+    suggested: list[dict] = []
+    for item in proposals:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("name") or "").strip()
+        reason = str(item.get("reason") or "").strip()
+        if not name or name.lower() in existing:
+            continue
+        try:
+            code = await CodeRepository(session).add_code(
+                name=name, owner=owner, catid=None, supercid=None
+            )
+            existing.add(name.lower())
+        except Exception:
+            continue
+        if code is None:
+            continue
+        suggested.append({"cid": code.cid, "name": code.name, "reason": reason})
+        if len(suggested) >= 3:
+            break
+    return suggested
 
 
 async def undo_codings(session: AsyncSession, items: list[dict]) -> int:

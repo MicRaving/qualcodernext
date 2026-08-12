@@ -369,14 +369,11 @@ export function GraphsMenuBar({ actions }: { actions?: ReactNode }) {
         {graphsUi.list.length === 0 ? (
           <option value="">{t("graphs.noGraphs")}</option>
         ) : (
-          <>
-            <option value="">{t("graphs.pickGraph")}</option>
-            {graphsUi.list.map((g) => (
-              <option key={g.grid} value={g.grid}>
-                {g.name}
-              </option>
-            ))}
-          </>
+          graphsUi.list.map((g) => (
+            <option key={g.grid} value={g.grid}>
+              {g.name}
+            </option>
+          ))
         )}
       </Select>
       <Button
@@ -494,16 +491,6 @@ export function GraphsView() {
   useEffect(() => {
     if (grid != null) void loadGraphData(grid);
   }, [grid, loadGraphData]);
-
-  async function createGraph(name: string) {
-    setGraphsUi({ dialog: null });
-    try {
-      const graph = await api.createGraph(name);
-      setGraphsUi({ grid: graph.grid, tick: graphsUi.tick + 1 });
-    } catch (e) {
-      setGraphsUi({ error: e instanceof Error ? e.message : "Could not create graph" });
-    }
-  }
 
   /* ------------------------------------------------------------- nodes */
 
@@ -887,11 +874,6 @@ export function GraphsView() {
           onAdd={(id, name) => void doAddNode(pickAdd.kind, id, name)}
         />
       )}
-      <GraphNameDialog
-        open={graphsUi.dialog === "name"}
-        onClose={() => setGraphsUi({ dialog: null })}
-        onSubmit={(n) => void createGraph(n)}
-      />
     </div>
   );
 }

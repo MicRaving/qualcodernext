@@ -6,8 +6,18 @@
  * button. Sections are separated by simple dividers, not cards.
  */
 import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
-import { Check, HelpCircle, LoaderCircle, Moon, RotateCw, Sun, Trash2 } from "lucide-react";
-import { api, type AiIndexStatus, type AiStatus, type Pseudonym } from "@/lib/api";
+import {
+  Check,
+  CircleAlert,
+  CircleCheck,
+  HelpCircle,
+  LoaderCircle,
+  Moon,
+  RotateCw,
+  Sun,
+  Trash2,
+} from "lucide-react";
+import { api, type AiIndexStatus, type Pseudonym } from "@/lib/api";
 import { errorDetail } from "@/features/ai/format";
 import { InterchangeView } from "@/features/interchange/InterchangeView";
 import { useI18n, LOCALE_NAMES, type Locale } from "@/lib/i18n";
@@ -16,6 +26,7 @@ import {
   Button,
   ErrorBanner,
   Field,
+  HelpFlyout,
   IconButton,
   Input,
   LeftBar,
@@ -79,10 +90,6 @@ export function SettingsView() {
     }
   }
 
-  const [status, setStatus] = useState<AiStatus | null>(null);
-  const [statusError, setStatusError] = useState<string | null>(null);
-  const [statusLoading, setStatusLoading] = useState(false);
-
   const [enabled, setEnabled] = useState(false);
   const [provider, setProvider] = useState("ollama");
   const [apiBase, setApiBase] = useState("");
@@ -90,8 +97,13 @@ export function SettingsView() {
   const [apiKey, setApiKey] = useState("");
   const [mcpPermissions, setMcpPermissions] = useState("read");
   const [models, setModels] = useState<string[]>([]);
+  const [modelsLoading, setModelsLoading] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
-  const [savedFlash, setSavedFlash] = useState(false);
+
+  /** Service-status check button: "checking" → "ok"/"broken" for 3s. */
+  const [serviceCheck, setServiceCheck] = useState<"idle" | "checking" | "ok" | "broken">("idle");
+  const [serviceProbeError, setServiceProbeError] = useState<string | null>(null);
+  const serviceCheckTimer = useRef<number | null>(null);
 
   // Semantic index
   const [indexStatus, setIndexStatus] = useState<AiIndexStatus | null>(null);
@@ -105,8 +117,9 @@ export function SettingsView() {
   const [pseudoError, setPseudoError] = useState<string | null>(null);
 
 
-  // Help popovers
+  // Help popovers (anchored for the shared HelpFlyout)
   const [helpOpen, setHelpOpen] = useState<"interchange" | "index" | null>(null);
+  const [indexHintAnchorEl, setIndexHintAnchorEl] = useState<HTMLElement | null>(null);
 
   const PROVIDER_PRESETS: Record<string, { url: string; model: string }> = {
     ollama: { url: "http://localhost:11434/v1", model: "llama3.2" },
@@ -128,31 +141,29 @@ export function SettingsView() {
   };
 
   const loadStatus = useCallback(async () => {
-    setStatusLoading(true);
-    setStatusError(null);
     try {
       const s = await api.aiStatus();
-      setStatus(s);
       if (touchedRef.current) return;
       setEnabled(s.enabled);
       setProvider(s.provider);
       setApiBase(s.base_url);
       setModel(s.model);
       setMcpPermissions(s.mcp_permissions ?? "read");
-    } catch (e) {
-      setStatusError(errorDetail(e, t("settings.aiLoadError")));
-    } finally {
-      setStatusLoading(false);
+    } catch {
+      /* fields keep their defaults when the backend is unreachable */
     }
-  }, [t]);
+  }, []);
 
   const loadModels = useCallback(async () => {
     if (!enabled) return;
+    setModelsLoading(true);
     try {
       const res = await api.aiModels();
       setModels(res.models);
     } catch {
       setModels([]);
+    } finally {
+      setModelsLoading(false);
     }
   }, [enabled]);
 
@@ -186,7 +197,33 @@ export function SettingsView() {
     void loadModels();
   }, [loadModels, provider, apiBase]);
 
-  /** Auto-save the AI settings (debounced) — no Save button. */
+  /** Probe the configured provider; the button shows OK/broken for 3s. */
+  async function checkService() {
+    if (serviceCheck === "checking") return;
+    setServiceCheck("checking");
+    setServiceProbeError(null);
+    try {
+      const s = await api.aiStatus(true);
+      const ok = s.reachable === true;
+      setServiceCheck(ok ? "ok" : "broken");
+      if (!ok && s.probe_error) setServiceProbeError(s.probe_error);
+    } catch (e) {
+      setServiceCheck("broken");
+      setServiceProbeError(errorDetail(e, t("settings.aiLoadError")));
+    }
+    if (serviceCheckTimer.current !== null) window.clearTimeout(serviceCheckTimer.current);
+    serviceCheckTimer.current = window.setTimeout(() => setServiceCheck("idle"), 3000);
+  }
+
+  useEffect(
+    () => () => {
+      if (serviceCheckTimer.current !== null) window.clearTimeout(serviceCheckTimer.current);
+    },
+    [],
+  );
+
+  /** Auto-save the AI settings (debounced) — no Save button, no "Saved"
+   *  flash; only errors surface. */
   const saveTimer = useRef<number | null>(null);
   useEffect(() => {
     if (saveTimer.current !== null) window.clearTimeout(saveTimer.current);
@@ -200,10 +237,6 @@ export function SettingsView() {
           model: model.trim(),
           api_key: apiKey,
           mcp_permissions: mcpPermissions,
-        })
-        .then(() => {
-          setSavedFlash(true);
-          window.setTimeout(() => setSavedFlash(false), 2000);
         })
         .catch((e) => setSaveError(errorDetail(e, t("settings.aiSaveError"))));
     }, 600);
@@ -266,6 +299,8 @@ export function SettingsView() {
       setPseudoError(errorDetail(err, "Could not delete pseudonym"));
     }
   }
+
+  const indexHintAnchor = helpOpen === "index" ? indexHintAnchorEl : null;
 
   return (
     <LeftBar
@@ -363,43 +398,6 @@ export function SettingsView() {
             </button>
           </div>
 
-          <div className="mt-2 flex items-center justify-between gap-3">
-            <div className="min-w-0">
-              <p className="text-xs text-text-secondary">{t("settings.aiStatus")}</p>
-              {statusLoading ? (
-                <p className="mt-0.5 flex items-center gap-1.5 text-xs text-text-secondary">
-                  <LoaderCircle size={12} className="animate-spin" aria-hidden />
-                  {t("settings.aiChecking")}
-                </p>
-              ) : status ? (
-                <p className="mt-0.5 text-xs text-text-primary">
-                  {status.configured
-                    ? t("settings.aiStatusConfigured", {
-                        provider: status.provider || t("settings.aiFallbackName"),
-                        model: status.model || t("settings.aiNoModel"),
-                        enabled: status.enabled ? t("settings.aiYes") : t("settings.aiNo"),
-                      })
-                    : t("settings.aiStatusNotConfigured", {
-                        provider: status.provider || t("settings.aiFallbackName"),
-                      })}
-                </p>
-              ) : (
-                <p className="mt-0.5 text-xs text-danger">{statusError ?? t("settings.aiStatusUnknown")}</p>
-              )}
-              {status && !status.configured && status.reason && (
-                <p className="mt-0.5 text-xs text-text-secondary">{status.reason}</p>
-              )}
-            </div>
-            <Button
-              variant="secondary"
-              onClick={() => void loadStatus()}
-              disabled={statusLoading}
-              icon={<RotateCw size={12} aria-hidden />}
-            >
-              {t("settings.aiCheckStatus")}
-            </Button>
-          </div>
-
           <div className="mt-3 grid grid-cols-1 gap-3">
             <div className="grid grid-cols-2 gap-3">
               <Field label={t("settings.aiProvider")}>
@@ -418,27 +416,34 @@ export function SettingsView() {
                 </Select>
               </Field>
               <Field label={t("settings.model")}>
-                {models.length > 0 ? (
-                  <Select
-                    value={model}
-                    onChange={(e) => { markTouched(); setModel(e.target.value); }}
-                    className="w-full"
-                  >
-                    {!models.includes(model) && model && <option value={model}>{model}</option>}
-                    {models.map((m) => (
-                      <option key={m} value={m}>
-                        {m}
-                      </option>
-                    ))}
-                  </Select>
+                <Select
+                  value={model}
+                  onChange={(e) => {
+                    markTouched();
+                    setModel(e.target.value);
+                  }}
+                  className="w-full"
+                  disabled={models.length === 0}
+                >
+                  {model && !models.includes(model) && <option value={model}>{model}</option>}
+                  {models.map((m) => (
+                    <option key={m} value={m}>
+                      {m}
+                    </option>
+                  ))}
+                </Select>
+                {modelsLoading ? (
+                  <span className="mt-1 flex items-center gap-1.5 text-xs text-text-secondary">
+                    <LoaderCircle size={11} className="animate-spin" aria-hidden />
+                    {t("settings.aiModelsLoading")}
+                  </span>
                 ) : (
-                  <Input
-                    type="text"
-                    value={model}
-                    onChange={(e) => { markTouched(); setModel(e.target.value); }}
-                    placeholder="llama3.2"
-                    className="w-full"
-                  />
+                  models.length === 0 &&
+                  enabled && (
+                    <span className="mt-1 block text-xs text-warning">
+                      {t("settings.aiModelsUnavailable")}
+                    </span>
+                  )
                 )}
               </Field>
             </div>
@@ -485,66 +490,112 @@ export function SettingsView() {
                 </Select>
               </Field>
             </div>
-            {savedFlash && (
-              <p className="flex items-center gap-1.5 text-xs text-success" role="status">
-                <Check size={12} aria-hidden />
-                {t("settings.saved")}
-              </p>
-            )}
           </div>
 
-          {/* Semantic index — right of the permissions row */}
-          <div className="mt-3 border-t border-border pt-3">
-            <div className="flex items-center gap-1.5">
-              <h3 className="text-xs font-semibold text-text-primary">{t("ai.indexSection")}</h3>
-              <IconButton
-                label={t("ai.indexHint")}
-                title={t("ai.indexHint")}
-                size="sm"
-                aria-expanded={helpOpen === "index"}
-                onClick={() => setHelpOpen(helpOpen === "index" ? null : "index")}
-              >
-                <HelpCircle size={12} aria-hidden />
-              </IconButton>
-            </div>
-            {helpOpen === "index" && (
-              <p className="mt-1 text-xs text-text-secondary">{t("ai.indexHint")}</p>
-            )}
-            {indexStatus?.indexed ? (
-              <p className="mt-1 text-xs text-text-primary">
-                {t("ai.indexStatusReady", {
-                  chunks: String(indexStatus.chunks),
-                  model: indexStatus.model,
-                })}
-              </p>
-            ) : (
-              <p className="mt-1 text-xs text-text-secondary">{t("ai.indexStatusNone")}</p>
-            )}
-            {indexError && <p className="mt-1 text-xs text-danger">{indexError}</p>}
-            <div className="mt-2 flex items-center gap-2">
-              <Button
-                variant="secondary"
-                onClick={() => void buildIndex()}
-                disabled={indexBusy}
-                icon={
-                  indexBusy ? (
-                    <LoaderCircle size={12} className="animate-spin" aria-hidden />
-                  ) : (
-                    <RotateCw size={12} aria-hidden />
-                  )
-                }
-              >
-                {indexStatus?.indexed ? t("ai.indexRebuild") : t("ai.indexBuild")}
-              </Button>
-              {indexStatus?.indexed && (
+          {/* Service status | Semantic index — side by side */}
+          <div className="mt-3 grid grid-cols-1 gap-3 border-t border-border pt-3 sm:grid-cols-2">
+            {/* Service status — the Check button turns into a transient
+                OK/broken indicator for 3s after probing the provider. */}
+            <div>
+              <div className="flex items-center gap-1.5">
+                <h3 className="text-xs font-semibold text-text-primary">{t("settings.aiServiceStatus")}</h3>
+              </div>
+              <div className="mt-2 flex items-center gap-2">
                 <Button
-                  variant="danger"
-                  onClick={() => void deleteIndex()}
-                  icon={<Trash2 size={12} aria-hidden />}
+                  variant="secondary"
+                  onClick={() => void checkService()}
+                  disabled={serviceCheck === "checking"}
+                  icon={
+                    serviceCheck === "checking" ? (
+                      <LoaderCircle size={12} className="animate-spin" aria-hidden />
+                    ) : serviceCheck === "ok" ? (
+                      <CircleCheck size={12} aria-hidden />
+                    ) : serviceCheck === "broken" ? (
+                      <CircleAlert size={12} aria-hidden />
+                    ) : (
+                      <RotateCw size={12} aria-hidden />
+                    )
+                  }
+                  className={
+                    serviceCheck === "ok"
+                      ? "border-success text-success hover:bg-success/10"
+                      : serviceCheck === "broken"
+                        ? "border-danger text-danger hover:bg-danger/10"
+                        : ""
+                  }
                 >
-                  {t("ai.indexDelete")}
+                  {serviceCheck === "checking"
+                    ? t("settings.aiChecking")
+                    : serviceCheck === "ok"
+                      ? t("settings.aiStatusOk")
+                      : serviceCheck === "broken"
+                        ? t("settings.aiStatusBroken")
+                        : t("settings.aiCheckStatus")}
                 </Button>
+              </div>
+              {serviceCheck === "broken" && serviceProbeError && (
+                <p className="mt-1.5 break-words text-xs text-danger">{serviceProbeError}</p>
               )}
+            </div>
+
+            {/* Semantic index */}
+            <div>
+              <div className="flex items-center gap-1.5">
+                <h3 className="text-xs font-semibold text-text-primary">{t("ai.indexSection")}</h3>
+                <IconButton
+                  label={t("ai.indexHint")}
+                  title={t("ai.indexHint")}
+                  size="sm"
+                  aria-expanded={helpOpen === "index"}
+                  onClick={(e) => {
+                    setIndexHintAnchorEl(e.currentTarget);
+                    setHelpOpen(helpOpen === "index" ? null : "index");
+                  }}
+                >
+                  <HelpCircle size={12} aria-hidden />
+                </IconButton>
+                {helpOpen === "index" && indexHintAnchor && (
+                  <HelpFlyout anchor={indexHintAnchor} onClose={() => setHelpOpen(null)}>
+                    <p className="text-xs leading-relaxed text-text-secondary">{t("ai.indexHint")}</p>
+                  </HelpFlyout>
+                )}
+              </div>
+              {indexStatus?.indexed ? (
+                <p className="mt-1 text-xs text-text-primary">
+                  {t("ai.indexStatusReady", {
+                    chunks: String(indexStatus.chunks),
+                    model: indexStatus.model,
+                  })}
+                </p>
+              ) : (
+                <p className="mt-1 text-xs text-text-secondary">{t("ai.indexStatusNone")}</p>
+              )}
+              {indexError && <p className="mt-1 text-xs text-danger">{indexError}</p>}
+              <div className="mt-2 flex items-center gap-2">
+                <Button
+                  variant="secondary"
+                  onClick={() => void buildIndex()}
+                  disabled={indexBusy}
+                  icon={
+                    indexBusy ? (
+                      <LoaderCircle size={12} className="animate-spin" aria-hidden />
+                    ) : (
+                      <RotateCw size={12} aria-hidden />
+                    )
+                  }
+                >
+                  {indexStatus?.indexed ? t("ai.indexRebuild") : t("ai.indexBuild")}
+                </Button>
+                {indexStatus?.indexed && (
+                  <Button
+                    variant="danger"
+                    onClick={() => void deleteIndex()}
+                    icon={<Trash2 size={12} aria-hidden />}
+                  >
+                    {t("ai.indexDelete")}
+                  </Button>
+                )}
+              </div>
             </div>
           </div>
         </section>

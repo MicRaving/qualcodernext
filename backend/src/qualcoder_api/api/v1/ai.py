@@ -42,7 +42,13 @@ class IndexRequest(BaseModel):
 async def ai_models() -> dict:
     """List the models the configured provider advertises (OpenAI-compatible
     ``/v1/models``). Local providers (ollama/lmstudio/opencode-go) answer
-    quickly; cloud providers need an API key, so failures return empty."""
+    quickly; cloud providers need an API key, so failures return empty.
+
+    The list is FILTERED per provider: chat models only, newest generations —
+    Gemini/GPT video, TTS, embedding and image models are dropped.
+    """
+    import re
+
     import httpx
 
     ai = user_settings.get_ai_settings()
@@ -59,20 +65,57 @@ async def ai_models() -> dict:
             resp = await client.get(url, headers=headers)
             resp.raise_for_status()
             data = resp.json()
-        models = sorted(
-            (m.get("id") for m in data.get("data", []) if m.get("id")),
-        )
-        return {"models": models}
     except Exception:
         return {"models": []}
+    ids = sorted(m.get("id") for m in data.get("data", []) if m.get("id"))
+
+    provider = ai.get("provider", "custom")
+    if provider == "gemini":
+        keep = re.compile(r"^gemini-[0-9]")
+        drop = re.compile(
+            r"(video|audio|tts|embedding|imagen|image|veo|live|exp|whisper|meet|nanoda|pali|music)"
+        )
+    elif provider == "gpt":
+        keep = re.compile(r"^gpt-(4|5|o[34])")
+        drop = re.compile(r"(audio|video|tts|embedding|realtime|image|dall|speech|gpt-4\.5-can|vega)")
+    elif provider == "claude":
+        keep = re.compile(r"^claude-(sonnet|opus|haiku)")
+        drop = re.compile(r"(aws|bedrock|agent|vertex)")
+    else:
+        # Local / custom providers: everything they advertise is a candidate.
+        keep = re.compile(r".+")
+        drop = None
+
+    models = [m for m in ids if keep.match(m) and (drop is None or not drop.search(m))]
+    return {"models": models}
+
+
+async def _probe_provider(ai: dict) -> tuple[bool | None, str]:
+    """Live reachability check of the configured provider's /v1/models."""
+    import httpx
+
+    api_base = (ai.get("api_base") or "").rstrip("/")
+    if not api_base:
+        return None, "no api base configured"
+    headers = {}
+    api_key = ai.get("api_key") or ""
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+    try:
+        async with httpx.AsyncClient(timeout=2.5) as client:
+            resp = await client.get(f"{api_base}/models", headers=headers)
+            resp.raise_for_status()
+        return True, ""
+    except Exception as err:
+        return False, str(err)
 
 
 @router.get("/status")
-async def ai_status() -> dict:
+async def ai_status(probe: bool = False) -> dict:
     ai = user_settings.get_ai_settings()
     configured, reason = AiService.is_configured(ai)
     api_base = ai.get("api_base") or ""
-    return {
+    out = {
         "enabled": ai["enabled"],
         "configured": configured,
         "reason": reason,
@@ -80,7 +123,14 @@ async def ai_status() -> dict:
         "base_url": api_base,
         "model": ai["model"],
         "mcp_permissions": ai.get("mcp_permissions", "read"),
+        "reachable": None,
+        "probe_error": "",
     }
+    if probe:
+        reachable, probe_error = await _probe_provider(ai)
+        out["reachable"] = reachable
+        out["probe_error"] = probe_error
+    return out
 
 
 @router.put("/settings")

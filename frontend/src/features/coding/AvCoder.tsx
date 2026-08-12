@@ -10,7 +10,6 @@ import {
   Captions,
   Check,
   Code,
-  LoaderCircle,
   Mic,
   Music,
   Pause,
@@ -23,6 +22,7 @@ import {
 } from "lucide-react";
 import { api, sourceFileUrl, type AVCoding, type CodeTreeItem, type Coding, type Source } from "@/lib/api";
 import { CodePicker, type PickedCode } from "@/features/coding/CodePicker";
+import { AutocodeDialog } from "@/features/coding/AutocodeDialog";
 import { TranscribeDialog } from "@/features/coding/TranscribeDialog";
 import { formatTime, parseTranscript, segmentLeft, secondsToMs, segmentWidth, buildCrAt, rawToRendered, renderedToRaw, stripCr, normalizeCodingPositions } from "@/features/coding/media";
 import { getSelectionOffsets } from "@/features/coding/selection";
@@ -33,7 +33,6 @@ import {
   Button,
   ErrorBanner,
   IconButton,
-  Input,
   LoadingState,
   Select,
   Textarea,
@@ -57,6 +56,7 @@ function transcriptTimestamp(ms: number): string {
 
 export function AvCoder({ source }: { source: Source }) {
   const { t } = useI18n();
+  const storeCodeTree = useProjectStore((s) => s.codeTree);
   const [transcribeOpen, setTranscribeOpen] = useState(false);
   const activeCodeId = useProjectStore((s) => s.activeCodeId);
   const hiddenCodes = useProjectStore((s) => s.hiddenCodes);
@@ -295,35 +295,10 @@ export function AvCoder({ source }: { source: Source }) {
 
   // --- transcript autocode ---
   const [autoOpen, setAutoOpen] = useState(false);
-  const [autoText, setAutoText] = useState("");
-  const [autoCid, setAutoCid] = useState("");
-  const [autoBusy, setAutoBusy] = useState(false);
-  const codeTree = useProjectStore((s) => s.codeTree);
-  const codeOptions = useMemo(() => codeTree.filter((c) => c.kind === "code"), [codeTree]);
 
-  async function runTranscriptAutocode() {
-    const findTexts = autoText.trim().split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
-    if (findTexts.length === 0 || !autoCid || transcriptId == null || autoBusy) return;
-    setAutoBusy(true);
-    setTError(null);
-    try {
-      await api.autocode({
-        fid: transcriptId,
-        cid: Number(autoCid),
-        find_texts: findTexts,
-        mode: "all",
-        use_regex: false,
-      });
-      await useProjectStore.getState().refreshProject();
-      await loadTranscriptCodings();
-      setAutoOpen(false);
-      setAutoText("");
-      setAutoCid("");
-    } catch (e) {
-      setTError(e instanceof Error ? e.message : t("coder.autoError"));
-    } finally {
-      setAutoBusy(false);
-    }
+  function handleAutocodeDone() {
+    void useProjectStore.getState().refreshProject();
+    void loadTranscriptCodings();
   }
 
   /** Render the coded subranges of one transcript line (absolute offsets
@@ -847,56 +822,14 @@ export function AvCoder({ source }: { source: Source }) {
               )}
               <div className="flex-1" />
               {transcriptId != null && (
-                <div className="relative">
-                  <Button
-                    variant="secondary"
-                    className="h-6 px-1.5"
-                    onClick={() => setAutoOpen((o) => !o)}
-                    icon={<Sparkles size={12} aria-hidden />}
-                  >
-                    {t("coder.autocode")}
-                  </Button>
-                  {autoOpen && (
-                    <div className={`absolute right-0 top-full z-40 mt-1 w-64 p-2 ${cls.popup}`}>
-                      <Input
-                        autoFocus
-                        value={autoText}
-                        onChange={(e) => setAutoText(e.target.value)}
-                        placeholder={t("coder.autoPlaceholder")}
-                        className="w-full"
-                      />
-                      <div className="mt-1.5 flex items-center gap-1.5">
-                        <Select
-                          value={autoCid}
-                          onChange={(e) => setAutoCid(e.target.value)}
-                          aria-label={t("coder.pickCode")}
-                          className="min-w-0 flex-1"
-                        >
-                          <option value="">{t("coder.pickCode")}</option>
-                          {codeOptions.map((c) => (
-                            <option key={c.id} value={c.id}>
-                              {c.name}
-                            </option>
-                          ))}
-                        </Select>
-                        <Button
-                          variant="primary"
-                          onClick={() => void runTranscriptAutocode()}
-                          disabled={autoBusy || !autoText.trim() || !autoCid}
-                          icon={
-                            autoBusy ? (
-                              <LoaderCircle size={12} className="animate-spin" aria-hidden />
-                            ) : (
-                              <Sparkles size={12} aria-hidden />
-                            )
-                          }
-                        >
-                          {t("coder.autocode")}
-                        </Button>
-                      </div>
-                    </div>
-                  )}
-                </div>
+                <Button
+                  variant="secondary"
+                  className="h-6 px-1.5"
+                  onClick={() => setAutoOpen((o) => !o)}
+                  icon={<Sparkles size={12} aria-hidden />}
+                >
+                  {t("coder.autocode")}
+                </Button>
               )}
               {tError && <span className="text-xs text-danger">{tError}</span>}
               <IconButton
@@ -1026,7 +959,7 @@ export function AvCoder({ source }: { source: Source }) {
             )}
             <CodePicker
               open={tPickerOpen}
-              codes={codes}
+              codes={storeCodeTree}
               onClose={() => setTPickerOpen(false)}
               onPick={(picked) => void codeTranscriptSelection(picked.cid)}
             />
@@ -1116,12 +1049,20 @@ export function AvCoder({ source }: { source: Source }) {
 
       <CodePicker
         open={pickerOpen}
-        codes={codes}
+        codes={storeCodeTree}
         onClose={() => {
           setPickerOpen(false);
           setPendingStart(null);
         }}
         onPick={(code) => void handlePick(code)}
+      />
+
+      <AutocodeDialog
+        open={autoOpen}
+        onClose={() => setAutoOpen(false)}
+        fid={transcriptId}
+        codes={storeCodeTree}
+        onDone={handleAutocodeDone}
       />
 
       {transcribeOpen && (

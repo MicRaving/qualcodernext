@@ -97,17 +97,25 @@ test("create project, import a file, autocode it, and run a report", async ({ pa
 
   // --------------------------------------------------------------- autocode
   await test.step("autocode the document into a new code", async () => {
-    await page.getByRole("button", { name: "Autocode" }).first().click();
+    // Create the code first (sidebar inline editor).
+    await page.getByRole("button", { name: "Code", exact: true }).click();
+    await page.getByTestId("inline-name-edit").fill("E2E");
+    await page.keyboard.press("Enter");
+    await expect(page.getByText("E2E", { exact: true }).first()).toBeVisible({
+      timeout: 10_000,
+    });
 
-    const searchText = page.getByPlaceholder("One search text per line");
+    await page.getByRole("button", { name: "Autocode" }).first().click();
+    const dialog = page.getByRole("dialog", { name: "Autocode" });
+    const searchText = dialog.getByLabel("Search texts");
     await expect(searchText).toBeVisible();
     await searchText.fill("happy");
-    await page.getByPlaceholder("\u2026or new code name").fill("E2E");
+    await dialog.getByText("E2E").click();
+    await dialog.getByRole("button", { name: "Autocode" }).click();
 
-    // The panel's run button is the second "Autocode" button in DOM order.
-    await page.getByRole("button", { name: "Autocode" }).nth(1).click();
-
-    await expect(page.getByText(/Autocoded \d+ instances/)).toBeVisible({ timeout: 20_000 });
+    await expect(dialog.getByText(/Autocoded \d+ instances/)).toBeVisible({
+      timeout: 20_000,
+    });
   });
 
   // ----------------------------------------------------------------- report

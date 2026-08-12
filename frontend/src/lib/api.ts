@@ -422,6 +422,7 @@ export interface CommitEditResponse {
 export interface AutocodeResponse {
   created: Coding[];
   count: number;
+  suggested: { cid: number; name: string; reason: string }[];
 }
 
 export interface UndoCodingsResponse {
@@ -438,6 +439,9 @@ export interface AiStatus {
   base_url: string;
   model: string;
   mcp_permissions?: string;
+  /** Live reachability of the provider (only when probed). */
+  reachable?: boolean | null;
+  probe_error?: string;
 }
 
 export interface AiChatReply {
@@ -1059,10 +1063,11 @@ export const api = {
     }),
   autocode: (body: {
     fid: number | null;
-    cid: number;
+    cids: number[];
     find_texts: string[];
     mode: string;
     use_regex: boolean;
+    suggest?: boolean;
     owner?: string;
   }) =>
     request<AutocodeResponse>("/codings/autocode", {
@@ -1249,7 +1254,8 @@ export const api = {
       codername,
       qualitativeHeaders ? { qualitative_headers: qualitativeHeaders.join(",") } : undefined,
     ),
-  aiStatus: () => request<AiStatus>("/ai/status"),
+  aiStatus: (probe = false) =>
+    request<AiStatus>(`/ai/status${probe ? "?probe=1" : ""}`),
   aiModels: () => request<{ models: string[] }>("/ai/models"),
   aiSaveSettings: (body: {
     enabled: boolean;

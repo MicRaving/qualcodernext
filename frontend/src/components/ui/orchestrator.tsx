@@ -11,6 +11,8 @@
 import {
   useContext,
   useEffect,
+  useRef,
+  useState,
   type ButtonHTMLAttributes,
   type HTMLAttributes,
   type InputHTMLAttributes,
@@ -344,6 +346,76 @@ export function MenuItem({ className = "", children, ...rest }: MenuItemProps) {
     <button type="button" className={`${cls.menuItem} ${className}`} {...rest}>
       {children}
     </button>
+  );
+}
+
+/**
+ * HelpFlyout — a consistent question-mark popover. Renders fixed at the
+ * anchor button, clamped inside the window (never cut off by boundaries),
+ * closes on outside click or Escape.
+ */
+export function HelpFlyout({
+  anchor,
+  onClose,
+  children,
+  className = "",
+}: {
+  anchor: HTMLElement | null;
+  onClose: () => void;
+  children: ReactNode;
+  className?: string;
+}) {
+  const ref = useRef<HTMLDivElement | null>(null);
+  const [pos, setPos] = useState<{ left: number; top: number } | null>(null);
+
+  useEffect(() => {
+    const place = () => {
+      const a = anchor?.getBoundingClientRect();
+      const el = ref.current;
+      if (!a || !el) return;
+      const w = el.offsetWidth;
+      const h = el.offsetHeight;
+      const left = Math.max(8, Math.min(a.left, window.innerWidth - w - 8));
+      let top = a.bottom + 6;
+      if (top + h > window.innerHeight - 8) {
+        top = Math.max(8, a.top - h - 6);
+      }
+      setPos({ left, top });
+    };
+    place();
+    window.addEventListener("resize", place);
+    window.addEventListener("scroll", place, true);
+    return () => {
+      window.removeEventListener("resize", place);
+      window.removeEventListener("scroll", place, true);
+    };
+  }, [anchor]);
+
+  useEffect(() => {
+    const onDown = (e: MouseEvent) => {
+      const target = e.target instanceof Node ? e.target : null;
+      if (target && !ref.current?.contains(target) && !anchor?.contains(target)) onClose();
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    document.addEventListener("mousedown", onDown);
+    window.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDown);
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [anchor, onClose]);
+
+  return (
+    <div
+      ref={ref}
+      role="dialog"
+      className={`fixed z-50 w-72 p-3 ${cls.popup} ${className}`}
+      style={pos ? { left: pos.left, top: pos.top } : { visibility: "hidden" }}
+    >
+      {children}
+    </div>
   );
 }
 

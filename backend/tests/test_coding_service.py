@@ -248,36 +248,36 @@ async def test_autocode_all_first_last_modes(project_session):
     session = project_session
     source, code = await _seed_source_and_code(session, "cat dog cat bird cat")
 
-    all_ = await autocode(
-        session, fid=source.id, cid=code.cid, find_texts=["cat"], mode="all", owner="t-all"
-    )
+    all_ = (await autocode(
+        session, fid=source.id, cids=[code.cid], find_texts=["cat"], mode="all", owner="t-all"
+    ))["created"]
     assert [c["pos0"] for c in all_] == [0, 8, 17]
     assert all(c["seltext"] == "cat" for c in all_)
     assert all(c["cid"] == code.cid and c["fid"] == source.id for c in all_)
 
-    first = await autocode(
-        session, fid=source.id, cid=code.cid, find_texts=["cat"], mode="first", owner="t-first"
-    )
+    first = (await autocode(
+        session, fid=source.id, cids=[code.cid], find_texts=["cat"], mode="first", owner="t-first"
+    ))["created"]
     assert [c["pos0"] for c in first] == [0]
 
-    last = await autocode(
-        session, fid=source.id, cid=code.cid, find_texts=["cat"], mode="last", owner="t-last"
-    )
+    last = (await autocode(
+        session, fid=source.id, cids=[code.cid], find_texts=["cat"], mode="last", owner="t-last"
+    ))["created"]
     assert [c["pos0"] for c in last] == [17]
 
 
 async def test_autocode_regex_mode(project_session):
     session = project_session
     source, code = await _seed_source_and_code(session, "cat dog cat bird cat")
-    created = await autocode(
+    created = (await autocode(
         session,
         fid=source.id,
-        cid=code.cid,
+        cids=[code.cid],
         find_texts=[r"c.t"],
         mode="all",
         use_regex=True,
         owner="t-regex",
-    )
+    ))["created"]
     assert [c["pos0"] for c in created] == [0, 8, 17]
     # regex seltext is the matched substring
     assert all(c["seltext"] == "cat" for c in created)
@@ -288,7 +288,7 @@ async def test_autocode_invalid_regex_raises(project_session):
     source, code = await _seed_source_and_code(session, "cat")
     with pytest.raises(ValueError, match="invalid regex"):
         await autocode(
-            session, fid=source.id, cid=code.cid, find_texts=["["], use_regex=True, owner="x"
+            session, fid=source.id, cids=[code.cid], find_texts=["["], use_regex=True, owner="x"
         )
 
 
@@ -301,9 +301,9 @@ async def test_autocode_without_fid_covers_all_text_sources(project_session):
     await SourceRepository(session).add_source(
         name="ext.txt", mediapath="docs:C:/ext.txt", fulltext="cat c", owner="tester"
     )
-    created = await autocode(
-        session, fid=None, cid=code.cid, find_texts=["cat"], mode="all", owner="t-all"
-    )
+    created = (await autocode(
+        session, fid=None, cids=[code.cid], find_texts=["cat"], mode="all", owner="t-all"
+    ))["created"]
     assert len(created) == 2  # /images/ and /audio/... sources are excluded
     assert sorted({c["fid"] for c in created}) == sorted(c["fid"] for c in created)
 
@@ -311,18 +311,18 @@ async def test_autocode_without_fid_covers_all_text_sources(project_session):
 async def test_autocode_skips_duplicate_inserts(project_session):
     session = project_session
     source, code = await _seed_source_and_code(session, "cat dog cat")
-    created = await autocode(
-        session, fid=source.id, cid=code.cid, find_texts=["cat", "cat"], mode="all", owner="t-dup"
-    )
+    created = (await autocode(
+        session, fid=source.id, cids=[code.cid], find_texts=["cat", "cat"], mode="all", owner="t-dup"
+    ))["created"]
     assert len(created) == 2  # second find_text is entirely duplicate
 
 
 async def test_autocode_emoji_position_adjustment(project_session):
     session = project_session
     source, code = await _seed_source_and_code(session, "cat \N{GRINNING FACE} dog")
-    created = await autocode(
-        session, fid=source.id, cid=code.cid, find_texts=["dog"], mode="all", owner="t-emoji"
-    )
+    created = (await autocode(
+        session, fid=source.id, cids=[code.cid], find_texts=["dog"], mode="all", owner="t-emoji"
+    ))["created"]
     assert len(created) == 1
     # legacy adds each preceding emoji's extra length (match_end - match_start)
     assert created[0]["pos0"] == 7
@@ -342,14 +342,14 @@ async def test_autocode_code_within_code_keeps_matches_inside_coded_spans(projec
         )
     )
     await session.commit()
-    created = await autocode(
+    created = (await autocode(
         session,
         fid=source.id,
-        cid=code.cid,
+        cids=[code.cid],
         find_texts=["alpha"],
         mode="code_within_code 9999",
         owner="x",
-    )
+    ))["created"]
     assert len(created) == 1
     assert created[0]["pos0"] == 11
 

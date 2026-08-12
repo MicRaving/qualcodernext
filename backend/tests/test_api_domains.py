@@ -492,7 +492,7 @@ async def test_autocode_endpoint_roundtrip(project_client):
 
     res = await client.post(
         "/api/v1/codings/autocode",
-        json={"fid": fid, "cid": code["cid"], "find_texts": ["cat"], "mode": "all"},
+        json={"fid": fid, "cids": [code["cid"]], "find_texts": ["cat"], "mode": "all"},
     )
     assert res.status_code == 201, res.text
     body = res.json()
@@ -505,7 +505,7 @@ async def test_autocode_endpoint_roundtrip(project_client):
 
     bad = await client.post(
         "/api/v1/codings/autocode",
-        json={"fid": fid, "cid": code["cid"], "find_texts": ["["], "use_regex": True},
+        json={"fid": fid, "cids": [code["cid"]], "find_texts": ["["], "use_regex": True},
     )
     assert bad.status_code == 422
 

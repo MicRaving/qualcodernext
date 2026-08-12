@@ -39,8 +39,11 @@ playwright-report/
 # Rust / Tauri (build cache — multi-GB, fully regenerable)
 **/src-tauri/target/
 
-
-
 # Tauri updater signing (SECRET — never commit)
 updater.key
 
+# Mic's notes - don't touch!
+00 ToDo.txt
+
+# Old QualCoder - for reference only
+upstreamQualcoder

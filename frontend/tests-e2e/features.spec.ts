@@ -325,6 +325,7 @@ test("history view lists project changes and filters", async ({ page }) => {
 // ---------------------------------------------------------------------------
 
 test("autocode + SQL report", async ({ page }) => {
+  page.on("pageerror", (e) => console.log(`[PAGEERR] ${e.message.slice(0, 400)}`));
   await ensureProjectOpen(page);
 
   await page.getByRole("button", { name: "Files", exact: true }).click();
@@ -336,13 +337,21 @@ test("autocode + SQL report", async ({ page }) => {
   ).toBeVisible({ timeout: 20_000 });
 
   // Autocode "rain" into a new code.
+  await page.getByRole("button", { name: "Code", exact: true }).click();
+  await page.getByTestId("inline-name-edit").fill("RainCode");
+  await page.keyboard.press("Enter");
+  await expect(page.getByText("RainCode", { exact: true }).first()).toBeVisible({
+    timeout: 10_000,
+  });
+
   await page.getByRole("button", { name: "Autocode" }).first().click();
-  const searchText = page.getByPlaceholder("One search text per line");
+  const dialog = page.getByRole("dialog", { name: "Autocode" });
+  const searchText = dialog.getByLabel("Search texts");
   await expect(searchText).toBeVisible();
   await searchText.fill("rain");
-  await page.getByPlaceholder("\u2026or new code name").fill("RainCode");
-  await page.getByRole("button", { name: "Autocode" }).nth(1).click();
-  await expect(page.getByText(/Autocoded \d+ instances/)).toBeVisible({
+  await dialog.getByText("RainCode").click();
+  await dialog.getByRole("button", { name: "Autocode" }).click();
+  await expect(dialog.getByText(/Autocoded \d+ instances/)).toBeVisible({
     timeout: 20_000,
   });
 

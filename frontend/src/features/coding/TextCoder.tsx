@@ -34,12 +34,11 @@ import {
   Button,
   ErrorBanner,
   IconButton,
-  Input,
   LoadingState,
-  Select,
   Textarea,
   ViewHeader,
 } from "@/components/ui/orchestrator";
+import { AutocodeDialog } from "@/features/coding/AutocodeDialog";
 import {
   api,
   type Annotation,
@@ -70,23 +69,6 @@ const FALLBACK_CODE_COLOR = "var(--qc-accent)";
 /** Soft highlight for coded segments: the code color, transparently. */
 function softBackground(color: string): string {
   return codeTint(color);
-}
-
-/** Split autocode input into search texts: newline-separated (commas too when not regex). */
-function parseFindTexts(raw: string, regex: boolean): string[] {
-  const out: string[] = [];
-  for (const line of raw.split(/\r?\n/)) {
-    if (regex) {
-      const t = line.trim();
-      if (t) out.push(t);
-    } else {
-      for (const part of line.split(",")) {
-        const t = part.trim();
-        if (t) out.push(t);
-      }
-    }
-  }
-  return out;
 }
 
 /** Apply shifted positions back onto coding rows, dropping any the backend marked for deletion. */
@@ -135,6 +117,7 @@ export function TextCoder({
   onExitPlainText?: () => void;
 }) {
   const { t } = useI18n();
+  const storeCodeTree = useProjectStore((s) => s.codeTree);
   const activeCodeId = useProjectStore((s) => s.activeCodeId);
   const hiddenCodes = useProjectStore((s) => s.hiddenCodes);
 
@@ -165,13 +148,6 @@ export function TextCoder({
   const [saving, setSaving] = useState(false);
 
   const [autoOpen, setAutoOpen] = useState(false);
-  const [autoText, setAutoText] = useState("");
-  const [autoCid, setAutoCid] = useState("");
-  const [autoMode, setAutoMode] = useState<"all" | "first" | "last">("all");
-  const [autoRegex, setAutoRegex] = useState(false);
-  const [autoNewName, setAutoNewName] = useState("");
-  const [autoBusy, setAutoBusy] = useState(false);
-  const [autoResult, setAutoResult] = useState<string | null>(null);
 
   const [bookmarkFileId, setBookmarkFileId] = useState<number | null>(null);
   const [bookmarkPos, setBookmarkPos] = useState<number | null>(null);
@@ -243,7 +219,6 @@ export function TextCoder({
     setEditingAnnMemo(null);
     setUndoStack([]);
     setAutoOpen(false);
-    setAutoResult(null);
     void (async () => {
       try {
         const [src, cod, anns, flat] = await Promise.all([
@@ -345,11 +320,6 @@ export function TextCoder({
     for (const [id, c] of codeById) m[id] = c.color ?? FALLBACK_CODE_COLOR;
     return m;
   }, [codeById]);
-
-  const codeOptions = useMemo(
-    () => codes.filter((c) => c.kind === "code").sort((a, b) => a.name.localeCompare(b.name)),
-    [codes],
-  );
 
   const segments = useMemo(
     () => buildRenderedSegments(text, codings, colorByCid),
@@ -700,43 +670,9 @@ export function TextCoder({
 
   /* ---------------------------------------------------------------- autocode */
 
-  function runAutocode() {
-    const find_texts = parseFindTexts(autoText, autoRegex);
-    if (find_texts.length === 0) {
-      setErrMsg(t("coder.autoNoText"));
-      return;
-    }
-    setAutoBusy(true);
-    setAutoResult(null);
-    setErrMsg(null);
-    void (async () => {
-      try {
-        let cid = autoCid === "" ? Number.NaN : Number(autoCid);
-        const newName = autoNewName.trim();
-        if (newName) {
-          const res = await api.createCode(newName);
-          cid = res.cid;
-          void refreshCodes().catch(() => undefined);
-        }
-        if (!Number.isFinite(cid)) {
-          setErrMsg(t("coder.autoNoCode"));
-          return;
-        }
-        const res = await api.autocode({
-          fid: sourceId,
-          cid,
-          find_texts,
-          mode: autoMode,
-          use_regex: autoRegex,
-        });
-        setAutoResult(t("coder.autocoded", { count: res.count }));
-        await refreshCodings();
-      } catch (e) {
-        setErrMsg(e instanceof Error ? e.message : t("coder.autoError"));
-      } finally {
-        setAutoBusy(false);
-      }
-    })();
+  function handleAutocodeDone() {
+    void refreshCodings();
+    void refreshCodes().catch(() => undefined);
   }
 
   /* --------------------------------------------------------------- rendering */
@@ -996,61 +932,13 @@ export function TextCoder({
 
       {errMsg && <ErrorBanner onClose={() => setErrMsg(null)}>{errMsg}</ErrorBanner>}
 
-      {autoOpen && !editMode && (
-        <div className="shrink-0 border-b border-border bg-surface px-3 py-2">
-          <div className="flex flex-wrap items-end gap-2">
-            <Textarea
-              value={autoText}
-              onChange={(e) => setAutoText(e.target.value)}
-              placeholder={t("coder.autoPlaceholder")}
-              className="h-14 w-64 resize-none px-2 py-1"
-            />
-            <Select value={autoCid} onChange={(e) => setAutoCid(e.target.value)} aria-label={t("coder.pickCode")}>
-              <option value="">{t("coder.pickCode")}</option>
-              {codeOptions.map((c) => (
-                <option key={c.id} value={c.id}>
-                  {c.name}
-                </option>
-              ))}
-            </Select>
-            <Select value={autoMode} onChange={(e) => setAutoMode(e.target.value as "all" | "first" | "last")}>
-              <option value="all">{t("coder.autoAll")}</option>
-              <option value="first">{t("coder.autoFirst")}</option>
-              <option value="last">{t("coder.autoLast")}</option>
-            </Select>
-            <label className="flex h-7 items-center gap-1.5 text-xs text-text-secondary">
-              <input
-                type="checkbox"
-                checked={autoRegex}
-                onChange={(e) => setAutoRegex(e.target.checked)}
-                className="accent-accent"
-              />
-              {t("coder.autoRegex")}
-            </label>
-            <Input
-              value={autoNewName}
-              onChange={(e) => setAutoNewName(e.target.value)}
-              placeholder={t("coder.autoNewName")}
-              className="w-36"
-            />
-            <Button
-              variant="primary"
-              icon={
-                autoBusy ? (
-                  <LoaderCircle size={12} className="animate-spin" aria-hidden />
-                ) : (
-                  <Sparkles size={12} aria-hidden />
-                )
-              }
-              onClick={runAutocode}
-              disabled={autoBusy}
-            >
-              {t("coder.autocode")}
-            </Button>
-          </div>
-          {autoResult && <p className="mt-1 text-xs text-success">{autoResult}</p>}
-        </div>
-      )}
+      <AutocodeDialog
+        open={autoOpen}
+        onClose={() => setAutoOpen(false)}
+        fid={sourceId}
+        codes={storeCodeTree}
+        onDone={handleAutocodeDone}
+      />
 
       <div
         ref={scrollRef}
@@ -1283,7 +1171,7 @@ export function TextCoder({
 
       <CodePicker
         open={pickerOpen}
-        codes={codes}
+        codes={storeCodeTree}
         onClose={() => setPickerOpen(false)}
         onPick={handlePickCode}
       />

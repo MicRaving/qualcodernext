@@ -21,13 +21,15 @@ import {
   FileText,
   LoaderCircle,
   Pencil,
+  Sparkles,
   Rows3,
   Trash2,
   X,
 } from "lucide-react";
-import { api, fetchWithTimeout, type CodeTreeItem, type ImageCoding, type Source } from "@/lib/api";
+import { api, fetchWithTimeout, type CodeTreeItem, type Coding, type ImageCoding, type Source } from "@/lib/api";
 import { sourceFileUrl } from "@/lib/api";
 import { CodePicker, type PickedCode } from "@/features/coding/CodePicker";
+import { AutocodeDialog } from "@/features/coding/AutocodeDialog";
 import { TextCoder } from "@/features/coding/TextCoder";
 import {
   buildPageOverlays,
@@ -92,6 +94,27 @@ function coveredTextItems(
   return items.filter((it) => it.x < x2 && it.x + it.w > x1 && it.y < y2 && it.y + it.h > y1);
 }
 
+/** Best-effort reverse mapping of a text coding (stored in the extracted
+ *  plain text) back onto the pdf.js items of one page: find the run of
+ *  items that contain the coding's first and last word, in order. */
+function matchCodingItems(items: TextItemData[], seltext: string): TextItemData[] | null {
+  const words = seltext.split(/\s+/).filter(Boolean);
+  if (words.length === 0) return null;
+  const first = words[0].toLowerCase();
+  const last = words[words.length - 1].toLowerCase();
+  const start = items.findIndex((it) => it.str.toLowerCase().includes(first));
+  if (start < 0) return null;
+  let end = start;
+  for (let i = start; i < items.length; i++) {
+    if (items[i].str.toLowerCase().includes(last)) {
+      end = i;
+      break;
+    }
+  }
+  if (!items[end].str.toLowerCase().includes(last)) return null;
+  return items.slice(start, end + 1);
+}
+
 /** Reconstruct the selected text from the covered pdf.js items: words on
  *  one line join with a space, lines with a newline (matches PyMuPDF's
  *  page text closely enough for the backend's word-sequence matching). */
@@ -115,11 +138,14 @@ function buildSelectionText(items: TextItemData[]): string {
 
 export function PdfCoder({ source }: { source: Source }) {
   const { t } = useI18n();
+  const storeCodeTree = useProjectStore((s) => s.codeTree);
   const activeCodeId = useProjectStore((s) => s.activeCodeId);
   const hiddenCodes = useProjectStore((s) => s.hiddenCodes);
 
   const [plainText, setPlainText] = useState(false);
+  const [autoOpen, setAutoOpen] = useState(false);
   const [codings, setCodings] = useState<ImageCoding[]>([]);
+  const [textCodings, setTextCodings] = useState<Coding[]>([]);
   const [codes, setCodes] = useState<CodeTreeItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -177,12 +203,14 @@ export function PdfCoder({ source }: { source: Source }) {
     setCurrentPage(1);
     void (async () => {
       try {
-        const [cod, flat] = await Promise.all([
+        const [cod, textCod, flat] = await Promise.all([
           api.imageCodings(source.id),
+          api.sourceCoding(source.id),
           api.codesFlat(),
         ]);
         if (cancelled) return;
         setCodings(cod);
+        setTextCodings(textCod);
         setCodes(flat);
       } catch (e) {
         if (!cancelled) setLoadError(e instanceof Error ? e.message : t("coder.loadCodingsError"));
@@ -228,9 +256,11 @@ export function PdfCoder({ source }: { source: Source }) {
           for (const item of content.items) {
             if (!("str" in item) || item.str === "") continue;
             const tr = item.transform;
+            // pdf.js reports PDF units with y growing UPWARD; flip to the
+            // screen convention (top-left origin) for hit-testing.
             list.push({
               x: tr[4],
-              y: tr[5],
+              y: vp.height - (tr[5] + item.height),
               w: item.width,
               h: item.height,
               str: item.str,
@@ -297,7 +327,9 @@ export function PdfCoder({ source }: { source: Source }) {
         }
       }
     };
-  }, [pdf, scale, currentPage, continuous, t]);
+    // Re-render whenever the view (re)mounts — including toggling back from
+    // the plain-text mode, which unmounts the page canvases.
+  }, [pdf, scale, currentPage, continuous, plainText, t]);
 
   /* ---------------------------------------------------------------- fit */
 
@@ -350,10 +382,39 @@ export function PdfCoder({ source }: { source: Source }) {
     [selectedImid, codings],
   );
 
+  /** Text codings mapped back onto their pages' pdf.js items (best-effort
+   *  word matching) so they show as overlays in the rendered view. */
+  const textOverlays = useMemo(() => {
+    const out = new Map<
+      number,
+      { items: TextItemData[]; color: string; ctid: number }[]
+    >();
+    for (const coding of textCodings) {
+      for (const [page, items] of textItems) {
+        const matched = matchCodingItems(items, coding.seltext ?? "");
+        if (matched) {
+          const list = out.get(page) ?? [];
+          list.push({
+            items: matched,
+            color: colorByCid.get(coding.cid) ?? DEFAULT_CODING_COLOR,
+            ctid: coding.ctid,
+          });
+          out.set(page, list);
+          break;
+        }
+      }
+    }
+    return out;
+  }, [textCodings, textItems, colorByCid]);
+
   /* ------------------------------------------------------------- actions */
 
   const refreshCodings = useCallback(async () => {
     setCodings(await api.imageCodings(source.id));
+  }, [source.id]);
+
+  const refreshTextCodings = useCallback(async () => {
+    setTextCodings(await api.sourceCoding(source.id));
   }, [source.id]);
 
   const refreshCodes = useCallback(async () => {
@@ -430,6 +491,7 @@ export function PdfCoder({ source }: { source: Source }) {
             pos1: pending.pos1,
             owner: "default",
           });
+          await refreshTextCodings();
         } catch (e) {
           setErrMsg(e instanceof Error ? e.message : t("coder.createError"));
         } finally {
@@ -437,7 +499,7 @@ export function PdfCoder({ source }: { source: Source }) {
         }
       })();
     },
-    [source.id, t],
+    [source.id, t, refreshTextCodings],
   );
 
   /** Code the pending drag rectangle with the given code id. */
@@ -558,7 +620,11 @@ export function PdfCoder({ source }: { source: Source }) {
 
   function handlePickCode(picked: PickedCode) {
     setPickerOpen(false);
-    codePendingRect(picked.cid);
+    if (pendingActionRef.current?.kind === "text") {
+      codePendingText(picked.cid);
+    } else {
+      codePendingRect(picked.cid);
+    }
   }
 
   function deleteCoding(row: ImageCoding) {
@@ -737,6 +803,16 @@ export function PdfCoder({ source }: { source: Source }) {
               <div className="mx-1 h-4 w-px bg-border" aria-hidden />
               <Button
                 variant="secondary"
+                className="h-7"
+                onClick={() => setAutoOpen((o) => !o)}
+                icon={<Sparkles size={12} aria-hidden />}
+              >
+                {t("coder.autocode")}
+              </Button>
+
+              <div className="mx-1 h-4 w-px bg-border" aria-hidden />
+              <Button
+                variant="secondary"
                 className="h-7 font-medium"
                 onClick={() => setPlainText(true)}
                 title={t("pdfCoder.plainTextHint")}
@@ -790,6 +866,30 @@ export function PdfCoder({ source }: { source: Source }) {
                     onClick={() => setSelectedImid(o.key)}
                   />
                 ))}
+
+                {/* Text codings (shared with the plain-text mode) as
+                    best-effort overlays on their matched items. */}
+                {(textOverlays.get(p) ?? []).map((ov) =>
+                  ov.items.map((it, i) => (
+                    <div
+                      key={`t-${ov.ctid}-${i}`}
+                      className={cn(
+                        "pointer-events-none absolute",
+                        hiddenCodes.includes(
+                          textCodings.find((c) => c.ctid === ov.ctid)?.cid ?? -1,
+                        ) && "qc-seg-hidden",
+                      )}
+                      style={{
+                        left: it.x * scale,
+                        top: it.y * scale,
+                        width: it.w * scale,
+                        height: it.h * scale,
+                        backgroundColor: codeTint(ov.color),
+                        border: `1px solid ${ov.color}`,
+                      }}
+                    />
+                  )),
+                )}
 
                 {drag && drag.pageNumber === p && drag.mode === "region" && (
                   <PreviewRect start={drag.start} current={drag.current} />
@@ -885,9 +985,21 @@ export function PdfCoder({ source }: { source: Source }) {
 
       <CodePicker
         open={pickerOpen}
-        codes={codes}
+        codes={storeCodeTree}
         onClose={() => setPickerOpen(false)}
         onPick={handlePickCode}
+      />
+
+      <AutocodeDialog
+        open={autoOpen}
+        onClose={() => setAutoOpen(false)}
+        fid={source.id}
+        codes={storeCodeTree}
+        onDone={() => {
+          void refreshTextCodings();
+          void refreshCodings();
+          void refreshCodes().catch(() => undefined);
+        }}
       />
     </div>
   );

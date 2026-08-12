@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "qualcoder-api"
 version = "0.1.0"
-description = "QualCoder v4 backend - FastAPI + SQLAlchemy async + SQLite"
+description = "QualCoder v4 backend"
 requires-python = ">=3.11"
 dependencies = [
     "fastapi>=0.111",

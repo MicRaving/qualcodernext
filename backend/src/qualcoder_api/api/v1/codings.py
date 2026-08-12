@@ -215,10 +215,11 @@ async def delete_av_coding(avid: int, db: DbDep) -> None:
 
 class AutocodeRequest(BaseModel):
     fid: int | None = None
-    cid: int
+    cids: list[int]
     find_texts: list[str]
     mode: str = "all"  # all | first | last | code_within_code <cid>
     use_regex: bool = False
+    suggest: bool = False
     owner: str | None = None
 
 
@@ -243,14 +244,17 @@ class UndoCodingsRequest(BaseModel):
 @router.post("/autocode", status_code=201)
 async def autocode_endpoint(req: AutocodeRequest, db: DbDep) -> dict:
     owner = resolve_owner(req.owner)
+    if not req.cids:
+        raise HTTPException(status_code=422, detail="at least one code required")
     try:
-        created = await autocode(
+        result = await autocode(
             db,
             fid=req.fid,
-            cid=req.cid,
+            cids=req.cids,
             find_texts=req.find_texts,
             mode=req.mode,
             use_regex=req.use_regex,
+            suggest=req.suggest,
             owner=owner,
         )
     except ValueError:
@@ -258,9 +262,14 @@ async def autocode_endpoint(req: AutocodeRequest, db: DbDep) -> dict:
     await audit.record(
         db, user=owner, action="coding.autocode", entity="code_text",
         source_id=req.fid,
-        detail={"cid": req.cid, "count": len(created), "find_texts": req.find_texts},
+        detail={
+            "cids": req.cids,
+            "count": result["count"],
+            "find_texts": req.find_texts,
+            "suggested": [s["name"] for s in result["suggested"]],
+        },
     )
-    return {"created": created, "count": len(created)}
+    return result
 
 
 @router.post("/shift-positions")

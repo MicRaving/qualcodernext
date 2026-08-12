@@ -7,10 +7,10 @@
  * the embedded Settings variant is chrome-free (no cards, explanations live
  * behind ? icons).
  */
-import { useEffect, useRef, useState, type ChangeEvent, type ReactNode } from "react";
+import { useRef, useState, type ChangeEvent, type ReactNode } from "react";
 import { CircleAlert, CircleCheck, Download, HelpCircle, LoaderCircle } from "lucide-react";
 import { api, ApiError, type InterchangeResult } from "@/lib/api";
-import { Button, IconButton, ViewHeader } from "@/components/ui/orchestrator";
+import { Button, HelpFlyout, IconButton, ViewHeader } from "@/components/ui/orchestrator";
 import { cls } from "@/components/ui/tokens";
 import { importLabel } from "@/features/interchange/format";
 import { useI18n } from "@/lib/i18n";
@@ -59,32 +59,6 @@ function FormatHelpList() {
   );
 }
 
-function FormatHelpPopover({ onClose }: { onClose: () => void }) {
-  const rootRef = useRef<HTMLDivElement | null>(null);
-
-  useEffect(() => {
-    const onDown = (e: MouseEvent) => {
-      const target = e.target instanceof Node ? e.target : null;
-      if (target && !rootRef.current?.contains(target)) onClose();
-    };
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
-    };
-    document.addEventListener("mousedown", onDown);
-    window.addEventListener("keydown", onKey);
-    return () => {
-      document.removeEventListener("mousedown", onDown);
-      window.removeEventListener("keydown", onKey);
-    };
-  }, [onClose]);
-
-  return (
-    <div ref={rootRef} className={`absolute right-0 top-full z-50 mt-1 w-80 p-3 ${cls.popup}`} role="dialog">
-      <FormatHelpList />
-    </div>
-  );
-}
-
 /** The counts the backend reports after an import, as [label, value] pairs. */
 function resultCounts(res: InterchangeResult): [string, number][] {
   const out: [string, number][] = [];
@@ -101,10 +75,16 @@ function resultCounts(res: InterchangeResult): [string, number][] {
 export function InterchangeView({ embedded = false }: { embedded?: boolean }) {
   const { t } = useI18n();
   const [helpOpen, setHelpOpen] = useState<null | "export" | "import">(null);
+  const [helpAnchor, setHelpAnchor] = useState<HTMLElement | null>(null);
   const [busy, setBusy] = useState(false);
   const [pending, setPending] = useState<File | null>(null);
   const [result, setResult] = useState<InterchangeResult | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  function toggleHelp(kind: "export" | "import", anchor: HTMLElement) {
+    setHelpAnchor(anchor);
+    setHelpOpen((cur) => (cur === kind ? null : kind));
+  }
 
   /** Picking a file shows the import menu (name + format + Import/Cancel). */
   function handleFileChange(e: ChangeEvent<HTMLInputElement>) {
@@ -163,36 +143,37 @@ export function InterchangeView({ embedded = false }: { embedded?: boolean }) {
       </div>
     ) : null;
 
-  const statusCard: ReactNode = (
-    <div className="mt-2 min-h-9">
-      {busy ? (
-        <p className="flex items-center gap-1.5 text-xs text-text-secondary" role="status">
-          <LoaderCircle size={12} className="animate-spin" aria-hidden />
-          {t("interchange.importing")}
-        </p>
-      ) : result && result.ok ? (
-        <div className="rounded-sm border border-border bg-bg p-2">
-          <p className="flex items-center gap-1.5 text-xs font-medium text-success">
-            <CircleCheck size={12} aria-hidden />
-            {t("interchange.importComplete")}
+  const statusCard: ReactNode =
+    busy || (result && result.ok) || error ? (
+      <div className="mt-2">
+        {busy ? (
+          <p className="flex items-center gap-1.5 text-xs text-text-secondary" role="status">
+            <LoaderCircle size={12} className="animate-spin" aria-hidden />
+            {t("interchange.importing")}
           </p>
-          <ul className="mt-1 grid grid-cols-2 gap-x-3 gap-y-0.5 text-xs text-text-secondary">
-            {resultCounts(result).map(([label, value]) => (
-              <li key={label}>
-                {value} {label}
-              </li>
-            ))}
-          </ul>
-          {result.message && <p className="mt-1 text-xs text-text-secondary">{result.message}</p>}
-        </div>
-      ) : error ? (
-        <p className="flex items-start gap-1.5 text-xs text-danger">
-          <CircleAlert size={12} className="mt-0.5 shrink-0" aria-hidden />
-          <span>{error}</span>
-        </p>
-      ) : null}
-    </div>
-  );
+        ) : result && result.ok ? (
+          <div className="rounded-sm border border-border bg-bg p-2">
+            <p className="flex items-center gap-1.5 text-xs font-medium text-success">
+              <CircleCheck size={12} aria-hidden />
+              {t("interchange.importComplete")}
+            </p>
+            <ul className="mt-1 grid grid-cols-2 gap-x-3 gap-y-0.5 text-xs text-text-secondary">
+              {resultCounts(result).map(([label, value]) => (
+                <li key={label}>
+                  {value} {label}
+                </li>
+              ))}
+            </ul>
+            {result.message && <p className="mt-1 text-xs text-text-secondary">{result.message}</p>}
+          </div>
+        ) : error ? (
+          <p className="flex items-start gap-1.5 text-xs text-danger">
+            <CircleAlert size={12} className="mt-0.5 shrink-0" aria-hidden />
+            <span>{error}</span>
+          </p>
+        ) : null}
+      </div>
+    ) : null;
 
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -234,13 +215,15 @@ export function InterchangeView({ embedded = false }: { embedded?: boolean }) {
                 title={t("interchange.exportHelp")}
                 size="sm"
                 aria-expanded={helpOpen === "export"}
-                onClick={() => setHelpOpen(helpOpen === "export" ? null : "export")}
+                onClick={(e) => toggleHelp("export", e.currentTarget)}
               >
                 <HelpCircle size={12} aria-hidden />
               </IconButton>
             </div>
-            {helpOpen === "export" && (
-              <p className="mt-1 text-xs leading-relaxed text-text-secondary">{t("interchange.exportHelp")}</p>
+            {helpOpen === "export" && helpAnchor && (
+              <HelpFlyout anchor={helpAnchor} onClose={() => setHelpOpen(null)}>
+                <p className="text-xs leading-relaxed text-text-secondary">{t("interchange.exportHelp")}</p>
+              </HelpFlyout>
             )}
             <a
               href={api.interchange.exportRefiUrl()}
@@ -261,12 +244,16 @@ export function InterchangeView({ embedded = false }: { embedded?: boolean }) {
                 title={t("interchange.helpTitle")}
                 size="sm"
                 className="ml-1"
-                onClick={() => setHelpOpen(helpOpen === "import" ? null : "import")}
+                onClick={(e) => toggleHelp("import", e.currentTarget)}
                 aria-expanded={helpOpen === "import"}
               >
                 <HelpCircle size={14} aria-hidden />
               </IconButton>
-              {helpOpen === "import" && <FormatHelpPopover onClose={() => setHelpOpen(null)} />}
+              {helpOpen === "import" && helpAnchor && (
+                <HelpFlyout anchor={helpAnchor} onClose={() => setHelpOpen(null)}>
+                  <FormatHelpList />
+                </HelpFlyout>
+              )}
             </div>
             {filePicker}
             {pendingCard}
