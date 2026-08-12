@@ -5,7 +5,7 @@
 export const en: Record<string, string> = {
   // app chrome
   "app.name": "QCnext",
-  "app.version": "v4.0 (dev)",
+  "app.version": "0.1.0",
 
   // backend status pill
   "backend.ok": "Backend {status}",
@@ -104,7 +104,7 @@ export const en: Record<string, string> = {
   "settings.aiLoadError": "Failed to load AI status",
   "settings.aiSaveError": "Could not save AI settings",
   "settings.about": "About",
-  "settings.aboutText": "QualCoder v4.0 (dev) — rewrite of QualCoder",
+  "settings.aboutText": "QCnext — A Rework of QualCoder",
   "settings.updatesSection": "App updates",
   "settings.updatesAuto": "Install updates automatically",
   "settings.updatesInterval": "Check interval",

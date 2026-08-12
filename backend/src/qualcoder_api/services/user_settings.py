@@ -33,7 +33,7 @@ AI_DEFAULTS: dict = {
 # layer. Model names track the current standard models.
 AI_PROVIDER_DEFAULTS: dict = {
     "ollama": {"api_base": "http://localhost:11434/v1", "model": "llama3.2"},
-    "lmstudio": {"api_base": "http://localhost:1234/v1", "model": ""},
+    "lmstudio": {"api_base": "http://127.0.0.1:1234/v1", "model": ""},
     "opencode-go": {"api_base": "http://localhost:8080/v1", "model": "deepseek-v4-flash"},
     "gemini": {
         "api_base": "https://generativelanguage.googleapis.com/v1beta/openai",

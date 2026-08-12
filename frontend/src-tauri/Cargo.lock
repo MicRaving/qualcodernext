@@ -2437,7 +2437,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "qualcoder-tauri"
+name = "qcnext"
 version = "0.1.0"
 dependencies = [
  "serde",

@@ -1,13 +1,11 @@
-1. In the settings, for the AI assistant, automatically poll the available models from the respective provider proactively (check if Ollama and LM Studio are even available). Also filter providers like Google and OpenAI only for the relevant models (the newest Gemini/GPT models, no video models etc.) and make sure that only the models of the respective Provider are shown. and then only delivering a dropdown for the model field. Remove the "Saved" indicator. Also, the status seems to show nonsense and not react to any of my changes. Remove it and move the check status button (and status headline) in the right column next to "Semantic Index"; make the button indicate whether the status of the chosen service is okay or broken for 3s.
-2. Ensure that no keys get leaked into my repo
-3. In the settings, implement a consistent flyout for all question marks that does not get cut off by boundaries. There is a lot of empty space between the export button and the next delimiter, reduce it so that it aligns with the space in the other settings sections.
-
-1. Adding new graphs does not update the graph list immediately. Also remove the "Select graph..." item from the dropdown. Deleting a graph results in "API error 404 on /graphs/2: graph not found".
-2. Trying to mark text in the rendered PDF results in various errors but does not actually mark the text. Going back and forth between plain text and rendered PDF regularly breaks the flow. 
-3. The autocode feature is unintuitive. It should code one or multiple selected codes and have a "allow suggesting codes" checkbox that allows the LLM to suggest new codes if something is important but does not fit the existing code schema at all. It should work identical for PDFs/text/transcripts.
-
-
 1. Update the E2E tests and readme to the current state of the project and be able to test everything. 
 2. Create a full documentation of every screen and feature including screenshots and structure this as a repo inside the folder docs.
 3. For Linux, only build a flatpack for now.
-4. Rename and unify every occurrence of qualcodernext and QualCoder to QCnext and the version number from 4.0 to 0.1
+
+
+1. In autocode, prefill the coding prompt.
+2. In the settings, rename "QualCoder v4.0 (dev) - rewrite of QualCoder" to "QCnext - A Rework of QualCoder". In the very bottom right of the window, change the version number to 0.1.0
+3. a) In the AI menu, the API base URL of LMStudio is wrong (must be http://127.0.0.1:1234). 
+b) Also, "2026-08-12 18:09:53 [DEBUG] Received request: GET to /models 2026-08-12 18:09:53 [ERROR] Unexpected endpoint or method. (GET /models). Returning 200 anyway". 
+c) Model polling still fails; search online to correct this for every method. 
+d) the error with Gemini persists.

@@ -123,7 +123,7 @@ export function SettingsView() {
 
   const PROVIDER_PRESETS: Record<string, { url: string; model: string }> = {
     ollama: { url: "http://localhost:11434/v1", model: "llama3.2" },
-    lmstudio: { url: "http://localhost:1234/v1", model: "" },
+    lmstudio: { url: "http://127.0.0.1:1234/v1", model: "" },
     "opencode-go": { url: "https://opencode.ai/zen/go/v1", model: "deepseek-v4-flash" },
     gemini: {
       url: "https://generativelanguage.googleapis.com/v1beta/openai",

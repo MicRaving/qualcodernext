@@ -6,7 +6,7 @@
 export const de: Record<string, string> = {
   // app chrome
   "app.name": "QCnext",
-  "app.version": "v4.0 (dev)",
+  "app.version": "0.1.0",
 
   // backend status pill
   "backend.ok": "Backend {status}",
@@ -105,7 +105,7 @@ export const de: Record<string, string> = {
   "settings.aiLoadError": "KI-Status konnte nicht geladen werden",
   "settings.aiSaveError": "KI-Einstellungen konnten nicht gespeichert werden",
   "settings.about": "Über",
-  "settings.aboutText": "QualCoder v4.0 (dev) — Neufassung von QualCoder",
+  "settings.aboutText": "QCnext — Eine Neufassung von QualCoder",
   "settings.updatesSection": "App-Updates",
   "settings.updatesAuto": "Updates automatisch installieren",
   "settings.updatesInterval": "Prüfintervall",
