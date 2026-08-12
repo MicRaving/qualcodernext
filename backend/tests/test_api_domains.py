@@ -96,6 +96,58 @@ async def test_pdf_source_reports_pdf_dispatch(project_client):
     assert is_pdf_filename(body["name"]) is True
 
 
+async def test_pdf_text_locate_maps_selection_to_plain_text_offsets(project_client):
+    """Selections made over a rendered PDF page resolve to offsets in the
+    extracted plain text (whitespace differences included)."""
+    import fitz
+
+    client, _ = project_client
+
+    doc = fitz.open()
+    page = doc.new_page()
+    page.insert_text((72, 100), "hello pdf world")
+    pdf_bytes = doc.tobytes()
+
+    res = await client.post(
+        "/api/v1/sources/import",
+        files={"file": ("located.pdf", pdf_bytes, "application/pdf")},
+    )
+    assert res.status_code == 200, res.text
+    sid = res.json()["id"]
+
+    # Exact text (pdf.js reconstruction with spaces).
+    r = await client.post(
+        f"/api/v1/sources/{sid}/pdf-text-locate",
+        json={"page": 1, "text": "hello pdf"},
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["seltext"] == "hello pdf"
+    assert body["pos1"] == body["pos0"] + len("hello pdf")
+
+    # Whitespace-differing selection still maps (word-sequence fallback).
+    r2 = await client.post(
+        f"/api/v1/sources/{sid}/pdf-text-locate",
+        json={"page": 1, "text": "hello   pdf   world"},
+    )
+    assert r2.status_code == 200, r2.text
+    assert r2.json()["seltext"] == "hello pdf world"
+
+    # Out-of-range page / non-PDF source / empty selection are rejected.
+    assert (
+        await client.post(
+            f"/api/v1/sources/{sid}/pdf-text-locate",
+            json={"page": 99, "text": "hello"},
+        )
+    ).status_code == 422
+    assert (
+        await client.post(
+            f"/api/v1/sources/{sid}/pdf-text-locate",
+            json={"page": 1, "text": "   "},
+        )
+    ).status_code == 422
+
+
 async def test_source_crud_via_api(project_client):
     client, _ = project_client
     await client.post(

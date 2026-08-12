@@ -386,6 +386,15 @@ export function GraphsMenuBar({ actions }: { actions?: ReactNode }) {
       >
         {t("common.add")}
       </Button>
+      <IconButton
+        label={t("graphs.deleteOpen")}
+        title={t("graphs.deleteOpen")}
+        disabled={graphsUi.grid == null}
+        onClick={() => setGraphsUi({ dialog: "delete" })}
+        className="hover:text-danger"
+      >
+        <Trash2 size={14} aria-hidden />
+      </IconButton>
       <div className="flex-1" />
       <Button
         variant="secondary"
@@ -395,15 +404,6 @@ export function GraphsMenuBar({ actions }: { actions?: ReactNode }) {
         {t("graphs.models")}
       </Button>
       {actions}
-      {graphsUi.grid != null && (
-        <Button
-          variant="danger"
-          icon={<Trash2 size={12} aria-hidden />}
-          onClick={() => setGraphsUi({ dialog: "delete" })}
-        >
-          {t("common.delete")}
-        </Button>
-      )}
       <GraphNameDialog
         open={dialog === "name"}
         onClose={() => setGraphsUi({ dialog: null })}

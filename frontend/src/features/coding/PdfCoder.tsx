@@ -62,6 +62,57 @@ interface PageSize {
   height: number;
 }
 
+/** One pdf.js text item in PDF (unscaled) units — used to hit-test and
+ *  select text over the rendered page. */
+interface TextItemData {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  str: string;
+}
+
+/** Pending coding action after a drag: a picture region or a text span. */
+type PendingAction =
+  | { kind: "region"; pageNumber: number; rect: NormalizedRect }
+  | { kind: "text"; pos0: number; pos1: number; seltext: string };
+
+/** Text items whose rects overlap the drag rectangle (PDF units). */
+function coveredTextItems(
+  items: TextItemData[],
+  scale: number,
+  start: PagePoint,
+  current: PagePoint,
+): TextItemData[] {
+  const rect = clampRect(start, current);
+  const x1 = rect.x1 / scale;
+  const y1 = rect.y1 / scale;
+  const x2 = rect.x2 / scale;
+  const y2 = rect.y2 / scale;
+  return items.filter((it) => it.x < x2 && it.x + it.w > x1 && it.y < y2 && it.y + it.h > y1);
+}
+
+/** Reconstruct the selected text from the covered pdf.js items: words on
+ *  one line join with a space, lines with a newline (matches PyMuPDF's
+ *  page text closely enough for the backend's word-sequence matching). */
+function buildSelectionText(items: TextItemData[]): string {
+  const sorted = [...items].sort((a, b) => {
+    const sameLine = Math.abs(a.y - b.y) < Math.max(3, Math.min(a.h, b.h) * 0.5);
+    return sameLine ? a.x - b.x : a.y - b.y;
+  });
+  let out = "";
+  let prev: TextItemData | null = null;
+  for (const it of sorted) {
+    if (prev) {
+      const sameLine = Math.abs(it.y - prev.y) < Math.max(3, Math.min(it.h, prev.h) * 0.5);
+      out += sameLine ? " " : "\n";
+    }
+    out += it.str;
+    prev = it;
+  }
+  return out;
+}
+
 export function PdfCoder({ source }: { source: Source }) {
   const { t } = useI18n();
   const activeCodeId = useProjectStore((s) => s.activeCodeId);
@@ -85,7 +136,12 @@ export function PdfCoder({ source }: { source: Source }) {
   const [zoom, setZoom] = useState<number | "fit">("fit");
   const [fittedScale, setFittedScale] = useState(1);
 
-  const [drag, setDrag] = useState<{ pageNumber: number; start: PagePoint; current: PagePoint } | null>(null);
+  /** pdf.js text items per page (PDF units) — enables text marking. */
+  const [textItems, setTextItems] = useState<Map<number, TextItemData[]>>(new Map());
+  const [drag, setDrag] = useState<
+    | { pageNumber: number; start: PagePoint; current: PagePoint; mode: "region" | "text" }
+    | null
+  >(null);
   const [pendingRect, setPendingRect] = useState<{ pageNumber: number; rect: NormalizedRect } | null>(null);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [selectedImid, setSelectedImid] = useState<number | null>(null);
@@ -94,6 +150,7 @@ export function PdfCoder({ source }: { source: Source }) {
   const canvasRefs = useRef(new Map<number, HTMLCanvasElement>());
   const dragRef = useRef(drag);
   const pendingRectRef = useRef(pendingRect);
+  const pendingActionRef = useRef<PendingAction | null>(null);
 
   useEffect(() => {
     dragRef.current = drag;
@@ -143,6 +200,7 @@ export function PdfCoder({ source }: { source: Source }) {
     setPdf(null);
     setPdfError(null);
     setPageSizes(new Map());
+    setTextItems(new Map());
     setFittedScale(1);
     void (async () => {
       try {
@@ -160,13 +218,29 @@ export function PdfCoder({ source }: { source: Source }) {
         if (cancelled) return;
         setPdf(doc);
         const sizes = new Map<number, PageSize>();
+        const items = new Map<number, TextItemData[]>();
         for (let p = 1; p <= doc.numPages; p++) {
           const page = await doc.getPage(p);
           const vp = page.getViewport({ scale: 1 });
           sizes.set(p, { width: vp.width, height: vp.height });
+          const content = await page.getTextContent();
+          const list: TextItemData[] = [];
+          for (const item of content.items) {
+            if (!("str" in item) || item.str === "") continue;
+            const tr = item.transform;
+            list.push({
+              x: tr[4],
+              y: tr[5],
+              w: item.width,
+              h: item.height,
+              str: item.str,
+            });
+          }
+          items.set(p, list);
         }
         if (cancelled) return;
         setPageSizes(sizes);
+        setTextItems(items);
       } catch (e) {
         if (!cancelled) setPdfError(e instanceof Error ? e.message : t("pdfCoder.loadDocumentError"));
       }
@@ -300,13 +374,31 @@ export function PdfCoder({ source }: { source: Source }) {
     return { x: e.clientX - rect.left, y: e.clientY - rect.top };
   }
 
+  /** Whether the point lands on a text item (starts a TEXT drag). */
+  function hitTextItem(pageNumber: number, pt: PagePoint): boolean {
+    const items = textItems.get(pageNumber) ?? [];
+    if (items.length === 0) return false;
+    const px = pt.x / scale;
+    const py = pt.y / scale;
+    const tol = 2 / scale;
+    return items.some(
+      (it) =>
+        px >= it.x - tol &&
+        px <= it.x + it.w + tol &&
+        py >= it.y - tol &&
+        py <= it.y + it.h + tol,
+    );
+  }
+
   function onPageMouseDown(e: ReactMouseEvent<HTMLDivElement>, pageNumber: number) {
     if (e.button !== 0) return;
     e.preventDefault();
     setSelectedImid(null);
     setPendingRect(null);
+    pendingActionRef.current = null;
     const pt = pagePointFromEvent(e);
-    const next = { pageNumber, start: pt, current: pt };
+    const mode: "region" | "text" = hitTextItem(pageNumber, pt) ? "text" : "region";
+    const next = { pageNumber, start: pt, current: pt, mode };
     setDrag(next);
     dragRef.current = next;
   }
@@ -320,6 +412,33 @@ export function PdfCoder({ source }: { source: Source }) {
       return next;
     });
   }
+
+  /** Code the pending text selection (offsets already mapped to the
+   *  plain-text coordinates) with the given code id. */
+  const codePendingText = useCallback(
+    (cid: number) => {
+      const pending = pendingActionRef.current;
+      if (!pending || pending.kind !== "text") return;
+      setPickerOpen(false);
+      void (async () => {
+        try {
+          await api.createTextCoding({
+            cid,
+            fid: source.id,
+            seltext: pending.seltext,
+            pos0: pending.pos0,
+            pos1: pending.pos1,
+            owner: "default",
+          });
+        } catch (e) {
+          setErrMsg(e instanceof Error ? e.message : t("coder.createError"));
+        } finally {
+          pendingActionRef.current = null;
+        }
+      })();
+    },
+    [source.id, t],
+  );
 
   /** Code the pending drag rectangle with the given code id. */
   const codePendingRect = useCallback(
@@ -356,6 +475,33 @@ export function PdfCoder({ source }: { source: Source }) {
     if (!d) return;
     setDrag(null);
     dragRef.current = null;
+    if (d.mode === "text") {
+      const covered = coveredTextItems(textItems.get(d.pageNumber) ?? [], scale, d.start, d.current);
+      const text = buildSelectionText(covered);
+      if (!text.trim()) return;
+      void (async () => {
+        try {
+          const loc = await api.pdfTextLocate(source.id, {
+            page: d.pageNumber,
+            text,
+          });
+          pendingActionRef.current = {
+            kind: "text",
+            pos0: loc.pos0,
+            pos1: loc.pos1,
+            seltext: loc.seltext,
+          };
+          if (activeCodeId != null) {
+            codePendingText(activeCodeId);
+          } else {
+            setPickerOpen(true);
+          }
+        } catch (e) {
+          setErrMsg(e instanceof Error ? e.message : t("pdfCoder.textLocateError"));
+        }
+      })();
+      return;
+    }
     const rect = clampRect(d.start, d.current);
     if (rect.x2 - rect.x1 > DRAG_MIN_SIZE && rect.y2 - rect.y1 > DRAG_MIN_SIZE) {
       const next = { pageNumber: d.pageNumber, rect };
@@ -367,19 +513,23 @@ export function PdfCoder({ source }: { source: Source }) {
         setPickerOpen(true);
       }
     }
-  }, [activeCodeId, codePendingRect]);
+  }, [activeCodeId, codePendingRect, codePendingText, source.id, t, scale, textItems]);
 
-  // Clicking a code in the left sidebar assigns it to the pending rectangle.
+  // Clicking a code in the left sidebar assigns it to the pending action.
   useEffect(() => {
     const onAssign = (e: Event) => {
       const cid = (e as CustomEvent<{ cid: number }>).detail?.cid;
       if (typeof cid !== "number") return;
       setPickerOpen(false);
-      codePendingRect(cid);
+      if (pendingActionRef.current?.kind === "text") {
+        codePendingText(cid);
+      } else {
+        codePendingRect(cid);
+      }
     };
     window.addEventListener("qc:assign-code", onAssign);
     return () => window.removeEventListener("qc:assign-code", onAssign);
-  }, [codePendingRect]);
+  }, [codePendingRect, codePendingText]);
 
   // Catch releases that land outside the page element; finishDrag is
   // idempotent, so a fast release inside the element (handled by its own
@@ -400,6 +550,7 @@ export function PdfCoder({ source }: { source: Source }) {
       setDrag(null);
       setPendingRect(null);
       setSelectedImid(null);
+      pendingActionRef.current = null;
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -640,8 +791,27 @@ export function PdfCoder({ source }: { source: Source }) {
                   />
                 ))}
 
-                {drag && drag.pageNumber === p && (
+                {drag && drag.pageNumber === p && drag.mode === "region" && (
                   <PreviewRect start={drag.start} current={drag.current} />
+                )}
+
+                {drag && drag.pageNumber === p && drag.mode === "text" && (
+                  <>
+                    {coveredTextItems(textItems.get(p) ?? [], scale, drag.start, drag.current).map((it, i) => (
+                      <div
+                        key={i}
+                        className="pointer-events-none absolute"
+                        style={{
+                          left: it.x * scale,
+                          top: it.y * scale,
+                          width: it.w * scale,
+                          height: it.h * scale,
+                          backgroundColor: "var(--qc-accent)",
+                          opacity: 0.25,
+                        }}
+                      />
+                    ))}
+                  </>
                 )}
 
                 {!size && (

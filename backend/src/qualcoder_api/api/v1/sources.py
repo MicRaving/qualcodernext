@@ -191,6 +191,82 @@ async def source_thumbnail(
     return Response(content=png, media_type="image/png")
 
 
+class PdfTextLocateRequest(BaseModel):
+    page: int
+    text: str
+
+
+class PdfTextLocateResponse(BaseModel):
+    pos0: int
+    pos1: int
+    seltext: str
+
+
+@router.post("/{source_id}/pdf-text-locate", response_model=PdfTextLocateResponse)
+async def pdf_text_locate(
+    source_id: int, req: PdfTextLocateRequest, db: DbDep, svc: ServiceDep
+) -> PdfTextLocateResponse:
+    """Map a selection made over a RENDERED pdf.js page to offsets in the
+    extracted plain text — the same text the plain-text mode codes against.
+
+    The frontend sends the reconstructed selection (items joined with
+    spaces/newlines); pdf.js whitespace differs from PyMuPDF's, so the match
+    is word-sequence based: the selection's words are located in the page's
+    extracted text and the raw span is returned (coded text therefore equals
+    the plain-text mode's slice exactly).
+    """
+    import asyncio
+    import re
+
+    from qualcoder_api.services.source_files import resolve_source_path
+
+    source = await SourceRepository(db).get_source(source_id)
+    if source is None:
+        raise HTTPException(status_code=404, detail="source not found")
+    if not (source.name or "").lower().endswith(".pdf"):
+        raise HTTPException(status_code=422, detail="not a PDF source")
+    path = resolve_source_path(svc.project_path, source.mediapath, source.name)
+    if path is None or not os.path.exists(path):
+        raise HTTPException(status_code=404, detail="file not found")
+    if not req.text.strip():
+        raise HTTPException(status_code=422, detail="empty selection")
+
+    def _locate(page_text: str, sel: str) -> tuple[int, int] | None:
+        idx = page_text.find(sel)
+        if idx >= 0:
+            return idx, idx + len(sel)
+        # Whitespace-insensitive fallback: locate the word sequence.
+        words = re.findall(r"\S+", sel)
+        page_words = list(re.finditer(r"\S+", page_text))
+        for i in range(len(page_words) - len(words) + 1):
+            if [m.group(0) for m in page_words[i : i + len(words)]] == words:
+                start = page_words[i].start()
+                end = page_words[i + len(words) - 1].end()
+                return start, end
+        return None
+
+    def _run() -> PdfTextLocateResponse:
+        import fitz
+
+        with fitz.open(path) as doc:
+            if not 1 <= req.page <= doc.page_count:
+                raise HTTPException(status_code=422, detail="page out of range")
+            page_texts = [page.get_text() for page in doc]
+        page_text = page_texts[req.page - 1]
+        found = _locate(page_text, req.text)
+        if found is None:
+            raise HTTPException(
+                status_code=422, detail="selection not found in the page text"
+            )
+        pos0, pos1 = found
+        offset = sum(len(t) for t in page_texts[: req.page - 1])
+        return PdfTextLocateResponse(
+            pos0=offset + pos0, pos1=offset + pos1, seltext=page_text[pos0:pos1]
+        )
+
+    return await asyncio.to_thread(_run)
+
+
 @router.post("/import", response_model=Source)
 async def import_source(
     db: DbDep,

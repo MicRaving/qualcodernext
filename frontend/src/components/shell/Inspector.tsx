@@ -378,9 +378,18 @@ function FileDetailsPanel({ details }: { details: SourceDetails }) {
       </dl>
 
       {/* Codes used — collapsed by default; click a code to highlight/hide
-          its segments in the open coder. */}
+          its segments in the open coder. Right-click the header to jump to
+          the memos view (codes have memos too). */}
       <div className="px-3 py-2">
-        <div className="flex items-center justify-between">
+        <div
+          className="flex items-center justify-between"
+          onContextMenu={(e) => {
+            e.preventDefault();
+            useProjectStore.getState().setNotesUi({ tab: "memos" });
+            useProjectStore.getState().setView({ kind: "notes" });
+          }}
+          title={t("inspector.openMemos")}
+        >
           <SectionLabel>{t("inspector.codesUsed")}</SectionLabel>
           <IconButton
             label={codesCollapsed ? t("inspector.expand") : t("inspector.collapse")}
@@ -427,9 +436,18 @@ function FileDetailsPanel({ details }: { details: SourceDetails }) {
           ))}
       </div>
 
-      {/* Cases — with inline assignment from the right bar */}
+      {/* Cases — with inline assignment from the right bar. Right-click the
+          header to jump to the Cases workspace. */}
       <div className="px-3 py-2">
-        <SectionLabel>{t("inspector.cases")}</SectionLabel>
+        <div
+          onContextMenu={(e) => {
+            e.preventDefault();
+            useProjectStore.getState().setView({ kind: "cases" });
+          }}
+          title={t("inspector.openCases")}
+        >
+          <SectionLabel>{t("inspector.cases")}</SectionLabel>
+        </div>
         {caseError && <p className="mb-1 text-xs text-danger">{caseError}</p>}
         {details.cases.length === 0 ? (
           <p className="text-sm text-text-secondary">{t("inspector.noCases")}</p>

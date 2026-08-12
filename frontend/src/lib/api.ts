@@ -979,6 +979,13 @@ export const api = {
     }),
 
   imageCodings: (sourceId: number) => request<ImageCoding[]>(`/codings/image/${sourceId}`),
+  /** Map a selection made over a rendered PDF page to plain-text offsets
+   *  (the same text the plain-text mode codes against). */
+  pdfTextLocate: (fid: number, body: { page: number; text: string }) =>
+    request<{ pos0: number; pos1: number; seltext: string }>(
+      `/sources/${fid}/pdf-text-locate`,
+      { method: "POST", body: JSON.stringify(body) },
+    ),
   createImageCoding: (body: {
     id: number;
     x1: number;
@@ -1022,8 +1029,8 @@ export const api = {
     }),
   deleteAvCoding: (avid: number) => request<void>(`/codings/av/${avid}`, { method: "DELETE" }),
 
-  fileAnnotations: (fid: number) => request<Annotation[]>(`/annotations/${fid}`),  createAnnotation: (body: { fid: number; pos0: number; pos1: number; memo: string; owner?: string }) =>
-    request<Annotation>("/annotations", {
+  fileAnnotations: (fid: number) => request<Annotation[]>(`/annotations/${fid}`),
+  createAnnotation: (body: { fid: number; pos0: number; pos1: number; memo: string; owner?: string }) =>    request<Annotation>("/annotations", {
       method: "POST",
       body: JSON.stringify(body),
     }),
