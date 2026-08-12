@@ -71,7 +71,15 @@ function MemoEditor({
   if (!editing) {
     return (
       <div className="px-3 py-2">
-        <div className="mb-1 flex items-center justify-between">
+        <div
+          className="mb-1 flex items-center justify-between"
+          onContextMenu={(e) => {
+            e.preventDefault();
+            useProjectStore.getState().setNotesUi({ tab: "memos" });
+            useProjectStore.getState().setView({ kind: "notes" });
+          }}
+          title={t("inspector.openMemos")}
+        >
           <SectionLabel>{t("inspector.memo")}</SectionLabel>
           <IconButton
             label={t("inspector.addMemo")}
@@ -149,7 +157,6 @@ function CodeDetailsPanel({ details }: { details: CodeDetails }) {
   const selectCode = useProjectStore((s) => s.selectCode);
   const clearInspector = useProjectStore((s) => s.clearInspector);
   const [actionError, setActionError] = useState<string | null>(null);
-  const stats = formatStats(details);
 
   async function saveMemo(value: string) {
     await api.patchCode(details.code.cid, { memo: value });
@@ -184,18 +191,23 @@ function CodeDetailsPanel({ details }: { details: CodeDetails }) {
         )}
       </div>
 
-      {/* Stats */}
-      <div className="flex gap-2 border-b border-border px-3 py-2">
-        <div className="flex-1 rounded-sm bg-surface-higher px-2 py-1.5 text-center">
-          <div className="text-sm font-semibold text-text-primary">{stats.primary}</div>
-          <div className="text-xs text-text-secondary">{stats.secondary}</div>
+      {/* Stats — same meta-row style as the file details panel */}
+      <dl className="flex flex-col gap-1 border-b border-border px-3 py-2 text-xs">
+        <div className="flex justify-between gap-2">
+          <dt className="text-text-secondary">{t("inspector.codings")}</dt>
+          <dd className="truncate text-text-primary">{details.coding_count}</dd>
         </div>
-      </div>
+        <div className="flex justify-between gap-2">
+          <dt className="text-text-secondary">{t("inspector.files")}</dt>
+          <dd className="truncate text-text-primary">{details.file_count}</dd>
+        </div>
+      </dl>
 
       <MemoEditor key={details.code.cid} memo={details.code.memo} onSave={saveMemo} />
       {actionError && <p className="px-3 pb-2 text-xs text-danger">{actionError}</p>}
 
-      {/* Recent coded segments */}
+      {/* Recent coded segments — click opens the file and highlights the
+          segment in the coder for ~2s. */}
       <div className="px-3 py-2">
         <SectionLabel>{t("inspector.recentSegments")}</SectionLabel>
         {details.recent_examples.length === 0 ? (
@@ -203,9 +215,23 @@ function CodeDetailsPanel({ details }: { details: CodeDetails }) {
         ) : (
           <ul className="flex flex-col gap-1.5">
             {details.recent_examples.slice(0, 5).map((ex) => (
-              <li key={ex.ctid} className="rounded-sm bg-surface-higher px-2 py-1.5">
-                <p className="truncate text-xs text-text-secondary">{ex.file_name}</p>
-                <p className="line-clamp-2 text-sm text-text-primary">{ex.seltext}</p>
+              <li key={ex.ctid}>
+                <button
+                  type="button"
+                  onClick={() => {
+                    useProjectStore.getState().setView({ kind: "coding", sourceId: ex.fid });
+                    useProjectStore.getState().setGotoSegment({
+                      ctid: ex.ctid,
+                      pos0: ex.pos0,
+                      pos1: ex.pos1,
+                    });
+                  }}
+                  title={t("inspector.gotoSegment", { file: ex.file_name })}
+                  className="block w-full rounded-sm bg-surface-higher px-2 py-1.5 text-left hover:bg-border"
+                >
+                  <p className="truncate text-xs text-text-secondary">{ex.file_name}</p>
+                  <p className="line-clamp-2 text-sm text-text-primary">{ex.seltext}</p>
+                </button>
               </li>
             ))}
           </ul>
@@ -452,9 +478,18 @@ function FileDetailsPanel({ details }: { details: SourceDetails }) {
         </div>
       </div>
 
-      {/* Annotations on this file */}
+      {/* Annotations on this file — right-click the header to open the
+          full annotations view (Notes workspace, annotations tab). */}
       <div className="px-3 py-2">
-        <div className="mb-1 flex items-center justify-between">
+        <div
+          className="mb-1 flex items-center justify-between"
+          onContextMenu={(e) => {
+            e.preventDefault();
+            useProjectStore.getState().setNotesUi({ tab: "annotations" });
+            useProjectStore.getState().setView({ kind: "notes" });
+          }}
+          title={t("inspector.openAnnotations")}
+        >
           <SectionLabel>{t("inspector.annotations")}</SectionLabel>
           <IconButton
             label={t("inspector.addAnnotation")}

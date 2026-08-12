@@ -200,6 +200,7 @@ export interface Category {
 
 export interface CodeExample {
   ctid: number;
+  fid: number;
   file_name: string;
   seltext: string;
   pos0: number;

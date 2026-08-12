@@ -64,6 +64,7 @@ class RecentExample(BaseModel):
     """One recent ``code_text`` row, joined with the source file name."""
 
     ctid: int
+    fid: int
     file_name: str
     seltext: str
     pos0: int
@@ -259,7 +260,7 @@ async def code_details(cid: int, db: DbDep) -> CodeDetails:
 
     example_rows = await db.execute(
         text(
-            "SELECT ct.ctid, s.name, ct.seltext, ct.pos0, ct.pos1 "
+            "SELECT ct.ctid, ct.fid, s.name, ct.seltext, ct.pos0, ct.pos1 "
             "FROM code_text_visible ct JOIN source s ON s.id = ct.fid "
             "WHERE ct.cid = :cid ORDER BY ct.ctid DESC LIMIT 5"
         ),
@@ -267,7 +268,7 @@ async def code_details(cid: int, db: DbDep) -> CodeDetails:
     )
     recent_examples = [
         RecentExample(
-            ctid=r[0], file_name=r[1] or "", seltext=r[2] or "", pos0=r[3], pos1=r[4]
+            ctid=r[0], fid=r[1], file_name=r[2] or "", seltext=r[3] or "", pos0=r[4], pos1=r[5]
         )
         for r in example_rows
     ]

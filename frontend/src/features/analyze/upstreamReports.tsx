@@ -23,6 +23,7 @@ import {
 } from "@/features/analyze/reportData";
 import {
   ReportStatus,
+  ReportMenuBar,
 } from "@/features/analyze/reportKit";
 
 function CsvButton({ filename, headers, rows }: { filename: string; headers: string[]; rows: unknown[][] }) {
@@ -144,15 +145,14 @@ export function WordCloudReport() {
         <div className="h-48"><EmptyState>No data</EmptyState></div>
       ) : (
         <>
-          <canvas ref={canvasRef} className="h-[360px] w-full rounded-sm border border-border bg-white" />
-          <div className="flex items-center justify-between">
-            <h2 className="text-sm font-medium text-text-primary">{t("analyze.topWords")}</h2>
+          <ReportMenuBar>
             <CsvButton
               filename="word-frequencies.csv"
               headers={[t("analyze.colWord"), t("analyze.colCount")]}
               rows={rows.rows.map((r) => [r.word, r.count])}
             />
-          </div>
+          </ReportMenuBar>
+          <canvas ref={canvasRef} className="h-[360px] w-full rounded-sm border border-border bg-white" />
           <div className={cardCls}>
             <table className="w-full border-collapse">
               <thead className="sticky top-0 z-10">
@@ -215,7 +215,7 @@ export function CodebookReport() {
   if (loading || error) return <ReportStatus loading={loading} error={error} onRetry={retry} />;
   return (
     <div className="space-y-2">
-      <div className="flex flex-wrap items-center gap-2">
+      <ReportMenuBar>
         <label className="flex items-center gap-1.5 text-sm text-text-secondary">
           <input type="checkbox" checked={memos} onChange={(e) => setMemos(e.target.checked)} />
           {t("analyze.withMemos")}
@@ -235,7 +235,7 @@ export function CodebookReport() {
         >
           {copied ? t("common.copied") : t("analyze.copyCodebook")}
         </Button>
-      </div>
+      </ReportMenuBar>
       <pre className="qc-selectable max-h-96 overflow-y-auto whitespace-pre-wrap break-words rounded-sm border border-border bg-surface p-3 text-xs leading-relaxed text-text-primary">
         {data?.text || "—"}
       </pre>
@@ -313,14 +313,14 @@ export function ReferencesReport() {
     return <div className="h-48"><EmptyState>{t("analyze.referencesEmpty")}</EmptyState></div>;
   return (
     <div className="space-y-2">
-      <div className="flex items-center justify-between">
-        <h2 className="text-sm font-medium text-text-primary">{t("analyze.referencesCount", { n: rows.length })}</h2>
+      <ReportMenuBar>
         <CsvButton
           filename="references.csv"
           headers={[t("analyze.colTitle"), t("analyze.colAuthors"), t("analyze.colYear"), t("analyze.colType")]}
           rows={rows.map((r) => [r.title, r.authors.join("; "), r.year, r.type])}
         />
-      </div>
+      </ReportMenuBar>
+      <h2 className="text-sm font-medium text-text-primary">{t("analyze.referencesCount", { n: rows.length })}</h2>
       <div className={cardCls}>
         <table className="w-full border-collapse">
           <thead className="sticky top-0 z-10">

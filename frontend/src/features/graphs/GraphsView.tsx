@@ -34,9 +34,6 @@ import { api, GRAPH_MODELS, type GraphData } from "@/lib/api";
 
 import { useI18n } from "@/lib/i18n";
 import { Button, ErrorBanner, Field, IconButton, Input, LeftBar, BarHeader, Menu, MenuItem, Modal, Select } from "@/components/ui/orchestrator";
-import { InlineNameEdit } from "@/components/ui/InlineNameEdit";
-
-import { RowContextMenu } from "@/features/shell/RowContextMenu";
 import { cls } from "@/components/ui/tokens";
 
 import { useProjectStore } from "@/stores/project";
@@ -310,9 +307,9 @@ function ConfirmDialog({
   );
 }
 
-/** The center-contained graph toolbar: title + zoom/connect on the right.
- *  Graph picking lives in the left bar; the modals are owned here (opened
- *  from the left bar via the store dialog flag). */
+/** The center-contained graph toolbar: graph dropdown + Add on the right
+ *  (graph picking lives here since the dedicated left bar is gone), plus
+ *  Models / zoom / connect / delete. The dialogs are owned here. */
 export function GraphsMenuBar({ actions }: { actions?: ReactNode }) {
   const { t } = useI18n();
   const graphsUi = useProjectStore((s) => s.graphsUi);
@@ -360,8 +357,43 @@ export function GraphsMenuBar({ actions }: { actions?: ReactNode }) {
 
   return (
     <div className="flex h-10 shrink-0 items-center gap-2 border-b border-border bg-surface px-3">
-      <h1 className="text-sm font-semibold text-text-primary">{t("graphs.title")}</h1>
+      <Select
+        value={graphsUi.grid ?? ""}
+        onChange={(e) => {
+          const grid = Number(e.target.value);
+          if (grid) setGraphsUi({ grid, tick: graphsUi.tick + 1 });
+        }}
+        aria-label={t("graphs.pickGraph")}
+        className="h-7 min-w-40 max-w-72 text-xs"
+      >
+        {graphsUi.list.length === 0 ? (
+          <option value="">{t("graphs.noGraphs")}</option>
+        ) : (
+          <>
+            <option value="">{t("graphs.pickGraph")}</option>
+            {graphsUi.list.map((g) => (
+              <option key={g.grid} value={g.grid}>
+                {g.name}
+              </option>
+            ))}
+          </>
+        )}
+      </Select>
+      <Button
+        variant="primary"
+        icon={<Network size={12} aria-hidden />}
+        onClick={() => setGraphsUi({ dialog: "name" })}
+      >
+        {t("common.add")}
+      </Button>
       <div className="flex-1" />
+      <Button
+        variant="secondary"
+        icon={<Sparkles size={12} aria-hidden />}
+        onClick={() => setGraphsUi({ dialog: "models" })}
+      >
+        {t("graphs.models")}
+      </Button>
       {actions}
       {graphsUi.grid != null && (
         <Button
@@ -428,6 +460,8 @@ export function GraphsView() {
   const [pickAdd, setPickAdd] = useState<{
     kind: "category" | "code" | "case" | "file" | "free" | "memo";
     options: { id: number; name: string }[];
+    /** Canvas position the new node lands at (the menu is closed by then). */
+    at: { x: number; y: number };
   } | null>(null);
   const [saving, setSaving] = useState(false);
   const svgRef = useRef<SVGSVGElement | null>(null);
@@ -518,28 +552,30 @@ export function GraphsView() {
       setGraphsUi({ error: "No items to add yet" });
       return;
     }
+    const at = addMenu ?? { x: 40, y: 40 };
     setAddMenu(null);
-    setPickAdd({ kind, options });
+    setPickAdd({ kind, options, at });
   }
 
   async function doAddNode(kind: "category" | "code" | "case" | "file" | "free" | "memo", id: number, name: string) {
-    if (!data || !addMenu) return;
+    const pending = pickAdd;
+    if (!data || !pending) return;
     setPickAdd(null);
     try {
       if (kind === "category" || kind === "code") {
-        await api.graphAddCdctItem(data.graph.grid, { kind, ref_id: id, x: addMenu.x, y: addMenu.y });
+        await api.graphAddCdctItem(data.graph.grid, { kind, ref_id: id, x: pending.at.x, y: pending.at.y });
       } else if (kind === "case") {
-        await api.graphAddCaseItem(data.graph.grid, { caseid: id, x: addMenu.x, y: addMenu.y });
+        await api.graphAddCaseItem(data.graph.grid, { caseid: id, x: pending.at.x, y: pending.at.y });
       } else if (kind === "file") {
-        await api.graphAddFileItem(data.graph.grid, { fid: id, x: addMenu.x, y: addMenu.y });
+        await api.graphAddFileItem(data.graph.grid, { fid: id, x: pending.at.x, y: pending.at.y });
       } else if (kind === "free") {
-        await api.graphAddFreeItem(data.graph.grid, { x: addMenu.x, y: addMenu.y, free_text: name.trim() });
+        await api.graphAddFreeItem(data.graph.grid, { x: pending.at.x, y: pending.at.y, free_text: name.trim() });
       } else {
         await api.graphAddMemoItem(data.graph.grid, {
           memo_source_type: "code",
           memo_source_id: id,
-          x: addMenu.x,
-          y: addMenu.y,
+          x: pending.at.x,
+          y: pending.at.y,
         });
       }
       await loadGraphData(data.graph.grid);
@@ -1042,186 +1078,6 @@ function ModelDialog({
   );
 }
 /** Left bar for the graphs view: the graph list + New graph / Models. */
-export function GraphsList() {
-  const { t } = useI18n();
-  const graphsUi = useProjectStore((s) => s.graphsUi);
-  const setGraphsUi = useProjectStore((s) => s.setGraphsUi);
-  const [rowMenu, setRowMenu] = useState<{ x: number; y: number; grid: number; name: string } | null>(null);
-  const [editingId, setEditingId] = useState<number | null>(null);
-
-  async function reloadList() {
-    try {
-      const res = await api.graphs();
-      setGraphsUi({
-        list: res.graphs.map((g) => ({ grid: g.grid, name: g.name })),
-        tick: graphsUi.tick + 1,
-      });
-    } catch {
-      /* keep the cached list */
-    }
-  }
-
-  async function createGraph(name: string) {
-    try {
-      const graph = await api.createGraph(name);
-      setGraphsUi({ grid: graph.grid, tick: graphsUi.tick + 1 });
-      await reloadList();
-      return graph.grid;
-    } catch {
-      return null;
-    }
-  }
-
-  async function renameGraphInline(grid: number, name: string) {
-    // Close the editor synchronously so Tab can move it to the next row.
-    setEditingId(null);
-    try {
-      await api.updateGraph(grid, { name });
-      await reloadList();
-    } catch {
-      /* keep the picker state */
-    }
-  }
-
-  async function deleteGraphRow(grid: number, name: string) {
-    if (!window.confirm(t("graphs.deleteConfirm", { name }))) return;
-    try {
-      await api.deleteGraph(grid);
-      setGraphsUi({ grid: null, tick: graphsUi.tick + 1 });
-      await reloadList();
-    } catch {
-      /* keep the picker state */
-    }
-  }
-
-  return (
-    <LeftBar
-      header={
-        <BarHeader
-          title={t("graphs.title")}
-          actions={
-            <>
-              <Button
-                variant="secondary"
-                icon={<Sparkles size={12} aria-hidden />}
-                onClick={() => setGraphsUi({ dialog: "models" })}
-              >
-                {t("graphs.models")}
-              </Button>
-              <Button
-                variant="primary"
-                icon={<Network size={12} aria-hidden />}
-                onClick={() => {
-                  void createGraph(t("graphs.untitled")).then((grid) => {
-                    if (grid != null) setEditingId(grid);
-                  });
-                }}
-              >
-                {t("common.add")}
-              </Button>
-            </>
-          }
-        />
-      }
-      
-    >
-      {graphsUi.list.length === 0 ? (
-        <p className="px-3 py-6 text-center text-sm text-text-secondary">
-          {t("graphs.noGraphs")}
-        </p>
-      ) : (
-        <div className="divide-y divide-border">
-          {graphsUi.list.map((g) =>
-            editingId === g.grid ? (
-              <div key={g.grid} className="flex w-full items-center gap-2 px-3 py-2">
-                <Network size={14} className="shrink-0 text-text-secondary" aria-hidden />
-                <InlineNameEdit
-                  value={g.name}
-                  placeholder={t("graphs.graphNamePlaceholder")}
-                  onSave={(name) => void renameGraphInline(g.grid, name)}
-                  onCancel={() => setEditingId(null)}
-                  onTab={() => {
-                    const idx = graphsUi.list.findIndex((x) => x.grid === g.grid);
-                    const next = graphsUi.list[idx + 1];
-                    setEditingId(next ? next.grid : null);
-                  }}
-                />
-              </div>
-            ) : (
-              <div key={g.grid} className="group">
-                <button
-                  type="button"
-                  onClick={() => setGraphsUi({ grid: g.grid, tick: graphsUi.tick + 1 })}
-                  onContextMenu={(e) => {
-                    e.preventDefault();
-                    setRowMenu({ x: e.clientX, y: e.clientY, grid: g.grid, name: g.name });
-                  }}
-                  className={`flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-surface-higher ${
-                    graphsUi.grid === g.grid ? "bg-accent/10 text-accent" : "text-text-primary"
-                  }`}
-                >
-                  <Network size={14} className="shrink-0 text-text-secondary" aria-hidden />
-                  <span className="min-w-0 flex-1 truncate">{g.name}</span>
-                  <span className="ml-auto flex shrink-0 gap-0.5 opacity-0 group-hover:opacity-100">
-                    <IconButton
-                      label={t("graphs.renameFor", { name: g.name })}
-                      title={t("graphs.renameFor", { name: g.name })}
-                      size="sm"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setEditingId(g.grid);
-                      }}
-                    >
-                      <Pencil size={13} aria-hidden />
-                    </IconButton>
-                    <IconButton
-                      label={t("graphs.deleteFor", { name: g.name })}
-                      title={t("graphs.deleteFor", { name: g.name })}
-                      size="sm"
-                      className="hover:text-danger"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setGraphsUi({ grid: g.grid, dialog: "delete", tick: graphsUi.tick + 1 });
-                      }}
-                    >
-                      <Trash2 size={13} aria-hidden />
-                    </IconButton>
-                  </span>
-                </button>
-              </div>
-            ),
-          )}
-        </div>
-      )}
-      {rowMenu && (
-        <RowContextMenu
-          x={rowMenu.x}
-          y={rowMenu.y}
-          onClose={() => setRowMenu(null)}
-          items={[
-            {
-              label: t("common.rename"),
-              icon: <Pencil size={14} aria-hidden />,
-              run: () => {
-                setRowMenu(null);
-                setEditingId(rowMenu.grid);
-              },
-            },
-            {
-              label: t("common.delete"),
-              icon: <Trash2 size={14} aria-hidden />,
-              danger: true,
-              run: () => void deleteGraphRow(rowMenu.grid, rowMenu.name),
-            },
-          ]}
-        />
-      )}
-    </LeftBar>
-  );
-}
-
-/** Right-bar inspector for the graphs view (opens automatically): the
- *  selected node/line editor. */
 export function GraphsInspector() {
   const { t } = useI18n();
   const graphsUi = useProjectStore((s) => s.graphsUi);

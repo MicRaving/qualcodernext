@@ -11,7 +11,6 @@ import {
   Files,
   History,
   LayoutDashboard,
-  Network,
   NotebookPen,
   Settings,
   Sparkles,
@@ -28,7 +27,7 @@ import { CaseDetails, CasesList } from "@/features/cases/CasesView";
 import { NotesEditor, NotesList } from "@/features/notes/NotesView";
 import { AnalyzeView } from "@/features/analyze/AnalyzeView";
 import { ReportsList } from "@/features/analyze/ReportsList";
-import { GraphsInspector, GraphsList, GraphsView } from "@/features/graphs/GraphsView";
+import { GraphsInspector, GraphsView } from "@/features/graphs/GraphsView";
 import { HistoryView } from "@/features/history/HistoryView";
 import { SettingsView } from "@/features/settings/SettingsView";
 import { AiView } from "@/features/ai/AiView";
@@ -149,7 +148,6 @@ const NAV_BUTTONS: { kind: WorkspaceView["kind"]; labelKey: string; icon: typeof
   { kind: "cases", labelKey: "nav.cases", icon: Users },
   { kind: "notes", labelKey: "nav.notes", icon: NotebookPen },
   { kind: "analyze", labelKey: "nav.analyze", icon: BarChart3 },
-  { kind: "graphs", labelKey: "nav.graphs", icon: Network },
 ];
 
 const RIGHT_ICON_BUTTONS: { pane: "history" | "ai"; labelKey: string; icon: typeof Files }[] = [
@@ -162,6 +160,7 @@ export function ProjectShell() {
   const toast = useToast();
   const view = useProjectStore((s) => s.view);
   const setView = useProjectStore((s) => s.setView);
+  const analyzeUi = useProjectStore((s) => s.analyzeUi);
   const rightPane = useProjectStore((s) => s.rightPane);
   const setRightPane = useProjectStore((s) => s.setRightPane);
   const projectOpen = useProjectStore((s) => s.projectOpen);
@@ -225,7 +224,19 @@ export function ProjectShell() {
               <button
                 key={kind}
                 type="button"
-                onClick={projectOpen ? () => setView({ kind } as WorkspaceView) : undefined}
+                onClick={
+                  projectOpen
+                    ? () => {
+                        setView({ kind } as WorkspaceView);
+                        // The ribbon entry is "Journal": coming back from an
+                        // annotations/memos view (opened via the file
+                        // inspector) always resets to the journal tab.
+                        if (kind === "notes") {
+                          useProjectStore.getState().setNotesUi({ tab: "journal" });
+                        }
+                      }
+                    : undefined
+                }
                 disabled={!projectOpen}
                 aria-label={label}
                 title={projectOpen ? label : t("shell.navDisabled")}
@@ -365,11 +376,9 @@ export function ProjectShell() {
           <CasesList />
         ) : view.kind === "notes" ? (
           <NotesList />
-        ) : view.kind === "graphs" ? (
-          <GraphsList />
         ) : view.kind === "analyze" ? (
           // The reports list replaces the standard file-groups sidebar
-          // while the Analysis area is active.
+          // while the Analysis area is active (graphs live under it too).
           <ReportsList />
         ) : (
           <Sidebar />
@@ -382,7 +391,7 @@ export function ProjectShell() {
           <SettingsView />
         ) : rightPane === "history" ? (
           <HistoryView />
-        ) : view.kind === "graphs" ? (
+        ) : view.kind === "analyze" && analyzeUi.selectedId === "graphs" ? (
           // The graph details inspector opens automatically; closing the
           // AI/Settings/History panes returns here.
           <GraphsInspector />
@@ -402,9 +411,11 @@ export function ProjectShell() {
         ) : view.kind === "notes" ? (
           <NotesEditor />
         ) :         view.kind === "analyze" ? (
-          <AnalyzeView />
-        ) : view.kind === "graphs" ? (
-          <GraphsView />
+          analyzeUi.selectedId === "graphs" ? (
+            <GraphsView />
+          ) : (
+            <AnalyzeView />
+          )
         ) : (
           <DashboardView />
         )

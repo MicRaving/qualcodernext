@@ -188,6 +188,36 @@ export function TextCoder({
   const shiftTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const shiftSeqRef = useRef(0);
 
+  /* Segment flash highlight ("show this segment" from the code inspector):
+     a pending gotoSegment scrolls the segment into view and flashes it. */
+  const [flashCtid, setFlashCtid] = useState<number | null>(null);
+  const flashTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const gotoSegment = useProjectStore((s) => s.gotoSegment);
+
+  useEffect(() => {
+    if (!gotoSegment) return;
+    // The codings arrive async — wait until the segment's span is rendered.
+    const el =
+      gotoSegment.ctid != null
+        ? scrollRef.current?.querySelector(`[data-ctid="${gotoSegment.ctid}"]`)
+        : null;
+    if (!el) return;
+    (el as HTMLElement).scrollIntoView({ block: "center", behavior: "smooth" });
+    // Reset first so repeat clicks re-trigger the flash animation.
+    setFlashCtid(null);
+    requestAnimationFrame(() => setFlashCtid(gotoSegment.ctid));
+    if (flashTimer.current) clearTimeout(flashTimer.current);
+    flashTimer.current = setTimeout(() => setFlashCtid(null), 2000);
+    useProjectStore.getState().setGotoSegment(null);
+  }, [gotoSegment, codings]);
+
+  useEffect(
+    () => () => {
+      if (flashTimer.current) clearTimeout(flashTimer.current);
+    },
+    [],
+  );
+
   const text = source?.fulltext ?? "";
   const unsaved = editMode && editText !== text;
 
@@ -746,7 +776,10 @@ export function TextCoder({
       out.push(
         <span
           key={`seg-${i}-${seg.start}`}
-          className={`cursor-pointer rounded-sm qc-seg ${hidden ? "qc-seg-hidden" : ""}`}
+          data-ctid={seg.ctids[0]}
+          className={`cursor-pointer rounded-sm qc-seg ${hidden ? "qc-seg-hidden" : ""} ${
+            flashCtid != null && seg.ctids.includes(flashCtid) ? "qc-seg-flash" : ""
+          }`}
           title={title}
           onClick={() => {
             setSelectedSeg(seg);

@@ -25,8 +25,6 @@ import {
   Button,
   IconButton,
   LeftBar,
-  Menu,
-  MenuItem,
   Select,
   ViewHeader,
 } from "@/components/ui/orchestrator";
@@ -37,54 +35,15 @@ import { JournalEditor, JournalList } from "@/features/journals/JournalView";
 import { useI18n } from "@/lib/i18n";
 import { useProjectStore } from "@/stores/project";
 
-type NotesTab = "journal" | "annotations" | "memos";
-
 const MAX_TREE_DEPTH = 64;
 
-/** Left bar: header with the type dropdown + per-tab list. */
+/** Left bar: the journal list by default. Annotations and memos have no tab
+ *  switcher anymore — those views are opened from the file inspector's
+ *  right-click (their lists fill this bar while active). */
 export function NotesList() {
   const { t } = useI18n();
   const notesUi = useProjectStore((s) => s.notesUi);
   const setNotesUi = useProjectStore((s) => s.setNotesUi);
-  const [typeMenuOpen, setTypeMenuOpen] = useState(false);
-  const typeMenuRef = useRef<HTMLDivElement | null>(null);
-  const [typeMenuPos, setTypeMenuPos] = useState<{ left: number; top: number } | null>(null);
-
-  function toggleTypeMenu() {
-    const open = !typeMenuOpen;
-    setTypeMenuOpen(open);
-    if (open) {
-      const el = typeMenuRef.current;
-      if (el) {
-        const rect = el.getBoundingClientRect();
-        // Clamp inside the window so the dropdown never gets cut off.
-        const width = 160;
-        setTypeMenuPos({
-          left: Math.max(8, Math.min(rect.right - width, window.innerWidth - width - 8)),
-          top: Math.min(rect.bottom + 4, window.innerHeight - 140),
-        });
-      }
-    }
-  }
-
-  useEffect(() => {
-    if (!typeMenuOpen) return;
-    const onDown = (e: MouseEvent) => {
-      const target = e.target instanceof Node ? e.target : null;
-      if (target && !typeMenuRef.current?.contains(target) && !(target as HTMLElement).closest("[data-notes-menu]")) {
-        setTypeMenuOpen(false);
-      }
-    };
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setTypeMenuOpen(false);
-    };
-    document.addEventListener("mousedown", onDown);
-    window.addEventListener("keydown", onKey);
-    return () => {
-      document.removeEventListener("mousedown", onDown);
-      window.removeEventListener("keydown", onKey);
-    };
-  }, [typeMenuOpen]);
 
   const loadAnnotations = useCallback(async () => {
     try {
@@ -145,104 +104,53 @@ export function NotesList() {
     setNotesUi({ selectedId: first.id, selectedKind: "code", tick: notesUi.tick + 1 });
   }
 
-  function pickTab(tab: NotesTab) {
-    setTypeMenuOpen(false);
-    setNotesUi({ tab, selectedId: null, selectedKind: null });
-  }
-
   return (
     <LeftBar
-      
       header={
-        <>
-          <BarHeader
-            title={
-              <span className="flex items-center gap-1">
-                {t(`notes.tab.${notesUi.tab}`)}
-                {/* The type flyout arrow sits EXACTLY right of the heading;
-                    the dropdown renders fixed so the h1 truncation can't
-                    clip it. */}
-                <span className="relative" ref={typeMenuRef}>
-                  <IconButton
-                    label={t("notes.tabsAria")}
-                    title={t("notes.tabsAria")}
-                    aria-expanded={typeMenuOpen}
-                    aria-haspopup="listbox"
-                    onClick={toggleTypeMenu}
-                  >
-                    <ChevronDown size={14} aria-hidden />
-                  </IconButton>
-                  {typeMenuOpen && typeMenuPos && (
-                    <Menu
-                      position="fixed"
-                      data-notes-menu
-                      role="listbox"
-                      aria-label={t("notes.tabsAria")}
-                      className="min-w-36"
-                      style={{ left: typeMenuPos.left, top: typeMenuPos.top }}
-                    >
-                      {(["journal", "annotations", "memos"] as NotesTab[]).map((tab) => (
-                        <MenuItem
-                          key={tab}
-                          role="option"
-                          aria-selected={notesUi.tab === tab}
-                          className={notesUi.tab === tab ? "text-accent" : ""}
-                          onClick={() => pickTab(tab)}
-                        >
-                          {tab === "journal" ? (
-                            <Hash size={12} aria-hidden />
-                          ) : tab === "annotations" ? (
-                            <StickyNote size={12} aria-hidden />
-                          ) : (
-                            <Hash size={12} aria-hidden />
-                          )}
-                          {t(`notes.tab.${tab}`)}
-                        </MenuItem>
-                      ))}
-                    </Menu>
-                  )}
-                </span>
-              </span>
-            }
-            actions={
-              <>
-                {notesUi.tab === "journal" && (
-                  <Button
-                    variant="primary"
-                    icon={<NotebookPen size={12} aria-hidden />}
-                    aria-label={t("common.add")}
-                    title={t("common.add")}
-                    onClick={() => void newEntry()}
-                  >
-                    {t("common.add")}
-                  </Button>
-                )}
-                {notesUi.tab === "annotations" && (
-                  <Button
-                    variant="primary"
-                    icon={<StickyNote size={12} aria-hidden />}
-                    aria-label={t("common.add")}
-                    title={t("common.add")}
-                    onClick={() => void newAnnotation()}
-                  >
-                    {t("common.add")}
-                  </Button>
-                )}
-                {notesUi.tab === "memos" && (
-                  <Button
-                    variant="primary"
-                    icon={<Hash size={12} aria-hidden />}
-                    aria-label={t("common.add")}
-                    title={t("common.add")}
-                    onClick={() => void newMemo()}
-                  >
-                    {t("common.add")}
-                  </Button>
-                )}
-              </>
-            }
-          />
-        </>
+        <BarHeader
+          title={
+            notesUi.tab === "journal"
+              ? t("nav.notes")
+              : t(`notes.tab.${notesUi.tab}`)
+          }
+          actions={
+            <>
+              {notesUi.tab === "journal" && (
+                <Button
+                  variant="primary"
+                  icon={<NotebookPen size={12} aria-hidden />}
+                  aria-label={t("common.add")}
+                  title={t("common.add")}
+                  onClick={() => void newEntry()}
+                >
+                  {t("common.add")}
+                </Button>
+              )}
+              {notesUi.tab === "annotations" && (
+                <Button
+                  variant="primary"
+                  icon={<StickyNote size={12} aria-hidden />}
+                  aria-label={t("common.add")}
+                  title={t("common.add")}
+                  onClick={() => void newAnnotation()}
+                >
+                  {t("common.add")}
+                </Button>
+              )}
+              {notesUi.tab === "memos" && (
+                <Button
+                  variant="primary"
+                  icon={<Hash size={12} aria-hidden />}
+                  aria-label={t("common.add")}
+                  title={t("common.add")}
+                  onClick={() => void newMemo()}
+                >
+                  {t("common.add")}
+                </Button>
+              )}
+            </>
+          }
+        />
       }
     >
       <div className="relative shrink-0 px-3 py-2">

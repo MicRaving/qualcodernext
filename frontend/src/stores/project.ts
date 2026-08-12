@@ -75,7 +75,8 @@ export type ReportId =
   | "text-corpus"
   | "codebook"
   | "references"
-  | "sql";
+  | "sql"
+  | "graphs";
 
 export type InspectorSelection = { kind: "code" | "file"; id: number } | null;
 
@@ -257,6 +258,12 @@ interface ProjectState {
   selectCode: (id: number | null) => Promise<void>;
   selectFile: (id: number | null) => Promise<void>;
   clearInspector: () => void;
+
+  /** Pending "show this segment in the coder" request (set by the code
+   *  inspector's recent-segment click; consumed by the TextCoder once the
+   *  segment's codings are loaded). */
+  gotoSegment: { ctid: number | null; pos0: number | null; pos1: number | null } | null;
+  setGotoSegment: (goto: { ctid: number | null; pos0: number | null; pos1: number | null } | null) => void;
 }
 
 /** Monotonic guard for the inspector detail fetches (only the LATEST
@@ -630,6 +637,9 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       inspectorLoading: false,
       inspectorError: null,
     }),
+
+  gotoSegment: null,
+  setGotoSegment: (goto) => set({ gotoSegment: goto }),
 
   selectCode: async (id) => {
     if (id == null) {

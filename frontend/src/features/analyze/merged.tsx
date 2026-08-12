@@ -56,7 +56,8 @@ import {
 } from "@/features/analyze/reportData";
 import {
   ReportStatus,
-  ReportHeader,
+  ReportMenuBar,
+  ReportCsvButton,
   ColorSwatch,
   CategoryCell,
 } from "@/features/analyze/reportKit";
@@ -256,7 +257,7 @@ export function CodeFrequenciesView() {
     const max = Math.max(0, ...rows.map((r) => r.count));
     return (
       <div className="space-y-4">
-        <div className="flex items-center gap-1">
+        <ReportMenuBar>
           <Button
             variant="primary"
             className="h-6 px-2 py-0"
@@ -271,13 +272,25 @@ export function CodeFrequenciesView() {
           >
             {t("analyze.cumulative")}
           </Button>
-          <div className="flex-1" />
           {selectedCid != null && (
             <Button variant="secondary" className="h-6 px-2 py-0 text-text-secondary" onClick={() => setSelectedCid(null)}>
               {t("analyze.clearCode")}
             </Button>
           )}
-        </div>
+          <Button
+            variant="secondary"
+            className="text-text-secondary hover:text-text-primary"
+            onClick={() => void downloadChartPng("code-frequencies.png", rows)}
+            icon={<FileImage size={12} aria-hidden />}
+          >
+            PNG
+          </Button>
+          <ReportCsvButton
+            filename="code-frequencies.csv"
+            headers={[t("analyze.colCode"), t("analyze.colCategory"), t("analyze.colCount")]}
+            rows={rows.map((row: CodeFrequencyRow) => [row.name, row.category, row.count])}
+          />
+        </ReportMenuBar>
         {selectedCid != null && summary && summary.cid === selectedCid && (
           <div className="rounded-sm border border-border bg-surface p-3">
             <div className="flex items-baseline justify-between gap-2">
@@ -303,22 +316,6 @@ export function CodeFrequenciesView() {
             {summary.memo && <p className="mt-2 text-xs text-text-secondary">{summary.memo}</p>}
           </div>
         )}
-        <ReportHeader
-          title={t("analyze.titleCodeFrequencies")}
-          filename="code-frequencies.csv"
-          headers={[t("analyze.colCode"), t("analyze.colCategory"), t("analyze.colCount")]}
-          rows={rows.map((row: CodeFrequencyRow) => [row.name, row.category, row.count])}
-          actions={
-            <Button
-              variant="secondary"
-              className="text-text-secondary hover:text-text-primary"
-              onClick={() => void downloadChartPng("code-frequencies.png", rows)}
-              icon={<FileImage size={12} aria-hidden />}
-            >
-              PNG
-            </Button>
-          }
-        />
         <section>
           <SectionLabel>{t("analyze.codingCounts")}</SectionLabel>
           <div className={cn(cardCls, "mt-2 space-y-2 p-3")}>
@@ -392,26 +389,24 @@ export function CodeFrequenciesView() {
   if (rows.length === 0) return <div className="h-48"><EmptyState>No data</EmptyState></div>;
   return (
     <div className="space-y-4">
-      <div className="flex items-center gap-1">
+      <ReportMenuBar>
         <Button variant="secondary" className="h-6 px-2 py-0" onClick={() => setMode("ranked")}>
           Ranked
         </Button>
         <Button variant="primary" className="h-6 px-2 py-0" onClick={() => setMode("cumulative")}>
           Cumulative
         </Button>
-        <div className="flex-1" />
-      </div>
+        <ReportCsvButton
+          filename="cumulative.csv"
+          headers={[t("analyze.colCode"), t("analyze.colCount"), t("analyze.cumulative")]}
+          rows={rows.map((r) => [r.name, r.count, r.cumulative])}
+        />
+      </ReportMenuBar>
       <canvas
         ref={(el) => {
           if (el && rows.length > 0) drawCumulativeChart(el, rows);
         }}
         className="h-[340px] w-full rounded-sm border border-border bg-white"
-      />
-      <ReportHeader
-        title="Cumulative codings"
-        filename="cumulative.csv"
-        headers={[t("analyze.colCode"), t("analyze.colCount"), t("analyze.cumulative")]}
-        rows={rows.map((r) => [r.name, r.count, r.cumulative])}
       />
       <div className={cardCls}>
         <table className="w-full border-collapse">
@@ -500,6 +495,16 @@ export function CodeSegmentsView() {
     if (files.length === 0) return <div className="h-48"><EmptyState>No data</EmptyState></div>;
     return (
       <div className="space-y-2">
+        <ReportMenuBar>
+          <Button variant="secondary" className="h-7" onClick={() => setCompare(false)}>
+            {t("analyze.flatList")}
+          </Button>
+          <ReportCsvButton
+            filename="coder-file-comparison.csv"
+            headers={[t("analyze.colFile"), `${coderA} ${t("analyze.colCount").toLowerCase()}`, `${coderB} ${t("analyze.colCount").toLowerCase()}`]}
+            rows={files.map(([name, e]) => [name, e.a.length, e.b.length])}
+          />
+        </ReportMenuBar>
         <div className="flex flex-wrap items-end gap-2">
           <label className="block">
             <span className="mb-1 block text-xs text-text-secondary">{t("analyze.coderALabel")}</span>
@@ -517,16 +522,7 @@ export function CodeSegmentsView() {
               ))}
             </Select>
           </label>
-          <Button variant="secondary" className="h-7" onClick={() => setCompare(false)}>
-            {t("analyze.flatList")}
-          </Button>
         </div>
-        <ReportHeader
-          title={`${coderA} vs ${coderB} — ${files.length} ${t("analyze.files").toLowerCase()}`}
-          filename="coder-file-comparison.csv"
-          headers={[t("analyze.colFile"), `${coderA} ${t("analyze.colCount").toLowerCase()}`, `${coderB} ${t("analyze.colCount").toLowerCase()}`]}
-          rows={files.map(([name, e]) => [name, e.a.length, e.b.length])}
-        />
         <div className={cardCls}>
           <table className="w-full border-collapse">
             <thead className="sticky top-0 z-10">
@@ -570,6 +566,23 @@ export function CodeSegmentsView() {
     if (rows.length === 0) return <div className="h-48"><EmptyState>No data</EmptyState></div>;
     return (
       <div className="space-y-2">
+        <ReportMenuBar>
+          <Button variant="secondary" className="h-7" onClick={() => setCompare(true)}>
+            {t("analyze.compareTwoCoders")}
+          </Button>
+          <ReportCsvButton
+            filename="codes-by-segments.csv"
+            headers={[t("analyze.colFile"), t("analyze.colCode"), t("analyze.colCategory"), t("analyze.colSegment"), t("analyze.colOwner"), t("analyze.colDate")]}
+            rows={rows.map((row: CodesBySegmentRow) => [
+              row.file_name,
+              row.code_name,
+              row.category,
+              row.seltext,
+              row.owner,
+              row.date,
+            ])}
+          />
+        </ReportMenuBar>
         <div className="flex flex-wrap items-end gap-2">
           <label className="block min-w-40">
             <span className="mb-1 block text-xs text-text-secondary">Code</span>
@@ -584,23 +597,7 @@ export function CodeSegmentsView() {
               ))}
             </Select>
           </label>
-          <Button variant="secondary" className="h-7" onClick={() => setCompare(true)}>
-            {t("analyze.compareTwoCoders")}
-          </Button>
         </div>
-        <ReportHeader
-          title={`${t("analyze.segmentsCount", { n: rows.length })}`}
-          filename="codes-by-segments.csv"
-          headers={[t("analyze.colFile"), t("analyze.colCode"), t("analyze.colCategory"), t("analyze.colSegment"), t("analyze.colOwner"), t("analyze.colDate")]}
-          rows={rows.map((row: CodesBySegmentRow) => [
-            row.file_name,
-            row.code_name,
-            row.category,
-            row.seltext,
-            row.owner,
-            row.date,
-          ])}
-        />
         <div className={cardCls}>
           <table className="w-full border-collapse">
             <thead className="sticky top-0 z-10">
@@ -641,6 +638,20 @@ export function CodeSegmentsView() {
   if (rows.length === 0) return <div className="h-48"><EmptyState>No data</EmptyState></div>;
   return (
     <div className="space-y-2">
+      <ReportMenuBar>
+        <ReportCsvButton
+          filename="code-segments.csv"
+          headers={[t("analyze.kind"), t("analyze.colFile"), t("analyze.position"), t("analyze.textGeometry"), t("analyze.colOwner"), t("analyze.memo")]}
+          rows={rows.map((r) => [
+            KIND_LABEL[r.kind],
+            r.file_name,
+            segmentPosition(r),
+            r.seltext ?? `${r.width}×${r.height}@${r.x1},${r.y1}`,
+            r.owner,
+            r.memo,
+          ])}
+        />
+      </ReportMenuBar>
       <div className="flex flex-wrap items-end gap-2">
         <label className="block min-w-40">
           <span className="mb-1 block text-xs text-text-secondary">Code</span>
@@ -656,19 +667,6 @@ export function CodeSegmentsView() {
           </Select>
         </label>
       </div>
-      <ReportHeader
-        title={`${rows.length} segment(s)`}
-        filename="code-segments.csv"
-          headers={[t("analyze.kind"), t("analyze.colFile"), t("analyze.position"), t("analyze.textGeometry"), t("analyze.colOwner"), t("analyze.memo")]}
-        rows={rows.map((r) => [
-          KIND_LABEL[r.kind],
-          r.file_name,
-          segmentPosition(r),
-          r.seltext ?? `${r.width}×${r.height}@${r.x1},${r.y1}`,
-          r.owner,
-          r.memo,
-        ])}
-      />
       <div className={cardCls}>
         <table className="w-full border-collapse">
           <thead className="sticky top-0 z-10">
@@ -760,7 +758,7 @@ export function FileCodeView() {
 
   return (
     <div className="space-y-2">
-      <div className="flex flex-wrap items-center gap-1">
+      <ReportMenuBar>
         <Select
           value={dim}
           onChange={(e) => setDim(e.target.value as typeof dim)}
@@ -770,7 +768,6 @@ export function FileCodeView() {
           <option value="files">{t("analyze.perFile")}</option>
           <option value="cases">{t("analyze.perCase")}</option>
         </Select>
-        <div className="w-2" />
         {(["table", "stacked", "heatmap"] as const).map((v) => (
           <Button
             key={v}
@@ -781,16 +778,15 @@ export function FileCodeView() {
             {v === "table" ? t("analyze.table") : v === "stacked" ? t("analyze.stacked") : t("analyze.heatmap")}
           </Button>
         ))}
-      </div>
+        <ReportCsvButton
+          filename={`${dimLabel.toLowerCase()}-code.csv`}
+          headers={[dimLabel, ...codes.map((c) => c.name)]}
+          rows={entities.map((e, ri) => [e.name, ...(counts[ri] ?? []).map((n) => n)])}
+        />
+      </ReportMenuBar>
 
       {view === "table" ? (
         <>
-          <ReportHeader
-            title={`${dimLabel} × ${t("analyze.colCode").toLowerCase()}`}
-            filename={`${dimLabel.toLowerCase()}-code.csv`}
-            headers={[dimLabel, ...codes.map((c) => c.name)]}
-            rows={entities.map((e, ri) => [e.name, ...(counts[ri] ?? []).map((n) => n)])}
-          />
           <div className={cn(cardCls, "max-h-96")}>
             <table className="w-full border-collapse">
               <thead className="sticky top-0 z-10">
@@ -857,26 +853,24 @@ export function CodeRelationsView() {
     if (rows.length === 0) return <div className="h-48"><EmptyState>No data</EmptyState></div>;
     return (
       <div className="space-y-2">
-        <div className="flex flex-wrap items-center gap-1">
+        <ReportMenuBar>
           <Button variant="secondary" className="h-6 px-2 py-0" onClick={() => setMode("cooccurrence")}>
             {t("analyze.cooccurrence")}
           </Button>
           <Button variant="primary" className="h-6 px-2 py-0" onClick={() => setMode("crossover")}>
             {t("analyze.crossovers")}
           </Button>
-          <div className="w-2" />
           <Select value={owner} onChange={(e) => setOwner(e.target.value)} className="h-7" aria-label="Coder">
             {coders.map((n) => (
               <option key={n} value={n}>{n}</option>
             ))}
           </Select>
-        </div>
-        <ReportHeader
-          title={`${t("analyze.crossoversCount", { n: rows.length })}`}
-          filename="code-relations.csv"
-          headers={[t("analyze.coderALabel"), t("analyze.coderBLabel"), t("analyze.crossovers")]}
-          rows={rows.map((r) => [r.code_a, r.code_b, r.count])}
-        />
+          <ReportCsvButton
+            filename="code-relations.csv"
+            headers={[t("analyze.coderALabel"), t("analyze.coderBLabel"), t("analyze.crossovers")]}
+            rows={rows.map((r) => [r.code_a, r.code_b, r.count])}
+          />
+        </ReportMenuBar>
         <div className={cardCls}>
           <table className="w-full border-collapse">
             <thead className="sticky top-0 z-10">
@@ -907,20 +901,19 @@ export function CodeRelationsView() {
   if (codes.length === 0) return <div className="h-48"><EmptyState>No data</EmptyState></div>;
   return (
     <div className="space-y-2">
-      <div className="flex flex-wrap items-center gap-1">
+      <ReportMenuBar>
         <Button variant="primary" className="h-6 px-2 py-0" onClick={() => setMode("cooccurrence")}>
           Co-occurrence
         </Button>
         <Button variant="secondary" className="h-6 px-2 py-0" onClick={() => setMode("crossover")}>
           Crossovers
         </Button>
-      </div>
-      <ReportHeader
-        title={t("analyze.cooccurrenceTitle")}
-        filename="co-occurrence.csv"
-        headers={["", ...codes.map((c) => c.name)]}
-        rows={codes.map((a, i) => [a.name, ...(counts[i] ?? []).map((n) => n)])}
-      />
+        <ReportCsvButton
+          filename="co-occurrence.csv"
+          headers={["", ...codes.map((c) => c.name)]}
+          rows={codes.map((a, i) => [a.name, ...(counts[i] ?? []).map((n) => n)])}
+        />
+      </ReportMenuBar>
       <div className={cn(cardCls, "max-h-96")}>
         <table className="w-full border-collapse">
           <thead className="sticky top-0 z-10">
@@ -1020,12 +1013,13 @@ export function InterraterView() {
         <ReportStatus loading={loading} error={error} onRetry={retry} />
       ) : volume.length > 0 ? (
         <div className="space-y-2">
-          <ReportHeader
-            title={t("analyze.coderComparisonTitle")}
-            filename="coder-comparison.csv"
-          headers={[t("analyze.colCoder"), t("analyze.colCodings"), t("analyze.colFiles")]}
-            rows={volume.map((row: CoderComparisonRow) => [row.owner, row.codings_count, row.files_count])}
-          />
+          <ReportMenuBar>
+            <ReportCsvButton
+              filename="coder-comparison.csv"
+              headers={[t("analyze.colCoder"), t("analyze.colCodings"), t("analyze.colFiles")]}
+              rows={volume.map((row: CoderComparisonRow) => [row.owner, row.codings_count, row.files_count])}
+            />
+          </ReportMenuBar>
           <div className={cardCls}>
             <table className="w-full border-collapse">
               <thead className="sticky top-0 z-10">
@@ -1154,7 +1148,7 @@ export function CorpusTextView() {
   const [tab, setTab] = useState<(typeof CORPUS_TABS)[number]["id"]>("word-cloud");
   return (
     <div className="space-y-3">
-      <div className="flex flex-wrap items-center gap-1">
+      <ReportMenuBar>
         {CORPUS_TABS.map((t) => (
           <Button
             key={t.id}
@@ -1165,7 +1159,7 @@ export function CorpusTextView() {
             {t.label}
           </Button>
         ))}
-      </div>
+      </ReportMenuBar>
       {tab === "word-cloud" && <WordCloudReport />}
       {tab === "exact-matches" && <ExactMatchesReport />}
       {tab === "file-summary" && <FileSummaryReport />}

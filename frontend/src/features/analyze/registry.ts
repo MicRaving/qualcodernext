@@ -111,4 +111,5 @@ export const REPORT_COMPONENTS: Record<ReportId, ComponentType> = {
   codebook: CodebookReport,
   references: ReferencesReport,
   sql: SqlReport,
+  graphs: () => null,
 };

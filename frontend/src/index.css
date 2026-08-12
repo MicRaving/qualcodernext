@@ -147,3 +147,20 @@ select {
 .qc-seg.qc-seg-hidden {
   opacity: 0.2;
 }
+
+/* Flash highlight for "show this segment" (code inspector recent segments):
+   a fading accent outline around the segment for ~2s. */
+.qc-seg.qc-seg-flash {
+  animation: qc-seg-flash 2s ease-out;
+}
+@keyframes qc-seg-flash {
+  0% {
+    box-shadow: 0 0 0 4px color-mix(in srgb, var(--qc-accent) 55%, transparent);
+    outline: 2px solid var(--qc-accent);
+    outline-offset: 1px;
+  }
+  100% {
+    box-shadow: 0 0 0 0 transparent;
+    outline: 2px solid transparent;
+  }
+}
