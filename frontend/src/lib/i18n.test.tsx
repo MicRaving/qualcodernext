@@ -67,7 +67,7 @@ describe("I18nProvider", () => {
         <LocaleProbe />
       </I18nProvider>,
     );
-    expect(html).toContain("en:Files");
+    expect(html).toContain("en:Coding");
   });
 
   it("persists setLocale to localStorage", () => {
@@ -94,7 +94,7 @@ describe("I18nProvider", () => {
         <LocaleProbe />
       </I18nProvider>,
     );
-    expect(html).toContain("en:Files");
+    expect(html).toContain("en:Coding");
   });
 
   it("falls back to 'en' when the persisted value is invalid", () => {
@@ -104,7 +104,7 @@ describe("I18nProvider", () => {
         <LocaleProbe />
       </I18nProvider>,
     );
-    expect(html).toContain("en:Files");
+    expect(html).toContain("en:Coding");
   });
 
   it("context value is stable across re-renders (memoized)", () => {

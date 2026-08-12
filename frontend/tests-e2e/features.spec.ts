@@ -176,8 +176,8 @@ test("create project, import image and text fixtures", async ({ page }) => {
     timeout: 30_000,
   });
 
-  await page.getByRole("button", { name: "Files", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "Files" }).first()).toBeVisible();
+  await page.getByRole("button", { name: "Coding", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Coding" }).first()).toBeVisible();
 
   await page.setInputFiles("input[type=file]", [PHOTO_TXT, IMAGE_PNG]);
   await expect(page.getByRole("row").filter({ hasText: "photo.txt" })).toBeVisible({
@@ -193,8 +193,8 @@ test("create project, import image and text fixtures", async ({ page }) => {
 test("image coding: draw a region and code it", async ({ page }) => {
   await ensureProjectOpen(page);
 
-  await page.getByRole("button", { name: "Files", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "Files" }).first()).toBeVisible();
+  await page.getByRole("button", { name: "Coding", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Coding" }).first()).toBeVisible();
   await page.getByRole("row").filter({ hasText: "image.png" }).click();
 
   // ImageCoder loads the image and auto-fits the zoom; wait for a rendered
@@ -256,8 +256,8 @@ test("image coding: draw a region and code it", async ({ page }) => {
 test("sidebar code click codes the selected text", async ({ page }) => {
   await ensureProjectOpen(page);
 
-  await page.getByRole("button", { name: "Files", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "Files" }).first()).toBeVisible();
+  await page.getByRole("button", { name: "Coding", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Coding" }).first()).toBeVisible();
   await page.getByRole("row").filter({ hasText: "photo.txt" }).click();
   const docLine = page.getByText("The sun was shining brightly over the hills.");
   await expect(docLine).toBeVisible({ timeout: 20_000 });
@@ -328,8 +328,8 @@ test("autocode + SQL report", async ({ page }) => {
   page.on("pageerror", (e) => console.log(`[PAGEERR] ${e.message.slice(0, 400)}`));
   await ensureProjectOpen(page);
 
-  await page.getByRole("button", { name: "Files", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "Files" }).first()).toBeVisible();
+  await page.getByRole("button", { name: "Coding", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Coding" }).first()).toBeVisible();
   await page.getByRole("row").filter({ hasText: "photo.txt" }).click();
 
   await expect(
@@ -413,7 +413,7 @@ test("cases and attributes", async ({ page }) => {
   await saved;
 
   // Persistence: leave the view and come back; the value reloads from the API.
-  await navButton("Files").click();
+  await navButton("Coding").click();
   await navButton("Cases").click();
   await page.getByText("FeatureCase").first().click();
   await expect(page.getByLabel("Score")).toHaveValue("42", { timeout: 15_000 });
@@ -463,8 +463,8 @@ test("a11y smoke: every button has an accessible name", async ({ page }) => {
   await ensureProjectOpen(page);
 
   // Stable shell state for the sweep: toolbar + sidebar + Files view.
-  await page.getByRole("button", { name: "Files", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "Files" }).first()).toBeVisible();
+  await page.getByRole("button", { name: "Coding", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Coding" }).first()).toBeVisible();
 
   const buttons = await page.getByRole("button").all();
   expect(buttons.length).toBeGreaterThan(0);

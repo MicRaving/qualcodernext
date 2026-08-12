@@ -75,7 +75,7 @@ doc.save(r"${pdfPath}")
 
   await createProject(page, projectPath);
 
-  await page.getByRole("button", { name: "Files", exact: true }).click();
+  await page.getByRole("button", { name: "Coding", exact: true }).click();
   await page.setInputFiles("input[type=file]", [pdfPath]);
   await expect(page.getByRole("row").filter({ hasText: "doc_" })).toBeVisible({
     timeout: 20_000,
@@ -133,7 +133,7 @@ test("autocode dialog codes multiple selected codes", async ({ page }) => {
 
   await createProject(page, projectPath);
 
-  await page.getByRole("button", { name: "Files", exact: true }).click();
+  await page.getByRole("button", { name: "Coding", exact: true }).click();
   await page.setInputFiles("input[type=file]", [txtPath]);
   await expect(page.getByRole("row").filter({ hasText: "doc_" })).toBeVisible({
     timeout: 20_000,

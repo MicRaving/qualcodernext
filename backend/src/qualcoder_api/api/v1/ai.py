@@ -3,7 +3,7 @@ persistent index, MCP endpoint."""
 
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel
 
 from qualcoder_api.api.v1.deps import DbDep, ServiceDep
@@ -65,10 +65,18 @@ def _models_urls(provider: str, api_base: str) -> list[str]:
 
 
 @router.get("/models")
-async def ai_models() -> dict:
+async def ai_models(
+    provider: str | None = Query(None),
+    api_base: str | None = Query(None),
+    api_key: str | None = Query(None),
+) -> dict:
     """List the models the configured provider advertises (OpenAI-compatible
     ``/v1/models``). Local providers (ollama/lmstudio/opencode-go) answer
     quickly; cloud providers need an API key, so failures return empty.
+
+    Query params (``provider``/``api_base``/``api_key``), when provided,
+    override the saved settings for this fetch only — they are never saved.
+    An empty-string api_key is treated the same as None.
 
     The list is FILTERED per provider: chat models only, newest generations —
     Gemini/GPT video, TTS, embedding and image models are dropped — and
@@ -79,11 +87,11 @@ async def ai_models() -> dict:
     import httpx
 
     ai = user_settings.get_ai_settings()
-    provider = ai.get("provider", "custom")
-    api_base = (ai.get("api_base") or "").rstrip("/")
+    provider = provider or ai.get("provider", "custom")
+    api_base = (api_base or ai.get("api_base") or "").rstrip("/")
     if not api_base:
         return {"models": []}
-    api_key = ai.get("api_key") or ""
+    api_key = api_key or ai.get("api_key") or ""
     if _provider_requires_key(provider) and not api_key.strip():
         return {"models": []}
     headers = _provider_headers(provider, api_key)

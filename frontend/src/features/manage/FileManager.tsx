@@ -46,6 +46,8 @@ import {
   ViewHeader,
 } from "@/components/ui/orchestrator";
 import { useProjectStore } from "@/stores/project";
+import { TranscribeDialog } from "@/features/coding/TranscribeDialog";
+import { AutocodeDialog } from "@/features/coding/AutocodeDialog";
 import {
   filterSources,
   mediaTypeLabel,
@@ -106,6 +108,7 @@ export function FileManager() {
   const setView = useProjectStore((s) => s.setView);
   const selectFile = useProjectStore((s) => s.selectFile);
   const sources = useProjectStore((s) => s.sources);
+  const codeTree = useProjectStore((s) => s.codeTree);
 
   const fileQuery = useProjectStore((s) => s.fileQuery);
   const setFileQuery = useProjectStore((s) => s.setFileQuery);
@@ -121,6 +124,8 @@ export function FileManager() {
   const [badLinks, setBadLinks] = useState<BadLink[]>([]);
   const [filters, setFilters] = useState<FileFilter[]>([]);
   const [activeFilter, setActiveFilter] = useState<number | "">("");
+  const [batchTranscribe, setBatchTranscribe] = useState<number[] | null>(null);
+  const [batchAutocode, setBatchAutocode] = useState<number[] | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const replaceInputRef = useRef<HTMLInputElement | null>(null);
@@ -399,6 +404,33 @@ export function FileManager() {
     }
   }
 
+  function openBatchTranscribe() {
+    const ids = sources
+      .filter(
+        (s) =>
+          selected.has(s.id) &&
+          (s.media_type === "audio" || s.media_type === "video") &&
+          s.av_text_id == null,
+      )
+      .map((s) => s.id);
+    if (ids.length === 0) {
+      toast.error(t("files.transcribeNone"));
+      return;
+    }
+    setBatchTranscribe(ids);
+  }
+
+  function openBatchAutocode() {
+    const ids = sources
+      .filter((s) => selected.has(s.id) && s.media_type === "text")
+      .map((s) => s.id);
+    if (ids.length === 0) {
+      toast.error(t("files.autocodeNone"));
+      return;
+    }
+    setBatchAutocode(ids);
+  }
+
   async function assignToCase(row: Source) {
     const name = window.prompt(t("files.assignCasePrompt", { name: row.name }));
     if (name === null) return;
@@ -474,14 +506,30 @@ export function FileManager() {
           </div>
         )}
         {selected.size > 0 && (
-          <Button
-            variant="danger"
-            icon={<Trash2 size={13} aria-hidden />}
-            onClick={() => void deleteSelected()}
-            title={t("files.deleteSelectedConfirm", { n: selected.size })}
-          >
-            {t("files.deleteSelectedButton", { n: selected.size })}
-          </Button>
+          <>
+            <Button
+              variant="secondary"
+              onClick={() => openBatchTranscribe()}
+              title={t("files.transcribeSelected", { n: selected.size })}
+            >
+              {t("files.transcribeSelected", { n: selected.size })}
+            </Button>
+            <Button
+              variant="secondary"
+              onClick={() => openBatchAutocode()}
+              title={t("files.autocodeSelected", { n: selected.size })}
+            >
+              {t("files.autocodeSelected", { n: selected.size })}
+            </Button>
+            <Button
+              variant="danger"
+              icon={<Trash2 size={13} aria-hidden />}
+              onClick={() => void deleteSelected()}
+              title={t("files.deleteSelectedConfirm", { n: selected.size })}
+            >
+              {t("files.deleteSelectedButton", { n: selected.size })}
+            </Button>
+          </>
         )}
         <IconButton
           label={t("files.badLinks")}
@@ -792,6 +840,21 @@ export function FileManager() {
           </Button>
         </div>
       </Modal>
+
+      {/* Batch transcribe / autocode dialogs for the selected files */}
+      {batchTranscribe && (
+        <TranscribeDialog sourceIds={batchTranscribe} onClose={() => setBatchTranscribe(null)} />
+      )}
+      {batchAutocode && (
+        <AutocodeDialog
+          open
+          onClose={() => setBatchAutocode(null)}
+          fid={null}
+          codes={codeTree}
+          sourceIds={batchAutocode}
+          onDone={() => setBatchAutocode(null)}
+        />
+      )}
     </div>
   );
 }

@@ -109,12 +109,15 @@ export function TextCoder({
   sourceId,
   forceText = false,
   onExitPlainText,
+  bare = false,
 }: {
   sourceId: number;
   /** Render the plain text even for PDF sources (PDF "plain text" mode). */
   forceText?: boolean;
   /** When set (PDF plain-text mode), renders a "back to rendered PDF" toggle. */
   onExitPlainText?: () => void;
+  /** Omit the view header — renders only the document surface (split view). */
+  bare?: boolean;
 }) {
   const { t } = useI18n();
   const storeCodeTree = useProjectStore((s) => s.codeTree);
@@ -846,89 +849,91 @@ export function TextCoder({
 
   return (
     <div className="flex h-full flex-col bg-bg">
-      <ViewHeader
-        wrap
-        title={source.name}
-        meta={source.memo}
-        actions={
-          <>
-            {saving && (
-              <span className="flex items-center gap-1 text-xs text-text-secondary" role="status">
-                <LoaderCircle size={12} className="animate-spin" aria-hidden />
-                {t("coder.saving")}
-              </span>
-            )}
-            {editMode ? (
-              <>
-                <Button
-                  variant="primary"
-                  icon={<Save size={12} aria-hidden />}
-                  onClick={saveEdit}
-                  disabled={saving}
-                >
-                  {t("common.save")}
-                </Button>
-                <Button
-                  variant="secondary"
-                  icon={unsaved ? <CircleAlert size={12} aria-hidden /> : <X size={12} aria-hidden />}
-                  onClick={toggleEditMode}
-                  disabled={saving}
-                >
-                  {unsaved ? t("coder.discard") : t("common.cancel")}
-                </Button>
-              </>
-            ) : (
-              <>
-                {onExitPlainText && (
-                  <Button variant="secondary" icon={<Rows3 size={12} aria-hidden />} onClick={onExitPlainText}>
-                    {t("pdfCoder.renderedMode")}
+      {!bare && (
+        <ViewHeader
+          wrap
+          title={source.name}
+          meta={source.memo}
+          actions={
+            <>
+              {saving && (
+                <span className="flex items-center gap-1 text-xs text-text-secondary" role="status">
+                  <LoaderCircle size={12} className="animate-spin" aria-hidden />
+                  {t("coder.saving")}
+                </span>
+              )}
+              {editMode ? (
+                <>
+                  <Button
+                    variant="primary"
+                    icon={<Save size={12} aria-hidden />}
+                    onClick={saveEdit}
+                    disabled={saving}
+                  >
+                    {t("common.save")}
                   </Button>
-                )}
-                <Button variant="secondary" icon={<FilePen size={12} aria-hidden />} onClick={toggleEditMode}>
-                  {t("coder.editMode")}
-                </Button>
-                <IconButton
-                  label={t("coder.bookmarkSet")}
-                  title={t("coder.bookmarkSet")}
-                  onClick={() => void setBookmark()}
-                  className={cn(bookmarkFileId === source.id && "text-accent")}
-                >
-                  <Bookmark
-                    size={16}
-                    className={bookmarkFileId === source.id ? "fill-current" : ""}
-                    aria-hidden
-                  />
-                </IconButton>
-                <IconButton
-                  label={t("coder.bookmarkGo")}
-                  title={t("coder.bookmarkGoTitle")}
-                  onClick={() => void goBookmark()}
-                  disabled={bookmarkFileId == null}
-                >
-                  <BookmarkCheck size={16} aria-hidden />
-                </IconButton>
-                <Button
-                  variant="secondary"
-                  icon={<Undo2 size={12} aria-hidden />}
-                  onClick={unmarkLast}
-                  disabled={undoStack.length === 0}
-                  title={t("coder.unmarkTitle")}
-                >
-                  {t("coder.unmarkLast")}
-                </Button>
-                <Button
-                  variant="secondary"
-                  icon={<Sparkles size={12} aria-hidden />}
-                  onClick={() => setAutoOpen((o) => !o)}
-                  className={cn(autoOpen && "border-accent text-accent")}
-                >
-                  {t("coder.autocode")}
-                </Button>
-              </>
-            )}
-          </>
-        }
-      />
+                  <Button
+                    variant="secondary"
+                    icon={unsaved ? <CircleAlert size={12} aria-hidden /> : <X size={12} aria-hidden />}
+                    onClick={toggleEditMode}
+                    disabled={saving}
+                  >
+                    {unsaved ? t("coder.discard") : t("common.cancel")}
+                  </Button>
+                </>
+              ) : (
+                <>
+                  {onExitPlainText && (
+                    <Button variant="secondary" icon={<Rows3 size={12} aria-hidden />} onClick={onExitPlainText}>
+                      {t("pdfCoder.renderedMode")}
+                    </Button>
+                  )}
+                  <Button variant="secondary" icon={<FilePen size={12} aria-hidden />} onClick={toggleEditMode}>
+                    {t("coder.editMode")}
+                  </Button>
+                  <IconButton
+                    label={t("coder.bookmarkSet")}
+                    title={t("coder.bookmarkSet")}
+                    onClick={() => void setBookmark()}
+                    className={cn(bookmarkFileId === source.id && "text-accent")}
+                  >
+                    <Bookmark
+                      size={16}
+                      className={bookmarkFileId === source.id ? "fill-current" : ""}
+                      aria-hidden
+                    />
+                  </IconButton>
+                  <IconButton
+                    label={t("coder.bookmarkGo")}
+                    title={t("coder.bookmarkGoTitle")}
+                    onClick={() => void goBookmark()}
+                    disabled={bookmarkFileId == null}
+                  >
+                    <BookmarkCheck size={16} aria-hidden />
+                  </IconButton>
+                  <Button
+                    variant="secondary"
+                    icon={<Undo2 size={12} aria-hidden />}
+                    onClick={unmarkLast}
+                    disabled={undoStack.length === 0}
+                    title={t("coder.unmarkTitle")}
+                  >
+                    {t("coder.unmarkLast")}
+                  </Button>
+                  <Button
+                    variant="secondary"
+                    icon={<Sparkles size={12} aria-hidden />}
+                    onClick={() => setAutoOpen((o) => !o)}
+                    className={cn(autoOpen && "border-accent text-accent")}
+                  >
+                    {t("coder.autocode")}
+                  </Button>
+                </>
+              )}
+            </>
+          }
+        />
+      )}
 
       {errMsg && <ErrorBanner onClose={() => setErrMsg(null)}>{errMsg}</ErrorBanner>}
 

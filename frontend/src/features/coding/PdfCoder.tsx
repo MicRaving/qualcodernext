@@ -20,6 +20,7 @@ import {
   CircleAlert,
   FileText,
   LoaderCircle,
+  PanelRight,
   Pencil,
   Sparkles,
   Rows3,
@@ -143,6 +144,10 @@ export function PdfCoder({ source }: { source: Source }) {
   const hiddenCodes = useProjectStore((s) => s.hiddenCodes);
 
   const [plainText, setPlainText] = useState(false);
+  const [splitView, setSplitView] = useState(false);
+  const [textW, setTextW] = useState(420);
+  const [textDragging, setTextDragging] = useState(false);
+  const textResizeRef = useRef<{ startX: number; startW: number } | null>(null);
   const [autoOpen, setAutoOpen] = useState(false);
   const [codings, setCodings] = useState<ImageCoding[]>([]);
   const [textCodings, setTextCodings] = useState<Coding[]>([]);
@@ -185,6 +190,35 @@ export function PdfCoder({ source }: { source: Source }) {
   useEffect(() => {
     pendingRectRef.current = pendingRect;
   }, [pendingRect]);
+
+  /* ------------------------------------------------------- split resize */
+
+  function startTextResize(e: ReactMouseEvent<HTMLDivElement>) {
+    e.preventDefault();
+    textResizeRef.current = { startX: e.clientX, startW: textW };
+    setTextDragging(true);
+  }
+
+  useEffect(() => {
+    if (!textDragging) return;
+    const onMove = (e: MouseEvent) => {
+      const drag = textResizeRef.current;
+      if (!drag) return;
+      const containerW = containerRef.current?.clientWidth ?? 0;
+      const maxW = containerW > 0 ? Math.round(containerW * 0.7) : 0;
+      setTextW(Math.min(maxW, Math.max(220, Math.round(drag.startW + (e.clientX - drag.startX)))));
+    };
+    const onUp = () => {
+      textResizeRef.current = null;
+      setTextDragging(false);
+    };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+    return () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+    };
+  }, [textDragging]);
 
   const numPages = pdf?.numPages ?? 0;
   const scale = zoom === "fit" ? fittedScale : zoom;
@@ -820,6 +854,19 @@ export function PdfCoder({ source }: { source: Source }) {
               >
                 {t("pdfCoder.plainText")}
               </Button>
+
+              <div className="mx-1 h-4 w-px bg-border" aria-hidden />
+              <Button
+                variant="secondary"
+                className={cn("h-7", splitView && "border-accent text-accent")}
+                onClick={() => setSplitView((s) => !s)}
+                aria-pressed={splitView}
+                title={t("pdf.split")}
+                aria-label={t("pdf.split")}
+                icon={<PanelRight size={12} aria-hidden />}
+              >
+                {t("pdf.split")}
+              </Button>
             </div>
           </>
         }
@@ -827,8 +874,12 @@ export function PdfCoder({ source }: { source: Source }) {
 
       {errMsg && <ErrorBanner onClose={() => setErrMsg(null)}>{errMsg}</ErrorBanner>}
 
-      <div ref={containerRef} className="min-h-0 flex-1 overflow-y-auto bg-bg">
-        <div className="mx-auto flex w-max min-w-full flex-col items-center gap-4 p-6">
+      <div className="flex min-h-0 flex-1">
+        <div
+          ref={containerRef}
+          className={cn("min-h-0 min-w-0 flex-1 overflow-y-auto bg-bg")}
+        >
+          <div className="mx-auto flex w-max min-w-full flex-col items-center gap-4 p-6">
           {pageNumbers.map((p) => {
             const size = pageSizes.get(p);
             const overlays = buildPageOverlays(codings, p, scale, colorByCid);
@@ -924,6 +975,25 @@ export function PdfCoder({ source }: { source: Source }) {
             );
           })}
         </div>
+      </div>
+        {splitView && (
+          <>
+            <div
+              onMouseDown={startTextResize}
+              className={cn(
+                "w-1 shrink-0 cursor-col-resize border-r border-border",
+                textDragging ? "bg-accent/40" : "bg-surface hover:bg-accent/40",
+              )}
+              role="separator"
+              aria-orientation="vertical"
+              aria-label="Resize text panel"
+              title="Resize text panel"
+            />
+            <div className="flex min-h-0 shrink-0 flex-col overflow-hidden bg-bg" style={{ width: textW }}>
+              <TextCoder sourceId={source.id} forceText bare />
+            </div>
+          </>
+        )}
       </div>
 
       {selectedCoding && (

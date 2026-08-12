@@ -4,18 +4,23 @@
  * one the dashboard empty state provides New/Open project (the app always
  * starts on the dashboard).
  */
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
+  AudioLines,
   BarChart3,
   Download,
   Files,
   History,
   LayoutDashboard,
   NotebookPen,
+  Pause,
+  Play,
   Settings,
   Sparkles,
+  Trash2,
   Users,
 } from "lucide-react";
+import type { TaskInfo } from "@/stores/project";
 import { Sidebar } from "@/components/shell/Sidebar";
 import { Inspector } from "@/components/shell/Inspector";
 import { CoderSwitcher } from "@/components/shell/CoderSwitcher";
@@ -35,6 +40,7 @@ import { api } from "@/lib/api";
 import { useToast } from "@/lib/toast";
 import { useI18n } from "@/lib/i18n";
 import { useProjectStore, type WorkspaceView } from "@/stores/project";
+import { A11ySkipLink } from "@/features/accessibility/A11yControls";
 import { useUpdatesStore } from "@/stores/updates";
 import { Button } from "@/components/ui/orchestrator";
 import { cls } from "@/components/ui/tokens";
@@ -164,34 +170,63 @@ export function ProjectShell() {
   const rightPane = useProjectStore((s) => s.rightPane);
   const setRightPane = useProjectStore((s) => s.setRightPane);
   const projectOpen = useProjectStore((s) => s.projectOpen);
-  const transcribeJobs = useProjectStore((s) => s.transcribeJobs);
+  const tasks = useProjectStore((s) => s.tasks);
+  const tasksPaused = useProjectStore((s) => s.tasksPaused);
   const importState = useProjectStore((s) => s.importState);
   const [queueOpen, setQueueOpen] = useState(false);
+  const [dragId, setDragId] = useState<string | null>(null);
+  const announceRef = useRef<HTMLDivElement>(null);
+  const a11yMode = useProjectStore((s) => s.a11yMode);
 
-  // Poll running transcription jobs; refresh the project when one finishes.
+  // Announce task completion for screen readers (aria-live region — only
+  // mounted in screen-reader mode so the default DOM stays quiet).
+  const announce = (text: string) => {
+    if (announceRef.current) announceRef.current.textContent = text;
+  };
+
+  // Poll running background jobs (transcription + autocode); refresh the
+  // project when one finishes.
   useEffect(() => {
-    if (transcribeJobs.length === 0) return;
+    if (tasks.length === 0) return;
     const poll = async () => {
       const store = useProjectStore.getState();
-      for (const job of store.transcribeJobs) {
-        if (job.state !== "running") continue;
+      for (const task of store.tasks) {
+        if (task.state !== "running") continue;
         try {
-          const j = await api.transcribeJob(job.id);
-          const completed = j.state !== "running" && job.state === "running";
-          store.updateTranscribeJob(job.id, {
-            state: j.state,
-            progress: j.progress,
-            message: j.message,
-            transcriptSourceId: j.transcript_source_id ?? null,
-          });
-          if (completed && j.state === "done") {
-            void store.refreshProject();
-            toast.success(t("transcribe.done", { id: j.transcript_source_id ?? 0 }));
-            // Clean the top-bar indicator: finished jobs auto-remove shortly
-            // after completion instead of lingering as a stopped queue.
-            window.setTimeout(() => {
-              useProjectStore.getState().clearFinishedTranscribeJobs();
-            }, 6000);
+          if (task.kind === "transcribe") {
+            const j = await api.transcribeJob(task.id);
+            const completed = j.state !== "running" && task.state === "running";
+            store.updateTranscribeJob(task.id, {
+              state: j.state as TaskInfo["state"],
+              progress: j.progress,
+              message: j.message,
+              paused: j.paused,
+              transcriptSourceId: j.transcript_source_id ?? null,
+            });
+            if (completed && j.state === "done") {
+              void store.refreshProject();
+              toast.success(t("transcribe.done", { id: j.transcript_source_id ?? 0 }));
+              announce(t("transcribe.done", { id: j.transcript_source_id ?? 0 }));
+            }
+          } else {
+            const j = await api.autocodeJob(task.id);
+            const completed = j.state !== "running" && task.state === "running";
+            store.updateAutocodeJob(task.id, {
+              state: j.state as TaskInfo["state"],
+              progress: j.progress,
+              message: j.message,
+              paused: j.paused,
+              resultCount: j.result?.count ?? null,
+            });
+            if (completed) {
+              if (j.state === "done") {
+                void store.refreshProject();
+                toast.success(t("tasks.autocoded", { count: j.result?.count ?? 0 }));
+                announce(t("tasks.autocoded", { count: j.result?.count ?? 0 }));
+              } else if (j.state === "error") {
+                toast.error(t("tasks.autocodeFailed"));
+              }
+            }
           }
         } catch {
           /* transient — the next poll retries */
@@ -200,11 +235,45 @@ export function ProjectShell() {
     };
     const timer = setInterval(() => void poll(), 1500);
     return () => clearInterval(timer);
-  }, [transcribeJobs.length, t, toast]);
+  }, [tasks.length, t, toast]);
 
-  const activeJobs = transcribeJobs.filter((j) => j.state === "running");
-  const finishedJobs = transcribeJobs.filter((j) => j.state !== "running");
-  const showIndicator = transcribeJobs.length > 0 || importState !== null;
+  // Sequential queue dispatcher: while not paused, start queued jobs one at
+  // a time (nothing may run in parallel with the current job). The task is
+  // marked running IN THE STORE before the request fires so the effect never
+  // re-starts the same job (and the poll loop picks it up).
+  useEffect(() => {
+    if (tasksPaused) return;
+    const store = useProjectStore.getState();
+    if (store.tasks.some((j) => j.state === "running")) return;
+    const next = store.tasks.find((j) => j.state === "queued");
+    if (!next) return;
+    if (next.kind === "transcribe") store.updateTranscribeJob(next.id, { state: "running" });
+    else store.updateAutocodeJob(next.id, { state: "running", progress: 1, message: "starting" });
+    const start = () =>
+      next.kind === "transcribe"
+        ? api.transcribeJobControl(next.id, "start")
+        : api.autocodeJobControl(next.id, "start");
+    start().catch(() => {
+      /* retried on the next state change */
+    });
+  }, [tasks, tasksPaused]);
+
+  // Pause/resume: pause halts the dispatcher and pauses the running
+  // transcription job (autocode jobs finish their file, then wait).
+  useEffect(() => {
+    const store = useProjectStore.getState();
+    for (const task of store.tasks) {
+      if (task.state !== "running") continue;
+      if (task.kind !== "transcribe") continue;
+      const action = tasksPaused ? "pause" : "resume";
+      api.transcribeJobControl(task.id, action).catch(() => {});
+      store.updateTranscribeJob(task.id, { paused: tasksPaused });
+    }
+  }, [tasksPaused]);
+
+  const activeJobs = tasks.filter((j) => j.state === "running");
+  const finishedJobs = tasks.filter((j) => j.state === "done" || j.state === "error");
+  const showIndicator = tasks.length > 0 || importState !== null;
   // Overall progress for the fill circle: active jobs average, import %, or
   // 100 once everything is done (stopped circle).
   const taskProgress =
@@ -215,7 +284,17 @@ export function ProjectShell() {
         : 100;
 
   return (
-    <WorkspaceLayout
+    <>
+      <A11ySkipLink />
+      {a11yMode === "screenreader" && (
+        <div
+          ref={announceRef}
+          role="status"
+          aria-live="polite"
+          className="sr-only"
+        />
+      )}
+      <WorkspaceLayout
       ribbon={
         <header className="flex h-11 shrink-0 items-center gap-0.5 border-b border-border bg-surface px-3">
           {NAV_BUTTONS.map(({ kind, labelKey, icon: Icon }) => {
@@ -261,22 +340,55 @@ export function ProjectShell() {
                 type="button"
                 onClick={() => setQueueOpen((o) => !o)}
                 aria-expanded={queueOpen}
-                aria-label={t("transcribe.queue")}
-                title={t("transcribe.queue")}
+                aria-label={t("tasks.title")}
+                title={t("tasks.title")}
                 className={cls.secondary}
               >
                 <TaskIndicator progress={taskProgress} />
                 {activeJobs.length > 0 ? String(activeJobs.length) : ""}
               </button>
               {queueOpen && (
-                <Menu className="right-0 w-72">
-                  <div className="border-b border-border px-2 py-1 text-xs font-medium text-text-secondary">
-                    {t("transcribe.queue")}
+                <Menu role="menu" className="right-0 w-80">
+                  <div className="flex items-center gap-1 border-b border-border px-2 py-1">
+                    <span className="min-w-0 flex-1 text-xs font-medium text-text-secondary">
+                      {t("tasks.title")}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const paused = !useProjectStore.getState().tasksPaused;
+                        useProjectStore.getState().setTasksPaused(paused);
+                      }}
+                      aria-pressed={tasksPaused}
+                      title={tasksPaused ? t("tasks.resume") : t("tasks.pause")}
+                      className="rounded-sm p-1 hover:bg-surface-higher"
+                    >
+                      {tasksPaused ? (
+                        <Play size={13} aria-hidden />
+                      ) : (
+                        <Pause size={13} aria-hidden />
+                      )}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        useProjectStore.getState().clearFinishedTasks();
+                      }}
+                      title={t("tasks.clear")}
+                      className="rounded-sm p-1 hover:bg-surface-higher"
+                    >
+                      <Trash2 size={13} aria-hidden />
+                    </button>
                   </div>
                   {/* App-update info rides in the same background-tasks
                       flyout: available → download button, downloading →
                       progress. */}
                   <UpdateStatusRow />
+                  {tasksPaused && (
+                    <div className="border-b border-border px-2 py-1 text-xs text-text-secondary">
+                      {t("tasks.pausedHint")}
+                    </div>
+                  )}
                   {importState !== null && (
                     <div className="px-2 py-1.5">
                       <div className="flex items-center gap-2 text-xs">
@@ -297,24 +409,78 @@ export function ProjectShell() {
                       </div>
                     </div>
                   )}
-                  {transcribeJobs.map((job) => (
-                    <div key={job.id} className="px-2 py-1.5">
+                  {tasks.length === 0 && importState === null && (
+                    <div className="px-2 py-3 text-center text-xs text-text-secondary">
+                      {t("tasks.empty")}
+                    </div>
+                  )}
+                  {tasks.map((job) => (
+                    <div
+                      key={job.id}
+                      draggable
+                      onDragStart={(e) => {
+                        setDragId(job.id);
+                        e.dataTransfer.effectAllowed = "move";
+                      }}
+                      onDragOver={(e) => {
+                        if (dragId && dragId !== job.id) e.preventDefault();
+                      }}
+                      onDrop={(e) => {
+                        e.preventDefault();
+                        if (dragId && dragId !== job.id) {
+                          useProjectStore.getState().moveTask(dragId, job.id);
+                        }
+                        setDragId(null);
+                      }}
+                      onDragEnd={() => setDragId(null)}
+                      className={`px-2 py-1.5 ${dragId === job.id ? "opacity-50" : ""}`}
+                    >
                       <div className="flex items-center gap-2 text-xs">
-                        <span className="min-w-0 flex-1 truncate text-text-primary">
-                          {job.sourceName}
+                        <span
+                          className="flex items-center gap-1.5"
+                          title={job.kind === "transcribe" ? t("tasks.kindTranscribe") : t("tasks.kindAutocode")}
+                        >
+                          {job.kind === "transcribe" ? (
+                            <AudioLines size={12} aria-hidden />
+                          ) : (
+                            <Sparkles size={12} aria-hidden />
+                          )}
+                          <span className="min-w-0 flex-1 truncate text-text-primary">
+                            {job.sourceName}
+                          </span>
                         </span>
-                        <span className="text-text-secondary">
+                        <span className="shrink-0 text-text-secondary">
                           {job.state === "running"
                             ? `${Math.round(job.progress)}%`
-                            : job.state === "done"
-                              ? "✓"
-                              : "✗"}
+                            : job.state === "queued"
+                              ? t("tasks.queued")
+                              : job.state === "done"
+                                ? "✓"
+                                : "✗"}
                         </span>
+                        <button
+                          type="button"
+                          onClick={() => useProjectStore.getState().removeTask(job.id)}
+                          aria-label={t("tasks.delete", { name: job.sourceName })}
+                          title={t("tasks.delete", { name: job.sourceName })}
+                          className="shrink-0 rounded-sm p-0.5 text-text-secondary hover:bg-surface-higher hover:text-text-primary"
+                        >
+                          <Trash2 size={12} aria-hidden />
+                        </button>
                       </div>
                       <div className="mt-1 h-1 w-full overflow-hidden rounded-full bg-border">
                         <div
-                          className="h-full rounded-full bg-accent transition-all"
-                          style={{ width: `${Math.round(job.progress)}%` }}
+                          className={`h-full rounded-full transition-all ${
+                            job.state === "error" ? "bg-danger" : "bg-accent"
+                          }`}
+                          style={{
+                            width:
+                              job.state === "running" || job.state === "done"
+                                ? `${Math.round(job.progress)}%`
+                                : job.state === "error"
+                                  ? "100%"
+                                  : "0%",
+                          }}
                         />
                       </div>
                     </div>
@@ -322,9 +488,9 @@ export function ProjectShell() {
                   {finishedJobs.length > 0 && (
                     <MenuItem
                       className="text-xs text-text-secondary"
-                      onClick={() => useProjectStore.getState().clearFinishedTranscribeJobs()}
+                      onClick={() => useProjectStore.getState().clearFinishedTasks()}
                     >
-                      {t("transcribe.clearFinished")}
+                      {t("tasks.clearFinished")}
                     </MenuItem>
                   )}
                 </Menu>
@@ -422,6 +588,7 @@ export function ProjectShell() {
       ) : (
         <DashboardView />
       )}
-    </WorkspaceLayout>
+      </WorkspaceLayout>
+    </>
   );
 }

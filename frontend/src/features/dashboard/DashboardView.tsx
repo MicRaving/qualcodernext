@@ -11,6 +11,7 @@ import { api } from "@/lib/api";
 import { Button, Input, Modal, ViewHeader } from "@/components/ui/orchestrator";
 import { useI18n } from "@/lib/i18n";
 import { useProjectStore } from "@/stores/project";
+import { A11yControls } from "@/features/accessibility/A11yControls";
 
 /** True inside the Tauri shell (native dialogs available); false in plain-browser dev. */
 const isTauriShell =
@@ -296,6 +297,10 @@ export function DashboardView() {
           </ul>
         </div>
       )}
+
+      <div className="mt-7 max-w-xl">
+        <A11yControls />
+      </div>
 
       {dialog && <ProjectFormDialog mode={dialog} onClose={() => setDialog(null)} />}
       </div>

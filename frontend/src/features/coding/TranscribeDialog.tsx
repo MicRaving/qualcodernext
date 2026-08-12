@@ -9,6 +9,7 @@ import { Captions, CircleAlert, LoaderCircle, Mic, Users } from "lucide-react";
 import { api, type SpeakerInfo, type TranscribeStatus } from "@/lib/api";
 import { Button, ErrorBanner, Field, Input, Modal, Select } from "@/components/ui/orchestrator";
 import { useI18n } from "@/lib/i18n";
+import { useToast } from "@/lib/toast";
 import { useProjectStore } from "@/stores/project";
 
 const IDENTIFIER_OPTIONS = [
@@ -21,15 +22,22 @@ const IDENTIFIER_OPTIONS = [
 ] as const;
 
 interface Props {
-  sourceId: number;
+  /** Single-source mode (AV coder). */
+  sourceId?: number;
+  /** Batch mode: transcribe every source as a queued background job. */
+  sourceIds?: number[];
   onClose: () => void;
 }
 
-export function TranscribeDialog({ sourceId, onClose }: Props) {
+export function TranscribeDialog({ sourceId, sourceIds, onClose }: Props) {
   const { t } = useI18n();
+  const toast = useToast();
+  const batchMode = sourceIds != null && sourceIds.length > 0;
   const codeTree = useProjectStore((s) => s.codeTree);
   const codeOptions = codeTree.filter((c) => c.kind === "code");
-  const source = useProjectStore((s) => s.sources.find((src) => src.id === sourceId));
+  const source = useProjectStore((s) =>
+    sourceId != null ? s.sources.find((src) => src.id === sourceId) : undefined,
+  );
   const transcriptId = source?.av_text_id ?? null;
 
   const [tab, setTab] = useState<"transcribe" | "speakers">("transcribe");
@@ -81,6 +89,36 @@ export function TranscribeDialog({ sourceId, onClose }: Props) {
     setError(null);
     setBusy(true);
     try {
+      if (batchMode) {
+        const names = new Map(
+          useProjectStore.getState().sources.map((s) => [s.id, s.name] as const),
+        );
+        for (const id of sourceIds) {
+          const res = await api.transcribeStart({
+            source_id: id,
+            engine,
+            model,
+            language: language.trim() || null,
+            translate,
+            beam_size: beamSize,
+            vad,
+            timestamps,
+            segment_coding: segmentCoding,
+            segment_cid: segmentCoding && segmentCid ? Number(segmentCid) : null,
+            start: false,
+          });
+          useProjectStore.getState().enqueueTranscribe({
+            id: res.job_id,
+            sourceId: id,
+            sourceName: names.get(id) ?? `source ${id}`,
+            start: false,
+          });
+        }
+        toast.success(t("transcribe.batchHint"));
+        onClose();
+        return;
+      }
+      if (sourceId == null) return;
       const res = await api.transcribeStart({
         source_id: sourceId,
         engine,
@@ -103,6 +141,10 @@ export function TranscribeDialog({ sourceId, onClose }: Props) {
       onClose();
     } catch (err) {
       setBusy(false);
+      if (batchMode) {
+        toast.error(err instanceof Error ? err.message : t("transcribe.startError"));
+        return;
+      }
       setError(err instanceof Error ? err.message : t("transcribe.startError"));
     }
   }
@@ -159,10 +201,11 @@ export function TranscribeDialog({ sourceId, onClose }: Props) {
       open
       onClose={onClose}
       closeDisabled={busy || speakerBusy}
-      title={t("transcribe.title")}
+      title={batchMode ? t("transcribe.batchTitle", { n: sourceIds.length }) : t("transcribe.title")}
       icon={<Mic size={15} aria-hidden />}
       size="lg"
     >
+      {!batchMode && (
       <div className="border-b border-border px-3 py-2">
         <div className="flex w-fit items-center gap-0.5 rounded-sm border border-border bg-bg p-0.5">
           <button
@@ -193,8 +236,9 @@ export function TranscribeDialog({ sourceId, onClose }: Props) {
           </button>
         </div>
       </div>
+      )}
 
-      {tab === "transcribe" ? (
+      {batchMode || tab === "transcribe" ? (
         <form onSubmit={(ev) => void handleStart(ev)} className="space-y-3 p-3">
           {!whisperAvailable && !noscribeAvailable && (
             <p className="flex items-center gap-1.5 text-xs text-danger">
@@ -312,7 +356,7 @@ export function TranscribeDialog({ sourceId, onClose }: Props) {
 
           <p className="flex items-center gap-1.5 text-xs text-text-secondary" role="status">
             <LoaderCircle size={13} className="animate-pulse" aria-hidden />
-            {t("transcribe.backgroundHint")}
+            {batchMode ? t("transcribe.batchHint") : t("transcribe.backgroundHint")}
           </p>
 
           <div className="flex justify-end gap-2 pt-1">
@@ -331,8 +375,8 @@ export function TranscribeDialog({ sourceId, onClose }: Props) {
                 )
               }
             >
-              {t("transcribe.start")}
-            </Button>
+            {batchMode ? t("transcribe.batchStart") : t("transcribe.start")}
+          </Button>
           </div>
         </form>
       ) : (

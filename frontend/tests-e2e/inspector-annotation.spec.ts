@@ -23,8 +23,8 @@ test("inspector: add annotation from the files rightbar", async ({ page }) => {
   await dialog.getByRole("button", { name: "Create project" }).click();
   await expect(page.getByRole("button", { name: "Cases" })).toBeVisible({ timeout: 30_000 });
 
-  await page.getByRole("button", { name: "Files", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "Files" }).first()).toBeVisible();
+  await page.getByRole("button", { name: "Coding", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Coding" }).first()).toBeVisible();
   await page.setInputFiles("input[type=file]", [TXT_A]);
   await expect(page.getByRole("row").filter({ hasText: "aaa.txt" })).toBeVisible({
     timeout: 20_000,

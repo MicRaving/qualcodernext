@@ -18,10 +18,15 @@
  * their content adapts as they resize.
  */
 import { useEffect, useRef, useState, type ReactNode } from "react";
+import { ChevronLeft, ChevronRight } from "lucide-react";
 import { BarWidthContext } from "@/components/ui/barWidth";
 
 const MIN_BAR = 200;
 const MAX_BAR = 520;
+/** Dragging a bar past this width snaps it shut (hidden state). */
+const HIDE_BAR_BELOW = 140;
+/** Edge tab width when a bar is hidden (recall arrow). */
+const EDGE_TAB = 16;
 
 export function WorkspaceLayout({
   ribbon,
@@ -40,6 +45,10 @@ export function WorkspaceLayout({
 }) {
   const [leftW, setLeftW] = useState(288);
   const [rightW, setRightW] = useState(288);
+  const [leftHidden, setLeftHidden] = useState(false);
+  const [rightHidden, setRightHidden] = useState(false);
+  const lastLeftW = useRef(288);
+  const lastRightW = useRef(288);
   const dragRef = useRef<{ side: "left" | "right"; startX: number; startW: number } | null>(null);
   const [dragging, setDragging] = useState(false);
 
@@ -62,9 +71,23 @@ export function WorkspaceLayout({
       if (!drag) return;
       const delta = e.clientX - drag.startX;
       const next = drag.side === "left" ? drag.startW + delta : drag.startW - delta;
+      if (next < HIDE_BAR_BELOW) {
+        // Dragged substantially past the minimum width: hide the bar; it is
+        // recalled from the very edge of the window via the arrow tab.
+        if (drag.side === "left") setLeftHidden(true);
+        else setRightHidden(true);
+        return;
+      }
       const clamped = Math.min(MAX_BAR, Math.max(MIN_BAR, Math.round(next)));
-      if (drag.side === "left") setLeftW(clamped);
-      else setRightW(clamped);
+      if (drag.side === "left") {
+        setLeftHidden(false);
+        lastLeftW.current = clamped;
+        setLeftW(clamped);
+      } else {
+        setRightHidden(false);
+        lastRightW.current = clamped;
+        setRightW(clamped);
+      }
     };
     const onUp = () => {
       dragRef.current = null;
@@ -90,6 +113,15 @@ export function WorkspaceLayout({
     return () => window.removeEventListener("resize", clamp);
   }, []);
 
+  const restoreLeft = () => {
+    setLeftHidden(false);
+    setLeftW(Math.min(MAX_BAR, lastLeftW.current));
+  };
+  const restoreRight = () => {
+    setRightHidden(false);
+    setRightW(Math.min(MAX_BAR, lastRightW.current));
+  };
+
   return (
     <div className="flex h-full flex-col bg-bg text-text-primary">
       {ribbon}
@@ -100,30 +132,68 @@ export function WorkspaceLayout({
       )}
       <div className="flex min-h-0 flex-1">
         {leftBar && (
-          <div className="relative flex shrink-0">
-            <BarWidthContext.Provider value={leftW}>{leftBar}</BarWidthContext.Provider>
-            <div
-              className={`absolute inset-y-0 -right-1 z-30 w-2 cursor-col-resize ${
-                dragging ? "bg-accent/30" : "hover:bg-accent/30"
-              }`}
-              role="separator"
-              aria-orientation="vertical"
-              onMouseDown={startResize("left")}
-            />
+          <div className="relative flex shrink-0" style={{ width: leftHidden ? 0 : leftW }}>
+            {!leftHidden && (
+              <BarWidthContext.Provider value={leftW}>
+                <div className="min-w-0">{leftBar}</div>
+              </BarWidthContext.Provider>
+            )}
+            {leftHidden ? (
+              <button
+                type="button"
+                onClick={restoreLeft}
+                aria-label="Show left sidebar"
+                title="Show left sidebar"
+                className="absolute inset-y-0 left-0 z-40 flex items-center border-r border-border bg-surface px-0.5 text-text-secondary hover:bg-surface-higher"
+                style={{ width: EDGE_TAB }}
+              >
+                <ChevronRight size={12} aria-hidden />
+              </button>
+            ) : (
+              <div
+                className={`absolute inset-y-0 -right-1 z-30 w-2 cursor-col-resize ${
+                  dragging ? "bg-accent/30" : "hover:bg-accent/30"
+                }`}
+                role="separator"
+                aria-orientation="vertical"
+                aria-label="Resize left sidebar"
+                onMouseDown={startResize("left")}
+              />
+            )}
           </div>
         )}
-        <main className="min-w-0 flex-1 overflow-hidden">{children}</main>
+        <main id="qc-main" className="min-w-0 flex-1 overflow-hidden">
+          {children}
+        </main>
         {rightBar && (
-          <div className="relative flex shrink-0">
-            <div
-              className={`absolute inset-y-0 -left-1 z-30 w-2 cursor-col-resize ${
-                dragging ? "bg-accent/30" : "hover:bg-accent/30"
-              }`}
-              role="separator"
-              aria-orientation="vertical"
-              onMouseDown={startResize("right")}
-            />
-            <BarWidthContext.Provider value={rightW}>{rightBar}</BarWidthContext.Provider>
+          <div className="relative flex shrink-0" style={{ width: rightHidden ? 0 : rightW }}>
+            {rightHidden ? (
+              <button
+                type="button"
+                onClick={restoreRight}
+                aria-label="Show right sidebar"
+                title="Show right sidebar"
+                className="absolute inset-y-0 right-0 z-40 flex items-center border-l border-border bg-surface px-0.5 text-text-secondary hover:bg-surface-higher"
+                style={{ width: EDGE_TAB }}
+              >
+                <ChevronLeft size={12} aria-hidden />
+              </button>
+            ) : (
+              <>
+                <div
+                  className={`absolute inset-y-0 -left-1 z-30 w-2 cursor-col-resize ${
+                    dragging ? "bg-accent/30" : "hover:bg-accent/30"
+                  }`}
+                  role="separator"
+                  aria-orientation="vertical"
+                  aria-label="Resize right sidebar"
+                  onMouseDown={startResize("right")}
+                />
+                <BarWidthContext.Provider value={rightW}>
+                  <div className="min-w-0">{rightBar}</div>
+                </BarWidthContext.Provider>
+              </>
+            )}
           </div>
         )}
       </div>

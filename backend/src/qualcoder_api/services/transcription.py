@@ -91,27 +91,49 @@ def get_status() -> dict:
 def get_job(job_id: str) -> dict | None:
     with _jobs_lock:
         job = _JOBS.get(job_id)
-        return dict(job) if job else None
+        # Strip the private control events — they must never be JSON-serialized.
+        return {k: v for k, v in job.items() if not k.startswith("_")} if job else None
 
 
-def start_job(*, source_path: str, options: dict, meta: dict | None = None) -> str:
+def start_job(
+    *,
+    source_path: str,
+    options: dict,
+    meta: dict | None = None,
+    auto_start: bool = True,
+) -> str:
     """Queue a transcription job and return its id (runs in a worker thread).
 
     ``meta`` carries completion metadata (transcript name, segment coding
-    options) used by the polling endpoint to finalize the job.
+    options) used by the polling endpoint to finalize the job. With
+    ``auto_start=False`` the job is created in the ``queued`` state and only
+    begins transcribing once :func:`control_job` is called with ``"start"``
+    (the UI drives a sequential queue this way).
     """
     job_id = uuid.uuid4().hex[:12]
+    start_event = threading.Event()
+    pause_event = threading.Event()
+    cancel_event = threading.Event()
+    # A set pause event means "running allowed" (default). control_job's
+    # pause/resume clear/set it.
+    pause_event.set()
+    if auto_start:
+        start_event.set()
     with _jobs_lock:
         _JOBS[job_id] = {
             "id": job_id,
-            "state": "running",
+            "state": "running" if auto_start else "queued",
             "progress": 0.0,
-            "message": "loading model",
+            "message": "loading model" if auto_start else "queued",
             "segments": 0,
             "result": None,
             "error": None,
             "live_text": None,
+            "paused": False,
             "started": time.time(),
+            "_start": start_event,
+            "_pause": pause_event,
+            "_cancel": cancel_event,
             **(meta or {}),
         }
     threading.Thread(
@@ -120,6 +142,53 @@ def start_job(*, source_path: str, options: dict, meta: dict | None = None) -> s
         daemon=True,
     ).start()
     return job_id
+
+
+def control_job(job_id: str, action: str) -> bool:
+    """Apply a queue control to a job: ``start``, ``pause``, ``resume`` or
+    ``cancel``. Returns False when the job id is unknown (or no longer
+    controllable)."""
+    with _jobs_lock:
+        job = _JOBS.get(job_id)
+        if job is None:
+            return False
+        state = job.get("state")
+        if action == "start" and state in ("queued",):
+            job["_start"].set()
+            job["state"] = "running"
+            job["message"] = "loading model"
+        elif action == "pause" and state in ("running",):
+            job["_pause"].clear()
+            job["paused"] = True
+        elif action == "resume":
+            job["_pause"].set()
+            job["paused"] = False
+        elif action == "cancel" and state in ("queued", "running", "paused"):
+            job["_cancel"].set()
+            job["state"] = "cancelled"
+            job["message"] = "cancelled"
+        else:
+            return False
+        return True
+
+
+def _gate(job_id: str) -> None:
+    """Block the worker while the job is paused, aborting on cancel."""
+    with _jobs_lock:
+        job = _JOBS.get(job_id)
+        if job is None:
+            return
+        start = job["_start"]
+        pause = job["_pause"]
+        cancel = job["_cancel"]
+    start.wait()
+    while cancel.is_set() is False and pause.is_set() is False:
+        if cancel.wait(0.25):
+            break
+
+
+class JobCancelled(Exception):
+    """Raised by workers when a job is cancelled mid-transcription."""
 
 
 def _set_job(job_id: str, **fields) -> None:
@@ -150,10 +219,16 @@ def mark_job_consumed(job_id: str, source_id: int | None) -> None:
 def _run_worker(job_id: str, source_path: str, options: dict) -> None:
     engine = options.get("engine") or "whisper"
     try:
+        # A queued job waits here until the UI starts it (or cancels it).
+        _gate(job_id)
+        if _is_cancelled(job_id):
+            return
         if engine == "noscribe":
             segments = _transcribe_noscribe(job_id, source_path, options)
         else:
             segments = _transcribe_whisper(job_id, source_path, options)
+        if _is_cancelled(job_id):
+            return
         # Persist the finished transcript so it survives an app restart even
         # when nobody polls the job (a sweep on project open finalizes it).
         persist_finished_job(job_id)
@@ -165,9 +240,17 @@ def _run_worker(job_id: str, source_path: str, options: dict) -> None:
             segments=len(segments),
             result=segments,
         )
+    except JobCancelled:
+        _set_job(job_id, state="cancelled", message="cancelled")
     except Exception as err:
         logger.exception("transcription failed")
         _set_job(job_id, state="error", error=str(err), message="failed")
+
+
+def _is_cancelled(job_id: str) -> bool:
+    with _jobs_lock:
+        job = _JOBS.get(job_id)
+        return bool(job and job.get("_cancel") and job["_cancel"].is_set())
 
 
 def persist_finished_job(job_id: str) -> None:
@@ -442,6 +525,9 @@ def _transcribe_whisper(job_id: str, source_path: str, options: dict) -> list[di
     segments: list[dict] = []
     live_lines: list[str] = []
     for idx, seg in enumerate(segments_iter):
+        _gate(job_id)
+        if _is_cancelled(job_id):
+            raise JobCancelled
         segments.append(
             {"start": float(seg.start), "end": float(seg.end), "text": (seg.text or "").strip()}
         )

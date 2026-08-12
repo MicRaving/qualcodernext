@@ -20,6 +20,7 @@ import {
 import { api, type AiIndexStatus, type Pseudonym } from "@/lib/api";
 import { errorDetail } from "@/features/ai/format";
 import { InterchangeView } from "@/features/interchange/InterchangeView";
+import { A11yControls } from "@/features/accessibility/A11yControls";
 import { useI18n, LOCALE_NAMES, type Locale } from "@/lib/i18n";
 import {
   BarHeader,
@@ -157,14 +158,14 @@ export function SettingsView() {
   const loadModels = useCallback(async () => {
     setModelsLoading(true);
     try {
-      const res = await api.aiModels();
+      const res = await api.aiModels({ provider, api_base: apiBase, api_key: apiKey });
       setModels(res.models);
     } catch {
       setModels([]);
     } finally {
       setModelsLoading(false);
     }
-  }, []);
+  }, [provider, apiBase, apiKey]);
 
   const loadIndex = useCallback(async () => {
     try {
@@ -373,6 +374,10 @@ export function SettingsView() {
 
           <div className="mt-2">
             <InterchangeView embedded />
+          </div>
+
+          <div className="mt-3 border-t border-border pt-3">
+            <A11yControls />
           </div>
         </section>
 

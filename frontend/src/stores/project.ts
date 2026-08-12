@@ -49,6 +49,53 @@ function initialThemeMode(): ThemeMode {
 const INITIAL_THEME_MODE = initialThemeMode();
 applyThemeMode(INITIAL_THEME_MODE);
 
+/** Accessibility display modes (visual impairments / screen readers). */
+export type A11yMode =
+  | "off"
+  | "screenreader"
+  | "high-contrast"
+  | "large-text"
+  | "reduced-motion"
+  | "colorblind";
+
+/** Apply the a11y mode class on <html> and persist it. */
+function applyA11yMode(mode: A11yMode) {
+  if (typeof document !== "undefined") {
+    const root = document.documentElement;
+    for (const m of [
+      "screenreader",
+      "high-contrast",
+      "large-text",
+      "reduced-motion",
+      "colorblind",
+    ] as const) {
+      root.classList.toggle(`a11y-${m}`, mode === m);
+    }
+  }
+  if (typeof window !== "undefined") {
+    localStorage.setItem("qc-a11y", mode);
+  }
+}
+
+function initialA11yMode(): A11yMode {
+  if (typeof window !== "undefined") {
+    const saved = localStorage.getItem("qc-a11y");
+    if (
+      saved === "screenreader" ||
+      saved === "high-contrast" ||
+      saved === "large-text" ||
+      saved === "reduced-motion" ||
+      saved === "colorblind"
+    ) {
+      return saved;
+    }
+  }
+  return "off";
+}
+
+const INITIAL_A11Y_MODE = initialA11yMode();
+applyA11yMode(INITIAL_A11Y_MODE);
+
 export type WorkspaceView =
   | { kind: "dashboard" }
   | { kind: "files" }
@@ -80,15 +127,21 @@ export type ReportId =
 
 export type InspectorSelection = { kind: "code" | "file"; id: number } | null;
 
-/** A background transcription job as tracked by the UI. */
-export interface TranscribeJobInfo {
+/** A background job as tracked by the UI (transcription or autocode). */
+export type TaskKind = "transcribe" | "autocode";
+export type TaskState = "queued" | "running" | "done" | "error";
+export interface TaskInfo {
+  kind: TaskKind;
   id: string;
   sourceId: number;
   sourceName: string;
-  state: "running" | "done" | "error";
+  state: TaskState;
   progress: number;
   message: string;
+  paused?: boolean;
   transcriptSourceId?: number | null;
+  /** Number of codings created by an autocode job (done jobs). */
+  resultCount?: number | null;
 }
 
 interface ProjectState {
@@ -119,6 +172,9 @@ interface ProjectState {
   themeMode: ThemeMode;
   setThemeMode: (mode: ThemeMode) => void;
 
+  a11yMode: A11yMode;
+  setA11yMode: (mode: A11yMode) => void;
+
   /** Code the user picked in the left sidebar; used as the target code for
    *  selections/rects across coders (and highlighted in the sidebar). */
   activeCodeId: number | null;
@@ -138,12 +194,27 @@ interface ProjectState {
   switchCoder: (name: string) => Promise<boolean>;
   deleteCoder: (name: string, reassignTo?: string) => Promise<boolean>;
 
-  /** Background transcription jobs (started from any AV coder; the shell
-   *  polls them and shows a progress chip in the top bar). */
-  transcribeJobs: TranscribeJobInfo[];
-  enqueueTranscribe: (job: Omit<TranscribeJobInfo, "state" | "progress" | "message">) => void;
-  updateTranscribeJob: (id: string, patch: Partial<TranscribeJobInfo>) => void;
-  clearFinishedTranscribeJobs: () => void;
+  /** Background tasks (transcription + autocode jobs; the shell polls them
+   *  and shows a progress chip in the top bar). The queue runs sequentially:
+   *  the shell's dispatcher starts queued jobs one after another. */
+  tasks: TaskInfo[];
+  tasksPaused: boolean;
+  setTasksPaused: (paused: boolean) => void;
+  enqueueTranscribe: (job: {
+    id: string;
+    sourceId: number;
+    sourceName: string;
+    /** False when the job was created queued (batch mode). */
+    start?: boolean;
+  }) => void;
+  enqueueAutocode: (job: { id: string; sourceId: number; sourceName: string }) => void;
+  updateTranscribeJob: (id: string, patch: Partial<TaskInfo>) => void;
+  updateAutocodeJob: (id: string, patch: Partial<TaskInfo>) => void;
+  /** Remove a task from the queue (also cancels it on the backend). */
+  removeTask: (id: string) => void;
+  /** Drop queued/running order: move the task with id before targetId. */
+  moveTask: (id: string, targetId: string | null) => void;
+  clearFinishedTasks: () => void;
 
   /** Background file import progress (shown in the ribbon indicator). */
   importState: { done: number; total: number } | null;
@@ -294,6 +365,12 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     set({ themeMode: mode });
   },
 
+  a11yMode: INITIAL_A11Y_MODE,
+  setA11yMode: (mode) => {
+    applyA11yMode(mode);
+    set({ a11yMode: mode });
+  },
+
   activeCodeId: null,
   setActiveCode: (cid) => set({ activeCodeId: cid }),
 
@@ -347,22 +424,71 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     }
   },
 
-  transcribeJobs: [],
+  tasks: [],
+  tasksPaused: false,
+  setTasksPaused: (paused) => set({ tasksPaused: paused }),
   rightPane: "inspector",
   setRightPane: (pane) => set({ rightPane: pane }),
   enqueueTranscribe: (job) =>
     set((s) => ({
-      transcribeJobs: [
-        ...s.transcribeJobs,
-        { ...job, state: "running", progress: 0, message: "queued" },
+      tasks: [
+        ...s.tasks,
+        {
+          kind: "transcribe",
+          id: job.id,
+          sourceId: job.sourceId,
+          sourceName: job.sourceName,
+          state: job.start === false ? "queued" : "running",
+          progress: 0,
+          message: job.start === false ? "queued" : "loading model",
+        },
+      ],
+    })),
+  enqueueAutocode: (job) =>
+    set((s) => ({
+      tasks: [
+        ...s.tasks,
+        {
+          kind: "autocode",
+          id: job.id,
+          sourceId: job.sourceId,
+          sourceName: job.sourceName,
+          state: "queued",
+          progress: 0,
+          message: "queued",
+        },
       ],
     })),
   updateTranscribeJob: (id, patch) =>
     set((s) => ({
-      transcribeJobs: s.transcribeJobs.map((j) => (j.id === id ? { ...j, ...patch } : j)),
+      tasks: s.tasks.map((j) => (j.kind === "transcribe" && j.id === id ? { ...j, ...patch } : j)),
     })),
-  clearFinishedTranscribeJobs: () =>
-    set((s) => ({ transcribeJobs: s.transcribeJobs.filter((j) => j.state === "running") })),
+  updateAutocodeJob: (id, patch) =>
+    set((s) => ({
+      tasks: s.tasks.map((j) => (j.kind === "autocode" && j.id === id ? { ...j, ...patch } : j)),
+    })),
+  removeTask: (id) => {
+    const task = useProjectStore.getState().tasks.find((j) => j.id === id);
+    if (!task) return;
+    if (task.kind === "transcribe") void api.transcribeJobDelete(id);
+    else void api.autocodeJobDelete(id);
+    set((s) => ({ tasks: s.tasks.filter((j) => j.id !== id) }));
+  },
+  moveTask: (id, targetId) =>
+    set((s) => {
+      const from = s.tasks.findIndex((j) => j.id === id);
+      if (from < 0) return {};
+      const tasks = s.tasks.filter((j) => j.id !== id);
+      if (targetId === null) return { tasks: [...tasks, s.tasks[from]] };
+      const to = tasks.findIndex((j) => j.id === targetId);
+      if (to < 0) return {};
+      tasks.splice(to, 0, s.tasks[from]);
+      return { tasks };
+    }),
+  clearFinishedTasks: () =>
+    set((s) => ({
+      tasks: s.tasks.filter((j) => j.state === "queued" || j.state === "running"),
+    })),
 
   importState: null,
   setImportState: (v) => set({ importState: v }),

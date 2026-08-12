@@ -164,3 +164,87 @@ select {
     outline: 2px solid transparent;
   }
 }
+
+/* ------------------------------------------------------------------ */
+/* Accessibility modes (a11y-* classes on <html>, driven by the       */
+/* display-mode drop-down in dashboard + settings).                   */
+/* ------------------------------------------------------------------ */
+
+/* Screen reader mode: strong focus rings, live announcements, no
+   decorative animation; everything stays keyboard-reachable. */
+.a11y-screenreader :focus-visible {
+  outline: 3px solid var(--qc-accent);
+  outline-offset: 2px;
+}
+.a11y-screenreader [role="button"],
+.a11y-screenreader button,
+.a11y-screenreader [role="menuitem"],
+.a11y-screenreader a,
+.a11y-screenreader input,
+.a11y-screenreader select,
+.a11y-screenreader textarea {
+  transition: none !important;
+  animation: none !important;
+}
+.a11y-screenreader .qc-seg-flash,
+.a11y-screenreader .qc-seg-flash * {
+  animation: none !important;
+}
+
+/* High contrast: stronger borders, higher-contrast secondary text. */
+.a11y-high-contrast {
+  --qc-border: #000000;
+  --qc-text-secondary: #000000;
+  --qc-surface: #ffffff;
+  --qc-surface-higher: #e8e8e8;
+}
+.a11y-high-contrast.dark {
+  --qc-border: #ffffff;
+  --qc-text-secondary: #ffffff;
+  --qc-surface: #000000;
+  --qc-surface-higher: #1c1c24;
+}
+.a11y-high-contrast header,
+.a11y-high-contrast aside,
+.a11y-high-contrast footer,
+.a11y-high-contrast tr,
+.a11y-high-contrast .border-b,
+.a11y-high-contrast .border-t {
+  border-color: var(--qc-border) !important;
+}
+
+/* Large text: bump the base font size and relax line height. */
+.a11y-large-text {
+  font-size: 14px;
+}
+.a11y-large-text body,
+.a11y-large-text main {
+  line-height: 1.6;
+}
+
+/* Reduced motion: kill animations and transitions everywhere. */
+.a11y-reduced-motion *,
+.a11y-reduced-motion *::before,
+.a11y-reduced-motion *::after {
+  animation: none !important;
+  transition: none !important;
+  scroll-behavior: auto !important;
+}
+
+/* Colorblind-friendly: accent never carries information alone. */
+.a11y-colorblind .text-accent,
+.a11y-colorblind .border-accent,
+.a11y-colorblind [aria-pressed="true"] {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.a11y-colorblind .qc-seg {
+  outline: 1px solid transparent;
+}
+.a11y-colorblind .qc-seg.qc-seg-hidden {
+  opacity: 0.35;
+}
+.a11y-colorblind [aria-selected="true"],
+.a11y-colorblind [aria-current="true"] {
+  box-shadow: inset 3px 0 0 var(--qc-accent);
+}

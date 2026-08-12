@@ -37,6 +37,9 @@ class TranscribeRequest(BaseModel):
     timestamps: bool = True
     segment_coding: bool = False
     segment_cid: int | None = None
+    # False enqueues the job ("queued" state) without starting it; the UI
+    # dispatcher starts queued jobs one by one via POST /jobs/{id}/start.
+    start: bool = True
 
 
 @router.get("/status")
@@ -117,13 +120,39 @@ async def transcribe(req: TranscribeRequest, svc: ServiceDep, db: DbDep) -> dict
         "segment_cid": req.segment_cid,
         "project_path": svc.project_path,
     }
-    job_id = start_job(source_path=source_path, options=options, meta=meta)
+    job_id = start_job(source_path=source_path, options=options, meta=meta, auto_start=req.start)
     await audit.record(
         db, user=get_codername(), action="transcribe.start", entity="source",
         source_id=req.source_id, entity_id=req.source_id,
         detail={"job_id": job_id, "model": options["model"], "engine": options["engine"]},
     )
     return {"job_id": job_id}
+
+
+@router.post("/jobs/{job_id}/{action}")
+async def control(job_id: str, action: str) -> dict:
+    """Queue controls: ``start`` (begin a queued job), ``pause`` / ``resume``
+    (halt/resume transcribing between segments), ``cancel``."""
+    from qualcoder_api.services.transcription import control_job
+
+    if action not in ("start", "pause", "resume", "cancel"):
+        raise HTTPException(status_code=422, detail="unknown action")
+    ok = control_job(job_id, action)
+    if not ok:
+        raise HTTPException(status_code=404, detail="job not found or not controllable")
+    return {"ok": True}
+
+
+@router.delete("/jobs/{job_id}")
+async def cancel_job(job_id: str) -> dict:
+    """Cancel/remove a job: queued jobs never start, running jobs stop at the
+    next segment boundary (the transcript sidecar is discarded)."""
+    from qualcoder_api.services.transcription import control_job
+
+    ok = control_job(job_id, "cancel")
+    if not ok:
+        raise HTTPException(status_code=404, detail="job not found or already finished")
+    return {"ok": True}
 
 
 @router.get("/jobs/{job_id}")

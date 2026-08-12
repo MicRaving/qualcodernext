@@ -19,6 +19,7 @@ import {
   Textarea,
 } from "@/components/ui/orchestrator";
 import { errorDetail } from "@/features/ai/format";
+import { useProjectStore } from "@/stores/project";
 
 export interface AutocodeResult {
   count: number;
@@ -31,6 +32,7 @@ export function AutocodeDialog({
   fid,
   codes,
   onDone,
+  sourceIds,
 }: {
   open: boolean;
   onClose: () => void;
@@ -38,8 +40,11 @@ export function AutocodeDialog({
   fid: number | null;
   codes: CodeTreeItem[];
   onDone: (result: AutocodeResult) => void;
+  /** Batch mode: queue a background autocode job per source (overrides fid). */
+  sourceIds?: number[];
 }) {
   const { t } = useI18n();
+  const batchMode = sourceIds != null && sourceIds.length > 0;
   const [prompt, setPrompt] = useState("");
   const promptTouched = useRef(false);
   const [selected, setSelected] = useState<Set<number>>(new Set());
@@ -47,6 +52,7 @@ export function AutocodeDialog({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<AutocodeResult | null>(null);
+  const [queued, setQueued] = useState(false);
 
   useEffect(() => {
     if (open) {
@@ -56,6 +62,7 @@ export function AutocodeDialog({
       setSuggest(false);
       setError(null);
       setResult(null);
+      setQueued(false);
     }
   }, [open]);
 
@@ -105,6 +112,28 @@ export function AutocodeDialog({
     setBusy(true);
     setError(null);
     try {
+      if (batchMode) {
+        const res = await api.autocodeBatch({
+          source_ids: sourceIds,
+          cids: [...selected],
+          prompt: text,
+          suggest,
+        });
+        const names = new Map(
+          useProjectStore.getState().sources.map((s) => [s.id, s.name] as const),
+        );
+        res.job_ids.forEach((jobId, i) => {
+          const sid = sourceIds[i];
+          useProjectStore.getState().enqueueAutocode({
+            id: jobId,
+            sourceId: sid,
+            sourceName: names.get(sid) ?? `source ${sid}`,
+          });
+        });
+        setQueued(true);
+        window.setTimeout(() => onClose(), 1200);
+        return;
+      }
       const res: AutocodeResponse = await api.autocode({
         fid,
         cids: [...selected],
@@ -218,6 +247,13 @@ export function AutocodeDialog({
                   names: result.suggested.map((s) => s.name).join(", "),
                 })}`}
             </span>
+          </p>
+        )}
+
+        {queued && (
+          <p className="mt-2 flex items-center gap-1.5 text-xs text-text-secondary">
+            <LoaderCircle size={13} className="animate-pulse" aria-hidden />
+            {t("tasks.autocodeQueueHint")}
           </p>
         )}
 

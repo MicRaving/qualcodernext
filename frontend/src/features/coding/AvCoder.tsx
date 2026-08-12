@@ -159,7 +159,9 @@ export function AvCoder({ source }: { source: Source }) {
   // show the partial "[mm:ss] text" output as it is transcribed.
   const [liveTranscript, setLiveTranscript] = useState<string | null>(null);
   const runningJobId = useProjectStore((s) =>
-    s.transcribeJobs.find((j) => j.sourceId === source.id && j.state === "running")?.id,
+    s.tasks.find(
+      (j) => j.kind === "transcribe" && j.sourceId === source.id && j.state === "running",
+    )?.id,
   );
   useEffect(() => {
     if (!runningJobId) {
@@ -415,11 +417,11 @@ export function AvCoder({ source }: { source: Source }) {
   // THIS source finishes and open the transcript panel automatically.
   useEffect(() => {
     const unsub = useProjectStore.subscribe((s, prev) => {
-      if (s.transcribeJobs !== prev.transcribeJobs) {
-        const done = s.transcribeJobs.find(
-          (j) => j.sourceId === source.id && j.state === "done",
+      if (s.tasks !== prev.tasks) {
+        const done = s.tasks.find(
+          (j) => j.kind === "transcribe" && j.sourceId === source.id && j.state === "done",
         );
-        if (done && prev.transcribeJobs.find((j) => j.id === done.id)?.state !== "done") {
+        if (done && prev.tasks.find((j) => j.id === done.id)?.state !== "done") {
           void loadTranscript();
           setTranscriptVisible(true);
         }

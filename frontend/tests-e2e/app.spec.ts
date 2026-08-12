@@ -52,7 +52,7 @@ test("app shell with full dashboard (no welcome screen)", async ({ page }) => {
   await expect(page.getByRole("button", { name: "New project" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Open project" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Dashboard" })).toBeDisabled();
-  await expect(page.getByRole("button", { name: "Files", exact: true })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "Coding", exact: true })).toBeDisabled();
 
   // No backend status indicator in the top bar during startup.
   await expect(page.getByRole("status")).toHaveCount(0);
@@ -74,13 +74,13 @@ test("create project, import a file, autocode it, and run a report", async ({ pa
     await expect(page.getByRole("button", { name: "Cases" })).toBeVisible({
       timeout: 30_000,
     });
-    await expect(page.getByRole("button", { name: "Files", exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Coding", exact: true })).toBeVisible();
   });
 
   // ----------------------------------------------------------------- import
   await test.step("import a text file and open it in the coder", async () => {
-    await page.getByRole("button", { name: "Files", exact: true }).click();
-    await expect(page.getByRole("heading", { name: "Files" }).first()).toBeVisible();
+    await page.getByRole("button", { name: "Coding", exact: true }).click();
+    await expect(page.getByRole("heading", { name: "Coding" }).first()).toBeVisible();
 
     await page.setInputFiles("input[type=file]", INTERVIEW_FILE);
 

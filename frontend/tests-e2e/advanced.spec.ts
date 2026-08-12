@@ -143,8 +143,8 @@ test("PDF import and region coding", async ({ page }) => {
   });
 
   // --------------------------------------------------------------- import
-  await page.getByRole("button", { name: "Files", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "Files" }).first()).toBeVisible();
+  await page.getByRole("button", { name: "Coding", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Coding" }).first()).toBeVisible();
   await page.setInputFiles("input[type=file]", [PDF_PATH]);
   const row = page.getByRole("row").filter({ hasText: "e2e.pdf" });
   await expect(row).toBeVisible({ timeout: 20_000 });
@@ -242,8 +242,8 @@ test("PDF import and region coding", async ({ page }) => {
 test("duplicate import shows the skip banner", async ({ page }) => {
   await ensureProjectOpen(page);
 
-  await page.getByRole("button", { name: "Files", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "Files" }).first()).toBeVisible();
+  await page.getByRole("button", { name: "Coding", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Coding" }).first()).toBeVisible();
 
   await page.setInputFiles("input[type=file]", [DUP_TXT]);
   await expect(page.getByRole("row").filter({ hasText: "dup.txt" })).toBeVisible({

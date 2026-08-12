@@ -5,7 +5,7 @@ from __future__ import annotations
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
-from qualcoder_api.api.v1.deps import DbDep
+from qualcoder_api.api.v1.deps import DbDep, ServiceDep
 from qualcoder_api.core.models import AVCoding, Coding, ImageCoding
 from qualcoder_api.persistence.repositories import CodingRepository
 from qualcoder_api.services import audit
@@ -290,6 +290,110 @@ async def autocode_endpoint(req: AutocodeRequest, db: DbDep) -> dict:
         },
     )
     return result
+
+
+class AutocodeBatchRequest(BaseModel):
+    source_ids: list[int]
+    cids: list[int]
+    prompt: str
+    suggest: bool = False
+    owner: str | None = None
+
+
+@router.post("/autocode/batch", status_code=202)
+async def autocode_batch_endpoint(req: AutocodeBatchRequest, svc: ServiceDep, db: DbDep) -> dict:
+    """Queue one background autocode job per source file (prompt-based only).
+    Jobs are created in the ``queued`` state and started one by one by the
+    UI dispatcher via ``POST /codings/autocode/jobs/{id}/start``."""
+    from qualcoder_api.services import audit
+    from qualcoder_api.services.autocode_jobs import start_batch
+
+    if svc.project_path == "":
+        raise HTTPException(status_code=409, detail="no project is open")
+    owner = resolve_owner(req.owner)
+    if not req.source_ids:
+        raise HTTPException(status_code=422, detail="no source files given")
+    if not req.cids:
+        raise HTTPException(status_code=422, detail="at least one code required")
+    if not (req.prompt or "").strip():
+        raise HTTPException(status_code=422, detail="a coding prompt is required")
+
+    from sqlalchemy import select
+
+    from qualcoder_api.core.models import MediaType
+    from qualcoder_api.persistence import tables
+
+    rows = (
+        await db.execute(
+            select(tables.source.c.id, tables.source.c.name, tables.source.c.mediapath).where(
+                tables.source.c.id.in_(req.source_ids)
+            )
+        )
+    ).all()
+    by_id = {r[0]: r for r in rows}
+    missing = [sid for sid in req.source_ids if sid not in by_id]
+    if missing:
+        raise HTTPException(status_code=404, detail=f"sources not found: {missing}")
+    non_text = [
+        sid
+        for sid, r in by_id.items()
+        if MediaType.from_mediapath(r[2]).value != "text"
+    ]
+    if non_text:
+        raise HTTPException(
+            status_code=422, detail=f"autocode works on text sources only: {non_text}"
+        )
+
+    job_ids = start_batch(
+        session_factory=svc.session_factory,
+        project_path=svc.project_path,
+        source_ids=list(req.source_ids),
+        cids=req.cids,
+        prompt=req.prompt.strip(),
+        suggest=req.suggest,
+        owner=owner,
+        auto_start=False,
+    )
+    await audit.record(
+        db, user=owner, action="coding.autocode", entity="code_text",
+        source_id=req.source_ids[0],
+        detail={"batch": len(req.source_ids), "job_ids": job_ids, "cids": req.cids},
+    )
+    return {"job_ids": job_ids}
+
+
+@router.get("/autocode/jobs/{job_id}")
+async def autocode_job_status(job_id: str) -> dict:
+    from qualcoder_api.services.autocode_jobs import get_job
+
+    job = get_job(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="job not found")
+    return job
+
+
+@router.post("/autocode/jobs/{job_id}/{action}")
+async def autocode_job_control(job_id: str, action: str) -> dict:
+    """Queue controls: ``start``, ``pause``, ``resume``, ``cancel`` (a pause
+    takes effect between files; the LLM call itself cannot be interrupted)."""
+    from qualcoder_api.services.autocode_jobs import control_job
+
+    if action not in ("start", "pause", "resume", "cancel"):
+        raise HTTPException(status_code=422, detail="unknown action")
+    ok = control_job(job_id, action)
+    if not ok:
+        raise HTTPException(status_code=404, detail="job not found or not controllable")
+    return {"ok": True}
+
+
+@router.delete("/autocode/jobs/{job_id}")
+async def autocode_job_delete(job_id: str) -> dict:
+    from qualcoder_api.services.autocode_jobs import control_job
+
+    ok = control_job(job_id, "cancel")
+    if not ok:
+        raise HTTPException(status_code=404, detail="job not found or already finished")
+    return {"ok": True}
 
 
 @router.post("/shift-positions")

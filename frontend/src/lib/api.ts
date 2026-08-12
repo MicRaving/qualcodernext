@@ -661,15 +661,28 @@ export interface TranscribeStatus {
 
 export interface TranscribeJob {
   id: string;
-  state: "running" | "done" | "error";
+  state: string;
   progress: number;
   message: string;
-  segments: number;
+  segments: unknown[];
   error: string | null;
   transcript_source_id?: number | null;
   /** Partial "[mm:ss] text" transcript while the job is still running. */
   live_text?: string | null;
-  result?: { start: number; end: number; text: string }[] | null;
+  result?: unknown[];
+  paused?: boolean;
+}
+
+/** A background AI-autocode job (one per source file). */
+export interface AutocodeJob {
+  id: string;
+  state: string;
+  progress: number;
+  message: string;
+  source_id: number;
+  paused?: boolean;
+  error?: string | null;
+  result?: { count: number; suggested: { cid: number; name: string; reason: string }[] } | null;
 }
 
 export interface CoderInfo {
@@ -1257,7 +1270,14 @@ export const api = {
     ),
   aiStatus: (probe = false) =>
     request<AiStatus>(`/ai/status${probe ? "?probe=1" : ""}`),
-  aiModels: () => request<{ models: string[] }>("/ai/models"),
+  aiModels: (opts?: { provider?: string; api_base?: string; api_key?: string }) => {
+    const qs = new URLSearchParams(
+      Object.fromEntries(
+        Object.entries(opts ?? {}).filter(([, v]) => v !== undefined && v !== ""),
+      ) as Record<string, string>,
+    ).toString();
+    return request<{ models: string[] }>(`/ai/models${qs ? `?${qs}` : ""}`);
+  },
   aiSaveSettings: (body: {
     enabled: boolean;
     provider: string;
@@ -1327,8 +1347,34 @@ export const api = {
     timestamps?: boolean;
     segment_coding?: boolean;
     segment_cid?: number | null;
+    start?: boolean;
   }) => request<{ job_id: string }>("/transcribe", { method: "POST", body: JSON.stringify(body) }),
   transcribeJob: (jobId: string) => request<TranscribeJob>(`/transcribe/jobs/${jobId}`),
+  /** start | pause | resume | cancel */
+  transcribeJobControl: (jobId: string, action: string) =>
+    request<{ ok: boolean }>(`/transcribe/jobs/${jobId}/${action}`, { method: "POST" }),
+  transcribeJobDelete: (jobId: string) =>
+    request<{ ok: boolean }>(`/transcribe/jobs/${jobId}`, { method: "DELETE" }),
+
+  // --- Batch autocode (background jobs) --------------------------------
+
+  autocodeBatch: (body: {
+    source_ids: number[];
+    cids: number[];
+    prompt: string;
+    suggest?: boolean;
+    owner?: string | null;
+  }) => request<{ job_ids: string[] }>("/codings/autocode/batch", {
+    method: "POST",
+    body: JSON.stringify(body),
+  }),
+  autocodeJob: (jobId: string) =>
+    request<AutocodeJob>(`/codings/autocode/jobs/${jobId}`),
+  /** start | pause | resume | cancel */
+  autocodeJobControl: (jobId: string, action: string) =>
+    request<{ ok: boolean }>(`/codings/autocode/jobs/${jobId}/${action}`, { method: "POST" }),
+  autocodeJobDelete: (jobId: string) =>
+    request<{ ok: boolean }>(`/codings/autocode/jobs/${jobId}`, { method: "DELETE" }),
 
   // --- Graphs (code-map editor) ----------------------------------------
 
