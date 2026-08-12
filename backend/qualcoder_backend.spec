@@ -7,9 +7,18 @@ so nothing is unpacked at launch — the current onefile variant re-extracted
 
 Build:  .\.venv\Scripts\python.exe -m PyInstaller --noconfirm qualcoder_backend.spec
 Output: dist/qualcoder-backend/  (copied into the Tauri resources by compile.ps1)
+
+All paths are relative to this spec file so the same build runs on Windows,
+Linux and macOS (CI matrix).
 """
 
+import os
+
 from PyInstaller.utils.hooks import collect_data_files, collect_submodules
+
+# SPECPATH is the directory containing this spec file (PyInstaller does not
+# define __file__ while executing specs).
+HERE = os.path.abspath(SPECPATH)
 
 datas = []
 binaries = []
@@ -67,13 +76,13 @@ datas += collect_data_files("faster_whisper")
 
 a = Analysis(
     ["run_packaged.py"],
-    pathex=[r"D:\Downloads\qualcoder-rework\backend\src"],
+    pathex=[os.path.join(HERE, "src")],
     binaries=binaries,
     datas=datas,
     hiddenimports=hiddenimports,
     hookspath=[],
     hooksconfig={},
-    runtime_hooks=[r"D:\Downloads\qualcoder-rework\backend\runtime_hook.py"],
+    runtime_hooks=[os.path.join(HERE, "runtime_hook.py")],
     excludes=[],
     noarchive=False,
 )

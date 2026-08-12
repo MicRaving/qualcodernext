@@ -139,16 +139,21 @@ fn spawn_release_backend(app: &tauri::AppHandle) -> std::io::Result<Child> {
     }
 
     /// Spawn the bundled onedir backend from the resource dir
-    /// (`$RESOURCE/backend/qualcoder-backend.exe`).
+    /// (`$RESOURCE/backend/qualcoder-backend[.exe]` — PyInstaller names the
+    /// binary without an extension on Linux/macOS).
     fn spawn_resource_backend(app: &tauri::AppHandle) -> std::io::Result<Child> {
+        #[cfg(windows)]
+        let backend_name = "backend/qualcoder-backend.exe";
+        #[cfg(not(windows))]
+        let backend_name = "backend/qualcoder-backend";
         let resource = app
             .path()
-            .resolve("backend/qualcoder-backend.exe", tauri::path::BaseDirectory::Resource)
+            .resolve(backend_name, tauri::path::BaseDirectory::Resource)
             .map_err(|err| std::io::Error::new(std::io::ErrorKind::NotFound, err.to_string()))?;
         if !resource.exists() {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::NotFound,
-                "bundled backend not found in resources",
+                format!("bundled backend not found in resources ({backend_name})"),
             ));
         }
         let dir = resource

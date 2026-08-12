@@ -1,25 +1,54 @@
 name: Release
 
-# Builds the Windows release (backend onedir + Tauri app), signs the updater
-# artifacts and publishes them to a GitHub release together with the static
-# update manifest the app's updater endpoint points at
+# Builds the release for Windows, Linux and macOS (Tauri cannot cross-compile —
+# every platform builds on its own runner), signs the updater artifacts with
+# the repo's TAURI_SIGNING_PRIVATE_KEY secret, publishes the installers to a
+# GitHub release and assembles the static update manifest the app's updater
+# endpoint points at
 # (https://github.com/MicRaving/qualcodernext/releases/latest/download/qualcoder-latest.json).
 #
 # Required repository secret: TAURI_SIGNING_PRIVATE_KEY — the content of
 # updater.key (the app's built-in pubkey lives in tauri.conf.json and must
 # belong to this key, see `npx tauri signer generate`).
+#
+# Note: macOS builds are unsigned (no Apple code-signing secrets); Gatekeeper
+# will warn on first launch until a certificate + notarization are configured.
 
 on:
   push:
     tags: ["v*"]
 
 jobs:
-  release:
-    name: Build + publish Windows release
-    runs-on: windows-latest
-    defaults:
-      run:
-        working-directory: frontend
+  build:
+    name: Build ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            target: windows-x86_64
+            release_files: |
+              frontend/src-tauri/target/release/bundle/nsis/*
+              frontend/src-tauri/target/release/bundle/msi/*
+          - os: ubuntu-22.04
+            target: linux-x86_64
+            release_files: |
+              frontend/src-tauri/target/release/bundle/appimage/*
+              frontend/src-tauri/target/release/bundle/deb/*
+              frontend/src-tauri/target/release/bundle/rpm/*
+          - os: macos-13
+            target: darwin-x86_64
+            release_files: |
+              frontend/src-tauri/target/release/bundle/macos/*.tar.gz
+              frontend/src-tauri/target/release/bundle/macos/*.dmg
+              frontend/src-tauri/target/release/bundle/macos/*.sig
+          - os: macos-latest
+            target: darwin-aarch64
+            release_files: |
+              frontend/src-tauri/target/release/bundle/macos/*.tar.gz
+              frontend/src-tauri/target/release/bundle/macos/*.dmg
+              frontend/src-tauri/target/release/bundle/macos/*.sig
     steps:
       - uses: actions/checkout@v4
 
@@ -32,6 +61,12 @@ jobs:
           cache: npm
           cache-dependency-path: frontend/package-lock.json
       - uses: dtolnay/rust-toolchain@stable
+
+      - name: Linux system dependencies (webkit2gtk, tray, svg)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev patchelf
 
       - name: Backend deps (incl. PyInstaller for the onedir)
         run: |
@@ -58,40 +93,95 @@ jobs:
       - name: Copy backend into Tauri resources
         shell: pwsh
         run: |
-          $target = "src-tauri\resources\backend"
+          $target = "src-tauri/resources/backend"
           Remove-Item $target -Recurse -Force -ErrorAction SilentlyContinue
           New-Item -ItemType Directory -Path $target -Force | Out-Null
-          Copy-Item "..\backend\dist\qualcoder-backend\*" $target -Recurse -Force
+          Copy-Item "../backend/dist/qualcoder-backend/*" $target -Recurse -Force
 
       - name: Build the Tauri app + signed updater artifacts
         working-directory: frontend/src-tauri
         run: npx --yes @tauri-apps/cli@2 build
 
-      - name: Generate the static update manifest (qualcoder-latest.json)
+      - name: Rename macOS updater bundles (unique asset names per arch)
+        if: runner.os == 'macOS'
         shell: pwsh
-        working-directory: frontend/src-tauri/target/release/bundle/nsis
+        working-directory: frontend/src-tauri/target/release/bundle/macos
         run: |
-          $setup = Get-ChildItem -Filter "*setup.exe" | Select-Object -First 1
-          if (-not $setup) { throw "No NSIS setup found" }
-          $sig = Get-Content "$($setup.FullName).sig" -Raw
-          $version = (Get-Content "$env:GITHUB_WORKSPACE\frontend\src-tauri\tauri.conf.json" -Raw | ConvertFrom-Json).version
-          $manifest = @{
-            version  = $version
-            notes    = "QualCoder v$version"
-            pub_date = (Get-Date).ToUniversalTime().ToString("o")
-            platforms = @{
-              "windows-x86_64" = @{
-                signature = $sig.Trim()
-                url       = "https://github.com/MicRaving/qualcodernext/releases/latest/download/$($setup.Name)"
-              }
-            }
+          $suffix = "${{ matrix.target }}".Replace("darwin-", "")
+          $base = Get-ChildItem -Filter "*.app.tar.gz" | Select-Object -First 1
+          if (-not $base) { throw "No .app.tar.gz updater bundle found" }
+          $renamed = "QualCoder_darwin_$suffix.app.tar.gz"
+          Move-Item $base.Name $renamed
+          Move-Item "$($base.Name).sig" "$renamed.sig"
+
+      - name: Build the update-manifest fragment
+        shell: pwsh
+        working-directory: frontend/src-tauri/target/release/bundle
+        run: |
+          switch ("${{ matrix.target }}") {
+            "windows-x86_64" { $dir = "nsis";   $glob = "*setup.exe" }
+            "linux-x86_64"   { $dir = "appimage"; $glob = "*.AppImage" }
+            "darwin-x86_64"  { $dir = "macos";  $glob = "QualCoder_darwin_x86_64.app.tar.gz" }
+            "darwin-aarch64" { $dir = "macos";  $glob = "QualCoder_darwin_aarch64.app.tar.gz" }
           }
-          $manifest | ConvertTo-Json -Depth 5 | Set-Content -Path "qualcoder-latest.json" -Encoding utf8
+          $file = Get-ChildItem $dir -Filter $glob | Select-Object -First 1
+          if (-not $file) { throw "No updater bundle matched $glob in $dir" }
+          $signature = (Get-Content "$($file.FullName).sig" -Raw).Trim()
+          if (-not $signature) { throw "Missing .sig for $($file.Name)" }
+          $fragment = @{
+            target    = "${{ matrix.target }}"
+            signature = $signature
+            url       = "https://github.com/MicRaving/qualcodernext/releases/latest/download/$($file.Name)"
+          }
+          $fragment | ConvertTo-Json | Set-Content "$env:RUNNER_TEMP/fragment-${{ matrix.target }}.json"
+
+      - name: Upload manifest fragment
+        uses: actions/upload-artifact@v4
+        with:
+          name: fragment-${{ matrix.target }}
+          path: ${{ runner.temp }}/fragment-${{ matrix.target }}.json
 
       - name: Publish the GitHub release
         uses: softprops/action-gh-release@v2
         with:
-          files: |
-            frontend/src-tauri/target/release/bundle/nsis/*
-            frontend/src-tauri/target/release/bundle/msi/*
+          files: ${{ matrix.release_files }}
           generate_release_notes: true
+
+  manifest:
+    name: Assemble qualcoder-latest.json
+    needs: build
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all manifest fragments
+        uses: actions/download-artifact@v4
+        with:
+          pattern: fragment-*
+          path: fragments
+          merge-multiple: true
+
+      - name: Assemble the static update manifest
+        shell: pwsh
+        run: |
+          $version = (Get-Content "frontend/src-tauri/tauri.conf.json" -Raw | ConvertFrom-Json).version
+          $platforms = @{}
+          foreach ($f in Get-ChildItem "fragments/fragment-*.json") {
+            $frag = Get-Content $f.FullName -Raw | ConvertFrom-Json
+            $platforms[$frag.target] = @{
+              signature = $frag.signature
+              url       = $frag.url
+            }
+          }
+          $manifest = @{
+            version   = $version
+            notes     = "QualCoder v$version"
+            pub_date  = (Get-Date).ToUniversalTime().ToString("o")
+            platforms = $platforms
+          }
+          $manifest | ConvertTo-Json -Depth 6 | Set-Content "qualcoder-latest.json" -Encoding utf8
+
+      - name: Upload the update manifest
+        uses: softprops/action-gh-release@v2
+        with:
+          files: qualcoder-latest.json

@@ -240,17 +240,41 @@ Updater signing: with `updater.key` present (see below) the build also produces
 gitignored) the build still succeeds but updater artifacts are skipped
 (`createUpdaterArtifacts` is toggled off for that build and restored).
 
+**Linux & macOS** — Tauri cannot cross-compile, so those binaries are built in
+CI: the `release` workflow runs a four-job matrix
+(windows-x86_64, linux-x86_64, darwin-x86_64, darwin-aarch64). Each job builds
+the PyInstaller backend onedir and the platform installers:
+
+```
+Linux (ubuntu-22.04):   .AppImage (+ .sig, the updater bundle), .deb, .rpm
+macOS (arm64 + x64):    QualCoder.app.tar.gz (+ .sig, the updater bundle), .dmg
+```
+
+The per-platform signatures are merged into the single `qualcoder-latest.json`
+manifest (platforms: windows-x86_64 / linux-x86_64 / darwin-x86_64 /
+darwin-aarch64) and uploaded with the release assets. macOS binaries are not
+code-signed (Gatekeeper will warn); see Publishing updates below.
+
 ## Publishing updates
 
 1. Generate a signing keypair once and keep `updater.key` secret:
    `npx tauri signer generate -w updater.key --ci` — commit `updater.key.pub`
    and keep `tauri.conf.json`'s `plugins.updater.pubkey` in sync with it.
 2. Add the key content as the `TAURI_SIGNING_PRIVATE_KEY` repository secret.
-3. Push a `v*` tag: the `release` workflow builds, signs and uploads the
-   installers + signatures + `qualcoder-latest.json` to a GitHub release.
+3. Push a `v*` tag: the `release` workflow builds all platforms (Windows,
+   Linux, macOS x64 + arm64), signs and uploads the installers + signatures
+   + the merged `qualcoder-latest.json` to a GitHub release.
 4. The app checks
    `https://github.com/MicRaving/qualcodernext/releases/latest/download/qualcoder-latest.json`
-   (Settings → App updates) and offers to download & install.
+   (Settings → App updates) and offers to download & install the bundle for
+   its own platform.
+
+> macOS code-signing/notarization: to remove the Gatekeeper warning, add the
+> standard Apple signing secrets (`APPLE_CERTIFICATE`, `APPLE_CERTIFICATE_PASSWORD`,
+> `APPLE_SIGNING_IDENTITY`, `APPLE_ID`, `APPLE_PASSWORD`, `APPLE_TEAM_ID`) and
+> extend the workflow with `tauri-apps/tauri-action`-style signing steps.
+> The repository is private, so the unauthenticated `latest/download` URLs the
+> updater uses only resolve once the repo (or its releases) is public.
 
 ## License
 
