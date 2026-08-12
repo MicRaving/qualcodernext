@@ -39,8 +39,9 @@ class IndexRequest(BaseModel):
 
 
 def _provider_headers(provider: str, api_key: str) -> dict[str, str]:
-    """Auth headers per provider. Gemini's OpenAI-compat models endpoint is
-    documented with ``Authorization: Bearer``; local providers need none."""
+    """Auth headers per provider. Gemini's OpenAI-compat endpoints (chat AND
+    the /models list) are documented with ``Authorization: Bearer``; local
+    providers need none."""
     if api_key:
         return {"Authorization": f"Bearer {api_key}"}
     return {}
@@ -50,18 +51,35 @@ def _provider_requires_key(provider: str) -> bool:
     return provider in ("gemini", "gpt", "claude")
 
 
-def _models_urls(provider: str, api_base: str) -> list[str]:
-    """Candidate /models URLs. OpenAI-compatible servers serve the list at
-    ``<base>/v1/models`` (Ollama, LM Studio, opencode-go); when the base URL
-    already ends in /v1 use ``<base>/models``. Cloud providers advertise the
-    list at ``<base>/models`` with /v1 already in the base.
+def _models_urls(
+    provider: str, api_base: str, api_key: str = ""
+) -> list[tuple[str, dict[str, str]]]:
+    """Candidate (url, auth headers) pairs for the /models list.
+
+    OpenAI-compatible servers serve the list at ``<base>/v1/models``
+    (Ollama, LM Studio, opencode-go); when the base URL already ends in /v1
+    use ``<base>/models``. Cloud providers advertise the list at
+    ``<base>/models`` with /v1 already in the base.
+
+    Gemini's openai-compat endpoint documents the Bearer header, but in
+    practice the models list only answers when the key travels as the
+    ``?key=`` query param — that variant is tried second, without an auth
+    header. Chat always uses the Bearer header (see ai_service).
     """
+    from urllib.parse import quote
+
+    headers = _provider_headers(provider, api_key)
     base = api_base.rstrip("/")
     if base.endswith("/v1"):
-        return [f"{base}/models", f"{base.rsplit('/v1', 1)[0]}/v1/models"]
-    if provider in ("ollama", "lmstudio", "opencode-go"):
-        return [f"{base}/v1/models", f"{base}/models"]
-    return [f"{base}/models"]
+        urls = [f"{base}/models", f"{base.rsplit('/v1', 1)[0]}/v1/models"]
+    elif provider in ("ollama", "lmstudio", "opencode-go"):
+        urls = [f"{base}/v1/models", f"{base}/models"]
+    else:
+        urls = [f"{base}/models"]
+    candidates = [(url, headers) for url in urls]
+    if provider == "gemini" and api_key:
+        candidates.append((f"{urls[0]}?key={quote(api_key)}", {}))
+    return candidates
 
 
 @router.get("/models")
@@ -94,12 +112,11 @@ async def ai_models(
     api_key = api_key or ai.get("api_key") or ""
     if _provider_requires_key(provider) and not api_key.strip():
         return {"models": []}
-    headers = _provider_headers(provider, api_key)
     data: dict | None = None
-    for url in _models_urls(provider, api_base):
+    for url, req_headers in _models_urls(provider, api_base, api_key):
         try:
             async with httpx.AsyncClient(timeout=3.0) as client:
-                resp = await client.get(url, headers=headers)
+                resp = await client.get(url, headers=req_headers)
                 resp.raise_for_status()
                 data = resp.json()
             break
@@ -140,7 +157,12 @@ async def ai_models(
 
 
 async def _probe_provider(ai: dict) -> tuple[bool | None, str]:
-    """Live reachability check of the configured provider's /v1/models."""
+    """Live reachability check of the configured provider's /v1/models.
+
+    This exercises a real provider endpoint (the models list), so it also
+    validates the API key when one is needed — Gemini is probed against its
+    openai-compat ``/models`` endpoint, with the ``?key=`` fallback.
+    """
     import httpx
 
     provider = ai.get("provider", "custom")
@@ -150,8 +172,7 @@ async def _probe_provider(ai: dict) -> tuple[bool | None, str]:
     api_key = ai.get("api_key") or ""
     if _provider_requires_key(provider) and not api_key.strip():
         return False, "API key required for this provider"
-    headers = _provider_headers(provider, api_key)
-    for url in _models_urls(provider, api_base):
+    for url, headers in _models_urls(provider, api_base, api_key):
         try:
             async with httpx.AsyncClient(timeout=2.5) as client:
                 resp = await client.get(url, headers=headers)

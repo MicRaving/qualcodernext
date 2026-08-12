@@ -152,6 +152,7 @@ async def test_transcribe_status_and_settings(client, tmp_path, monkeypatch):
     assert res.status_code == 200
     body = res.json()
     assert body["engines"]["whisper"] is True
+    assert body["engines"] == {"whisper": True}
     assert body["settings"]["model"] == "large-v3-turbo"
 
     res = await client.put(
@@ -160,3 +161,21 @@ async def test_transcribe_status_and_settings(client, tmp_path, monkeypatch):
     assert res.status_code == 200
     assert res.json()["model"] == "base"
     assert res.json()["vad"] is False
+
+
+async def test_transcribe_settings_legacy_noscribe_falls_back_to_whisper(
+    client, tmp_path, monkeypatch
+):
+    """Old settings files that stored engine="noscribe" must read back as
+    whisper (the engine was purged)."""
+    from qualcoder_api.services import user_settings
+
+    monkeypatch.setattr(user_settings, "SETTINGS_FILE", tmp_path / "settings.json")
+    res = await client.put("/api/v1/transcribe/settings", json={"engine": "noscribe"})
+    assert res.status_code == 200
+    assert res.json()["engine"] == "whisper"
+
+    res = await client.get("/api/v1/transcribe/status")
+    assert res.status_code == 200
+    assert res.json()["settings"]["engine"] == "whisper"
+    assert "noscribe" not in res.json()["engines"]

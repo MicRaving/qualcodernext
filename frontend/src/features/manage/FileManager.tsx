@@ -13,6 +13,7 @@ import {
 import {
   ArrowDown,
   ArrowUp,
+  AudioLines,
   CircleAlert,
   Info,
   FileAudio,
@@ -21,6 +22,7 @@ import {
   Link2,
   Pencil,
   Replace,
+  Sparkles,
   StickyNote,
   Trash2,
   Upload,
@@ -56,6 +58,7 @@ import {
   type SortKey,
 } from "@/features/manage/files";
 import { ROW_HEIGHT, visibleRange } from "@/features/manage/virtual";
+import { canTranscribeSource } from "@/lib/media";
 
 function fileIcon(mediaType: string) {
   if (mediaType === "image") {
@@ -404,15 +407,24 @@ export function FileManager() {
     }
   }
 
+  // Eligible selection counts for the batch buttons: transcribe only AV
+  // media (same predicate as the AV coder's transcribe button), autocode
+  // only text sources. A disabled button says "nothing eligible" on its own.
+  const selectedList = useMemo(
+    () => sources.filter((s) => selected.has(s.id)),
+    [sources, selected],
+  );
+  const eligibleTranscribe = useMemo(
+    () => selectedList.filter((s) => canTranscribeSource(s)),
+    [selectedList],
+  );
+  const eligibleAutocode = useMemo(
+    () => selectedList.filter((s) => s.media_type === "text"),
+    [selectedList],
+  );
+
   function openBatchTranscribe() {
-    const ids = sources
-      .filter(
-        (s) =>
-          selected.has(s.id) &&
-          (s.media_type === "audio" || s.media_type === "video") &&
-          s.av_text_id == null,
-      )
-      .map((s) => s.id);
+    const ids = eligibleTranscribe.map((s) => s.id);
     if (ids.length === 0) {
       toast.error(t("files.transcribeNone"));
       return;
@@ -421,9 +433,7 @@ export function FileManager() {
   }
 
   function openBatchAutocode() {
-    const ids = sources
-      .filter((s) => selected.has(s.id) && s.media_type === "text")
-      .map((s) => s.id);
+    const ids = eligibleAutocode.map((s) => s.id);
     if (ids.length === 0) {
       toast.error(t("files.autocodeNone"));
       return;
@@ -510,16 +520,32 @@ export function FileManager() {
             <Button
               variant="secondary"
               onClick={() => openBatchTranscribe()}
-              title={t("files.transcribeSelected", { n: selected.size })}
+              disabled={eligibleTranscribe.length === 0}
+              icon={<AudioLines size={13} aria-hidden />}
+              title={t("files.transcribeSelectedCount", {
+                eligible: String(eligibleTranscribe.length),
+                n: String(selected.size),
+              })}
             >
-              {t("files.transcribeSelected", { n: selected.size })}
+              {t("files.transcribeSelectedCount", {
+                eligible: String(eligibleTranscribe.length),
+                n: String(selected.size),
+              })}
             </Button>
             <Button
               variant="secondary"
               onClick={() => openBatchAutocode()}
-              title={t("files.autocodeSelected", { n: selected.size })}
+              disabled={eligibleAutocode.length === 0}
+              icon={<Sparkles size={13} aria-hidden />}
+              title={t("files.autocodeSelectedCount", {
+                eligible: String(eligibleAutocode.length),
+                n: String(selected.size),
+              })}
             >
-              {t("files.autocodeSelected", { n: selected.size })}
+              {t("files.autocodeSelectedCount", {
+                eligible: String(eligibleAutocode.length),
+                n: String(selected.size),
+              })}
             </Button>
             <Button
               variant="danger"

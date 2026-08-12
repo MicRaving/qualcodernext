@@ -215,6 +215,10 @@ interface ProjectState {
   /** Drop queued/running order: move the task with id before targetId. */
   moveTask: (id: string, targetId: string | null) => void;
   clearFinishedTasks: () => void;
+  /** Resume the queue: the shell's dispatcher starts queued jobs again. */
+  startAllTasks: () => void;
+  /** Cancel and remove every background task (queued, running, finished). */
+  clearAllTasks: () => void;
 
   /** Background file import progress (shown in the ribbon indicator). */
   importState: { done: number; total: number } | null;
@@ -489,6 +493,14 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     set((s) => ({
       tasks: s.tasks.filter((j) => j.state === "queued" || j.state === "running"),
     })),
+  startAllTasks: () => set({ tasksPaused: false }),
+  clearAllTasks: () => {
+    for (const job of useProjectStore.getState().tasks) {
+      if (job.kind === "transcribe") void api.transcribeJobDelete(job.id);
+      else void api.autocodeJobDelete(job.id);
+    }
+    set({ tasks: [] });
+  },
 
   importState: null,
   setImportState: (v) => set({ importState: v }),

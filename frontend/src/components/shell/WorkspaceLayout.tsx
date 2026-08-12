@@ -135,7 +135,7 @@ export function WorkspaceLayout({
           <div className="relative flex shrink-0" style={{ width: leftHidden ? 0 : leftW }}>
             {!leftHidden && (
               <BarWidthContext.Provider value={leftW}>
-                <div className="min-w-0">{leftBar}</div>
+                <div className="h-full min-w-0">{leftBar}</div>
               </BarWidthContext.Provider>
             )}
             {leftHidden ? (
@@ -190,7 +190,7 @@ export function WorkspaceLayout({
                   onMouseDown={startResize("right")}
                 />
                 <BarWidthContext.Provider value={rightW}>
-                  <div className="min-w-0">{rightBar}</div>
+                  <div className="h-full min-w-0">{rightBar}</div>
                 </BarWidthContext.Provider>
               </>
             )}

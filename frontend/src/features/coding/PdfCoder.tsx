@@ -19,15 +19,15 @@ import {
   ChevronRight,
   CircleAlert,
   FileText,
+  FileType,
   LoaderCircle,
-  PanelRight,
   Pencil,
   Sparkles,
   Rows3,
   Trash2,
   X,
 } from "lucide-react";
-import { api, fetchWithTimeout, type CodeTreeItem, type Coding, type ImageCoding, type Source } from "@/lib/api";
+import { api, fetchWithTimeout, type Annotation, type CodeTreeItem, type Coding, type ImageCoding, type Source } from "@/lib/api";
 import { sourceFileUrl } from "@/lib/api";
 import { CodePicker, type PickedCode } from "@/features/coding/CodePicker";
 import { AutocodeDialog } from "@/features/coding/AutocodeDialog";
@@ -143,14 +143,15 @@ export function PdfCoder({ source }: { source: Source }) {
   const activeCodeId = useProjectStore((s) => s.activeCodeId);
   const hiddenCodes = useProjectStore((s) => s.hiddenCodes);
 
-  const [plainText, setPlainText] = useState(false);
-  const [splitView, setSplitView] = useState(false);
+  const [pdfVisible, setPdfVisible] = useState(true);
+  const [plainVisible, setPlainVisible] = useState(false);
   const [textW, setTextW] = useState(420);
   const [textDragging, setTextDragging] = useState(false);
   const textResizeRef = useRef<{ startX: number; startW: number } | null>(null);
   const [autoOpen, setAutoOpen] = useState(false);
   const [codings, setCodings] = useState<ImageCoding[]>([]);
   const [textCodings, setTextCodings] = useState<Coding[]>([]);
+  const [annotations, setAnnotations] = useState<Annotation[]>([]);
   const [codes, setCodes] = useState<CodeTreeItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -230,6 +231,7 @@ export function PdfCoder({ source }: { source: Source }) {
     setLoading(true);
     setLoadError(null);
     setCodings([]);
+    setAnnotations([]);
     setCodes([]);
     setSelectedImid(null);
     setPendingRect(null);
@@ -237,14 +239,16 @@ export function PdfCoder({ source }: { source: Source }) {
     setCurrentPage(1);
     void (async () => {
       try {
-        const [cod, textCod, flat] = await Promise.all([
+        const [cod, textCod, anns, flat] = await Promise.all([
           api.imageCodings(source.id),
           api.sourceCoding(source.id),
+          api.fileAnnotations(source.id),
           api.codesFlat(),
         ]);
         if (cancelled) return;
         setCodings(cod);
         setTextCodings(textCod);
+        setAnnotations(anns);
         setCodes(flat);
       } catch (e) {
         if (!cancelled) setLoadError(e instanceof Error ? e.message : t("coder.loadCodingsError"));
@@ -361,9 +365,9 @@ export function PdfCoder({ source }: { source: Source }) {
         }
       }
     };
-    // Re-render whenever the view (re)mounts — including toggling back from
-    // the plain-text mode, which unmounts the page canvases.
-  }, [pdf, scale, currentPage, continuous, plainText, t]);
+    // Re-render whenever the view (re)mounts — including toggling back to the
+    // PDF pane, which unmounts the page canvases.
+  }, [pdf, scale, currentPage, continuous, pdfVisible, t]);
 
   /* ---------------------------------------------------------------- fit */
 
@@ -385,7 +389,7 @@ export function PdfCoder({ source }: { source: Source }) {
     const ro = new ResizeObserver(() => void applyFit());
     ro.observe(el);
     return () => ro.disconnect();
-  }, [zoom, pdf, applyFit]);
+  }, [zoom, pdf, applyFit, pdfVisible]);
 
   /* ------------------------------------------------------------ derived */
 
@@ -462,6 +466,16 @@ export function PdfCoder({ source }: { source: Source }) {
   function setCanvasRef(pageNumber: number, el: HTMLCanvasElement | null) {
     if (el) canvasRefs.current.set(pageNumber, el);
     else canvasRefs.current.delete(pageNumber);
+  }
+
+  /** Toggle a pane on/off; never allow both off (fall back to PDF only). */
+  function toggleView(kind: "pdf" | "plain") {
+    const next = { pdf: pdfVisible, plain: plainVisible };
+    if (kind === "pdf") next.pdf = !next.pdf;
+    else next.plain = !next.plain;
+    if (!next.pdf && !next.plain) next.pdf = true;
+    setPdfVisible(next.pdf);
+    setPlainVisible(next.plain);
   }
 
   function pagePointFromEvent(e: ReactMouseEvent<HTMLDivElement>): PagePoint {
@@ -713,16 +727,6 @@ export function PdfCoder({ source }: { source: Source }) {
 
   /* ------------------------------------------------------------ rendering */
 
-  if (plainText) {
-    return (
-      <TextCoder
-        sourceId={source.id}
-        forceText
-        onExitPlainText={() => setPlainText(false)}
-      />
-    );
-  }
-
   if (loading) {
     return <LoadingState>{t("pdfCoder.loading")}</LoadingState>;
   }
@@ -847,25 +851,29 @@ export function PdfCoder({ source }: { source: Source }) {
               <div className="mx-1 h-4 w-px bg-border" aria-hidden />
               <Button
                 variant="secondary"
-                className="h-7 font-medium"
-                onClick={() => setPlainText(true)}
+                className={cn(
+                  "h-7 shrink-0",
+                  plainVisible ? "border-accent text-accent" : "bg-bg text-text-secondary",
+                )}
+                onClick={() => toggleView("plain")}
+                aria-pressed={plainVisible}
                 title={t("pdfCoder.plainTextHint")}
                 icon={<FileText size={12} aria-hidden />}
               >
                 {t("pdfCoder.plainText")}
               </Button>
-
-              <div className="mx-1 h-4 w-px bg-border" aria-hidden />
               <Button
                 variant="secondary"
-                className={cn("h-7", splitView && "border-accent text-accent")}
-                onClick={() => setSplitView((s) => !s)}
-                aria-pressed={splitView}
-                title={t("pdf.split")}
-                aria-label={t("pdf.split")}
-                icon={<PanelRight size={12} aria-hidden />}
+                className={cn(
+                  "h-7 shrink-0",
+                  pdfVisible ? "border-accent text-accent" : "bg-bg text-text-secondary",
+                )}
+                onClick={() => toggleView("pdf")}
+                aria-pressed={pdfVisible}
+                title={t("pdfCoder.pdfViewHint")}
+                icon={<FileType size={12} aria-hidden />}
               >
-                {t("pdf.split")}
+                {t("pdfCoder.pdfView")}
               </Button>
             </div>
           </>
@@ -875,124 +883,139 @@ export function PdfCoder({ source }: { source: Source }) {
       {errMsg && <ErrorBanner onClose={() => setErrMsg(null)}>{errMsg}</ErrorBanner>}
 
       <div className="flex min-h-0 flex-1">
-        <div
-          ref={containerRef}
-          className={cn("min-h-0 min-w-0 flex-1 overflow-y-auto bg-bg")}
-        >
-          <div className="mx-auto flex w-max min-w-full flex-col items-center gap-4 p-6">
-          {pageNumbers.map((p) => {
-            const size = pageSizes.get(p);
-            const overlays = buildPageOverlays(codings, p, scale, colorByCid);
-            return (
-              <div
-                key={p}
-                role="img"
-                aria-label={t("pdfCoder.pageOf", { page: p, pages: numPages })}
-                className="relative shrink-0"
-                style={size ? { width: size.width * scale, height: size.height * scale } : undefined}
-                onMouseDown={(e) => onPageMouseDown(e, p)}
-                onMouseMove={(e) => onPageMouseMove(e, p)}
-                onMouseUp={finishDrag}
-              >
-                <canvas ref={(el) => setCanvasRef(p, el)} className="block" />
+        {pdfVisible && (
+          <div ref={containerRef} className="min-h-0 min-w-0 flex-1 overflow-y-auto bg-bg">
+            <div className="mx-auto flex w-max min-w-full flex-col items-center gap-4 p-6">
+            {pageNumbers.map((p) => {
+              const size = pageSizes.get(p);
+              const overlays = buildPageOverlays(codings, p, scale, colorByCid);
+              return (
+                <div
+                  key={p}
+                  role="img"
+                  aria-label={t("pdfCoder.pageOf", { page: p, pages: numPages })}
+                  className="relative shrink-0"
+                  style={size ? { width: size.width * scale, height: size.height * scale } : undefined}
+                  onMouseDown={(e) => onPageMouseDown(e, p)}
+                  onMouseMove={(e) => onPageMouseMove(e, p)}
+                  onMouseUp={finishDrag}
+                >
+                  <canvas ref={(el) => setCanvasRef(p, el)} className="block" />
 
-                {overlays.map((o) => (
-                  <div
-                    key={o.key}
-                    className={cn(
-                      "absolute cursor-pointer qc-seg",
-                      hiddenCodes.includes(o.coding.cid) && "qc-seg-hidden",
-                      selectedImid === o.key && "outline outline-2 outline-accent",
-                    )}
-                    style={{
-                      left: o.left,
-                      top: o.top,
-                      width: o.width,
-                      height: o.height,
-                      backgroundColor: codeTint(o.color),
-                      border: `1px solid ${o.color}`,
-                    }}
-                    title={overlayTitle(o)}
-                    onMouseDown={(e) => e.stopPropagation()}
-                    onClick={() => setSelectedImid(o.key)}
-                  />
-                ))}
-
-                {/* Text codings (shared with the plain-text mode) as
-                    best-effort overlays on their matched items. */}
-                {(textOverlays.get(p) ?? []).map((ov) =>
-                  ov.items.map((it, i) => (
+                  {overlays.map((o) => (
                     <div
-                      key={`t-${ov.ctid}-${i}`}
+                      key={o.key}
                       className={cn(
-                        "pointer-events-none absolute",
-                        hiddenCodes.includes(
-                          textCodings.find((c) => c.ctid === ov.ctid)?.cid ?? -1,
-                        ) && "qc-seg-hidden",
+                        "absolute cursor-pointer qc-seg",
+                        hiddenCodes.includes(o.coding.cid) && "qc-seg-hidden",
+                        selectedImid === o.key && "outline outline-2 outline-accent",
                       )}
                       style={{
-                        left: it.x * scale,
-                        top: it.y * scale,
-                        width: it.w * scale,
-                        height: it.h * scale,
-                        backgroundColor: codeTint(ov.color),
-                        border: `1px solid ${ov.color}`,
+                        left: o.left,
+                        top: o.top,
+                        width: o.width,
+                        height: o.height,
+                        backgroundColor: codeTint(o.color),
+                        border: `1px solid ${o.color}`,
                       }}
+                      title={overlayTitle(o)}
+                      onMouseDown={(e) => e.stopPropagation()}
+                      onClick={() => setSelectedImid(o.key)}
                     />
-                  )),
-                )}
+                  ))}
 
-                {drag && drag.pageNumber === p && drag.mode === "region" && (
-                  <PreviewRect start={drag.start} current={drag.current} />
-                )}
-
-                {drag && drag.pageNumber === p && drag.mode === "text" && (
-                  <>
-                    {coveredTextItems(textItems.get(p) ?? [], scale, drag.start, drag.current).map((it, i) => (
+                  {/* Text codings (shared with the plain-text mode) as
+                      best-effort overlays on their matched items. */}
+                  {(textOverlays.get(p) ?? []).map((ov) =>
+                    ov.items.map((it, i) => (
                       <div
-                        key={i}
-                        className="pointer-events-none absolute"
+                        key={`t-${ov.ctid}-${i}`}
+                        className={cn(
+                          "pointer-events-none absolute",
+                          hiddenCodes.includes(
+                            textCodings.find((c) => c.ctid === ov.ctid)?.cid ?? -1,
+                          ) && "qc-seg-hidden",
+                        )}
                         style={{
                           left: it.x * scale,
                           top: it.y * scale,
                           width: it.w * scale,
                           height: it.h * scale,
-                          backgroundColor: "var(--qc-accent)",
-                          opacity: 0.25,
+                          backgroundColor: codeTint(ov.color),
+                          border: `1px solid ${ov.color}`,
                         }}
                       />
-                    ))}
-                  </>
-                )}
+                    )),
+                  )}
 
-                {!size && (
-                  <div className="absolute inset-0 flex items-center justify-center gap-2 text-xs text-text-secondary">
-                    <LoaderCircle size={14} className="animate-spin" aria-hidden />
-                    {t("pdfCoder.rendering", { page: p })}
-                  </div>
-                )}
-              </div>
-            );
-          })}
+                  {drag && drag.pageNumber === p && drag.mode === "region" && (
+                    <PreviewRect start={drag.start} current={drag.current} />
+                  )}
+
+                  {drag && drag.pageNumber === p && drag.mode === "text" && (
+                    <>
+                      {coveredTextItems(textItems.get(p) ?? [], scale, drag.start, drag.current).map((it, i) => (
+                        <div
+                          key={i}
+                          className="pointer-events-none absolute"
+                          style={{
+                            left: it.x * scale,
+                            top: it.y * scale,
+                            width: it.w * scale,
+                            height: it.h * scale,
+                            backgroundColor: "var(--qc-accent)",
+                            opacity: 0.25,
+                          }}
+                        />
+                      ))}
+                    </>
+                  )}
+
+                  {!size && (
+                    <div className="absolute inset-0 flex items-center justify-center gap-2 text-xs text-text-secondary">
+                      <LoaderCircle size={14} className="animate-spin" aria-hidden />
+                      {t("pdfCoder.rendering", { page: p })}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
         </div>
-      </div>
-        {splitView && (
-          <>
-            <div
-              onMouseDown={startTextResize}
-              className={cn(
-                "w-1 shrink-0 cursor-col-resize border-r border-border",
-                textDragging ? "bg-accent/40" : "bg-surface hover:bg-accent/40",
-              )}
-              role="separator"
-              aria-orientation="vertical"
-              aria-label="Resize text panel"
-              title="Resize text panel"
+        )}
+        {pdfVisible && plainVisible && (
+          <div
+            onMouseDown={startTextResize}
+            className={cn(
+              "w-1 shrink-0 cursor-col-resize border-r border-border",
+              textDragging ? "bg-accent/40" : "bg-surface hover:bg-accent/40",
+            )}
+            role="separator"
+            aria-orientation="vertical"
+            aria-label="Resize text panel"
+            title="Resize text panel"
+          />
+        )}
+        {plainVisible && (
+          <div
+            className={cn(
+              "flex min-h-0 flex-col overflow-hidden bg-bg",
+              pdfVisible ? "shrink-0" : "flex-1",
+            )}
+            style={pdfVisible ? { width: textW } : undefined}
+          >
+            <TextCoder
+              sourceId={source.id}
+              forceText
+              bare
+              codings={textCodings}
+              annotations={annotations}
+              codes={codes}
+              onCodingsChange={setTextCodings}
+              onAnnotationsChange={setAnnotations}
+              onCodesChange={setCodes}
             />
-            <div className="flex min-h-0 shrink-0 flex-col overflow-hidden bg-bg" style={{ width: textW }}>
-              <TextCoder sourceId={source.id} forceText bare />
-            </div>
-          </>
+          </div>
         )}
       </div>
 

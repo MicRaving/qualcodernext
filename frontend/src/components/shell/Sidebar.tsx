@@ -12,6 +12,8 @@ import {
   FolderOpen,
   FolderPlus,
   GitMerge,
+  IndentDecrease,
+  IndentIncrease,
   Info,
   Palette,
   Pencil,
@@ -443,6 +445,34 @@ export function Sidebar() {
     }
   }
 
+  /** Move a code/category one level UP (Word-list style). */
+  async function promoteItem(item: CodeTreeItem) {
+    setToolbarError(null);
+    try {
+      if (item.kind === "category") await api.promoteCategory(item.id);
+      else await api.promoteCode(item.id);
+      await useProjectStore.getState().refreshProject();
+    } catch (e) {
+      const detail = e instanceof Error ? e.message : t("tree.promoteFail");
+      setToolbarError(detail);
+      toast.error(detail);
+    }
+  }
+
+  /** Move a code/category one level DOWN (Word-list style). */
+  async function demoteItem(item: CodeTreeItem) {
+    setToolbarError(null);
+    try {
+      if (item.kind === "category") await api.demoteCategory(item.id);
+      else await api.demoteCode(item.id);
+      await useProjectStore.getState().refreshProject();
+    } catch (e) {
+      const detail = e instanceof Error ? e.message : t("tree.demoteFail");
+      setToolbarError(detail);
+      toast.error(detail);
+    }
+  }
+
   /* ------------------------------------------------------------------ */
   /* Context menu                                                        */
   /* ------------------------------------------------------------------ */
@@ -505,6 +535,16 @@ export function Sidebar() {
           run: close(() => void mergeCategoryInto(menu.item)),
         },
         {
+          label: t("tree.promote"),
+          icon: <IndentDecrease size={14} aria-hidden />,
+          run: close(() => void promoteItem(menu.item)),
+        },
+        {
+          label: t("tree.demote"),
+          icon: <IndentIncrease size={14} aria-hidden />,
+          run: close(() => void demoteItem(menu.item)),
+        },
+        {
           label: t("common.delete"),
           icon: <Trash2 size={14} aria-hidden />,
           danger: true,
@@ -563,6 +603,16 @@ export function Sidebar() {
               },
             ]
           : []),
+        {
+          label: t("tree.promote"),
+          icon: <IndentDecrease size={14} aria-hidden />,
+          run: close(() => void promoteItem(menu.item)),
+        },
+        {
+          label: t("tree.demote"),
+          icon: <IndentIncrease size={14} aria-hidden />,
+          run: close(() => void demoteItem(menu.item)),
+        },
         {
           label: t("common.delete"),
           icon: <Trash2 size={14} aria-hidden />,
@@ -803,7 +853,7 @@ export function Sidebar() {
   return (
     <LeftBar
       width="md"
-      
+      className="h-full min-h-0 overflow-y-auto"
       header={
         view.kind !== "coding" ? (
           <BarHeader

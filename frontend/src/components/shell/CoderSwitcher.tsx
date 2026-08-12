@@ -16,7 +16,9 @@ import {
   Eye,
   EyeOff,
   LoaderCircle,
+  Pause,
   Pencil,
+  Play,
   RefreshCw,
   Trash2,
   User,
@@ -31,6 +33,11 @@ import { Menu, MenuItem, Modal } from "@/components/ui/orchestrator";
 import { cls } from "@/components/ui/tokens";
 
 const SYNC_POLL_MS = 30_000;
+
+const FLYOUT_WIDTH = 260;
+const FLYOUT_MIN_HEIGHT = 240;
+const FLYOUT_MARGIN = 8;
+const FLYOUT_GAP = 4;
 
 function formatSince(ts: number): string {
   if (!ts) return "—";
@@ -63,6 +70,12 @@ export function CoderSwitcher() {
   const setSyncStatus = useProjectStore((s) => s.setSyncStatus);
   const setSyncEnabled = useProjectStore((s) => s.setSyncEnabled);
   const runSyncNow = useProjectStore((s) => s.runSyncNow);
+  const tasks = useProjectStore((s) => s.tasks);
+  const tasksPaused = useProjectStore((s) => s.tasksPaused);
+  const setTasksPaused = useProjectStore((s) => s.setTasksPaused);
+  const startAllTasks = useProjectStore((s) => s.startAllTasks);
+  const clearFinishedTasks = useProjectStore((s) => s.clearFinishedTasks);
+  const clearAllTasks = useProjectStore((s) => s.clearAllTasks);
   const [open, setOpen] = useState(false);
   const [adding, setAdding] = useState(false);
   const [newName, setNewName] = useState("");
@@ -72,11 +85,26 @@ export function CoderSwitcher() {
   const [menu, setMenu] = useState<{ name: string; x: number; y: number } | null>(null);
   const [stats, setStats] = useState<CoderStats | null>(null);
   const [statsLoading, setStatsLoading] = useState(false);
+  const [viewportTick, setViewportTick] = useState(0);
   const rootRef = useRef<HTMLDivElement | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
 
   const syncEnabled = syncStatus?.ok === true && syncStatus.enabled === true;
   const syncError = Boolean(syncStatus?.last_error);
+
+  const taskCounts = {
+    queued: tasks.filter((j) => j.state === "queued").length,
+    running: tasks.filter((j) => j.state === "running").length,
+    done: tasks.filter((j) => j.state === "done").length,
+    error: tasks.filter((j) => j.state === "error").length,
+  };
+
+  /* Recompute the flyout position whenever the window is resized. */
+  useEffect(() => {
+    const onResize = () => setViewportTick((n) => n + 1);
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
 
   /* Poll sync status while the flyout is open or the switch is on. */
   useEffect(() => {
@@ -254,18 +282,32 @@ export function CoderSwitcher() {
     setAdding(false);
   }
 
-  /** Flyout position: anchored to the button, clamped inside the window. */
+  /**
+   * Flyout position: anchored under the button and clamped so the panel
+   * always stays fully inside the window (8px inset on every side). The
+   * max-height shrinks with the window so the bottom never overflows; a
+   * 240px floor keeps the panel usable even on very small screens.
+   */
   const menuPos = useMemo(() => {
     const el = rootRef.current;
     if (!el) return undefined;
     const rect = el.getBoundingClientRect();
-    const width = 260;
-    return {
-      left: Math.max(8, Math.min(rect.right - width, window.innerWidth - width - 8)),
-      top: Math.min(rect.bottom + 4, window.innerHeight - 64),
-    };
+    const iw = window.innerWidth;
+    const ih = window.innerHeight;
+    const left = Math.max(
+      FLYOUT_MARGIN,
+      Math.min(rect.right - FLYOUT_WIDTH, iw - FLYOUT_WIDTH - FLYOUT_MARGIN),
+    );
+    const top = Math.max(
+      FLYOUT_MARGIN,
+      Math.min(rect.bottom + FLYOUT_GAP, ih - FLYOUT_MARGIN - FLYOUT_MIN_HEIGHT),
+    );
+    const maxHeight = Math.max(FLYOUT_MIN_HEIGHT, ih - top - 16);
+    return { left, top, maxHeight };
+    // open + viewportTick are intentional recompute triggers (refs/globals
+    // inside are not tracked by exhaustive-deps).
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open]);
+  }, [open, viewportTick]);
 
   return (
     <div ref={rootRef} className="relative flex shrink-0 items-center gap-1">
@@ -305,7 +347,7 @@ export function CoderSwitcher() {
           position="fixed"
           role="listbox"
           aria-label={t("coder.listAria")}
-          className="min-w-60 max-h-[calc(100vh-3.5rem)] overflow-y-auto"
+          className="min-w-60 overflow-y-auto"
           style={menuPos}
         >
           {coders.map((c) => (
@@ -353,6 +395,23 @@ export function CoderSwitcher() {
                 ) : (
                   <EyeOff size={13} aria-hidden />
                 )}
+              </button>
+              <button
+                type="button"
+                title={c.name === coderName ? t("coder.deleteCurrent") : t("coder.delete")}
+                aria-label={t("coder.delete")}
+                disabled={c.name === coderName}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  void handleDeleteCoder(c.name);
+                }}
+                className={`shrink-0 rounded-sm p-1 hover:bg-surface-higher ${
+                  c.name === coderName
+                    ? "cursor-not-allowed opacity-40"
+                    : "text-text-secondary hover:text-danger"
+                }`}
+              >
+                <Trash2 size={13} aria-hidden />
               </button>
             </div>
           ))}
@@ -482,6 +541,71 @@ export function CoderSwitcher() {
                 </button>
               </div>
             )}
+          </div>
+
+          {/* Background tasks */}
+          <div className="my-1 h-px bg-border" aria-hidden />
+          <div className="px-2 py-1.5">
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-xs font-medium text-text-primary">{t("coder.tasks")}</span>
+              {tasksPaused && (
+                <span className="shrink-0 text-[10px] font-medium text-warning">
+                  {t("coder.tasksPaused")}
+                </span>
+              )}
+            </div>
+            {tasks.length === 0 ? (
+              <p className="mt-1.5 text-[11px] leading-snug text-text-secondary">
+                {t("coder.tasksEmpty")}
+              </p>
+            ) : (
+              <p className="mt-1.5 text-[11px] leading-snug text-text-secondary" aria-live="polite">
+                {t("coder.tasksCounts", {
+                  queued: String(taskCounts.queued),
+                  running: String(taskCounts.running),
+                  done: String(taskCounts.done),
+                  error: String(taskCounts.error),
+                })}
+              </p>
+            )}
+            <div className="mt-1.5 flex flex-wrap items-center gap-1">
+              <button
+                type="button"
+                onClick={() => startAllTasks()}
+                disabled={!tasksPaused || taskCounts.queued === 0}
+                className={cls.primaryCompact}
+              >
+                <Play size={10} aria-hidden />
+                {t("coder.tasksStart")}
+              </button>
+              <button
+                type="button"
+                onClick={() => setTasksPaused(true)}
+                disabled={tasksPaused || tasks.length === 0}
+                className={cls.secondary}
+              >
+                <Pause size={11} aria-hidden />
+                {t("coder.tasksPause")}
+              </button>
+              <button
+                type="button"
+                onClick={() => clearFinishedTasks()}
+                disabled={taskCounts.done === 0 && taskCounts.error === 0}
+                className={cls.secondary}
+              >
+                <Trash2 size={11} aria-hidden />
+                {t("coder.tasksClear")}
+              </button>
+              <button
+                type="button"
+                onClick={() => clearAllTasks()}
+                disabled={tasks.length === 0}
+                className={cls.secondary}
+              >
+                <X size={11} aria-hidden />
+                {t("coder.tasksClearAll")}
+              </button>
+            </div>
           </div>
         </Menu>
       )}

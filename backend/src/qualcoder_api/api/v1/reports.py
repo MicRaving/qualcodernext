@@ -58,20 +58,23 @@ async def attributes_report(db: DbDep) -> dict:
 class InterraterRequest(BaseModel):
     coder_a: str
     coder_b: str
+    coders: list[str] | None = None
 
 
 @router.post("/interrater")
 async def interrater(db: DbDep, req: InterraterRequest) -> dict:
-    """Interrater reliability between two coders on the same documents.
+    """Interrater reliability between coders on the same documents.
 
     Units are the project's sources; categories are the codes. Each
-    unit x category cell is rated present/absent by both coders; the report
-    returns Cohen's Kappa, Krippendorff's Alpha and Gwet's AC1.
+    unit x category cell is rated present/absent by every selected coder.
+    ``coders`` (optional) restricts the comparison — default: all coders
+    with codings. Returns Krippendorff's Alpha over all selected coders
+    plus pairwise Cohen's Kappa and Gwet's AC1 (mean/min/max across pairs).
     """
     from fastapi import HTTPException
 
     try:
-        return await report_service.interrater(db, req.coder_a, req.coder_b)
+        return await report_service.interrater(db, req.coder_a, req.coder_b, req.coders)
     except ValueError as err:
         raise HTTPException(status_code=422, detail=str(err)) from err
 

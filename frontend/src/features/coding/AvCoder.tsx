@@ -27,6 +27,7 @@ import { TranscribeDialog } from "@/features/coding/TranscribeDialog";
 import { formatTime, parseTranscript, segmentLeft, secondsToMs, segmentWidth, buildCrAt, rawToRendered, renderedToRaw, stripCr, normalizeCodingPositions } from "@/features/coding/media";
 import { getSelectionOffsets } from "@/features/coding/selection";
 import { codeTint } from "@/features/coding/tint";
+import { canTranscribeSource } from "@/lib/media";
 import { cn } from "@/lib/utils";
 import { useI18n } from "@/lib/i18n";
 import {
@@ -661,15 +662,17 @@ export function AvCoder({ source }: { source: Source }) {
         meta={source.memo}
         actions={
           <>
-            <Button
-              variant="secondary"
-              onClick={() => setTranscribeOpen(true)}
-              title={t("transcribe.title")}
-              className="shrink-0"
-              icon={<Mic size={12} aria-hidden />}
-            >
-              {t("transcribe.button")}
-            </Button>
+            {canTranscribeSource(source) && (
+              <Button
+                variant="secondary"
+                onClick={() => setTranscribeOpen(true)}
+                title={t("transcribe.title")}
+                className="shrink-0"
+                icon={<Mic size={12} aria-hidden />}
+              >
+                {t("transcribe.button")}
+              </Button>
+            )}
             <Button
               variant="secondary"
               onClick={() => setTranscriptVisible((v) => !v)}

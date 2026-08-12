@@ -11,6 +11,7 @@ import { Button, ErrorBanner, Field, Input, Modal, Select } from "@/components/u
 import { useI18n } from "@/lib/i18n";
 import { useToast } from "@/lib/toast";
 import { useProjectStore } from "@/stores/project";
+import { canTranscribeSource } from "@/lib/media";
 
 const IDENTIFIER_OPTIONS = [
   { key: "name", labelKey: "avCoder.speakersName" },
@@ -43,7 +44,6 @@ export function TranscribeDialog({ sourceId, sourceIds, onClose }: Props) {
   const [tab, setTab] = useState<"transcribe" | "speakers">("transcribe");
 
   const [status, setStatus] = useState<TranscribeStatus | null>(null);
-  const [engine, setEngine] = useState("whisper");
   const [model, setModel] = useState("large-v3-turbo");
   const [language, setLanguage] = useState("");
   const [translate, setTranslate] = useState(false);
@@ -72,7 +72,6 @@ export function TranscribeDialog({ sourceId, sourceIds, onClose }: Props) {
       .transcribeStatus()
       .then((s) => {
         setStatus(s);
-        setEngine(s.settings.engine);
         setModel(s.settings.model);
         setLanguage(s.settings.language ?? "");
         setTranslate(s.settings.translate);
@@ -90,29 +89,50 @@ export function TranscribeDialog({ sourceId, sourceIds, onClose }: Props) {
     setBusy(true);
     try {
       if (batchMode) {
-        const names = new Map(
-          useProjectStore.getState().sources.map((s) => [s.id, s.name] as const),
-        );
-        for (const id of sourceIds) {
-          const res = await api.transcribeStart({
-            source_id: id,
-            engine,
-            model,
-            language: language.trim() || null,
-            translate,
-            beam_size: beamSize,
-            vad,
-            timestamps,
-            segment_coding: segmentCoding,
-            segment_cid: segmentCoding && segmentCid ? Number(segmentCid) : null,
-            start: false,
-          });
-          useProjectStore.getState().enqueueTranscribe({
-            id: res.job_id,
-            sourceId: id,
-            sourceName: names.get(id) ?? `source ${id}`,
-            start: false,
-          });
+        const allSources = useProjectStore.getState().sources;
+        const names = new Map(allSources.map((s) => [s.id, s.name] as const));
+        // Same eligibility predicate as the file manager's batch button, so
+        // the dialog can never disagree with it (transcribable = AV media).
+        const eligibleIds = sourceIds.filter((id) => {
+          const src = allSources.find((s) => s.id === id);
+          return src != null && canTranscribeSource(src);
+        });
+        if (eligibleIds.length === 0) {
+          setBusy(false);
+          toast.error(t("files.transcribeNone"));
+          return;
+        }
+        for (const id of eligibleIds) {
+          const name = names.get(id) ?? `source ${id}`;
+          try {
+            const res = await api.transcribeStart({
+              source_id: id,
+              model,
+              language: language.trim() || null,
+              translate,
+              beam_size: beamSize,
+              vad,
+              timestamps,
+              segment_coding: segmentCoding,
+              segment_cid: segmentCoding && segmentCid ? Number(segmentCid) : null,
+              start: false,
+            });
+            useProjectStore.getState().enqueueTranscribe({
+              id: res.job_id,
+              sourceId: id,
+              sourceName: name,
+              start: false,
+            });
+          } catch (err) {
+            setBusy(false);
+            toast.error(
+              t("transcribe.batchError", {
+                name,
+                message: err instanceof Error ? err.message : t("transcribe.startError"),
+              }),
+            );
+            return;
+          }
         }
         toast.success(t("transcribe.batchHint"));
         onClose();
@@ -121,7 +141,6 @@ export function TranscribeDialog({ sourceId, sourceIds, onClose }: Props) {
       if (sourceId == null) return;
       const res = await api.transcribeStart({
         source_id: sourceId,
-        engine,
         model,
         language: language.trim() || null,
         translate,
@@ -194,7 +213,6 @@ export function TranscribeDialog({ sourceId, sourceIds, onClose }: Props) {
   }
 
   const whisperAvailable = status?.engines.whisper ?? false;
-  const noscribeAvailable = status?.engines.noscribe ?? false;
 
   return (
     <Modal
@@ -240,111 +258,96 @@ export function TranscribeDialog({ sourceId, sourceIds, onClose }: Props) {
 
       {batchMode || tab === "transcribe" ? (
         <form onSubmit={(ev) => void handleStart(ev)} className="space-y-3 p-3">
-          {!whisperAvailable && !noscribeAvailable && (
+          {!whisperAvailable && (
             <p className="flex items-center gap-1.5 text-xs text-danger">
               <CircleAlert size={13} aria-hidden />
               {t("transcribe.noEngine")}
             </p>
           )}
 
-          <Field label={t("transcribe.engine")}>
-            <Select value={engine} onChange={(e) => setEngine(e.target.value)} className="w-full">
-              <option value="whisper" disabled={!whisperAvailable}>
-                Whisper (faster-whisper)
-              </option>
-              <option value="noscribe" disabled={!noscribeAvailable}>
-                noScribe
-              </option>
+          <Field label={t("transcribe.model")}>
+            <Select
+              value={model}
+              onChange={(e) => setModel(e.target.value)}
+              className="w-full"
+            >
+              {(status?.models ?? []).map((m) => (
+                <option key={m} value={m}>
+                  {m}
+                  {status?.models_cached.includes(m) ? " ✓" : ""}
+                </option>
+              ))}
             </Select>
           </Field>
-
-          {engine === "whisper" && (
-            <>
-              <Field label={t("transcribe.model")}>
-                <Select
-                  value={model}
-                  onChange={(e) => setModel(e.target.value)}
-                  className="w-full"
-                >
-                  {(status?.models ?? []).map((m) => (
-                    <option key={m} value={m}>
-                      {m}
-                      {status?.models_cached.includes(m) ? " ✓" : ""}
-                    </option>
-                  ))}
-                </Select>
-              </Field>
-              <Field label={t("transcribe.language")}>
-                <Input
-                  type="text"
-                  value={language}
-                  onChange={(e) => setLanguage(e.target.value)}
-                  placeholder={t("transcribe.languagePlaceholder")}
-                  className="w-full"
-                />
-              </Field>
-              <label className="flex items-center gap-2 text-sm text-text-primary">
-                <input
-                  type="checkbox"
-                  checked={translate}
-                  onChange={(e) => setTranslate(e.target.checked)}
-                  className="accent-accent"
-                />
-                {t("transcribe.translate")}
-              </label>
-              <label className="flex items-center gap-2 text-sm text-text-primary">
-                <input
-                  type="checkbox"
-                  checked={vad}
-                  onChange={(e) => setVad(e.target.checked)}
-                  className="accent-accent"
-                />
-                {t("transcribe.vad")}
-              </label>
-              <Field label={t("transcribe.beamSize")}>
-                <Input
-                  type="number"
-                  min={1}
-                  max={10}
-                  value={beamSize}
-                  onChange={(e) => setBeamSize(Number(e.target.value))}
-                  className="w-full"
-                />
-              </Field>
-              <label className="flex items-center gap-2 text-sm text-text-primary">
-                <input
-                  type="checkbox"
-                  checked={timestamps}
-                  onChange={(e) => setTimestamps(e.target.checked)}
-                  className="accent-accent"
-                />
-                {t("transcribe.timestamps")}
-              </label>
-              <label className="flex items-center gap-2 text-sm text-text-primary">
-                <input
-                  type="checkbox"
-                  checked={segmentCoding}
-                  onChange={(e) => setSegmentCoding(e.target.checked)}
-                  className="accent-accent"
-                />
-                {t("transcribe.segmentCoding")}
-              </label>
-              {segmentCoding && (
-                <Select
-                  value={segmentCid}
-                  onChange={(e) => setSegmentCid(e.target.value)}
-                  aria-label={t("transcribe.segmentCode")}
-                  className="w-full"
-                >
-                  <option value="">{t("coder.pickCode")}</option>
-                  {codeOptions.map((c) => (
-                    <option key={c.id} value={c.id}>
-                      {c.name}
-                    </option>
-                  ))}
-                </Select>
-              )}
-            </>
+          <Field label={t("transcribe.language")}>
+            <Input
+              type="text"
+              value={language}
+              onChange={(e) => setLanguage(e.target.value)}
+              placeholder={t("transcribe.languagePlaceholder")}
+              className="w-full"
+            />
+          </Field>
+          <label className="flex items-center gap-2 text-sm text-text-primary">
+            <input
+              type="checkbox"
+              checked={translate}
+              onChange={(e) => setTranslate(e.target.checked)}
+              className="accent-accent"
+            />
+            {t("transcribe.translate")}
+          </label>
+          <label className="flex items-center gap-2 text-sm text-text-primary">
+            <input
+              type="checkbox"
+              checked={vad}
+              onChange={(e) => setVad(e.target.checked)}
+              className="accent-accent"
+            />
+            {t("transcribe.vad")}
+          </label>
+          <Field label={t("transcribe.beamSize")}>
+            <Input
+              type="number"
+              min={1}
+              max={10}
+              value={beamSize}
+              onChange={(e) => setBeamSize(Number(e.target.value))}
+              className="w-full"
+            />
+          </Field>
+          <label className="flex items-center gap-2 text-sm text-text-primary">
+            <input
+              type="checkbox"
+              checked={timestamps}
+              onChange={(e) => setTimestamps(e.target.checked)}
+              className="accent-accent"
+            />
+            {t("transcribe.timestamps")}
+          </label>
+          <label className="flex items-center gap-2 text-sm text-text-primary">
+            <input
+              type="checkbox"
+              checked={segmentCoding}
+              onChange={(e) => setSegmentCoding(e.target.checked)}
+              className="accent-accent"
+            />
+            {t("transcribe.segmentCoding")}
+          </label>
+          {segmentCoding && (
+            <Select
+              value={segmentCid}
+              onChange={(e) => setSegmentCid(e.target.value)}
+              aria-label={t("transcribe.segmentCode")}
+              className="w-full"
+            >
+              <option value="">{t("coder.pickCode")}</option>
+              {codeOptions.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.name}
+                </option>
+              ))}
+            </Select>
           )}
 
           {error && (

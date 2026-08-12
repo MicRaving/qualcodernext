@@ -110,6 +110,12 @@ export function TextCoder({
   forceText = false,
   onExitPlainText,
   bare = false,
+  codings: codingsProp,
+  annotations: annotationsProp,
+  codes: codesProp,
+  onCodingsChange,
+  onAnnotationsChange,
+  onCodesChange,
 }: {
   sourceId: number;
   /** Render the plain text even for PDF sources (PDF "plain text" mode). */
@@ -118,6 +124,14 @@ export function TextCoder({
   onExitPlainText?: () => void;
   /** Omit the view header — renders only the document surface (split view). */
   bare?: boolean;
+  /** Controlled mode: the parent owns the codings/annotations/codes state and
+   *  is notified of every change, so all panes render from the same arrays. */
+  codings?: Coding[];
+  annotations?: Annotation[];
+  codes?: CodeTreeItem[];
+  onCodingsChange?: (codings: Coding[]) => void;
+  onAnnotationsChange?: (annotations: Annotation[]) => void;
+  onCodesChange?: (codes: CodeTreeItem[]) => void;
 }) {
   const { t } = useI18n();
   const storeCodeTree = useProjectStore((s) => s.codeTree);
@@ -125,9 +139,22 @@ export function TextCoder({
   const hiddenCodes = useProjectStore((s) => s.hiddenCodes);
 
   const [source, setSource] = useState<Source | null>(null);
-  const [codings, setCodings] = useState<Coding[]>([]);
-  const [annotations, setAnnotations] = useState<Annotation[]>([]);
-  const [codes, setCodes] = useState<CodeTreeItem[]>([]);
+  const [localCodings, setLocalCodings] = useState<Coding[]>([]);
+  const [localAnnotations, setLocalAnnotations] = useState<Annotation[]>([]);
+  const [localCodes, setLocalCodes] = useState<CodeTreeItem[]>([]);
+  const controlled = onCodingsChange !== undefined;
+  const codings = useMemo(
+    () => (controlled ? (codingsProp ?? []) : localCodings),
+    [controlled, codingsProp, localCodings],
+  );
+  const annotations = useMemo(
+    () => (controlled ? (annotationsProp ?? []) : localAnnotations),
+    [controlled, annotationsProp, localAnnotations],
+  );
+  const codes = useMemo(
+    () => (controlled ? (codesProp ?? []) : localCodes),
+    [controlled, codesProp, localCodes],
+  );
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [reloadTick, setReloadTick] = useState(0);
@@ -207,8 +234,6 @@ export function TextCoder({
     setLoading(true);
     setLoadError(null);
     setSource(null);
-    setCodings([]);
-    setAnnotations([]);
     setEditMode(false);
     setEditText("");
     setDraftPositions(null);
@@ -222,19 +247,27 @@ export function TextCoder({
     setEditingAnnMemo(null);
     setUndoStack([]);
     setAutoOpen(false);
+    if (!controlled) {
+      setLocalCodings([]);
+      setLocalAnnotations([]);
+      setLocalCodes([]);
+    }
     void (async () => {
       try {
-        const [src, cod, anns, flat] = await Promise.all([
-          api.getSource(sourceId),
-          api.sourceCoding(sourceId),
-          api.fileAnnotations(sourceId),
-          api.codesFlat(),
-        ]);
+        const src = await api.getSource(sourceId);
         if (cancelled) return;
         setSource(src);
-        setCodings(cod);
-        setAnnotations(anns);
-        setCodes(flat);
+        if (!controlled) {
+          const [cod, anns, flat] = await Promise.all([
+            api.sourceCoding(sourceId),
+            api.fileAnnotations(sourceId),
+            api.codesFlat(),
+          ]);
+          if (cancelled) return;
+          setLocalCodings(cod);
+          setLocalAnnotations(anns);
+          setLocalCodes(flat);
+        }
       } catch (e) {
         if (!cancelled) setLoadError(e instanceof Error ? e.message : t("coder.loadError"));
       } finally {
@@ -244,23 +277,29 @@ export function TextCoder({
     return () => {
       cancelled = true;
     };
-  }, [sourceId, reloadTick, t]);
+  }, [sourceId, reloadTick, t, controlled]);
 
   const refreshCodings = useCallback(async () => {
-    setCodings(await api.sourceCoding(sourceId));
-  }, [sourceId]);
+    const next = await api.sourceCoding(sourceId);
+    if (controlled) onCodingsChange?.(next);
+    else setLocalCodings(next);
+  }, [sourceId, controlled, onCodingsChange]);
 
   const refreshAnnotations = useCallback(async () => {
-    setAnnotations(await api.fileAnnotations(sourceId));
-  }, [sourceId]);
+    const next = await api.fileAnnotations(sourceId);
+    if (controlled) onAnnotationsChange?.(next);
+    else setLocalAnnotations(next);
+  }, [sourceId, controlled, onAnnotationsChange]);
 
   const refreshSource = useCallback(async () => {
     setSource(await api.getSource(sourceId));
   }, [sourceId]);
 
   const refreshCodes = useCallback(async () => {
-    setCodes(await api.codesFlat());
-  }, []);
+    const next = await api.codesFlat();
+    if (controlled) onCodesChange?.(next);
+    else setLocalCodes(next);
+  }, [controlled, onCodesChange]);
 
   /* ------------------------------------------------------------- bookmark */
 

@@ -1,6 +1,6 @@
 [package]
 name = "qcnext"
-version = "0.1.0"
+version = "0.2.0"
 description = "QCnext desktop shell (Tauri 2)"
 authors = ["QCnext"]
 edition = "2021"

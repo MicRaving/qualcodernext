@@ -59,6 +59,19 @@ class FakeClient:
         return FakeResponse({"error": {"message": "no route matched"}})
 
 
+class FakeGetClient(FakeClient):
+    """FakeClient variant that answers GET requests (the /models listings)."""
+
+    async def get(self, url: str, **kwargs):
+        self.calls.append({"url": url, "headers": kwargs.get("headers", {})})
+        for suffix, payload in self.routes.items():
+            if url.endswith(suffix):
+                if isinstance(payload, Exception):
+                    raise payload
+                return payload if isinstance(payload, FakeResponse) else FakeResponse(payload)
+        return FakeResponse({"error": {"message": "no route matched"}})
+
+
 def patch_client(monkeypatch, routes: dict[str, object]) -> FakeClient:
     fake = FakeClient(routes)
     monkeypatch.setattr(ai_service_module, "AsyncClient", lambda **kw: fake)
@@ -201,6 +214,173 @@ async def test_settings_persist_to_disk(project_client, tmp_path, monkeypatch):
         "api_key": "",
         "mcp_permissions": "read",
     }
+
+
+async def test_save_settings_empty_api_key_keeps_stored_key(
+    project_client, tmp_path, monkeypatch
+):
+    """A blank api_key in the save request must not wipe the stored key —
+    the settings UI never reads the key back, so blank means "unchanged"."""
+    client, _ = project_client
+    settings_file = tmp_path / "settings.json"
+    monkeypatch.setattr(user_settings, "SETTINGS_FILE", settings_file)
+
+    res = await client.put(
+        "/api/v1/ai/settings",
+        json={
+            "enabled": True,
+            "api_base": "http://localhost:9999/v1",
+            "model": "m",
+            "api_key": "topsecret",
+        },
+    )
+    assert res.status_code == 200, res.text
+    assert res.json()["api_key"] == "topsecret"
+
+    res = await client.put(
+        "/api/v1/ai/settings",
+        json={
+            "enabled": True,
+            "api_base": "http://localhost:9999/v1",
+            "model": "m2",
+            "api_key": "",
+        },
+    )
+    body = res.json()
+    assert body["model"] == "m2"
+    assert body["api_key"] == "topsecret"
+    data = json.loads(settings_file.read_text(encoding="utf-8"))
+    assert data["ai"]["api_key"] == "topsecret"
+
+    # A real key still replaces the stored one.
+    res = await client.put(
+        "/api/v1/ai/settings",
+        json={
+            "enabled": True,
+            "api_base": "http://localhost:9999/v1",
+            "model": "m",
+            "api_key": "newkey",
+        },
+    )
+    assert res.json()["api_key"] == "newkey"
+
+
+def test_save_ai_settings_blank_key_preserves_stored(monkeypatch, tmp_path):
+    """Service-level: save_ai_settings keeps the stored key on a blank one."""
+    monkeypatch.setattr(user_settings, "SETTINGS_FILE", tmp_path / "settings.json")
+    settings = {
+        "ai": {
+            "enabled": True,
+            "provider": "custom",
+            "api_base": "http://localhost:9999/v1",
+            "model": "m",
+            "api_key": "keepme",
+            "mcp_permissions": "read",
+        }
+    }
+    out = user_settings.save_ai_settings(
+        {
+            "enabled": True,
+            "provider": "custom",
+            "api_base": "http://localhost:9999/v1",
+            "model": "m2",
+            "api_key": "",
+        },
+        settings,
+    )
+    assert out["api_key"] == "keepme"
+
+
+# ----------------------------------------------------------------------
+# Model listings & provider probes
+# ----------------------------------------------------------------------
+
+async def configure_gemini(client, monkeypatch, tmp_path, api_key="secret") -> None:
+    settings_file = tmp_path / "settings.json"
+    monkeypatch.setattr(user_settings, "SETTINGS_FILE", settings_file)
+    res = await client.put(
+        "/api/v1/ai/settings",
+        json={
+            "enabled": True,
+            "provider": "gemini",
+            "api_base": "https://generativelanguage.googleapis.com/v1beta/openai",
+            "model": "gemini-2.5-flash",
+            "api_key": api_key,
+        },
+    )
+    assert res.status_code == 200, res.text
+
+
+async def test_gemini_models_bearer_and_filtering(project_client, tmp_path, monkeypatch):
+    """Gemini's openai-compat /models answers with the Bearer header; the
+    list is filtered to chat models of the current provider only."""
+    client, _ = project_client
+    await configure_gemini(client, monkeypatch, tmp_path)
+    fake = FakeGetClient(
+        {
+            "/v1beta/openai/models": {
+                "data": [
+                    {"id": "gemini-2.5-flash"},
+                    {"id": "gemini-3.6-flash"},
+                    {"id": "gemini-embedding-001"},
+                    {"id": "gemini-2.5-flash-video"},
+                    {"id": "gpt-5.6"},
+                ]
+            }
+        }
+    )
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: fake)
+    res = await client.get("/api/v1/ai/models?provider=gemini")
+    assert res.status_code == 200, res.text
+    assert res.json() == {"models": ["gemini-2.5-flash", "gemini-3.6-flash"]}
+    assert len(fake.calls) == 1
+    assert fake.calls[0]["url"].endswith("/v1beta/openai/models")
+    assert fake.calls[0]["headers"] == {"Authorization": "Bearer secret"}
+
+
+async def test_gemini_models_key_query_fallback(project_client, tmp_path, monkeypatch):
+    """When Gemini's /models rejects the Bearer call, the ``?key=`` query-param
+    variant (no auth header) is tried and its models are returned."""
+    client, _ = project_client
+    await configure_gemini(client, monkeypatch, tmp_path, api_key="sec ret")
+    fake = FakeGetClient(
+        {
+            "/models": httpx.ConnectError("refused"),
+            "/models?key=sec%20ret": {"data": [{"id": "gemini-2.5-flash"}]},
+        }
+    )
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: fake)
+    res = await client.get("/api/v1/ai/models?provider=gemini")
+    assert res.status_code == 200, res.text
+    assert res.json() == {"models": ["gemini-2.5-flash"]}
+    # call[0] is the failed Bearer attempt; call[1] the successful ?key= one.
+    assert fake.calls[0]["headers"] == {"Authorization": "Bearer sec ret"}
+    assert fake.calls[1]["url"].endswith("/models?key=sec%20ret")
+    assert fake.calls[1]["headers"] == {}
+
+
+async def test_status_probe_gemini_hits_models_endpoint(
+    project_client, tmp_path, monkeypatch
+):
+    """The Gemini status probe exercises the real openai-compat /models
+    endpoint (never a bare DNS touch), so it also validates the key."""
+    client, _ = project_client
+    await configure_gemini(client, monkeypatch, tmp_path)
+    fake = FakeGetClient({"/v1beta/openai/models": {"data": [{"id": "gemini-2.5-flash"}]}})
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: fake)
+    res = await client.get("/api/v1/ai/status?probe=1")
+    assert res.json()["reachable"] is True
+    assert fake.calls[0]["url"].endswith("/v1beta/openai/models")
+
+    failing = FakeGetClient(
+        {
+            "/models": httpx.ConnectError("refused"),
+            "/models?key=secret": httpx.ConnectError("refused"),
+        }
+    )
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: failing)
+    res = await client.get("/api/v1/ai/status?probe=1")
+    assert res.json()["reachable"] is False
 
 
 # ----------------------------------------------------------------------

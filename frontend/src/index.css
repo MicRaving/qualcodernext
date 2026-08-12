@@ -191,34 +191,89 @@ select {
   animation: none !important;
 }
 
-/* High contrast: stronger borders, higher-contrast secondary text. */
-.a11y-high-contrast {
-  --qc-border: #000000;
-  --qc-text-secondary: #000000;
+/* High contrast: pure black/white in both themes. Every design-token
+   variable is overridden so all utility-derived colors go monochrome;
+   inline code-palette fills are neutralised on .qc-seg. */
+html.a11y-high-contrast {
+  --qc-bg: #ffffff;
   --qc-surface: #ffffff;
-  --qc-surface-higher: #e8e8e8;
+  --qc-surface-higher: #ffffff;
+  --qc-border: #000000;
+  --qc-text-primary: #000000;
+  --qc-text-secondary: #000000;
+  --qc-accent: #000000;
+  --qc-accent-hover: #000000;
+  --qc-danger: #000000;
+  --qc-success: #000000;
+  --qc-warning: #000000;
+  --qc-info: #000000;
 }
-.a11y-high-contrast.dark {
-  --qc-border: #ffffff;
-  --qc-text-secondary: #ffffff;
+html.a11y-high-contrast.dark {
+  --qc-bg: #000000;
   --qc-surface: #000000;
-  --qc-surface-higher: #1c1c24;
+  --qc-surface-higher: #000000;
+  --qc-border: #ffffff;
+  --qc-text-primary: #ffffff;
+  --qc-text-secondary: #ffffff;
+  --qc-accent: #ffffff;
+  --qc-accent-hover: #ffffff;
+  --qc-danger: #ffffff;
+  --qc-success: #ffffff;
+  --qc-warning: #ffffff;
+  --qc-info: #ffffff;
 }
-.a11y-high-contrast header,
-.a11y-high-contrast aside,
-.a11y-high-contrast footer,
-.a11y-high-contrast tr,
-.a11y-high-contrast .border-b,
-.a11y-high-contrast .border-t {
+html.a11y-high-contrast header,
+html.a11y-high-contrast aside,
+html.a11y-high-contrast footer,
+html.a11y-high-contrast tr,
+html.a11y-high-contrast .border,
+html.a11y-high-contrast .border-b,
+html.a11y-high-contrast .border-t,
+html.a11y-high-contrast .border-l,
+html.a11y-high-contrast .border-r {
   border-color: var(--qc-border) !important;
 }
-
-/* Large text: bump the base font size and relax line height. */
-.a11y-large-text {
-  font-size: 14px;
+html.a11y-high-contrast *,
+html.a11y-high-contrast *::before,
+html.a11y-high-contrast *::after {
+  box-shadow: none !important;
 }
-.a11y-large-text body,
-.a11y-large-text main {
+html.a11y-high-contrast :focus-visible {
+  outline: 3px solid var(--qc-accent);
+  outline-offset: 2px;
+}
+html.a11y-high-contrast .qc-seg {
+  background-color: transparent !important;
+  border-color: var(--qc-text-primary) !important;
+  outline: 1px solid var(--qc-text-primary);
+  outline-offset: 1px;
+  font-weight: 600;
+  text-decoration: underline;
+  text-decoration-thickness: 2px;
+  text-underline-offset: 2px;
+}
+html.a11y-high-contrast .qc-seg span {
+  background-color: transparent !important;
+}
+html.a11y-high-contrast .qc-seg.qc-seg-hidden {
+  opacity: 0.5 !important;
+  border-style: dashed !important;
+}
+html.a11y-high-contrast [role="switch"] {
+  outline: 1px solid var(--qc-text-primary);
+  outline-offset: 1px;
+}
+html.a11y-high-contrast [role="switch"] [class*="bg-white"] {
+  background-color: var(--qc-bg) !important;
+}
+
+/* Large text: scale the whole UI (zoom is multiplicative and covers the
+   fixed-px Tailwind utilities) and relax line height. */
+html.a11y-large-text {
+  zoom: 1.2;
+}
+html.a11y-large-text body,
+html.a11y-large-text main {
   line-height: 1.6;
 }
 

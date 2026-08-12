@@ -175,10 +175,19 @@ def get_ai_settings(settings: dict | None = None) -> dict:
 
 
 def save_ai_settings(ai: dict, settings: dict | None = None) -> dict:
-    """Validate and store the AI settings dict, then persist and return it."""
+    """Validate and store the AI settings dict, then persist and return it.
+
+    An empty ``api_key`` in the request does NOT overwrite a stored key —
+    the settings pane never knows the saved key (it is not returned by the
+    status endpoint), so a blank value means "leave it unchanged". The
+    returned dict always carries the effective key.
+    """
     settings = settings or load_settings()
     if not isinstance(ai, dict):
         raise ValueError("AI settings must be a dict")
+    stored_ai = settings.get("ai")
+    if not isinstance(stored_ai, dict):
+        stored_ai = {}
     provider = str(ai.get("provider") or AI_DEFAULTS["provider"])
     preset = AI_PROVIDER_DEFAULTS.get(provider)
     if preset is None:
@@ -194,12 +203,16 @@ def save_ai_settings(ai: dict, settings: dict | None = None) -> dict:
     model = str(ai.get("model") or "").strip()
     if not model and preset.get("model"):
         model = preset["model"]
+    api_key = str(ai.get("api_key") or "").strip()
+    if not api_key:
+        # Blank key = keep the stored one (the UI cannot read it back).
+        api_key = str(stored_ai.get("api_key") or "").strip()
     clean = {
         "enabled": bool(ai.get("enabled", False)),
         "provider": provider,
         "api_base": api_base or AI_DEFAULTS["api_base"],
         "model": model or AI_DEFAULTS["model"],
-        "api_key": str(ai.get("api_key") or ""),
+        "api_key": api_key,
         "mcp_permissions": (
             str(ai.get("mcp_permissions") or "read")
             if str(ai.get("mcp_permissions") or "read") in ("read", "write", "full")
@@ -234,6 +247,10 @@ def get_transcription_settings(settings: dict | None = None) -> dict:
         tr = {}
     merged = dict(TRANSCRIPTION_DEFAULTS)
     merged.update({k: v for k, v in tr.items() if k in TRANSCRIPTION_DEFAULTS})
+    # Whisper is the only engine now; tolerate a legacy engine value stored
+    # in old settings files by falling back to whisper on read.
+    if merged.get("engine") != "whisper":
+        merged["engine"] = "whisper"
     return merged
 
 
@@ -244,6 +261,8 @@ def save_transcription_settings(tr: dict, settings: dict | None = None) -> dict:
         raise ValueError("transcription settings must be a dict")
     clean = dict(TRANSCRIPTION_DEFAULTS)
     clean.update({k: v for k, v in tr.items() if k in TRANSCRIPTION_DEFAULTS})
+    if clean.get("engine") != "whisper":
+        clean["engine"] = "whisper"
     settings["transcription"] = clean
     save_settings(settings)
     return dict(clean)

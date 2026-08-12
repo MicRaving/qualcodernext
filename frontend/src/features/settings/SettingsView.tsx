@@ -39,6 +39,47 @@ import { useUpdatesStore } from "@/stores/updates";
 import type { UpdatesSettings } from "@/lib/api";
 import { Download } from "lucide-react";
 
+/**
+ * Module-level draft of the AI settings pane. SettingsView unmounts whenever
+ * the right pane switches, so plain local state would lose a typed API key
+ * (and remount auto-save would wipe the stored one). The draft survives the
+ * pane lifetime and is re-used on reopen; it dies with the app session.
+ */
+interface AiDraft {
+  enabled: boolean;
+  provider: string;
+  apiBase: string;
+  model: string;
+  apiKey: string;
+  mcpPermissions: string;
+}
+
+let aiDraftCache: AiDraft | null = null;
+
+const LOCAL_PROVIDERS = ["ollama", "lmstudio"] as const;
+const PROVIDER_ORDER = ["ollama", "lmstudio", "opencode-go", "gemini", "gpt", "claude", "custom"];
+const PROVIDER_LABEL_KEYS: Record<string, string> = {
+  ollama: "settings.aiProviderOllama",
+  lmstudio: "settings.aiProviderLmStudio",
+  "opencode-go": "settings.aiProviderOpencodeGo",
+  gemini: "settings.aiProviderGemini",
+  gpt: "settings.aiProviderGpt",
+  claude: "settings.aiProviderClaude",
+  custom: "settings.aiProviderCustom",
+};
+
+const PROVIDER_PRESETS: Record<string, { url: string; model: string }> = {
+  ollama: { url: "http://localhost:11434/v1", model: "llama3.2" },
+  lmstudio: { url: "http://127.0.0.1:1234/v1", model: "" },
+  "opencode-go": { url: "https://opencode.ai/zen/go/v1", model: "deepseek-v4-flash" },
+  gemini: {
+    url: "https://generativelanguage.googleapis.com/v1beta/openai",
+    model: "gemini-3.6-flash",
+  },
+  gpt: { url: "https://api.openai.com/v1", model: "gpt-5.6" },
+  claude: { url: "https://api.anthropic.com/v1", model: "claude-sonnet-4-6" },
+};
+
 export function SettingsView() {
   const { t, locale, setLocale } = useI18n();
   const themeMode = useProjectStore((s) => s.themeMode);
@@ -91,20 +132,30 @@ export function SettingsView() {
     }
   }
 
-  const [enabled, setEnabled] = useState(false);
-  const [provider, setProvider] = useState("ollama");
-  const [apiBase, setApiBase] = useState("");
-  const [model, setModel] = useState("");
-  const [apiKey, setApiKey] = useState("");
-  const [mcpPermissions, setMcpPermissions] = useState("read");
+  const [enabled, setEnabled] = useState(() => aiDraftCache?.enabled ?? false);
+  const [provider, setProvider] = useState(() => aiDraftCache?.provider ?? "ollama");
+  const [apiBase, setApiBase] = useState(() => aiDraftCache?.apiBase ?? "");
+  const [model, setModel] = useState(() => aiDraftCache?.model ?? "");
+  const [apiKey, setApiKey] = useState(() => aiDraftCache?.apiKey ?? "");
+  const [mcpPermissions, setMcpPermissions] = useState(
+    () => aiDraftCache?.mcpPermissions ?? "read",
+  );
   const [models, setModels] = useState<string[]>([]);
   const [modelsLoading, setModelsLoading] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
+
+  // Local-provider reachability (ollama/lmstudio) — probed on pane open and
+  // on provider picks; state lives here only, so reopening re-probes.
+  const [localReach, setLocalReach] = useState<Record<string, boolean>>({});
 
   /** Service-status check button: "checking" → "ok"/"broken" for 3s. */
   const [serviceCheck, setServiceCheck] = useState<"idle" | "checking" | "ok" | "broken">("idle");
   const [serviceProbeError, setServiceProbeError] = useState<string | null>(null);
   const serviceCheckTimer = useRef<number | null>(null);
+
+  /** Sequence guard for model fetches — a stale response (previous provider)
+   *  must never overwrite the current provider's list. */
+  const modelsReqId = useRef(0);
 
   // Semantic index
   const [indexStatus, setIndexStatus] = useState<AiIndexStatus | null>(null);
@@ -121,18 +172,6 @@ export function SettingsView() {
   // Help popovers (anchored for the shared HelpFlyout)
   const [helpOpen, setHelpOpen] = useState<"interchange" | "index" | null>(null);
   const [indexHintAnchorEl, setIndexHintAnchorEl] = useState<HTMLElement | null>(null);
-
-  const PROVIDER_PRESETS: Record<string, { url: string; model: string }> = {
-    ollama: { url: "http://localhost:11434/v1", model: "llama3.2" },
-    lmstudio: { url: "http://127.0.0.1:1234/v1", model: "" },
-    "opencode-go": { url: "https://opencode.ai/zen/go/v1", model: "deepseek-v4-flash" },
-    gemini: {
-      url: "https://generativelanguage.googleapis.com/v1beta/openai",
-      model: "gemini-3.6-flash",
-    },
-    gpt: { url: "https://api.openai.com/v1", model: "gpt-5.6" },
-    claude: { url: "https://api.anthropic.com/v1", model: "claude-sonnet-4-6" },
-  };
 
   // Track whether the user has touched a field: the initial status fetch
   // must NOT overwrite an edit made while it was still in flight.
@@ -156,16 +195,38 @@ export function SettingsView() {
   }, []);
 
   const loadModels = useCallback(async () => {
+    const reqId = ++modelsReqId.current;
+    const opts = { provider, api_base: apiBase, api_key: apiKey };
     setModelsLoading(true);
     try {
-      const res = await api.aiModels({ provider, api_base: apiBase, api_key: apiKey });
+      const res = await api.aiModels(opts);
+      if (reqId !== modelsReqId.current) return; // superseded by a newer fetch
       setModels(res.models);
     } catch {
+      if (reqId !== modelsReqId.current) return;
       setModels([]);
     } finally {
-      setModelsLoading(false);
+      if (reqId === modelsReqId.current) setModelsLoading(false);
     }
   }, [provider, apiBase, apiKey]);
+
+  /** Quick reachability probe for the local providers (≤1.2s per provider)
+   *  so their dropdown entries can be greyed out while the server is down. */
+  const probeLocalProviders = useCallback(async () => {
+    const results: Record<string, boolean> = {};
+    await Promise.all(
+      LOCAL_PROVIDERS.map(async (name) => {
+        const url = `${PROVIDER_PRESETS[name].url}/models`;
+        try {
+          const resp = await fetch(url, { signal: AbortSignal.timeout(1200) });
+          results[name] = resp.ok;
+        } catch {
+          results[name] = false;
+        }
+      }),
+    );
+    setLocalReach(results);
+  }, []);
 
   const loadIndex = useCallback(async () => {
     try {
@@ -188,10 +249,20 @@ export function SettingsView() {
 
 
   useEffect(() => {
+    // A restored draft (pane reopen) wins over the status fetch — the draft
+    // already holds the values the user last saw and edited.
+    if (aiDraftCache) touchedRef.current = true;
     void loadStatus();
     void loadIndex();
     void loadPseudonyms();
-  }, [loadStatus, loadIndex, loadPseudonyms]);
+    void probeLocalProviders();
+  }, [loadStatus, loadIndex, loadPseudonyms, probeLocalProviders]);
+
+  // Keep the module-level draft in sync so a typed API key etc. survives a
+  // pane close/reopen (SettingsView unmounts on right-pane switches).
+  useEffect(() => {
+    aiDraftCache = { enabled, provider, apiBase, model, apiKey, mcpPermissions };
+  }, [enabled, provider, apiBase, model, apiKey, mcpPermissions]);
 
   // Model polling: fetch whenever the provider or base URL changes (with the
   // previous list cleared — no leftover models from other providers), and
@@ -234,10 +305,13 @@ export function SettingsView() {
   );
 
   /** Auto-save the AI settings (debounced) — no Save button, no "Saved"
-   *  flash; only errors surface. */
+   *  flash; only errors surface. Only runs after the user actually edited
+   *  something: a bare mount must never write defaults over stored settings
+   *  (the backend also refuses to overwrite the API key with a blank). */
   const saveTimer = useRef<number | null>(null);
   useEffect(() => {
     if (saveTimer.current !== null) window.clearTimeout(saveTimer.current);
+    if (!touchedRef.current) return;
     saveTimer.current = window.setTimeout(() => {
       setSaveError(null);
       void api
@@ -265,6 +339,9 @@ export function SettingsView() {
       setApiBase(preset.url);
       if (preset.model) setModel(preset.model);
     }
+    // Re-probe the local providers whenever the user picks one — a freshly
+    // started Ollama/LM Studio should light up immediately.
+    void probeLocalProviders();
   }
 
   async function buildIndex() {
@@ -421,14 +498,36 @@ export function SettingsView() {
                   onChange={(e) => handleProviderChange(e.target.value)}
                   className="w-full"
                 >
-                  <option value="ollama">{t("settings.aiProviderOllama")}</option>
-                  <option value="lmstudio">{t("settings.aiProviderLmStudio")}</option>
-                  <option value="opencode-go">{t("settings.aiProviderOpencodeGo")}</option>
-                  <option value="gemini">{t("settings.aiProviderGemini")}</option>
-                  <option value="gpt">{t("settings.aiProviderGpt")}</option>
-                  <option value="claude">{t("settings.aiProviderClaude")}</option>
-                  <option value="custom">{t("settings.aiProviderCustom")}</option>
+                  {PROVIDER_ORDER.map((name) => {
+                    const label = t(PROVIDER_LABEL_KEYS[name]);
+                    const down =
+                      (LOCAL_PROVIDERS as readonly string[]).includes(name) &&
+                      localReach[name] === false;
+                    return (
+                      <option
+                        key={name}
+                        value={name}
+                        disabled={down}
+                        title={
+                          down
+                            ? t("settings.aiProviderUnreachableHint", { name: label })
+                            : undefined
+                        }
+                      >
+                        {label}
+                        {down ? ` (${t("settings.aiProviderUnreachable")})` : ""}
+                      </option>
+                    );
+                  })}
                 </Select>
+                {(LOCAL_PROVIDERS as readonly string[]).includes(provider) &&
+                  localReach[provider] === false && (
+                    <span className="mt-1 block text-xs text-warning">
+                      {t("settings.aiProviderUnreachableHint", {
+                        name: t(PROVIDER_LABEL_KEYS[provider]),
+                      })}
+                    </span>
+                  )}
               </Field>
               <Field label={t("settings.model")}>
                 <Select
@@ -483,7 +582,10 @@ export function SettingsView() {
                 <Input
                   type="password"
                   value={apiKey}
-                  onChange={(e) => setApiKey(e.target.value)}
+                  onChange={(e) => {
+                    markTouched();
+                    setApiKey(e.target.value);
+                  }}
                   placeholder={t("settings.optional")}
                   className="w-full"
                 />

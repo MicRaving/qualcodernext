@@ -651,7 +651,7 @@ export interface TranscribeSettings {
 }
 
 export interface TranscribeStatus {
-  engines: { whisper: boolean; noscribe: boolean };
+  engines: { whisper: boolean };
   models_cached: string[];
   model_dir: string;
   models: string[];
@@ -970,6 +970,14 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ target_catid: targetCatid }),
     }),
+  promoteCode: (cid: number) =>
+    request<Code>(`/codes/${cid}/promote`, { method: "POST" }),
+  demoteCode: (cid: number) =>
+    request<Code>(`/codes/${cid}/demote`, { method: "POST" }),
+  promoteCategory: (catid: number) =>
+    request<Category>(`/codes/categories/${catid}/promote`, { method: "POST" }),
+  demoteCategory: (catid: number) =>
+    request<Category>(`/codes/categories/${catid}/demote`, { method: "POST" }),
 
   sourceDetails: (id: number) => request<SourceDetails>(`/sources/${id}/details`),
 

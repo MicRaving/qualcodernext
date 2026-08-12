@@ -615,6 +615,122 @@ class CodeRepository:
         ).first()
         return Code.model_validate(row._mapping) if row else None
 
+    async def get_category(self, catid: int) -> Category | None:
+        row = (
+            await self.session.execute(
+                select(tables.code_cat).where(tables.code_cat.c.catid == catid)
+            )
+        ).first()
+        return Category.model_validate(row._mapping) if row else None
+
+    async def set_code_catid(self, cid: int, catid: int | None) -> Code | None:
+        """Move a code between categories (or to the root with ``None``)."""
+        await self.session.execute(
+            update(tables.code_name).where(tables.code_name.c.cid == cid).values(catid=catid)
+        )
+        await self.session.commit()
+        code = await self.get_code(cid)
+        from qualcoder_api.services import sync
+
+        if code is not None:
+            row = (
+                await self.session.execute(
+                    select(tables.code_name).where(tables.code_name.c.cid == cid)
+                )
+            ).first()
+            await sync.capture_update(
+                self.session, entity="code_name", pk_name="cid", pk_value=cid,
+                row=sync.table_row(row._mapping) if row else None,
+            )
+            await self.session.commit()
+        return code
+
+    async def move_category(self, catid: int, supercatid: int | None) -> Category | None:
+        """Reparent a category under ``supercatid`` (promote/demote).
+
+        Raises ``ValueError`` when the move would create a cycle (a
+        category cannot be its own ancestor).
+        """
+        if supercatid is not None:
+            if supercatid == catid:
+                raise ValueError("a category cannot be its own parent")
+            # Walk up the parent chain from supercatid; if we reach catid, cycle.
+            seen: set[int] = set()
+            current: int | None = supercatid
+            while current is not None and current not in seen:
+                if current == catid:
+                    raise ValueError("cannot nest a category under its own sub-category")
+                seen.add(current)
+                parent_row = (
+                    await self.session.execute(
+                        select(tables.code_cat.c.supercatid).where(
+                            tables.code_cat.c.catid == current
+                        )
+                    )
+                ).first()
+                current = int(parent_row[0]) if parent_row is not None and parent_row[0] is not None else None
+        await self.session.execute(
+            update(tables.code_cat).where(tables.code_cat.c.catid == catid).values(supercatid=supercatid)
+        )
+        await self.session.commit()
+        category = await self.get_category(catid)
+        from qualcoder_api.services import sync
+
+        if category is not None:
+            row = (
+                await self.session.execute(
+                    select(tables.code_cat).where(tables.code_cat.c.catid == catid)
+                )
+            ).first()
+            await sync.capture_update(
+                self.session, entity="code_cat", pk_name="catid", pk_value=catid,
+                row=sync.table_row(row._mapping) if row else None,
+            )
+            await self.session.commit()
+        return category
+
+    async def previous_sibling_code(
+        self, cid: int, *, catid: int | None, supercid: int | None
+    ) -> int | None:
+        """The code immediately before ``cid`` at the same level (demote target).
+
+        Siblings share the same category and the same parent code (either
+        can be NULL — matched NULL-safely); the previous sibling is the one
+        with the largest cid below ``cid``.
+        """
+        stmt = (
+            select(tables.code_name.c.cid)
+            .where(
+                tables.code_name.c.cid < cid,
+                tables.code_name.c.catid.is_(catid)
+                if catid is None
+                else tables.code_name.c.catid == catid,
+                tables.code_name.c.supercid.is_(supercid)
+                if supercid is None
+                else tables.code_name.c.supercid == supercid,
+            )
+            .order_by(tables.code_name.c.cid.desc())
+            .limit(1)
+        )
+        row = (await self.session.execute(stmt)).first()
+        return int(row[0]) if row is not None else None
+
+    async def previous_sibling_category(self, catid: int, *, supercatid: int | None) -> int | None:
+        """The category immediately before ``catid`` at the same level."""
+        stmt = (
+            select(tables.code_cat.c.catid)
+            .where(
+                tables.code_cat.c.catid < catid,
+                tables.code_cat.c.supercatid.is_(supercatid)
+                if supercatid is None
+                else tables.code_cat.c.supercatid == supercatid,
+            )
+            .order_by(tables.code_cat.c.catid.desc())
+            .limit(1)
+        )
+        row = (await self.session.execute(stmt)).first()
+        return int(row[0]) if row is not None else None
+
     async def delete_code(self, cid: int) -> None:
         """Delete a code and all its codings (legacy order)."""
         from qualcoder_api.services import sync

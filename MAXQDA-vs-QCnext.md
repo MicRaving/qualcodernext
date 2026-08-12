@@ -131,7 +131,7 @@
 |---|---|---|---|
 | Code media directly without transcript | ✓ | ✓ | |
 | Manual transcription mode | ✓ (mode switcher, 26.3; foot pedal support, speed/volume control) | ✗ | QCnext has no manual transcription UI — significant gap |
-| Automatic transcription | ✓ (cloud service, 50+ languages; audio track extracted for video, 26.3) | ✓ (local faster-whisper / noScribe, 13 models, VAD, beam, temperature, translate) | MAXQDA is cloud-based; QCnext runs fully offline |
+| Automatic transcription | ✓ (cloud service, 50+ languages; audio track extracted for video, 26.3) | ✓ (local faster-whisper, 13 models, VAD, beam, temperature, translate) | MAXQDA is cloud-based; QCnext runs fully offline |
 | Transcript ↔ media time links | ✓ | ✓ ([mm:ss] transcript parse, AV codings linked to transcript) | |
 | Live transcript preview during transcription | ✗ | ✓ (streaming partial transcript in UI) | |
 | Per-segment auto-coding of transcript | ~ (AI) | ✓ (optional code applied to transcript segments) | |

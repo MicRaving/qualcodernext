@@ -299,6 +299,63 @@ async def merge_code(cid: int, req: MergeRequest, db: DbDep) -> Code:
     return code
 
 
+@router.post("/{cid}/promote", response_model=Code)
+async def promote_code(cid: int, db: DbDep) -> Code:
+    """Move a code one level UP the hierarchy (Word-list style).
+
+    Sub-codes lose their parent (``supercid`` cleared, staying at category
+    level); category members move into the parent category of their
+    category (or to the root when the category is top-level). Codes that
+    are already at the top level are rejected with 422.
+    """
+    repo = CodeRepository(db)
+    code = await repo.get_code(cid)
+    if code is None:
+        raise HTTPException(status_code=404, detail="code not found")
+    if code.supercid is not None:
+        code = await repo.set_supercid(cid, None)
+    elif code.catid is not None:
+        category = await repo.get_category(code.catid)
+        new_catid = None
+        if category is not None and category.supercatid:
+            new_catid = category.supercatid
+        code = await repo.set_code_catid(cid, new_catid)
+    else:
+        raise HTTPException(status_code=422, detail="code is already at the top level")
+    if code is None:
+        raise HTTPException(status_code=404, detail="code not found")
+    await audit.record(
+        db, user=get_codername(), action="code.promote", entity="code",
+        entity_id=cid, detail=code.model_dump(),
+    )
+    return code
+
+
+@router.post("/{cid}/demote", response_model=Code)
+async def demote_code(cid: int, db: DbDep) -> Code:
+    """Move a code one level DOWN: it becomes a sub-code of the previous
+    sibling at the same level (Word-list style). Without a previous sibling
+    the operation is rejected with 422."""
+    repo = CodeRepository(db)
+    code = await repo.get_code(cid)
+    if code is None:
+        raise HTTPException(status_code=404, detail="code not found")
+    sibling = await repo.previous_sibling_code(
+        cid, catid=code.catid, supercid=code.supercid
+    )
+    if sibling is None:
+        raise HTTPException(status_code=422, detail="no previous sibling to demote under")
+    assert sibling != cid  # the query only ever returns smaller cids
+    code = await repo.set_supercid(cid, sibling)
+    if code is None:
+        raise HTTPException(status_code=404, detail="code not found")
+    await audit.record(
+        db, user=get_codername(), action="code.demote", entity="code",
+        entity_id=cid, detail=code.model_dump(),
+    )
+    return code
+
+
 @router.post("/categories", response_model=Category, status_code=201)
 async def create_category(req: CategoryCreate, db: DbDep) -> Category:
     category = await CodeRepository(db).add_category(
@@ -371,3 +428,59 @@ async def merge_category(catid: int, req: MergeCategoryRequest, db: DbDep) -> No
         db, user=get_codername(), action="category.merge", entity="code_cat",
         entity_id=req.target_catid, detail={"from_catid": catid},
     )
+
+
+@router.post("/categories/{catid}/promote", response_model=Category)
+async def promote_category(catid: int, db: DbDep) -> Category:
+    """Move a category one level UP (Word-list style).
+
+    Subcategories move into the parent category of their parent (root when
+    the parent is top-level); top-level categories are rejected with 422.
+    """
+    repo = CodeRepository(db)
+    category = await repo.get_category(catid)
+    if category is None:
+        raise HTTPException(status_code=404, detail="category not found")
+    if not category.supercatid:
+        raise HTTPException(status_code=422, detail="category is already at the top level")
+    parent = await repo.get_category(category.supercatid)
+    new_supercatid = parent.supercatid if parent is not None else None
+    try:
+        category = await repo.move_category(catid, new_supercatid)
+    except ValueError as err:
+        raise HTTPException(status_code=422, detail=str(err)) from err
+    if category is None:
+        raise HTTPException(status_code=404, detail="category not found")
+    await audit.record(
+        db, user=get_codername(), action="category.promote", entity="code_cat",
+        entity_id=catid, detail=category.model_dump(),
+    )
+    return category
+
+
+@router.post("/categories/{catid}/demote", response_model=Category)
+async def demote_category(catid: int, db: DbDep) -> Category:
+    """Move a category one level DOWN: it becomes a subcategory of the
+    previous sibling at the same level (Word-list style). Without a
+    previous sibling the operation is rejected with 422."""
+    repo = CodeRepository(db)
+    category = await repo.get_category(catid)
+    if category is None:
+        raise HTTPException(status_code=404, detail="category not found")
+    sibling = await repo.previous_sibling_category(
+        catid, supercatid=category.supercatid
+    )
+    if sibling is None:
+        raise HTTPException(status_code=422, detail="no previous sibling to demote under")
+    assert sibling != catid  # the query only ever returns smaller catids
+    try:
+        category = await repo.move_category(catid, sibling)
+    except ValueError as err:
+        raise HTTPException(status_code=422, detail=str(err)) from err
+    if category is None:
+        raise HTTPException(status_code=404, detail="category not found")
+    await audit.record(
+        db, user=get_codername(), action="category.demote", entity="code_cat",
+        entity_id=catid, detail=category.model_dump(),
+    )
+    return category

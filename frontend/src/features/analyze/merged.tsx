@@ -16,11 +16,13 @@ import {
   useMemo,
   useRef,
   useState,
-  type FormEvent,
 } from "react";
-import { CircleAlert, FileImage } from "lucide-react";
+import { CircleAlert, FileImage, LoaderCircle } from "lucide-react";
 import {
   api,
+  ApiError,
+  fetchWithTimeout,
+  initApiBase,
   type ChartMatrix,
   type CodeFrequencyRow,
   type CodeRelation,
@@ -965,47 +967,130 @@ export function CodeRelationsView() {
 
 /* ---------------------------------------------------- 5. Interrater */
 
+interface InterraterPair {
+  coder_a: string;
+  coder_b: string;
+  n_units: number;
+  n_categories: number;
+  n_pairs: number;
+  both: number;
+  only_a: number;
+  only_b: number;
+  neither: number;
+  kappa: number | null;
+  krippendorff: number | null;
+  gwet_ac1: number | null;
+}
+
+interface InterraterSummary {
+  kappa: number | null;
+  krippendorff: number | null;
+  gwet_ac1: number | null;
+}
+
+/** Backend interrater response: the two-coder shape plus the multi-coder
+ *  fields (alpha over all selected coders and the pairwise table). */
+interface InterraterReport extends InterraterResult {
+  coders: string[];
+  n_coders: number;
+  alpha: number | null;
+  pairs: InterraterPair[];
+  pairwise_mean: InterraterSummary | null;
+  pairwise_min: InterraterSummary | null;
+  pairwise_max: InterraterSummary | null;
+}
+
+/** POST the interrater request with an explicit coder selection. The
+ *  report client's `interrater` helper only sends coder_a/coder_b; reuse
+ *  the exported request primitives to send the `coders` list as well. */
+async function postInterrater(body: {
+  coder_a: string;
+  coder_b: string;
+  coders: string[];
+}): Promise<InterraterReport> {
+  const doPost = async (): Promise<InterraterReport> => {
+    const base = await initApiBase();
+    const res = await fetchWithTimeout(`${base}/reports/interrater`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) {
+      let detail: unknown;
+      try {
+        detail = (await res.json()).detail;
+      } catch {
+        /* non-JSON error body */
+      }
+      const suffix = typeof detail === "string" && detail ? `: ${detail}` : "";
+      throw new ApiError(res.status, `API error ${res.status} on /reports/interrater${suffix}`, detail);
+    }
+    return (await res.json()) as InterraterReport;
+  };
+  try {
+    return await doPost();
+  } catch (err) {
+    if (err instanceof ApiError) throw err;
+    // Network-level failure (the packaged backend restarted): retry once
+    // so the base URL is resolved afresh.
+    return doPost();
+  }
+}
+
+const fmtValue = (v: number | null) => (v == null ? "—" : v.toFixed(4));
+
 export function InterraterView() {
   const { t } = useI18n();
   const { data, loading, error, retry } = useReport(api.reports.coderComparison);
   const volume = data?.rows ?? [];
   const coders = useProjectStore((state) => state.coders).map((c) => c.name);
-  const [coderA, setCoderA] = useState("");
-  const [coderB, setCoderB] = useState("");
-  const [metric, setMetric] = useState<"kappa" | "krippendorff" | "gwet_ac1">("kappa");
-  const [result, setResult] = useState<InterraterResult | null>(null);
+  const [selected, setSelected] = useState<string[]>([]);
+  const [result, setResult] = useState<InterraterReport | null>(null);
   const [computing, setComputing] = useState(false);
   const [computeError, setComputeError] = useState<string | null>(null);
+  const initialized = useRef(false);
+  const requestSeq = useRef(0);
 
+  // Default: every project coder is selected.
   useEffect(() => {
-    if (coders.length >= 2 && !coderA && !coderB) {
-      setCoderA(coders[0]);
-      setCoderB(coders[1]);
+    if (!initialized.current && coders.length > 0) {
+      initialized.current = true;
+      setSelected(coders);
     }
-  }, [coders, coderA, coderB]);
+  }, [coders]);
 
-  async function compute(e: FormEvent) {
-    e.preventDefault();
-    if (!coderA || !coderB || coderA === coderB) return;
+  // Recompute whenever the selection settles on two or more coders.
+  useEffect(() => {
+    if (selected.length < 2) {
+      setResult(null);
+      return;
+    }
+    const seq = ++requestSeq.current;
+    let cancelled = false;
     setComputing(true);
     setComputeError(null);
-    try {
-      setResult(await api.reports.interrater(coderA, coderB));
-    } catch (err) {
-      setComputeError(err instanceof Error ? err.message : "Failed to compute");
-    } finally {
-      setComputing(false);
-    }
-  }
+    postInterrater({ coder_a: selected[0], coder_b: selected[1], coders: selected })
+      .then((r) => {
+        if (!cancelled && seq === requestSeq.current) setResult(r);
+      })
+      .catch((err) => {
+        if (!cancelled && seq === requestSeq.current) {
+          setComputeError(err instanceof Error ? err.message : "Failed to compute");
+        }
+      })
+      .finally(() => {
+        if (seq === requestSeq.current) setComputing(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [selected]);
 
-  const value =
-    result == null
-      ? null
-      : metric === "kappa"
-        ? result.kappa
-        : metric === "krippendorff"
-          ? result.krippendorff
-          : result.gwet_ac1;
+  function toggleCoder(name: string) {
+    setSelected((prev) =>
+      prev.includes(name) ? prev.filter((n) => n !== name) : [...prev, name],
+    );
+  }
 
   return (
     <div className="space-y-4">
@@ -1043,92 +1128,145 @@ export function InterraterView() {
         </div>
       ) : null}
 
-      <form onSubmit={(e) => void compute(e)} className="flex flex-wrap items-end gap-2">
-        <label className="block">
-          <span className="mb-1 block text-xs text-text-secondary">Coder A</span>
-          <Select value={coderA} onChange={(e) => setCoderA(e.target.value)} className="w-full">
-            {coders.map((n) => (
-              <option key={n} value={n}>{n}</option>
-            ))}
-          </Select>
-        </label>
-        <label className="block">
-          <span className="mb-1 block text-xs text-text-secondary">Coder B</span>
-          <Select value={coderB} onChange={(e) => setCoderB(e.target.value)} className="w-full">
-            {coders.map((n) => (
-              <option key={n} value={n}>{n}</option>
-            ))}
-          </Select>
-        </label>
-        <label className="block">
-          <span className="mb-1 block text-xs text-text-secondary">Measure</span>
-          <Select
-            value={metric}
-            onChange={(e) => setMetric(e.target.value as typeof metric)}
-            className="w-full"
-          >
-            <option value="kappa">{t("analyze.kappa")}</option>
-            <option value="krippendorff">{t("analyze.krippendorff")}</option>
-            <option value="gwet_ac1">{t("analyze.gwet")}</option>
-          </Select>
-        </label>
-        <Button
-          variant="primary"
-          type="submit"
-          disabled={computing || !coderA || !coderB || coderA === coderB}
-        >
-          {computing ? t("analyze.computing") : t("analyze.compute")}
-        </Button>
-      </form>
-
-      {computeError && (
-        <p className="flex items-center gap-1.5 text-xs text-danger">
-          <CircleAlert size={13} aria-hidden />
-          {computeError}
-        </p>
-      )}
+      <div className="space-y-2">
+        <div className="flex flex-wrap items-center gap-1.5">
+          <span className="text-xs text-text-secondary">{t("analyze.coders")}:</span>
+          {coders.map((n) => (
+            <Button
+              key={n}
+              variant="secondary"
+              onClick={() => toggleCoder(n)}
+              className={cn(
+                "h-6 px-2.5 text-xs",
+                selected.includes(n) && "border-accent bg-accent/10 text-accent",
+              )}
+            >
+              {n}
+            </Button>
+          ))}
+          {computing && (
+            <span className="ml-2 flex items-center gap-1 text-xs text-text-secondary">
+              <LoaderCircle size={12} className="animate-spin" aria-hidden />
+              {t("analyze.computing")}
+            </span>
+          )}
+        </div>
+        {selected.length < 2 && (
+          <p className="flex items-center gap-1.5 text-xs text-danger">
+            <CircleAlert size={13} aria-hidden />
+            {t("analyze.atLeastTwoCoders")}
+          </p>
+        )}
+        {computeError && (
+          <p className="flex items-center gap-1.5 text-xs text-danger">
+            <CircleAlert size={13} aria-hidden />
+            {computeError}
+          </p>
+        )}
+      </div>
 
       {result && (
-        <div className={cardCls}>
-          <table className="w-full border-collapse">
-            <thead className="sticky top-0 z-10">
-              <tr>
-                <th className={thCls}>{t("analyze.measure")}</th>
-                <th className={cn(thCls, "text-right")}>Value</th>
-                <th className={cn(thCls, "text-right")}>{t("analyze.units")}</th>
-                <th className={cn(thCls, "text-right")}>{t("analyze.colCodes")}</th>
-                <th className={cn(thCls, "text-right")}>{t("analyze.pairs")}</th>
-                <th className={cn(thCls, "text-right")}>{t("analyze.both")}</th>
-                <th className={cn(thCls, "text-right")}>{t("analyze.aOnly")}</th>
-                <th className={cn(thCls, "text-right")}>{t("analyze.bOnly")}</th>
-                <th className={cn(thCls, "text-right")}>{t("analyze.neither")}</th>
-              </tr>
-            </thead>
-            <tbody>
-              {(
-                [
-                  [t("analyze.kappa"), result.kappa],
-                  [t("analyze.krippendorff"), result.krippendorff],
-                  [t("analyze.gwet"), result.gwet_ac1],
-                ] as [string, number | null][]
-              ).map(([label, v]) => (
-                <tr key={label} className={v === value ? "bg-accent/10" : "hover:bg-surface-higher"}>
-                  <td className={cn(tdCls, "font-medium")}>{label}</td>
-                  <td className={cn(tdCls, "text-right font-mono")}>{v == null ? "—" : v.toFixed(4)}</td>
-                  <td className={cn(tdCls, "text-right")}>{result.n_units}</td>
-                  <td className={cn(tdCls, "text-right")}>{result.n_categories}</td>
-                  <td className={cn(tdCls, "text-right")}>{result.n_pairs}</td>
-                  <td className={cn(tdCls, "text-right")}>{result.both}</td>
-                  <td className={cn(tdCls, "text-right")}>{result.only_a}</td>
-                  <td className={cn(tdCls, "text-right")}>{result.only_b}</td>
-                  <td className={cn(tdCls, "text-right")}>{result.neither}</td>
+        <div className="space-y-2">
+          <div className={cardCls}>
+            <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1 px-3 py-2">
+              <span className="font-mono text-2xl font-semibold text-accent">
+                {fmtValue(result.alpha)}
+              </span>
+              <span className="text-xs text-text-secondary">
+                {t("analyze.overallAlpha", { n: result.n_coders })}
+              </span>
+            </div>
+          </div>
+
+          <div className={cardCls}>
+            <table className="w-full border-collapse">
+              <thead className="sticky top-0 z-10">
+                <tr>
+                  <th className={thCls}>{t("analyze.coderALabel")}</th>
+                  <th className={thCls}>{t("analyze.coderBLabel")}</th>
+                  <th className={cn(thCls, "text-right")}>{t("analyze.kappa")}</th>
+                  <th className={cn(thCls, "text-right")}>{t("analyze.krippendorff")}</th>
+                  <th className={cn(thCls, "text-right")}>{t("analyze.gwet")}</th>
+                  <th className={cn(thCls, "text-right")}>{t("analyze.units")}</th>
+                  <th className={cn(thCls, "text-right")}>{t("analyze.pairs")}</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
-          <p className="border-t border-border px-2 py-1.5 text-xs text-text-secondary">
-            {t("analyze.agreementNote", { a: result.coder_a, b: result.coder_b })}
-          </p>
+              </thead>
+              <tbody>
+                {result.pairs.map((p) => (
+                  <tr key={`${p.coder_a}|${p.coder_b}`} className="hover:bg-surface-higher">
+                    <td className={cn(tdCls, "font-medium")}>{p.coder_a}</td>
+                    <td className={tdCls}>{p.coder_b}</td>
+                    <td className={cn(tdCls, "text-right font-mono tabular-nums")}>{fmtValue(p.kappa)}</td>
+                    <td className={cn(tdCls, "text-right font-mono tabular-nums")}>{fmtValue(p.krippendorff)}</td>
+                    <td className={cn(tdCls, "text-right font-mono tabular-nums")}>{fmtValue(p.gwet_ac1)}</td>
+                    <td className={cn(tdCls, "text-right tabular-nums")}>{p.n_units}</td>
+                    <td className={cn(tdCls, "text-right tabular-nums")}>{p.n_pairs}</td>
+                  </tr>
+                ))}
+                {result.pairwise_mean && (
+                  <tr className="bg-surface-higher font-medium">
+                    <td className={cn(tdCls, "text-xs text-text-secondary")} colSpan={2}>
+                      {t("analyze.mean")}
+                    </td>
+                    <td className={cn(tdCls, "text-right font-mono tabular-nums")}>
+                      {fmtValue(result.pairwise_mean.kappa)}
+                    </td>
+                    <td className={cn(tdCls, "text-right font-mono tabular-nums")}>
+                      {fmtValue(result.pairwise_mean.krippendorff)}
+                    </td>
+                    <td className={cn(tdCls, "text-right font-mono tabular-nums")}>
+                      {fmtValue(result.pairwise_mean.gwet_ac1)}
+                    </td>
+                    <td className={cn(tdCls, "text-right")} colSpan={2} />
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+
+          {result.n_coders === 2 && (
+            <div className={cardCls}>
+              <table className="w-full border-collapse">
+                <thead className="sticky top-0 z-10">
+                  <tr>
+                    <th className={thCls}>{t("analyze.measure")}</th>
+                    <th className={cn(thCls, "text-right")}>Value</th>
+                    <th className={cn(thCls, "text-right")}>{t("analyze.units")}</th>
+                    <th className={cn(thCls, "text-right")}>{t("analyze.colCodes")}</th>
+                    <th className={cn(thCls, "text-right")}>{t("analyze.pairs")}</th>
+                    <th className={cn(thCls, "text-right")}>{t("analyze.both")}</th>
+                    <th className={cn(thCls, "text-right")}>{t("analyze.aOnly")}</th>
+                    <th className={cn(thCls, "text-right")}>{t("analyze.bOnly")}</th>
+                    <th className={cn(thCls, "text-right")}>{t("analyze.neither")}</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {(
+                    [
+                      [t("analyze.kappa"), result.kappa],
+                      [t("analyze.krippendorff"), result.krippendorff],
+                      [t("analyze.gwet"), result.gwet_ac1],
+                    ] as [string, number | null][]
+                  ).map(([label, v]) => (
+                    <tr key={label} className="hover:bg-surface-higher">
+                      <td className={cn(tdCls, "font-medium")}>{label}</td>
+                      <td className={cn(tdCls, "text-right font-mono")}>{fmtValue(v)}</td>
+                      <td className={cn(tdCls, "text-right")}>{result.n_units}</td>
+                      <td className={cn(tdCls, "text-right")}>{result.n_categories}</td>
+                      <td className={cn(tdCls, "text-right")}>{result.n_pairs}</td>
+                      <td className={cn(tdCls, "text-right")}>{result.both}</td>
+                      <td className={cn(tdCls, "text-right")}>{result.only_a}</td>
+                      <td className={cn(tdCls, "text-right")}>{result.only_b}</td>
+                      <td className={cn(tdCls, "text-right")}>{result.neither}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              <p className="border-t border-border px-2 py-1.5 text-xs text-text-secondary">
+                {t("analyze.agreementNote", { a: result.coder_a, b: result.coder_b })}
+              </p>
+            </div>
+          )}
         </div>
       )}
     </div>

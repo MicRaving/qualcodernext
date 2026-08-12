@@ -1,4 +1,4 @@
-"""Audio/video transcription — faster-whisper (bundled) and noScribe (optional).
+"""Audio/video transcription — faster-whisper (bundled).
 
 Models are cached under ``~/.qualcoder/models/whisper`` (HuggingFace
 downloads). All heavy imports are lazy so the rest of the app never pays
@@ -57,17 +57,11 @@ WHISPER_MODELS = (
 
 def engines_available() -> dict[str, bool]:
     """Which transcription engines are importable in this environment."""
-    engines: dict[str, bool] = {"whisper": False, "noscribe": False}
+    engines: dict[str, bool] = {"whisper": False}
     try:
         import faster_whisper  # noqa: F401
 
         engines["whisper"] = True
-    except ImportError:
-        pass
-    try:
-        import noscribe  # noqa: F401
-
-        engines["noscribe"] = True
     except ImportError:
         pass
     return engines
@@ -217,16 +211,14 @@ def mark_job_consumed(job_id: str, source_id: int | None) -> None:
 
 
 def _run_worker(job_id: str, source_path: str, options: dict) -> None:
-    engine = options.get("engine") or "whisper"
     try:
         # A queued job waits here until the UI starts it (or cancels it).
         _gate(job_id)
         if _is_cancelled(job_id):
             return
-        if engine == "noscribe":
-            segments = _transcribe_noscribe(job_id, source_path, options)
-        else:
-            segments = _transcribe_whisper(job_id, source_path, options)
+        # Whisper is the only engine; any legacy engine value stored in
+        # the options (or an old settings file) is treated as whisper.
+        segments = _transcribe_whisper(job_id, source_path, options)
         if _is_cancelled(job_id):
             return
         # Persist the finished transcript so it survives an app restart even
@@ -543,15 +535,6 @@ def _transcribe_whisper(job_id: str, source_path: str, options: dict) -> list[di
             live_text="\n".join(live_lines),
         )
     return segments
-
-
-def _transcribe_noscribe(job_id: str, source_path: str, options: dict) -> list[dict]:
-    """noScribe engine (optional; requires the noscribe package)."""
-    import noscribe  # noqa: F401
-
-    raise NotImplementedError(
-        "noScribe engine not wired yet — import its .docx transcripts instead"
-    )
 
 
 # ----------------------------------------------------------------------

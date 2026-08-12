@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isPdf, usesPdfCoder } from "@/lib/media";
+import { canTranscribeSource, isPdf, usesPdfCoder } from "@/lib/media";
 
 describe("media helpers", () => {
   it("detects pdf by extension", () => {
@@ -12,5 +12,13 @@ describe("media helpers", () => {
     expect(usesPdfCoder({ name: "paper.pdf", media_type: "text" })).toBe(true);
     expect(usesPdfCoder({ name: "notes.txt", media_type: "text" })).toBe(false);
     expect(usesPdfCoder({ name: "clip.mp4", media_type: "video" })).toBe(false);
+  });
+
+  it("treats only audio/video sources as transcribable", () => {
+    expect(canTranscribeSource({ media_type: "audio" })).toBe(true);
+    expect(canTranscribeSource({ media_type: "video" })).toBe(true);
+    expect(canTranscribeSource({ media_type: "text" })).toBe(false);
+    expect(canTranscribeSource({ media_type: "pdf" })).toBe(false);
+    expect(canTranscribeSource({ media_type: "image" })).toBe(false);
   });
 });
