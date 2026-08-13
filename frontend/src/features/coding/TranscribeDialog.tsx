@@ -11,7 +11,7 @@ import { Button, ErrorBanner, Field, Input, Modal, Select } from "@/components/u
 import { useI18n } from "@/lib/i18n";
 import { useToast } from "@/lib/toast";
 import { useProjectStore } from "@/stores/project";
-import { canTranscribeSource } from "@/lib/media";
+import { canTranscribeSource, hasRealTranscript } from "@/lib/media";
 
 const IDENTIFIER_OPTIONS = [
   { key: "name", labelKey: "avCoder.speakersName" },
@@ -92,10 +92,11 @@ export function TranscribeDialog({ sourceId, sourceIds, onClose }: Props) {
         const allSources = useProjectStore.getState().sources;
         const names = new Map(allSources.map((s) => [s.id, s.name] as const));
         // Same eligibility predicate as the file manager's batch button, so
-        // the dialog can never disagree with it (transcribable = AV media).
+        // the dialog can never disagree with it (transcribable = AV media
+        // without a real transcript yet).
         const eligibleIds = sourceIds.filter((id) => {
           const src = allSources.find((s) => s.id === id);
-          return src != null && canTranscribeSource(src);
+          return src != null && canTranscribeSource(src) && !hasRealTranscript(src);
         });
         if (eligibleIds.length === 0) {
           setBusy(false);

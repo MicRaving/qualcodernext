@@ -60,7 +60,7 @@ import {
 } from "@/features/manage/files";
 import { ROW_HEIGHT, visibleRange } from "@/features/manage/virtual";
 import { UrlImportDialog } from "@/features/manage/UrlImportDialog";
-import { canTranscribeSource } from "@/lib/media";
+import { canTranscribeSource, hasRealTranscript } from "@/lib/media";
 
 function fileIcon(mediaType: string) {
   if (mediaType === "image") {
@@ -411,14 +411,15 @@ export function FileManager() {
   }
 
   // Eligible selection counts for the batch buttons: transcribe only AV
-  // media (same predicate as the AV coder's transcribe button), autocode
-  // only text sources. A disabled button says "nothing eligible" on its own.
+  // media that has no REAL transcript yet (same predicates as the AV coder's
+  // transcribe button plus the transcript check), autocode only text
+  // sources. A disabled button says "nothing eligible" on its own.
   const selectedList = useMemo(
     () => sources.filter((s) => selected.has(s.id)),
     [sources, selected],
   );
   const eligibleTranscribe = useMemo(
-    () => selectedList.filter((s) => canTranscribeSource(s)),
+    () => selectedList.filter((s) => canTranscribeSource(s) && !hasRealTranscript(s)),
     [selectedList],
   );
   const eligibleAutocode = useMemo(

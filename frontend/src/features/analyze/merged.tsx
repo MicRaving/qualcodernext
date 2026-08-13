@@ -1048,6 +1048,11 @@ export function InterraterView() {
   const [result, setResult] = useState<InterraterReport | null>(null);
   const [computing, setComputing] = useState(false);
   const [computeError, setComputeError] = useState<string | null>(null);
+  const [showCoefs, setShowCoefs] = useState({
+    kappa: true,
+    alpha: true,
+    gwet: true,
+  });
   const initialized = useRef(false);
   const requestSeq = useRef(0);
 
@@ -1091,6 +1096,9 @@ export function InterraterView() {
       prev.includes(name) ? prev.filter((n) => n !== name) : [...prev, name],
     );
   }
+
+  const hiddenCoefCount =
+    3 - (showCoefs.kappa ? 1 : 0) - (showCoefs.alpha ? 1 : 0) - (showCoefs.gwet ? 1 : 0);
 
   return (
     <div className="space-y-4">
@@ -1167,16 +1175,41 @@ export function InterraterView() {
 
       {result && (
         <div className="space-y-2">
-          <div className={cardCls}>
-            <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1 px-3 py-2">
-              <span className="font-mono text-2xl font-semibold text-accent">
-                {fmtValue(result.alpha)}
-              </span>
-              <span className="text-xs text-text-secondary">
-                {t("analyze.overallAlpha", { n: result.n_coders })}
-              </span>
-            </div>
+          <div className="flex flex-wrap items-center gap-1.5">
+            <span className="text-xs text-text-secondary">{t("analyze.coefficients")}:</span>
+            {(
+              [
+                ["kappa", t("analyze.kappa")],
+                ["alpha", t("analyze.krippendorff")],
+                ["gwet", t("analyze.gwet")],
+              ] as const
+            ).map(([key, label]) => (
+              <Button
+                key={key}
+                variant="secondary"
+                onClick={() => setShowCoefs((s) => ({ ...s, [key]: !s[key] }))}
+                className={cn(
+                  "h-6 px-2.5 text-xs",
+                  showCoefs[key] && "border-accent bg-accent/10 text-accent",
+                )}
+              >
+                {label}
+              </Button>
+            ))}
           </div>
+
+          {showCoefs.alpha && (
+            <div className={cardCls}>
+              <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1 px-3 py-2">
+                <span className="font-mono text-2xl font-semibold text-accent">
+                  {fmtValue(result.alpha)}
+                </span>
+                <span className="text-xs text-text-secondary">
+                  {t("analyze.overallAlpha", { n: result.n_coders })}
+                </span>
+              </div>
+            </div>
+          )}
 
           <div className={cardCls}>
             <table className="w-full border-collapse">
@@ -1184,9 +1217,15 @@ export function InterraterView() {
                 <tr>
                   <th className={thCls}>{t("analyze.coderALabel")}</th>
                   <th className={thCls}>{t("analyze.coderBLabel")}</th>
-                  <th className={cn(thCls, "text-right")}>{t("analyze.kappa")}</th>
-                  <th className={cn(thCls, "text-right")}>{t("analyze.krippendorff")}</th>
-                  <th className={cn(thCls, "text-right")}>{t("analyze.gwet")}</th>
+                  {showCoefs.kappa && (
+                    <th className={cn(thCls, "text-right")}>{t("analyze.kappa")}</th>
+                  )}
+                  {showCoefs.alpha && (
+                    <th className={cn(thCls, "text-right")}>{t("analyze.krippendorff")}</th>
+                  )}
+                  {showCoefs.gwet && (
+                    <th className={cn(thCls, "text-right")}>{t("analyze.gwet")}</th>
+                  )}
                   <th className={cn(thCls, "text-right")}>{t("analyze.units")}</th>
                   <th className={cn(thCls, "text-right")}>{t("analyze.pairs")}</th>
                 </tr>
@@ -1196,9 +1235,21 @@ export function InterraterView() {
                   <tr key={`${p.coder_a}|${p.coder_b}`} className="hover:bg-surface-higher">
                     <td className={cn(tdCls, "font-medium")}>{p.coder_a}</td>
                     <td className={tdCls}>{p.coder_b}</td>
-                    <td className={cn(tdCls, "text-right font-mono tabular-nums")}>{fmtValue(p.kappa)}</td>
-                    <td className={cn(tdCls, "text-right font-mono tabular-nums")}>{fmtValue(p.krippendorff)}</td>
-                    <td className={cn(tdCls, "text-right font-mono tabular-nums")}>{fmtValue(p.gwet_ac1)}</td>
+                    {showCoefs.kappa && (
+                      <td className={cn(tdCls, "text-right font-mono tabular-nums")}>
+                        {fmtValue(p.kappa)}
+                      </td>
+                    )}
+                    {showCoefs.alpha && (
+                      <td className={cn(tdCls, "text-right font-mono tabular-nums")}>
+                        {fmtValue(p.krippendorff)}
+                      </td>
+                    )}
+                    {showCoefs.gwet && (
+                      <td className={cn(tdCls, "text-right font-mono tabular-nums")}>
+                        {fmtValue(p.gwet_ac1)}
+                      </td>
+                    )}
                     <td className={cn(tdCls, "text-right tabular-nums")}>{p.n_units}</td>
                     <td className={cn(tdCls, "text-right tabular-nums")}>{p.n_pairs}</td>
                   </tr>
@@ -1208,16 +1259,22 @@ export function InterraterView() {
                     <td className={cn(tdCls, "text-xs text-text-secondary")} colSpan={2}>
                       {t("analyze.mean")}
                     </td>
-                    <td className={cn(tdCls, "text-right font-mono tabular-nums")}>
-                      {fmtValue(result.pairwise_mean.kappa)}
-                    </td>
-                    <td className={cn(tdCls, "text-right font-mono tabular-nums")}>
-                      {fmtValue(result.pairwise_mean.krippendorff)}
-                    </td>
-                    <td className={cn(tdCls, "text-right font-mono tabular-nums")}>
-                      {fmtValue(result.pairwise_mean.gwet_ac1)}
-                    </td>
-                    <td className={cn(tdCls, "text-right")} colSpan={2} />
+                    {showCoefs.kappa && (
+                      <td className={cn(tdCls, "text-right font-mono tabular-nums")}>
+                        {fmtValue(result.pairwise_mean.kappa)}
+                      </td>
+                    )}
+                    {showCoefs.alpha && (
+                      <td className={cn(tdCls, "text-right font-mono tabular-nums")}>
+                        {fmtValue(result.pairwise_mean.krippendorff)}
+                      </td>
+                    )}
+                    {showCoefs.gwet && (
+                      <td className={cn(tdCls, "text-right font-mono tabular-nums")}>
+                        {fmtValue(result.pairwise_mean.gwet_ac1)}
+                      </td>
+                    )}
+                    <td className={cn(tdCls, "text-right")} colSpan={2 + hiddenCoefCount} />
                   </tr>
                 )}
               </tbody>

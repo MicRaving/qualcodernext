@@ -24,3 +24,17 @@ export function usesPdfCoder(source: { name: string; media_type: string }): bool
 export function canTranscribeSource(source: { media_type: string }): boolean {
   return source.media_type === "audio" || source.media_type === "video";
 }
+
+/**
+ * True when the source already has a REAL transcript: a companion is linked
+ * (av_text_id) AND that companion carries non-empty text. Imported AV files
+ * get an empty companion immediately, so empty companions stay eligible for
+ * (re-)transcription. Used together with canTranscribeSource to decide
+ * batch-transcribe eligibility.
+ */
+export function hasRealTranscript(source: {
+  av_text_id: number | null;
+  has_transcript?: boolean;
+}): boolean {
+  return source.av_text_id != null && source.has_transcript === true;
+}

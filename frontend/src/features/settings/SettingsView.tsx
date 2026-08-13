@@ -56,7 +56,6 @@ interface AiDraft {
 
 let aiDraftCache: AiDraft | null = null;
 
-const LOCAL_PROVIDERS = ["ollama", "lmstudio"] as const;
 const PROVIDER_ORDER = ["ollama", "lmstudio", "opencode-go", "gemini", "gpt", "claude", "custom"];
 const PROVIDER_LABEL_KEYS: Record<string, string> = {
   ollama: "settings.aiProviderOllama",
@@ -144,10 +143,6 @@ export function SettingsView() {
   const [modelsLoading, setModelsLoading] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
 
-  // Local-provider reachability (ollama/lmstudio) — probed on pane open and
-  // on provider picks; state lives here only, so reopening re-probes.
-  const [localReach, setLocalReach] = useState<Record<string, boolean>>({});
-
   /** Service-status check button: "checking" → "ok"/"broken" for 3s. */
   const [serviceCheck, setServiceCheck] = useState<"idle" | "checking" | "ok" | "broken">("idle");
   const [serviceProbeError, setServiceProbeError] = useState<string | null>(null);
@@ -210,24 +205,6 @@ export function SettingsView() {
     }
   }, [provider, apiBase, apiKey]);
 
-  /** Quick reachability probe for the local providers (≤1.2s per provider)
-   *  so their dropdown entries can be greyed out while the server is down. */
-  const probeLocalProviders = useCallback(async () => {
-    const results: Record<string, boolean> = {};
-    await Promise.all(
-      LOCAL_PROVIDERS.map(async (name) => {
-        const url = `${PROVIDER_PRESETS[name].url}/models`;
-        try {
-          const resp = await fetch(url, { signal: AbortSignal.timeout(1200) });
-          results[name] = resp.ok;
-        } catch {
-          results[name] = false;
-        }
-      }),
-    );
-    setLocalReach(results);
-  }, []);
-
   const loadIndex = useCallback(async () => {
     try {
       setIndexStatus(await api.aiIndexStatus());
@@ -255,8 +232,7 @@ export function SettingsView() {
     void loadStatus();
     void loadIndex();
     void loadPseudonyms();
-    void probeLocalProviders();
-  }, [loadStatus, loadIndex, loadPseudonyms, probeLocalProviders]);
+  }, [loadStatus, loadIndex, loadPseudonyms]);
 
   // Keep the module-level draft in sync so a typed API key etc. survives a
   // pane close/reopen (SettingsView unmounts on right-pane switches).
@@ -339,9 +315,6 @@ export function SettingsView() {
       setApiBase(preset.url);
       if (preset.model) setModel(preset.model);
     }
-    // Re-probe the local providers whenever the user picks one — a freshly
-    // started Ollama/LM Studio should light up immediately.
-    void probeLocalProviders();
   }
 
   async function buildIndex() {
@@ -498,36 +471,12 @@ export function SettingsView() {
                   onChange={(e) => handleProviderChange(e.target.value)}
                   className="w-full"
                 >
-                  {PROVIDER_ORDER.map((name) => {
-                    const label = t(PROVIDER_LABEL_KEYS[name]);
-                    const down =
-                      (LOCAL_PROVIDERS as readonly string[]).includes(name) &&
-                      localReach[name] === false;
-                    return (
-                      <option
-                        key={name}
-                        value={name}
-                        disabled={down}
-                        title={
-                          down
-                            ? t("settings.aiProviderUnreachableHint", { name: label })
-                            : undefined
-                        }
-                      >
-                        {label}
-                        {down ? ` (${t("settings.aiProviderUnreachable")})` : ""}
-                      </option>
-                    );
-                  })}
+                  {PROVIDER_ORDER.map((name) => (
+                    <option key={name} value={name}>
+                      {t(PROVIDER_LABEL_KEYS[name])}
+                    </option>
+                  ))}
                 </Select>
-                {(LOCAL_PROVIDERS as readonly string[]).includes(provider) &&
-                  localReach[provider] === false && (
-                    <span className="mt-1 block text-xs text-warning">
-                      {t("settings.aiProviderUnreachableHint", {
-                        name: t(PROVIDER_LABEL_KEYS[provider]),
-                      })}
-                    </span>
-                  )}
               </Field>
               <Field label={t("settings.model")}>
                 <Select

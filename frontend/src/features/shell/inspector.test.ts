@@ -19,6 +19,7 @@ function makeSource(overrides: Partial<Source> = {}): Source {
     av_text_id: null,
     risid: null,
     media_type: "text",
+    has_transcript: false,
     ...overrides,
   };
 }

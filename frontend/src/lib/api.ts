@@ -166,6 +166,8 @@ export interface Source {
   av_text_id: number | null;
   risid: number | null;
   media_type: "text" | "pdf" | "image" | "audio" | "video";
+  /** True when av_text_id points at a companion whose fulltext is non-empty. */
+  has_transcript: boolean;
 }
 
 export interface CodeTreeItem {

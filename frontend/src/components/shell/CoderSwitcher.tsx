@@ -284,9 +284,10 @@ export function CoderSwitcher() {
 
   /**
    * Flyout position: anchored under the button and clamped so the panel
-   * always stays fully inside the window (8px inset on every side). The
-   * max-height shrinks with the window so the bottom never overflows; a
-   * 240px floor keeps the panel usable even on very small screens.
+   * always stays fully inside the window (8px inset on every side). When
+   * there is not enough room below the button it opens ABOVE it. The
+   * max-height shrinks with the window (never exceeding the viewport) so
+   * the bottom never overflows, even on very small screens.
    */
   const menuPos = useMemo(() => {
     const el = rootRef.current;
@@ -298,11 +299,19 @@ export function CoderSwitcher() {
       FLYOUT_MARGIN,
       Math.min(rect.right - FLYOUT_WIDTH, iw - FLYOUT_WIDTH - FLYOUT_MARGIN),
     );
-    const top = Math.max(
-      FLYOUT_MARGIN,
-      Math.min(rect.bottom + FLYOUT_GAP, ih - FLYOUT_MARGIN - FLYOUT_MIN_HEIGHT),
+    const below = ih - rect.bottom - FLYOUT_GAP - FLYOUT_MARGIN;
+    const above = rect.top - FLYOUT_GAP - FLYOUT_MARGIN;
+    const openAbove = below < FLYOUT_MIN_HEIGHT && above > below;
+    const maxHeight = Math.max(
+      FLYOUT_MIN_HEIGHT,
+      Math.min(ih - 2 * FLYOUT_MARGIN, openAbove ? above : below),
     );
-    const maxHeight = Math.max(FLYOUT_MIN_HEIGHT, ih - top - 16);
+    const top = openAbove
+      ? Math.max(FLYOUT_MARGIN, rect.top - FLYOUT_GAP - maxHeight)
+      : Math.max(
+          FLYOUT_MARGIN,
+          Math.min(rect.bottom + FLYOUT_GAP, ih - FLYOUT_MARGIN - maxHeight),
+        );
     return { left, top, maxHeight };
     // open + viewportTick are intentional recompute triggers (refs/globals
     // inside are not tracked by exhaustive-deps).
@@ -348,7 +357,7 @@ export function CoderSwitcher() {
           role="listbox"
           aria-label={t("coder.listAria")}
           className="min-w-60 overflow-y-auto"
-          style={menuPos}
+          style={{ ...menuPos, width: FLYOUT_WIDTH }}
         >
           {coders.map((c) => (
             <div

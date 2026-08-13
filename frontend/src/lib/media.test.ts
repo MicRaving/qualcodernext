@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { canTranscribeSource, isPdf, usesPdfCoder } from "@/lib/media";
+import { canTranscribeSource, hasRealTranscript, isPdf, usesPdfCoder } from "@/lib/media";
 
 describe("media helpers", () => {
   it("detects pdf by extension", () => {
@@ -20,5 +20,14 @@ describe("media helpers", () => {
     expect(canTranscribeSource({ media_type: "text" })).toBe(false);
     expect(canTranscribeSource({ media_type: "pdf" })).toBe(false);
     expect(canTranscribeSource({ media_type: "image" })).toBe(false);
+  });
+
+  it("hasRealTranscript requires a linked companion with text", () => {
+    expect(hasRealTranscript({ av_text_id: null, has_transcript: false })).toBe(false);
+    expect(hasRealTranscript({ av_text_id: null, has_transcript: true })).toBe(false);
+    expect(hasRealTranscript({ av_text_id: 7, has_transcript: false })).toBe(false);
+    expect(hasRealTranscript({ av_text_id: 7, has_transcript: true })).toBe(true);
+    // Defensive: flag missing on non-list data (single-source fetches).
+    expect(hasRealTranscript({ av_text_id: 7 })).toBe(false);
   });
 });

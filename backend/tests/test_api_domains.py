@@ -60,6 +60,55 @@ async def test_import_audio_creates_transcription(project_client):
     assert "talk.mp3.txt" not in names
     media = next(s for s in sources if s["name"] == "talk.mp3")
     assert media["av_text_id"] is not None
+    # The companion is created empty at import time, so the media file has
+    # no REAL transcript yet and stays eligible for transcription.
+    assert media["has_transcript"] is False
+
+
+async def test_source_list_has_transcript_flag(project_client):
+    """has_transcript is true only when the linked companion has text."""
+    import sqlite3
+
+    client, target = project_client
+    media = await client.post(
+        "/api/v1/sources/import",
+        files={"file": ("clip.mp4", b"\x00" * 64, "video/mp4")},
+    )
+    assert media.status_code == 200, media.text
+    media_id = media.json()["id"]
+
+    # An empty companion stays "no real transcript" (re-transcription ok).
+    listed = (await client.get("/api/v1/sources")).json()
+    row = next(s for s in listed if s["id"] == media_id)
+    assert row["av_text_id"] is not None
+    assert row["has_transcript"] is False
+
+    # Link a companion with real text -> has_transcript becomes true.
+    tx = await client.post(
+        "/api/v1/sources/import",
+        files={"file": ("clip.txt", "hello transcript", "text/plain")},
+    )
+    assert tx.status_code == 200, tx.text
+    tx_id = tx.json()["id"]
+    with sqlite3.connect(str(target / "data.qda")) as conn:
+        conn.execute("UPDATE source SET av_text_id = ? WHERE id = ?", (tx_id, media_id))
+        conn.commit()
+    listed = (await client.get("/api/v1/sources")).json()
+    row = next(s for s in listed if s["id"] == media_id)
+    assert row["has_transcript"] is True
+
+    # A whitespace-only companion is not a real transcript either.
+    blank = await client.post(
+        "/api/v1/sources/import",
+        files={"file": ("clip2.txt", "  \n\t ", "text/plain")},
+    )
+    assert blank.status_code == 200, blank.text
+    with sqlite3.connect(str(target / "data.qda")) as conn:
+        conn.execute("UPDATE source SET av_text_id = ? WHERE id = ?", (blank.json()["id"], media_id))
+        conn.commit()
+    listed = (await client.get("/api/v1/sources")).json()
+    row = next(s for s in listed if s["id"] == media_id)
+    assert row["has_transcript"] is False
 
 
 async def test_import_duplicate_name_rejected(project_client):

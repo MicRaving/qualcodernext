@@ -40,9 +40,17 @@ class IndexRequest(BaseModel):
 
 
 def _provider_headers(provider: str, api_key: str) -> dict[str, str]:
-    """Auth headers per provider. Gemini's OpenAI-compat endpoints (chat AND
-    the /models list) are documented with ``Authorization: Bearer``; local
-    providers need none."""
+    """Auth headers per provider for the /models list.
+
+    Gemini's NATIVE REST endpoint authenticates with ``x-goog-api-key``;
+    Claude requires ``x-api-key`` plus ``anthropic-version`` (Bearer is
+    rejected with 401). GPT and OpenAI-compatible/local servers use
+    ``Authorization: Bearer``; local providers need none.
+    """
+    if provider == "gemini" and api_key:
+        return {"x-goog-api-key": api_key}
+    if provider == "claude" and api_key:
+        return {"x-api-key": api_key, "anthropic-version": "2023-06-01"}
     if api_key:
         return {"Authorization": f"Bearer {api_key}"}
     return {}
@@ -59,28 +67,41 @@ def _models_urls(
 
     OpenAI-compatible servers serve the list at ``<base>/v1/models``
     (Ollama, LM Studio, opencode-go); when the base URL already ends in /v1
-    use ``<base>/models``. Cloud providers advertise the list at
-    ``<base>/models`` with /v1 already in the base.
+    use ``<base>/models``. GPT advertises it at ``<base>/models`` with /v1
+    already in the base.
 
-    Gemini's openai-compat endpoint documents the Bearer header, but in
-    practice the models list only answers when the key travels as the
-    ``?key=`` query param — that variant is tried second, without an auth
-    header. Chat always uses the Bearer header (see ai_service).
+    Gemini's openai-compat shim does NOT reliably implement the /models
+    route, so the list is fetched from the NATIVE REST endpoint
+    ``<native>/v1beta/models`` instead — the configured base is usually
+    ``https://generativelanguage.googleapis.com/v1beta/openai``, from which
+    the native host is derived by stripping the ``/v1beta/openai`` (or
+    ``/openai``) suffix (otherwise the base is used as-is). The key travels
+    as the ``x-goog-api-key`` header; a ``?key=`` query variant is tried
+    second, without an auth header. Claude's native list lives at
+    ``<base>/models`` and needs ``x-api-key`` plus ``anthropic-version``
+    (Bearer is rejected with 401).
     """
     from urllib.parse import quote
 
     headers = _provider_headers(provider, api_key)
     base = api_base.rstrip("/")
+    if provider == "gemini" and api_key:
+        native = base
+        for suffix in ("/v1beta/openai", "/openai"):
+            if base.endswith(suffix):
+                native = base[: -len(suffix)]
+                break
+        url = f"{native}/v1beta/models"
+        return [(url, headers), (f"{url}?key={quote(api_key)}", {})]
+    if provider == "claude":
+        return [(f"{base}/models", headers)]
     if base.endswith("/v1"):
         urls = [f"{base}/models", f"{base.rsplit('/v1', 1)[0]}/v1/models"]
     elif provider in ("ollama", "lmstudio", "opencode-go"):
         urls = [f"{base}/v1/models", f"{base}/models"]
     else:
         urls = [f"{base}/models"]
-    candidates = [(url, headers) for url in urls]
-    if provider == "gemini" and api_key:
-        candidates.append((f"{urls[0]}?key={quote(api_key)}", {}))
-    return candidates
+    return [(url, headers) for url in urls]
 
 
 @router.get("/models")
@@ -89,9 +110,10 @@ async def ai_models(
     api_base: str | None = Query(None),
     api_key: str | None = Query(None),
 ) -> dict:
-    """List the models the configured provider advertises (OpenAI-compatible
-    ``/v1/models``). Local providers (ollama/lmstudio/opencode-go) answer
-    quickly; cloud providers need an API key, so failures return empty.
+    """List the models the configured provider advertises (per-provider
+    ``/models`` endpoints). Local providers (ollama/lmstudio/opencode-go)
+    answer quickly; cloud providers need an API key, so failures return
+    empty.
 
     Query params (``provider``/``api_base``/``api_key``), when provided,
     override the saved settings for this fetch only — they are never saved.
@@ -125,7 +147,16 @@ async def ai_models(
             continue
     if data is None:
         return {"models": []}
-    ids = sorted(m.get("id") for m in data.get("data", []) if m.get("id"))
+    if provider == "gemini":
+        # Native REST shape: {"models": [{"name": "models/gemini-2.5-flash", ...}]}
+        ids = sorted(
+            m.get("name", "").removeprefix("models/")
+            for m in data.get("models", [])
+            if m.get("name")
+        )
+    else:
+        # OpenAI-compatible shape: {"data": [{"id": "..."}]}
+        ids = sorted(m.get("id") for m in data.get("data", []) if m.get("id"))
 
     if provider == "gemini":
         keep = re.compile(r"^gemini-[0-9]")
@@ -162,7 +193,7 @@ async def _probe_provider(ai: dict) -> tuple[bool | None, str]:
 
     This exercises a real provider endpoint (the models list), so it also
     validates the API key when one is needed — Gemini is probed against its
-    openai-compat ``/models`` endpoint, with the ``?key=`` fallback.
+    native ``/v1beta/models`` endpoint, with the ``?key=`` fallback.
     """
     import httpx
 

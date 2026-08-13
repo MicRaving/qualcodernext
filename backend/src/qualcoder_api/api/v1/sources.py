@@ -8,7 +8,7 @@ from typing import Annotated
 from fastapi import APIRouter, File, Form, HTTPException, Response, UploadFile
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
-from sqlalchemy import select, text
+from sqlalchemy import func, select, text
 
 from qualcoder_api.api.v1.deps import DbDep, ServiceDep
 from qualcoder_api.core.models import Source
@@ -61,9 +61,44 @@ class SourceDetails(BaseModel):
     attributes: list[SourceAttributeItem]
 
 
-@router.get("", response_model=list[Source])
-async def list_sources(db: DbDep) -> list[Source]:
-    return await SourceRepository(db).list_sources()
+class SourceWithTranscript(Source):
+    """Source plus a ``has_transcript`` flag for the file list.
+
+    ``has_transcript`` is true only when the source links to a companion
+    transcript (``av_text_id``) whose fulltext is non-empty. Imported AV
+    files get an empty companion immediately, so empty companions keep the
+    media file eligible for (re-)transcription.
+    """
+
+    has_transcript: bool = False
+
+
+@router.get("", response_model=list[SourceWithTranscript])
+async def list_sources(db: DbDep) -> list[SourceWithTranscript]:
+    sources = await SourceRepository(db).list_sources()
+    # One extra query: companion fulltext lengths for every av_text_id the
+    # list references (the list itself omits fulltext, so we only ship a
+    # boolean per source — never the megabytes of text).
+    av_ids = {s.av_text_id for s in sources if s.av_text_id is not None}
+    nonempty: set[int] = set()
+    if av_ids:
+        rows = await db.execute(
+            select(
+                tables.source.c.id,
+                # SQLite trim() defaults to spaces only; pass a whitespace
+                # charlist so "\n\t " -only companions count as empty, like
+                # Python's str.strip().
+                func.length(func.trim(tables.source.c.fulltext, " \n\t\r\v\f")),
+            ).where(tables.source.c.id.in_(av_ids))
+        )
+        nonempty = {r[0] for r in rows if (r[1] or 0) > 0}
+    return [
+        SourceWithTranscript(
+            **s.model_dump(),
+            has_transcript=s.av_text_id is not None and s.av_text_id in nonempty,
+        )
+        for s in sources
+    ]
 
 
 @router.get("/{source_id}", response_model=Source)

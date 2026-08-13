@@ -5,6 +5,7 @@ import { useEffect, useMemo, useState, type ReactNode } from "react";
 import {
   ChevronDown,
   ChevronRight,
+  CircleAlert,
   FileAudio,
   FileImage,
   FileText,
@@ -915,7 +916,13 @@ export function Sidebar() {
         />
       </div>
       {view.kind === "coding" && toolbarError && (
-        <p className="shrink-0 px-2 pt-1 text-xs text-danger">{toolbarError}</p>
+        <p
+          role="alert"
+          className="flex shrink-0 items-center gap-1.5 px-2 pt-1 text-xs text-danger"
+        >
+          <CircleAlert size={12} className="shrink-0" aria-hidden />
+          <span className="min-w-0 truncate">{toolbarError}</span>
+        </p>
       )}
       <div className={view.kind === "coding" ? "pt-1" : undefined}>
         {view.kind === "coding" ? (

@@ -311,20 +311,23 @@ async def configure_gemini(client, monkeypatch, tmp_path, api_key="secret") -> N
     assert res.status_code == 200, res.text
 
 
-async def test_gemini_models_bearer_and_filtering(project_client, tmp_path, monkeypatch):
-    """Gemini's openai-compat /models answers with the Bearer header; the
-    list is filtered to chat models of the current provider only."""
+async def test_gemini_models_native_listing_and_filtering(
+    project_client, tmp_path, monkeypatch
+):
+    """Gemini's models come from the NATIVE REST endpoint
+    (``<native>/v1beta/models``) with the ``x-goog-api-key`` header — the
+    openai-compat shim has no reliable /models list. The native
+    ``models[].name`` ids (``models/`` prefix stripped) are filtered to chat
+    models only."""
     client, _ = project_client
     await configure_gemini(client, monkeypatch, tmp_path)
     fake = FakeGetClient(
         {
-            "/v1beta/openai/models": {
-                "data": [
-                    {"id": "gemini-2.5-flash"},
-                    {"id": "gemini-3.6-flash"},
-                    {"id": "gemini-embedding-001"},
-                    {"id": "gemini-2.5-flash-video"},
-                    {"id": "gpt-5.6"},
+            "/v1beta/models": {
+                "models": [
+                    {"name": "models/gemini-2.5-flash"},
+                    {"name": "models/gemini-2.5-pro"},
+                    {"name": "models/text-embedding-004"},
                 ]
             }
         }
@@ -332,50 +335,135 @@ async def test_gemini_models_bearer_and_filtering(project_client, tmp_path, monk
     monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: fake)
     res = await client.get("/api/v1/ai/models?provider=gemini")
     assert res.status_code == 200, res.text
-    assert res.json() == {"models": ["gemini-2.5-flash", "gemini-3.6-flash"]}
+    assert res.json() == {"models": ["gemini-2.5-flash", "gemini-2.5-pro"]}
     assert len(fake.calls) == 1
-    assert fake.calls[0]["url"].endswith("/v1beta/openai/models")
-    assert fake.calls[0]["headers"] == {"Authorization": "Bearer secret"}
+    # The native host is derived from the configured openai-compat base.
+    assert fake.calls[0]["url"].endswith("/v1beta/models")
+    assert fake.calls[0]["headers"] == {"x-goog-api-key": "secret"}
 
 
 async def test_gemini_models_key_query_fallback(project_client, tmp_path, monkeypatch):
-    """When Gemini's /models rejects the Bearer call, the ``?key=`` query-param
-    variant (no auth header) is tried and its models are returned."""
+    """When the native list rejects the ``x-goog-api-key`` header call, the
+    ``?key=`` query-param variant (no auth header) is tried and its models
+    are returned."""
     client, _ = project_client
     await configure_gemini(client, monkeypatch, tmp_path, api_key="sec ret")
     fake = FakeGetClient(
         {
-            "/models": httpx.ConnectError("refused"),
-            "/models?key=sec%20ret": {"data": [{"id": "gemini-2.5-flash"}]},
+            "/v1beta/models": httpx.ConnectError("refused"),
+            "/v1beta/models?key=sec%20ret": {
+                "models": [{"name": "models/gemini-2.5-flash"}]
+            },
         }
     )
     monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: fake)
     res = await client.get("/api/v1/ai/models?provider=gemini")
     assert res.status_code == 200, res.text
     assert res.json() == {"models": ["gemini-2.5-flash"]}
-    # call[0] is the failed Bearer attempt; call[1] the successful ?key= one.
-    assert fake.calls[0]["headers"] == {"Authorization": "Bearer sec ret"}
-    assert fake.calls[1]["url"].endswith("/models?key=sec%20ret")
+    # call[0] is the failed header attempt; call[1] the successful ?key= one.
+    assert fake.calls[0]["headers"] == {"x-goog-api-key": "sec ret"}
+    assert fake.calls[1]["url"].endswith("/v1beta/models?key=sec%20ret")
     assert fake.calls[1]["headers"] == {}
+
+
+async def test_claude_models_headers_and_listing(project_client, tmp_path, monkeypatch):
+    """Claude's native list lives at ``<base>/models`` and needs ``x-api-key``
+    plus ``anthropic-version`` (Bearer is rejected with 401)."""
+    client, _ = project_client
+    settings_file = tmp_path / "settings.json"
+    monkeypatch.setattr(user_settings, "SETTINGS_FILE", settings_file)
+    res = await client.put(
+        "/api/v1/ai/settings",
+        json={
+            "enabled": True,
+            "provider": "claude",
+            "api_base": "https://api.anthropic.com/v1",
+            "model": "claude-sonnet-4-6",
+            "api_key": "sk-ant-secret",
+        },
+    )
+    assert res.status_code == 200, res.text
+    fake = FakeGetClient(
+        {
+            "/models": {
+                "data": [
+                    {"id": "claude-sonnet-4-6"},
+                    {"id": "claude-haiku-4-5"},
+                ]
+            }
+        }
+    )
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: fake)
+    res = await client.get("/api/v1/ai/models?provider=claude")
+    assert res.status_code == 200, res.text
+    assert res.json() == {"models": ["claude-haiku-4-5", "claude-sonnet-4-6"]}
+    assert len(fake.calls) == 1
+    assert fake.calls[0]["url"].endswith("/v1/models")
+    assert fake.calls[0]["headers"] == {
+        "x-api-key": "sk-ant-secret",
+        "anthropic-version": "2023-06-01",
+    }
+
+
+async def test_gpt_models_bearer_and_listing(project_client, tmp_path, monkeypatch):
+    """GPT lists models at ``<base>/models`` with a plain Bearer header; the
+    list is filtered to chat models of the current generation only."""
+    client, _ = project_client
+    settings_file = tmp_path / "settings.json"
+    monkeypatch.setattr(user_settings, "SETTINGS_FILE", settings_file)
+    res = await client.put(
+        "/api/v1/ai/settings",
+        json={
+            "enabled": True,
+            "provider": "gpt",
+            "api_base": "https://api.openai.com/v1",
+            "model": "gpt-5.2",
+            "api_key": "sk-secret",
+        },
+    )
+    assert res.status_code == 200, res.text
+    fake = FakeGetClient(
+        {
+            "/v1/models": {
+                "data": [
+                    {"id": "gpt-5.2"},
+                    {"id": "gpt-4.1"},
+                    {"id": "gpt-4o"},
+                    {"id": "gpt-4.5-can-12345"},
+                    {"id": "whisper-1"},
+                    {"id": "gpt-image-1"},
+                ]
+            }
+        }
+    )
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: fake)
+    res = await client.get("/api/v1/ai/models?provider=gpt")
+    assert res.status_code == 200, res.text
+    assert res.json() == {"models": ["gpt-4.1", "gpt-4o", "gpt-5.2"]}
+    assert len(fake.calls) == 1
+    assert fake.calls[0]["url"].endswith("/v1/models")
+    assert fake.calls[0]["headers"] == {"Authorization": "Bearer sk-secret"}
 
 
 async def test_status_probe_gemini_hits_models_endpoint(
     project_client, tmp_path, monkeypatch
 ):
-    """The Gemini status probe exercises the real openai-compat /models
+    """The Gemini status probe exercises the real native /v1beta/models
     endpoint (never a bare DNS touch), so it also validates the key."""
     client, _ = project_client
     await configure_gemini(client, monkeypatch, tmp_path)
-    fake = FakeGetClient({"/v1beta/openai/models": {"data": [{"id": "gemini-2.5-flash"}]}})
+    fake = FakeGetClient(
+        {"/v1beta/models": {"models": [{"name": "models/gemini-2.5-flash"}]}}
+    )
     monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: fake)
     res = await client.get("/api/v1/ai/status?probe=1")
     assert res.json()["reachable"] is True
-    assert fake.calls[0]["url"].endswith("/v1beta/openai/models")
+    assert fake.calls[0]["url"].endswith("/v1beta/models")
 
     failing = FakeGetClient(
         {
-            "/models": httpx.ConnectError("refused"),
-            "/models?key=secret": httpx.ConnectError("refused"),
+            "/v1beta/models": httpx.ConnectError("refused"),
+            "/v1beta/models?key=secret": httpx.ConnectError("refused"),
         }
     )
     monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: failing)
