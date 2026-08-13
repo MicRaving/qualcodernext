@@ -402,7 +402,11 @@ export function ProjectShell() {
                 {activeJobs.length > 0 ? String(activeJobs.length) : ""}
               </button>
               {queueOpen && (
-                <Menu role="menu" className="right-0 w-80">
+                <Menu
+                  role="menu"
+                  className="right-0 w-80 overflow-y-auto"
+                  style={{ maxHeight: "calc(100dvh - 3.5rem)" }}
+                >
                   <div className="flex items-center gap-1 border-b border-border px-2 py-1">
                     <span className="min-w-0 flex-1 text-xs font-medium text-text-secondary">
                       {t("tasks.title")}
@@ -471,7 +475,7 @@ export function ProjectShell() {
                     >
                       <div className="flex items-center gap-2 text-xs">
                         <span
-                          className="flex items-center gap-1.5"
+                          className="flex min-w-0 items-center gap-1.5"
                           title={
                             job.kind === "transcribe"
                               ? t("tasks.kindTranscribe")
@@ -482,15 +486,17 @@ export function ProjectShell() {
                                   : t("tasks.kindAutocode")
                           }
                         >
-                          {job.kind === "transcribe" ? (
-                            <AudioLines size={12} aria-hidden />
-                          ) : job.kind === "r" ? (
-                            <Terminal size={12} aria-hidden />
-                          ) : job.kind === "import" ? (
-                            <Upload size={12} aria-hidden />
-                          ) : (
-                            <Sparkles size={12} aria-hidden />
-                          )}
+                          <span className="flex w-4 shrink-0 items-center justify-center" aria-hidden>
+                            {job.kind === "transcribe" ? (
+                              <AudioLines size={12} aria-hidden />
+                            ) : job.kind === "r" ? (
+                              <Terminal size={12} aria-hidden />
+                            ) : job.kind === "import" ? (
+                              <Upload size={12} aria-hidden />
+                            ) : (
+                              <Sparkles size={12} aria-hidden />
+                            )}
+                          </span>
                           <span className="min-w-0 flex-1 truncate text-text-primary">
                             {job.kind === "import" ? t("files.importingShort") : job.sourceName}
                           </span>
