@@ -34,7 +34,7 @@ LEGACY_TABLES = [
     "CREATE TABLE journal (jid integer primary key, name text, jentry text, date text, owner text)",
 ]
 
-ALL_VERSIONS = [f"v{v}" for v in range(2, 30)]
+ALL_VERSIONS = [f"v{v}" for v in range(2, 31)]
 
 
 @pytest.fixture
@@ -98,7 +98,7 @@ async def test_full_chain_sets_final_version(v2_db):
     cur = await v2_db.cursor()
     await cur.execute("SELECT databaseversion, about FROM project")
     row = await cur.fetchone()
-    assert row[0] == "v29"
+    assert row[0] == "v30"
     assert row[1] == "4.0-test"
 
 
@@ -305,7 +305,7 @@ async def test_v29_adds_code_set_tables(v2_db):
     """v29 adds the code_set tables + member index."""
     chain = MigrationChain(v2_db)
     applied = await chain.run_all("4.0-test", "tester")
-    assert "v29" in applied
+    assert "v30" in applied
     objects = await _objects(v2_db)
     assert {"code_set", "code_set_member"} <= objects
     cur = await v2_db.cursor()

@@ -17,7 +17,7 @@ import {
   Sun,
   Trash2,
 } from "lucide-react";
-import { api, type AiIndexStatus, type Pseudonym } from "@/lib/api";
+import { api, type AiIndexStatus, type Pseudonym, type RStatus } from "@/lib/api";
 import { errorDetail } from "@/features/ai/format";
 import { InterchangeView } from "@/features/interchange/InterchangeView";
 import { A11yControls } from "@/features/accessibility/A11yControls";
@@ -163,6 +163,9 @@ export function SettingsView() {
   const [pseudoName, setPseudoName] = useState("");
   const [pseudoError, setPseudoError] = useState<string | null>(null);
 
+  // R integration status
+  const [rStatus, setRStatus] = useState<RStatus | null>(null);
+
 
   // Help popovers (anchored for the shared HelpFlyout)
   const [helpOpen, setHelpOpen] = useState<"interchange" | "index" | null>(null);
@@ -232,6 +235,10 @@ export function SettingsView() {
     void loadStatus();
     void loadIndex();
     void loadPseudonyms();
+    api
+      .rStatus()
+      .then(setRStatus)
+      .catch(() => setRStatus(null));
   }, [loadStatus, loadIndex, loadPseudonyms]);
 
   // Keep the module-level draft in sync so a typed API key etc. survives a
@@ -811,6 +818,37 @@ export function SettingsView() {
                 ? t("settings.updatesDesktopOnly")
                 : t("settings.updatesError", { detail: updatesError ?? "" })}
             </p>
+          )}
+        </section>
+
+        {/* R integration */}
+        <section className="p-3">
+          <h2 className="text-sm font-semibold text-text-primary">{t("r.statusTitle")}</h2>
+          {rStatus === null ? (
+            <p className="mt-2 flex items-center gap-1.5 text-xs text-text-secondary">
+              <LoaderCircle size={12} className="animate-spin" aria-hidden />
+              {t("r.checking")}
+            </p>
+          ) : rStatus.available ? (
+            <p className="mt-2 flex items-center gap-1.5 text-xs text-success">
+              <CircleCheck size={13} aria-hidden />
+              {t("r.detected", { version: rStatus.version ?? "?", path: rStatus.path ?? "?" })}
+            </p>
+          ) : (
+            <div className="mt-2">
+              <p className="flex items-center gap-1.5 text-xs text-warning">
+                <CircleAlert size={13} aria-hidden />
+                {t("r.notFound")}
+              </p>
+              <a
+                href="https://www.r-project.org/"
+                target="_blank"
+                rel="noreferrer"
+                className="mt-1 inline-block text-xs text-accent underline"
+              >
+                {t("r.installHint")}
+              </a>
+            </div>
           )}
         </section>
 

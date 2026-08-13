@@ -48,6 +48,7 @@ EXPECTED_TABLES = {
     "comment",
     "code_set",
     "code_set_member",
+    "r_script",
 }
 
 EXPECTED_VIEWS = {
@@ -94,7 +95,7 @@ async def test_initial_project_row(new_db):
     )
     row = await cur.fetchone()
     assert row is not None
-    assert row[0] == "v29"
+    assert row[0] == "v30"
     assert row[1] == ""
     assert row[2] == "4.0-test"
     assert row[3] == 0

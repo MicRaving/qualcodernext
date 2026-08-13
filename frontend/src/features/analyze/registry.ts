@@ -35,6 +35,7 @@ import { StatsReportView } from "@/features/analyze/StatsReport";
 import { SummaryTableReportView } from "@/features/analyze/SummaryTableReport";
 import { SentimentReportView } from "@/features/analyze/SentimentReport";
 import { DocumentCompareView } from "@/features/analyze/DocumentCompareReport";
+import { RConsoleView } from "@/features/analyze/RConsole";
 import type { ReportId } from "@/stores/project";
 
 export interface NavEntry {
@@ -112,6 +113,12 @@ export const ANALYSIS: NavEntry[] = [
     descriptionKey: "analyze.descDocCompare",
     icon: GitCompareArrows,
   },
+  {
+    id: "r-console",
+    titleKey: "analyze.titleRConsole",
+    descriptionKey: "analyze.descRConsole",
+    icon: SquareTerminal,
+  },
 ];
 
 /** Non-analytical tools, grouped under their own section in the left bar. */
@@ -152,4 +159,5 @@ export const REPORT_COMPONENTS: Record<ReportId, ComponentType> = {
   "summary-table": SummaryTableReportView,
   sentiment: SentimentReportView,
   "doc-compare": DocumentCompareView,
+  "r-console": RConsoleView,
 };

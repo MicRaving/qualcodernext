@@ -288,6 +288,7 @@ class MigrationChain:
         applied += await self.migrate_v27(app_version)
         applied += await self.migrate_v28(app_version)
         applied += await self.migrate_v29(app_version)
+        applied += await self.migrate_v30(app_version)
         return applied
 
     async def migrate_v21(self, app_version: str) -> list[str]:
@@ -511,6 +512,23 @@ class MigrationChain:
             await cur.execute('update project set databaseversion="v29", about=?', [app_version])
             await self.conn.commit()
             return ["v29"]
+        return []
+
+    async def migrate_v30(self, app_version: str) -> list[str]:
+        """v30: saved R scripts (``r_script``) — per-project R integration:
+        named scripts (name is unique) with created/updated timestamps and an
+        owner column like every other user table."""
+        if self.conn is None:
+            return []
+        cur = await self.conn.cursor()
+        if not await self._has_table(cur, "r_script"):
+            await cur.execute(
+                "CREATE TABLE r_script (id integer primary key autoincrement, name text, "
+                "script text, owner text, created text, updated text, unique(name))"
+            )
+            await cur.execute('update project set databaseversion="v30", about=?', [app_version])
+            await self.conn.commit()
+            return ["v30"]
         return []
 
     async def migrate_v20(self) -> list[str]:

@@ -129,6 +129,10 @@ export function thumbnailUrl(sourceId: number, maxSize = 300): string {
   return `${apiBaseSync()}/sources/${sourceId}/thumbnail?max_size=${maxSize}`;
 }
 
+/** URL to an R artifact (PNG/CSV written by an R job into the exchange dir). */
+export function rArtifactUrl(name: string): string {
+  return `${apiBaseSync()}/r/artifacts/${encodeURIComponent(name)}`;
+}
 
 export interface ProjectSummary {
   databaseversion: string;
@@ -686,6 +690,51 @@ export interface AutocodeJob {
   paused?: boolean;
   error?: string | null;
   result?: { count: number; suggested: { cid: number; name: string; reason: string }[] } | null;
+}
+
+// --- R integration (Rscript bridge) ------------------------------------
+
+/** R installation status as probed by the backend bridge. */
+export interface RStatus {
+  available: boolean;
+  path: string | null;
+  version: string | null;
+  error: string | null;
+}
+
+/** A background R-script job (runs through the same queue as the others). */
+export interface RJob {
+  id: string;
+  state: string;
+  progress: number;
+  message: string;
+  stdout: string;
+  stderr: string;
+  exit_code: number | null;
+  error: string | null;
+  /** Artifact file names produced by the job (subset of GET /r/artifacts). */
+  artifacts?: string[];
+}
+
+/** An artifact file in the R exchange directory. */
+export interface RArtifact {
+  name: string;
+  kind: "png" | "csv" | "other";
+  size: number;
+  modified: string;
+}
+
+/** A saved R script (per project, like stored SQL queries). */
+export interface RScript {
+  name: string;
+  script: string;
+  updated: string;
+}
+
+/** Response of POST /r/prepare-report: a template stub + prepared files. */
+export interface RPrepareResult {
+  stub: string;
+  files: string[];
 }
 
 export interface CoderInfo {
@@ -1386,6 +1435,39 @@ export const api = {
     request<{ ok: boolean }>(`/codings/autocode/jobs/${jobId}/${action}`, { method: "POST" }),
   autocodeJobDelete: (jobId: string) =>
     request<{ ok: boolean }>(`/codings/autocode/jobs/${jobId}`, { method: "DELETE" }),
+
+  // --- R integration (Rscript bridge) ----------------------------------
+
+  rStatus: () => request<RStatus>("/r/status"),
+  rRun: (script: string, name?: string) =>
+    request<{ job_id: string }>("/r/run", {
+      method: "POST",
+      body: JSON.stringify({ script, name }),
+    }),
+  rJob: (jobId: string) => request<RJob>(`/r/jobs/${jobId}`),
+  rJobDelete: (jobId: string) =>
+    request<{ ok: boolean }>(`/r/jobs/${jobId}`, { method: "DELETE" }),
+  rArtifacts: () => request<{ artifacts: RArtifact[] }>("/r/artifacts"),
+  rScripts: () => request<{ scripts: RScript[] }>("/r/scripts"),
+  rScriptCreate: (name: string, script: string) =>
+    request<RScript>("/r/scripts", {
+      method: "POST",
+      body: JSON.stringify({ name, script }),
+    }),
+  rScriptGet: (name: string) =>
+    request<RScript>(`/r/scripts/${encodeURIComponent(name)}`),
+  rScriptPatch: (name: string, script: string) =>
+    request<RScript>(`/r/scripts/${encodeURIComponent(name)}`, {
+      method: "PATCH",
+      body: JSON.stringify({ script }),
+    }),
+  rScriptDelete: (name: string) =>
+    request<void>(`/r/scripts/${encodeURIComponent(name)}`, { method: "DELETE" }),
+  rPrepareReport: (reportId: string) =>
+    request<RPrepareResult>("/r/prepare-report", {
+      method: "POST",
+      body: JSON.stringify({ report_id: reportId }),
+    }),
 
   // --- Graphs (code-map editor) ----------------------------------------
 

@@ -19,6 +19,7 @@ import {
   ScrollText,
   Settings,
   Sparkles,
+  Terminal,
   Trash2,
   Users,
 } from "lucide-react";
@@ -190,8 +191,8 @@ export function ProjectShell() {
     if (announceRef.current) announceRef.current.textContent = text;
   };
 
-  // Poll running background jobs (transcription + autocode); refresh the
-  // project when one finishes.
+  // Poll running background jobs (transcription + autocode + R); refresh
+  // the project when one finishes.
   useEffect(() => {
     if (tasks.length === 0) return;
     const poll = async () => {
@@ -214,7 +215,7 @@ export function ProjectShell() {
               toast.success(t("transcribe.done", { id: j.transcript_source_id ?? 0 }));
               announce(t("transcribe.done", { id: j.transcript_source_id ?? 0 }));
             }
-          } else {
+          } else if (task.kind === "autocode") {
             const j = await api.autocodeJob(task.id);
             const completed = j.state !== "running" && task.state === "running";
             store.updateAutocodeJob(task.id, {
@@ -231,6 +232,24 @@ export function ProjectShell() {
                 announce(t("tasks.autocoded", { count: j.result?.count ?? 0 }));
               } else if (j.state === "error") {
                 toast.error(t("tasks.autocodeFailed"));
+              }
+            }
+          } else if (task.kind === "r") {
+            const j = await api.rJob(task.id);
+            const completed = j.state !== "running" && task.state === "running";
+            store.updateRJob(task.id, {
+              state: j.state as TaskInfo["state"],
+              progress: j.progress,
+              message: j.message,
+            });
+            if (completed) {
+              if (j.state === "done") {
+                void store.refreshProject();
+                toast.success(t("r.done"));
+                announce(t("r.done"));
+              } else if (j.state === "error") {
+                toast.error(t("r.error"));
+                announce(t("r.error"));
               }
             }
           }
@@ -254,11 +273,16 @@ export function ProjectShell() {
     const next = store.tasks.find((j) => j.state === "queued");
     if (!next) return;
     if (next.kind === "transcribe") store.updateTranscribeJob(next.id, { state: "running" });
+    else if (next.kind === "r") store.updateRJob(next.id, { state: "running", progress: 1, message: "starting" });
     else store.updateAutocodeJob(next.id, { state: "running", progress: 1, message: "starting" });
     const start = () =>
       next.kind === "transcribe"
         ? api.transcribeJobControl(next.id, "start")
-        : api.autocodeJobControl(next.id, "start");
+        : next.kind === "r"
+          // R jobs start running at POST /r/run; the queued branch never
+          // occurs (enqueueRJob stores them running) — kept for safety.
+          ? Promise.resolve({ ok: true })
+          : api.autocodeJobControl(next.id, "start");
     start().catch(() => {
       /* retried on the next state change */
     });
@@ -444,10 +468,18 @@ export function ProjectShell() {
                       <div className="flex items-center gap-2 text-xs">
                         <span
                           className="flex items-center gap-1.5"
-                          title={job.kind === "transcribe" ? t("tasks.kindTranscribe") : t("tasks.kindAutocode")}
+                          title={
+                            job.kind === "transcribe"
+                              ? t("tasks.kindTranscribe")
+                              : job.kind === "r"
+                                ? t("tasks.kindR")
+                                : t("tasks.kindAutocode")
+                          }
                         >
                           {job.kind === "transcribe" ? (
                             <AudioLines size={12} aria-hidden />
+                          ) : job.kind === "r" ? (
+                            <Terminal size={12} aria-hidden />
                           ) : (
                             <Sparkles size={12} aria-hidden />
                           )}

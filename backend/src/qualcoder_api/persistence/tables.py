@@ -239,6 +239,17 @@ stored_sql = Table(
     Column("ssql", Text),
 )
 
+r_script = Table(
+    "r_script",
+    metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("name", String, unique=True, nullable=False),
+    Column("script", Text),
+    Column("owner", String),
+    Column("created", String),
+    Column("updated", String),
+)
+
 graph = Table(
     "graph",
     metadata,
@@ -562,6 +573,7 @@ OWNER_TABLES = [
     "comment",
     "code_set",
     "dictionary",
+    "r_script",
 ]
 
 # Visibility views over the coding/annotation tables.

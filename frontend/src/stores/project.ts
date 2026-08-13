@@ -129,12 +129,13 @@ export type ReportId =
   | "stats"
   | "summary-table"
   | "sentiment"
-  | "doc-compare";
+  | "doc-compare"
+  | "r-console";
 
 export type InspectorSelection = { kind: "code" | "file"; id: number } | null;
 
-/** A background job as tracked by the UI (transcription or autocode). */
-export type TaskKind = "transcribe" | "autocode";
+/** A background job as tracked by the UI (transcription, autocode or R). */
+export type TaskKind = "transcribe" | "autocode" | "r";
 export type TaskState = "queued" | "running" | "done" | "error";
 export interface TaskInfo {
   kind: TaskKind;
@@ -200,9 +201,10 @@ interface ProjectState {
   switchCoder: (name: string) => Promise<boolean>;
   deleteCoder: (name: string, reassignTo?: string) => Promise<boolean>;
 
-  /** Background tasks (transcription + autocode jobs; the shell polls them
-   *  and shows a progress chip in the top bar). The queue runs sequentially:
-   *  the shell's dispatcher starts queued jobs one after another. */
+  /** Background tasks (transcription + autocode + R jobs; the shell polls
+   *  them and shows a progress chip in the top bar). The queue runs
+   *  sequentially: the shell's dispatcher starts queued jobs one after
+   *  another. */
   tasks: TaskInfo[];
   tasksPaused: boolean;
   setTasksPaused: (paused: boolean) => void;
@@ -214,8 +216,12 @@ interface ProjectState {
     start?: boolean;
   }) => void;
   enqueueAutocode: (job: { id: string; sourceId: number; sourceName: string }) => void;
+  /** Add an R job. The backend starts it immediately (POST /r/run), so the
+   *  task enters the queue as running. No source: `sourceId` stays 0. */
+  enqueueRJob: (job: { id: string; sourceName: string }) => void;
   updateTranscribeJob: (id: string, patch: Partial<TaskInfo>) => void;
   updateAutocodeJob: (id: string, patch: Partial<TaskInfo>) => void;
+  updateRJob: (id: string, patch: Partial<TaskInfo>) => void;
   /** Remove a task from the queue (also cancels it on the backend). */
   removeTask: (id: string) => void;
   /** Drop queued/running order: move the task with id before targetId. */
@@ -480,10 +486,30 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     set((s) => ({
       tasks: s.tasks.map((j) => (j.kind === "autocode" && j.id === id ? { ...j, ...patch } : j)),
     })),
+  enqueueRJob: (job) =>
+    set((s) => ({
+      tasks: [
+        ...s.tasks,
+        {
+          kind: "r",
+          id: job.id,
+          sourceId: 0,
+          sourceName: job.sourceName,
+          state: "running",
+          progress: 0,
+          message: "starting",
+        },
+      ],
+    })),
+  updateRJob: (id, patch) =>
+    set((s) => ({
+      tasks: s.tasks.map((j) => (j.kind === "r" && j.id === id ? { ...j, ...patch } : j)),
+    })),
   removeTask: (id) => {
     const task = useProjectStore.getState().tasks.find((j) => j.id === id);
     if (!task) return;
     if (task.kind === "transcribe") void api.transcribeJobDelete(id);
+    else if (task.kind === "r") void api.rJobDelete(id);
     else void api.autocodeJobDelete(id);
     set((s) => ({ tasks: s.tasks.filter((j) => j.id !== id) }));
   },
@@ -506,6 +532,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   clearAllTasks: () => {
     for (const job of useProjectStore.getState().tasks) {
       if (job.kind === "transcribe") void api.transcribeJobDelete(job.id);
+      else if (job.kind === "r") void api.rJobDelete(job.id);
       else void api.autocodeJobDelete(job.id);
     }
     set({ tasks: [] });

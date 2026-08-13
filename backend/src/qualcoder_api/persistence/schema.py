@@ -93,6 +93,8 @@ _SCHEMA_SQL: list[str] = [
     "CREATE TABLE code_set_member (set_id integer, cid integer, primary key(set_id, cid));",
     "CREATE TABLE comment (id integer primary key autoincrement, target_kind text, target_id integer, "
     "body text, owner TEXT, created text)",
+    "CREATE TABLE r_script (id integer primary key autoincrement, name text, script text, "
+    "owner text, created text, updated text, unique(name))",
 ]
 
 # Hot-path indexes (created for new projects; the migration chain adds the
@@ -162,7 +164,7 @@ async def create_new_project_schema(
     await cur.execute(
         "INSERT INTO project VALUES(?,?,?,?,?,?,?,?,?,?,?)",
         (
-            "v29",
+            "v30",
             datetime.datetime.now().astimezone().strftime("%Y-%m-%d %H:%M:%S"),
             "",
             app_version,
