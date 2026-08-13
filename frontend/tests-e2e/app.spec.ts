@@ -111,7 +111,9 @@ test("create project, import a file, autocode it, and run a report", async ({ pa
     await expect(promptBox).toBeVisible();
     await promptBox.fill('"happy"');
     await dialog.getByText("E2E").click();
-    await dialog.getByRole("button", { name: "Autocode" }).click();
+    // The dialog gained a "Autocode with dictionary" button — the main action
+    // must be matched exactly so the two never collide.
+    await dialog.getByRole("button", { name: "Autocode", exact: true }).click();
 
     await expect(dialog.getByText(/Autocoded \d+ instances/)).toBeVisible({
       timeout: 20_000,

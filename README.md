@@ -2,6 +2,10 @@
 
 This is a rework of [QualCoder](https://github.com/ccbogel/QualCoder), the open-source qualitative data analysis (QDA) tool. The central focus of the software is to load text and multimedia files for qualitative coding. It can transcribe audio/video files, organize codes and files, generate reports like coding graphs and coder comparisons, and integrates LLMs to explore the data, support coding, and analyze the results.
 
+> **Current development branch: `alpha-0.2.0`** — the roadmap wave described below
+> (dictionary autocode, stats/sentiment reports, QTT, creative coding, ...) is
+> implemented and covered by the e2e suite (`frontend/tests-e2e`).
+
 
 
 ### Scope of the Rework
@@ -30,6 +34,23 @@ Based on the upstream QualCoder as per 10.08.2026 that was completely reworked w
 * Collaboration with automatic sync between multiple simultaneously working coders
 * Extended local AI assistant
 * Included an updater
+
+### 0.2.0 alpha — roadmap wave
+
+* Code **promote/demote** via the code-tree context menu (Word-list style hierarchy moves)
+* **Multi-coder interrater** reliability (N-rater Alpha, pairwise Kappa / AC1)
+* **Dictionary autocode**: MAXDictio-style word dictionaries with term-frequency report, used from the autocode dialog and the Dictionary report
+* **Sentiment report** (VADER lexicon or AI) and **document comparison** chart (LCS alignment)
+* **Statistics** suite: code × attribute crosstabs with chi-square, group comparisons (Mann-Whitney U), mixed-methods matrix
+* **Summary tables** (coding memos as a document × code grid) and the **smart publisher** (Word/Excel/PowerPoint export of reports)
+* **Segment hyperlinks / linked quotes** between documents (copy/paste link payloads)
+* **Creative coding** scratchpad with promote-to-code
+* **QTT workspace** (MAXQDA-style questions-themes-theories worksheets, qualitative + Creswell 14-step mixed template, send-to-QTT from the coders)
+* **URL import / scraping** (Reddit threads, YouTube metadata/captions/comments, articles, raw HTML)
+* **Manual transcription mode** (media keys, F9/Space, timestamp insert)
+* **Attribute value labels** (labelled dropdowns in the case/file properties)
+* **XLSX/SPSS .sav import** and **Transana `.tprd` import**
+* Coder flyout with per-coder delete + background-task queue controls; batch transcribe/autocode buttons with eligible counts
 
 ## Collaboration
 
@@ -82,31 +103,13 @@ Here is a non-exhaustive list of planned features
 
 ### Roadmap
 
-* Support Xlsx and SPSS .sav
-* Web page capture
-* Scrape Reddit and YouTube data (only)
-* Creative coding
-* Autocode via dictionary
-* Manual transcription mode: keyboard/multimedia-button start/pause only, no pedals
-* Statistical analysis
-* Sentiment analysis
-* Segment hyperlinks / linked quotes
-* Value labels
-* Mixed methods: quantify codes by variable, group comparisons
-* Dictionary-based content analysis
-* Document Comparison Chart
-* Summary Tables
-* Smart Publisher
-* QTT workspace (Questions, Themes, Theories)
-* Mixed Methods QTT Worksheet (Creswell 14-step)
-* Send-to-QTT collection
+Items shipped in the current `alpha-0.2.0` branch are listed in the changelog
+above; the remaining planned work:
+
 * Import of NVivo, ATLAS.ti → **Maybe** — depends on format research (see the open-source mapping projects below)
-* Import of Transana → planned (`.tprd` is SQLite — same pattern as the RQDA importer)
-* MS Office export
 * Cloud collaboration (shared projects, web access, comments) → **not planned** for the desktop app; comments via the existing folder-sync are assessed and deferred
 * Chat with memos
 * AI paraphrase
-* AI sentiment analysis
 
 ### Open-source format research — NVivo / ATLAS.ti
 
@@ -119,5 +122,5 @@ NVivo (`.nvpx`/`.nvp`, a ZIP of XML files) and ATLAS.ti (`.atlproj24`, ZIP of XM
 * [BarraQDA/nvivotools](https://github.com/BarraQDA/nvivotools) (GPL-3.0) — Python tooling around NVivo, incl. its XML export
 * [SecurityEssentials/Teams2NVivo](https://github.com/SecurityEssentials/Teams2NVivo) (MIT) — writes NVivo XML project files (documents the format)
 * [borisbachmann/atlas-qdpx](https://github.com/borisbachmann/atlas-qdpx) (MIT) — extracts annotations from ATLAS.ti REFI-QDA exports
-* Transana — the old GPL code lives on [SourceForge](https://sourceforge.net/projects/transana/) (current versions are commercial); single-user `.tprd` projects are SQLite, keeping the import planned
+* Transana — the old GPL code lives on [SourceForge](https://sourceforge.net/projects/transana/) (current versions are commercial); single-user `.tprd` projects are SQLite — **shipped in 0.2.0** (defensive schema probe, media + transcript + keyword mapping)
 

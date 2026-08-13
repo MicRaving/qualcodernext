@@ -32,16 +32,39 @@ if a server fails to start.
 
 ## What it covers
 
-1. **Welcome screen + theme toggle** — health pill shows "Backend ok", the
-   theme button flips the `dark` class on `<html>`.
-2. **Create project** — welcome form → project shell (toolbar, sidebar nav).
-3. **Import + code** — import `interview.txt`, open it in the text coder,
-   autocode the word "the" into a new code named `E2E`, verify the success
-   message.
-4. **Report** — Code frequencies shows `E2E` with count ≥ 1; close project
-   and verify it appears in "Recent projects".
-5. **Settings + AI** — reopen the project, check the Appearance and
-   AI assistant sections render.
+The specs run alphabetically in one serial worker (see "Why serial" below):
+
+1. **Advanced** (`advanced.spec.ts`) — PDF region coding, plain-text mode for
+   PDFs, duplicate-import skip banner, theme persistence, recent-projects
+   persistence and the nonexistent-project error path.
+2. **App shell** (`app.spec.ts`) — dashboard without a project, create project,
+   import + autocode + code-frequencies report, recent projects, settings +
+   AI sections.
+3. **Coding flows** (`coding-flows.spec.ts`) — graph create/delete, PDF text
+   marking with the plain-text/PDF toggles, and the multi-code autocode dialog.
+4. **Features** (`features.spec.ts`) — image region coding, sidebar-code
+   clicking, history view + filter, autocode + SQL report, cases + attributes,
+   REFI-QDA interchange export/import, a11y smoke (accessible names).
+5. **Inspector** (`inspector-annotation.spec.ts`) — file-inspector annotation.
+6. **Media** (`media.spec.ts`) — AV coding on a generated WAV: timeline
+   segments, delete, play/pause, the manual-transcription mode toggle, and a
+   whisper transcription run (skipped when no spoken fixture exists).
+7. **Roadmap** (`roadmap.spec.ts`) — v0.2.0 features: code promote/demote via
+   the sidebar context menu, the reports registry (dictionary / statistics /
+   summary table / sentiment / document comparison), QTT worksheet creation +
+   note entry, the creative scratchpad, and value-labels selects in the
+   attribute editor.
+8. **Smoke** (`smoke-features.spec.ts`) — reports menu bar, graphs under
+   reports, journal ribbon.
+9. **Tasks + a11y** (`tasks-a11y.spec.ts`) — batch autocode with eligible
+   counts on the batch buttons, the background-tasks queue flyout (pause/
+   resume/delete/clear), the coder flyout (viewport bounds, per-coder
+   trashcan, background-tasks section), sidebar drag-hide, display-mode a11y
+   classes, and the PDF coder's plain-text pane (PDF + text side by side).
+
+Flaky media-dependent flows (whisper transcription without a spoken fixture,
+headless autoplay) carry explicit skip/fallback annotations instead of
+weakening the assertions.
 
 Tests run serially (single worker) because the backend keeps one project
 open at a time and shares `~/.qualcoder/settings.json` (which the setup and

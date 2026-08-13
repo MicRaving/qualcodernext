@@ -302,7 +302,10 @@ test("transcribe audio with whisper and open the transcript", async ({ page }) =
   // Open the transcription dialog (one Transcribe button, tabbed) and start
   // with the tiny model (cached in ~/.qualcoder/models/whisper by the earlier
   // manual smoke run; first use downloads it, which the timeout covers).
-  await page.getByRole("button", { name: "Transcribe", exact: true }).click();
+  // The header ALSO has the manual transcription-mode toggle labelled
+  // "Transcribe" — the AI-transcribe button renders first, so .first() picks
+  // the dialog opener.
+  await page.getByRole("button", { name: "Transcribe", exact: true }).first().click();
   const dialog = page.getByRole("dialog", { name: "Transcribe audio/video" });
   await expect(dialog).toBeVisible({ timeout: 10_000 });
   await dialog
@@ -318,6 +321,42 @@ test("transcribe audio with whisper and open the transcript", async ({ page }) =
 
   // The transcript is now VISIBLE in the video view (linked companion panel).
   await expect(page.getByText(/Hello world/).first()).toBeVisible({ timeout: 20_000 });
+});
+
+// ---------------------------------------------------------------------------
+
+test("manual transcription mode toggle replaces the transcript with an editor", async ({
+  page,
+}) => {
+  await ensureProjectOpen(page);
+  await openToneInCoder(page);
+
+  // The header carries TWO "Transcribe" buttons: the AI transcription dialog
+  // opener and the manual transcription-mode toggle (aria-pressed). The
+  // toggle is enabled because importing the audio auto-created its text
+  // transcript (av_text companion).
+  const transcribeButtons = page.getByRole("button", { name: "Transcribe", exact: true });
+  await expect(transcribeButtons).toHaveCount(2, { timeout: 20_000 });
+  const modeToggle = transcribeButtons.nth(1);
+  await expect(modeToggle).toBeEnabled({ timeout: 10_000 });
+  await expect(modeToggle).toHaveAttribute("aria-pressed", "false");
+
+  // Toggling it swaps the transcript pane for the plain-text editor.
+  await modeToggle.click();
+  await expect(modeToggle).toHaveAttribute("aria-pressed", "true");
+  const editor = page.getByLabel("Transcribe", { exact: true }).last();
+  await expect(editor).toBeVisible({ timeout: 10_000 });
+
+  // Type a draft — the editor is usable for manual transcription.
+  await editor.fill("Draft transcript line");
+  await expect(editor).toHaveValue("Draft transcript line");
+
+  // Toggling back restores the read-only transcript view (the edited draft
+  // triggers the discard confirmation — accept it).
+  page.on("dialog", (d) => void d.accept());
+  await modeToggle.click();
+  await expect(modeToggle).toHaveAttribute("aria-pressed", "false");
+  await expect(editor).toBeHidden({ timeout: 10_000 });
 });
 
 // ---------------------------------------------------------------------------

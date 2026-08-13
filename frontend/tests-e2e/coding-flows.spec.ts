@@ -100,14 +100,19 @@ doc.save(r"${pdfPath}")
   await expect(picker).toBeHidden({ timeout: 10_000 });
   await expect(page.locator("[class*=banner]")).toHaveCount(0);
 
+  // Plain-text pane on: the extracted text (with the marked segment) shows
+  // next to the rendered PDF. "Plain text" is a toggle — pressing it again
+  // returns to the rendered PDF only.
   await page.getByRole("button", { name: "Plain text" }).click();
-  await expect(page.getByRole("button", { name: "Edit mode" })).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByText("The quick brown fox jumps over the lazy dog.")).toBeVisible({
+    timeout: 20_000,
+  });
   const seg = page.locator(".qc-seg").first();
   await expect(seg).toBeVisible({ timeout: 15_000 });
   await expect(seg).toContainText("The quick brown fox jumps over the lazy dog.");
 
   // Switch back to the rendered PDF — canvases re-render and text marking works.
-  await page.getByRole("button", { name: "Rendered PDF" }).click();
+  await page.getByRole("button", { name: "Plain text" }).click();
   await expect(page.locator("canvas").first()).toBeVisible({ timeout: 20_000 });
   await page.waitForTimeout(1500);
   const canvas2 = page.locator("canvas").first();
@@ -162,7 +167,9 @@ test("autocode dialog codes multiple selected codes", async ({ page }) => {
   await ad.getByText("BirdCode").click();
   await expect(ad.getByText("2 codes selected")).toBeVisible();
   await expect(ad.getByText("Suggest new codes")).toBeVisible();
-  await ad.getByRole("button", { name: "Autocode" }).click();
+  // The dialog also has a "Autocode with dictionary" button — match the main
+  // action exactly so the two never collide.
+  await ad.getByRole("button", { name: "Autocode", exact: true }).click();
 
   // Result: 3 matched spans x 2 codes = 6 codings (the dialog then closes).
   await expect(ad.getByText(/Autocoded \d+ instances/)).toBeVisible({ timeout: 15_000 });

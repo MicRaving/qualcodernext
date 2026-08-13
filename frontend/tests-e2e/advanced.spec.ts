@@ -201,7 +201,9 @@ test("PDF import and region coding", async ({ page }) => {
   page.removeAllListeners("dialog");
   await page.getByRole("button", { name: "Plain text" }).click();
   await expect(page.getByText("E2E PDF page")).toBeVisible({ timeout: 20_000 });
-  await expect(page.getByRole("button", { name: "Rendered PDF" })).toBeVisible();
+  // The coder toolbar toggles are "Plain text" / "PDF" (exact — "PDF" is a
+  // substring of every PdfCode/PdfTextCode row name in the sidebar).
+  await expect(page.getByRole("button", { name: "PDF", exact: true })).toBeVisible();
 
   // Create a fresh code via the sidebar (Code → inline name editor).
   await page.getByRole("button", { name: "Code", exact: true }).click();
@@ -232,7 +234,8 @@ test("PDF import and region coding", async ({ page }) => {
   await expect(page.getByText("Coding details")).toBeVisible({ timeout: 10_000 });
   await expect(page.locator("li").filter({ hasText: "PdfTextCode" })).toBeVisible();
 
-  await page.getByRole("button", { name: "Rendered PDF" }).click();
+  // Turn the text pane back off — the rendered PDF is the only view again.
+  await page.getByRole("button", { name: "Plain text" }).click();
   await expect(page.getByRole("img", { name: "Page 1 of 1" })).toBeVisible({
     timeout: 20_000,
   });

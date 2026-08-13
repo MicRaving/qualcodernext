@@ -67,17 +67,15 @@ test("files-view batch autocode queues background tasks with queue controls", as
   await rowA.locator('input[type="checkbox"]').check();
   await rowB.locator('input[type="checkbox"]').check();
 
-  // The batch buttons appear with the selection count.
-  const transcribeBtn = page.getByRole("button", { name: "Transcribe 2 files…" });
-  const autocodeBtn = page.getByRole("button", { name: "Autocode 2 files…" });
+  // The batch buttons appear with the selection counts (eligible/total):
+  // Transcribe only counts AV media (none here → disabled), Autocode counts
+  // text sources (both → enabled).
+  const transcribeBtn = page.getByRole("button", { name: "Transcribe (0/2)" });
+  const autocodeBtn = page.getByRole("button", { name: "Autocode (2/2)" });
   await expect(transcribeBtn).toBeVisible();
+  await expect(transcribeBtn).toBeDisabled();
   await expect(autocodeBtn).toBeVisible();
-
-  // Text-only selection: Transcribe reports nothing usable.
-  await transcribeBtn.click();
-  await expect(page.getByText(/No selected audio\/video file can be transcribed/)).toBeVisible({
-    timeout: 10_000,
-  });
+  await expect(autocodeBtn).toBeEnabled();
 
   // Autocode dialog: select the code, the prompt prefills with the code name.
   await autocodeBtn.click();
@@ -90,7 +88,9 @@ test("files-view batch autocode queues background tasks with queue controls", as
       timeout: 5_000,
     })
     .toBe(true);
-  await dialog.getByRole("button", { name: "Autocode" }).click();
+  // The dialog also has a "Autocode with dictionary" button — match the main
+  // action exactly so the two never collide.
+  await dialog.getByRole("button", { name: "Autocode", exact: true }).click();
   await expect(dialog).toBeHidden({ timeout: 15_000 });
 
   // Both files are queued as background tasks in the ribbon flyout.
@@ -119,6 +119,60 @@ test("files-view batch autocode queues background tasks with queue controls", as
   // Clear removes the remaining finished task.
   await page.getByRole("button", { name: "Clear finished tasks" }).click();
   await expect(flyout.getByText(/a_\d+\.txt/)).toHaveCount(0);
+});
+
+test("coder flyout stays in the viewport and hosts per-row delete + background tasks", async ({
+  page,
+}) => {
+  const projectPath = unique("Fl");
+  fs.mkdirSync(E2E_ROOT, { recursive: true });
+  await createProject(page, projectPath);
+
+  // The flyout opens from the coder-switcher button in the ribbon.
+  const coderBtn = page.getByRole("button", { name: /click to switch/ });
+  await expect(coderBtn).toBeVisible();
+  await coderBtn.click();
+  const flyout = page.getByRole("listbox", { name: "Coders" });
+  await expect(flyout).toBeVisible();
+
+  // Window-bounds sanity: the flyout must stay fully inside the viewport
+  // (the positioning code clamps it with an 8px margin on every side).
+  const box = await flyout.boundingBox();
+  expect(box).not.toBeNull();
+  const vp = page.viewportSize();
+  expect(vp).not.toBeNull();
+  expect(box!.x).toBeGreaterThanOrEqual(0);
+  expect(box!.y).toBeGreaterThanOrEqual(0);
+  expect(box!.x + box!.width).toBeLessThanOrEqual(vp!.width);
+  expect(box!.y + box!.height).toBeLessThanOrEqual(vp!.height);
+
+  // Per-coder rows carry a trashcan (Delete) button; the CURRENT coder's
+  // delete is disabled ("switch to another coder first").
+  const currentRow = flyout.getByRole("option").filter({ hasText: "default" });
+  await expect(currentRow).toBeVisible();
+  await expect(currentRow.getByRole("button", { name: "Delete", exact: true })).toBeDisabled();
+
+  // Add a second coder — the app switches to it, so its row now carries the
+  // enabled trashcan while the previous (default) coder's becomes deletable.
+  await flyout.getByRole("button", { name: /Add coder/ }).click();
+  await flyout.getByRole("textbox", { name: "New coder name" }).fill("Second");
+  await flyout.getByRole("button", { name: "Add coder" }).click();
+  const secondRow = flyout.getByRole("option").filter({ hasText: "Second" });
+  await expect(secondRow).toBeVisible({ timeout: 10_000 });
+  await expect(secondRow.getByRole("button", { name: "Delete", exact: true })).toBeVisible();
+
+  // Deleting the now non-current coder removes its row entirely.
+  const defaultRow = flyout.getByRole("option").filter({ hasText: "default" });
+  await expect(defaultRow.getByRole("button", { name: "Delete", exact: true })).toBeEnabled();
+  await defaultRow.getByRole("button", { name: "Delete", exact: true }).click();
+  await expect(defaultRow).toHaveCount(0, { timeout: 10_000 });
+
+  // The flyout hosts the background-tasks section with its queue controls.
+  await expect(flyout.getByText("Background tasks", { exact: true })).toBeVisible();
+  await expect(flyout.getByText("No background tasks.")).toBeVisible();
+  await expect(flyout.getByRole("button", { name: "Start", exact: true })).toBeVisible();
+  await expect(flyout.getByRole("button", { name: "Pause", exact: true })).toBeVisible();
+  await expect(flyout.getByRole("button", { name: "Clear all", exact: true })).toBeVisible();
 });
 
 test("sidebars hide when dragged past the minimum and recall via edge arrow", async ({ page }) => {
@@ -168,7 +222,7 @@ test("display-mode drop-down applies a11y classes (dashboard + settings)", async
   await expect(page.locator("html")).not.toHaveClass(/a11y-(high-contrast|screenreader)/);
 });
 
-test("pdf coder side-by-side view shows PDF and plain text left/right", async ({ page }) => {
+test("pdf coder plain-text pane shows PDF and text side by side", async ({ page }) => {
   const projectPath = unique("Ps");
   const pdfPath = path.join(E2E_ROOT, `sb_${Date.now() % 100000}.pdf`);
   const script = `
@@ -192,10 +246,12 @@ doc.save(r"${pdfPath}")
   await expect(page.locator("canvas").first()).toBeVisible({ timeout: 30_000 });
   await page.waitForTimeout(1500);
 
-  const splitBtn = page.getByRole("button", { name: "Side-by-side view" });
-  await expect(splitBtn).toBeVisible();
-  await splitBtn.click();
-  await expect(splitBtn).toHaveAttribute("aria-pressed", "true");
+  // The "Plain text" toggle is a pane switch (PDF stays on): pressing it
+  // once shows the extracted text next to the canvas.
+  const plainBtn = page.getByRole("button", { name: "Plain text" });
+  await expect(plainBtn).toBeVisible();
+  await plainBtn.click();
+  await expect(plainBtn).toHaveAttribute("aria-pressed", "true");
 
   // The plain-text column renders next to the canvas; the divider exists.
   await expect(page.getByText("The quick brown fox jumps over the lazy dog.")).toBeVisible({
@@ -205,7 +261,7 @@ doc.save(r"${pdfPath}")
   await expect(page.getByRole("separator", { name: "Resize text panel" })).toBeVisible();
 
   // Toggling off removes the text column again.
-  await splitBtn.click();
+  await plainBtn.click();
   await expect(page.getByText("The quick brown fox jumps over the lazy dog.")).toHaveCount(0, {
     timeout: 15_000,
   });
