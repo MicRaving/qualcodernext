@@ -33,6 +33,13 @@ OWNER_TABLES = (
     ("attribute", "owner"),
     ("manage_files_display", "owner"),
     ("files_filter", "owner"),
+    ("link", "owner"),
+    ("creative_item", "owner"),
+    ("qtt_sheet", "owner"),
+    ("qtt_item", "owner"),
+    ("comment", "owner"),
+    ("code_set", "owner"),
+    ("dictionary", "owner"),
 )
 
 

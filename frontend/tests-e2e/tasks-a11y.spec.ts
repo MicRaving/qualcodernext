@@ -263,7 +263,7 @@ test("display-mode drop-down applies a11y classes (dashboard + settings)", async
 
   // Settings exposes the same drop-down (the dashboard one stays mounted
   // behind it — target the settings instance).
-  await page.getByRole("button", { name: "Settings" }).click();
+  await page.getByRole("button", { name: "Settings", exact: true }).click();
   const settingsSelect = page.getByLabel("Display mode").last();
   await expect(settingsSelect).toBeVisible({ timeout: 10_000 });
   await settingsSelect.selectOption("screenreader");

@@ -1006,6 +1006,7 @@ class CodingRepository:
         memo: str = "",
         avid: int | None = None,
         important: int = 0,
+        weight: int = 0,
     ) -> Coding:
         result = await self.session.execute(
             insert(tables.code_text).values(
@@ -1019,6 +1020,7 @@ class CodingRepository:
                 memo=memo,
                 avid=avid,
                 important=important,
+                weight=weight,
             )
         )
         await self.session.commit()
@@ -1057,7 +1059,7 @@ class CodingRepository:
         return [Coding.model_validate(_coding_row(r._mapping)) for r in rows]
 
     async def update_text_coding(self, ctid: int, **fields) -> Coding | None:
-        allowed = {"seltext", "pos0", "pos1", "memo", "important", "avid", "cid"}
+        allowed = {"seltext", "pos0", "pos1", "memo", "important", "avid", "cid", "weight"}
         values = {k: v for k, v in fields.items() if k in allowed}
         if values:
             await self.session.execute(
@@ -1106,6 +1108,7 @@ class CodingRepository:
         memo: str = "",
         important: int = 0,
         pdf_page: int | None = None,
+        weight: int = 0,
     ) -> ImageCoding:
         result = await self.session.execute(
             insert(tables.code_image).values(
@@ -1120,6 +1123,7 @@ class CodingRepository:
                 owner=owner,
                 important=important,
                 pdf_page=pdf_page,
+                weight=weight,
             )
         )
         await self.session.commit()
@@ -1151,7 +1155,7 @@ class CodingRepository:
 
         Port of the legacy ``move_resize_rectangle`` behaviour.
         """
-        allowed = {"x1", "y1", "width", "height", "cid", "memo", "important", "pdf_page"}
+        allowed = {"x1", "y1", "width", "height", "cid", "memo", "important", "pdf_page", "weight"}
         values = {k: v for k, v in fields.items() if k in allowed and v is not None}
         if values:
             await self.session.execute(
@@ -1197,6 +1201,7 @@ class CodingRepository:
         owner: str,
         memo: str = "",
         important: int = 0,
+        weight: int = 0,
     ) -> AVCoding:
         result = await self.session.execute(
             insert(tables.code_av).values(
@@ -1208,6 +1213,7 @@ class CodingRepository:
                 date=_now(),
                 owner=owner,
                 important=important,
+                weight=weight,
             )
         )
         await self.session.commit()
@@ -1233,6 +1239,29 @@ class CodingRepository:
             {"sid": source_id},
         )
         return [AVCoding.model_validate(_coding_row(r._mapping)) for r in rows]
+
+    async def update_av_coding(self, avid: int, **fields) -> AVCoding | None:
+        """Update an AV time-range coding (memo/weight)."""
+        allowed = {"memo", "important", "weight"}
+        values = {k: v for k, v in fields.items() if k in allowed and v is not None}
+        if values:
+            await self.session.execute(
+                update(tables.code_av)
+                .where(tables.code_av.c.avid == avid)
+                .values(**values)
+            )
+            await self.session.commit()
+        row = (
+            await self.session.execute(
+                select(tables.code_av).where(tables.code_av.c.avid == avid)
+            )
+        ).first()
+        if row is not None:
+            await _capture(
+                self.session, "code_av", "update", "avid", avid, _rowdict(row)
+            )
+            await self.session.commit()
+        return AVCoding.model_validate(row._mapping) if row else None
 
     async def delete_av_coding(self, avid: int) -> None:
         row = (

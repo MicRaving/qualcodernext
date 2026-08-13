@@ -30,6 +30,7 @@ class TextCodingCreate(BaseModel):
     memo: str = ""
     avid: int | None = None
     important: int = 0
+    weight: int = Field(default=0, ge=0, le=100)
 
 
 class ImageCodingCreate(BaseModel):
@@ -43,6 +44,7 @@ class ImageCodingCreate(BaseModel):
     memo: str = ""
     important: int = 0
     pdf_page: int | None = None
+    weight: int = Field(default=0, ge=0, le=100)
 
 
 class AVCodingCreate(BaseModel):
@@ -53,6 +55,7 @@ class AVCodingCreate(BaseModel):
     owner: str | None = None
     memo: str = ""
     important: int = 0
+    weight: int = Field(default=0, ge=0, le=100)
 
 
 class TextCodingUpdate(BaseModel):
@@ -60,6 +63,7 @@ class TextCodingUpdate(BaseModel):
     important: int | None = None
     pos0: int | None = None
     pos1: int | None = None
+    weight: int | None = Field(default=None, ge=0, le=100)
 
 
 @router.post("/text", response_model=Coding, status_code=201)
@@ -142,6 +146,7 @@ class ImageCodingUpdate(BaseModel):
     cid: int | None = None
     memo: str | None = None
     important: int | None = None
+    weight: int | None = Field(default=None, ge=0, le=100)
 
 
 @router.patch("/image/{imid}", response_model=ImageCoding)
@@ -194,6 +199,27 @@ async def create_av_coding(req: AVCodingCreate, db: DbDep) -> AVCoding:
 @router.get("/av/{source_id}", response_model=list[AVCoding])
 async def list_av_codings(source_id: int, db: DbDep) -> list[AVCoding]:
     return await CodingRepository(db).list_av_codings_for_file(source_id)
+
+
+class AVCodingUpdate(BaseModel):
+    memo: str | None = None
+    important: int | None = None
+    weight: int | None = Field(default=None, ge=0, le=100)
+
+
+@router.patch("/av/{avid}", response_model=AVCoding)
+async def update_av_coding(avid: int, req: AVCodingUpdate, db: DbDep) -> AVCoding:
+    """Update an AV time-range coding (memo/weight)."""
+    coding = await CodingRepository(db).update_av_coding(
+        avid, **req.model_dump(exclude_none=True)
+    )
+    if coding is None:
+        raise HTTPException(status_code=404, detail="coding not found")
+    await audit.record(
+        db, user=get_codername(), action="coding.update", entity="code_av",
+        entity_id=avid, source_id=coding.id, detail=coding.model_dump(),
+    )
+    return coding
 
 
 @router.delete("/av/{avid}", status_code=204)

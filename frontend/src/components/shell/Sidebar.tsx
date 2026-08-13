@@ -3,6 +3,7 @@
  */
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import {
+  Check,
   ChevronDown,
   ChevronRight,
   CircleAlert,
@@ -16,19 +17,42 @@ import {
   IndentDecrease,
   IndentIncrease,
   Info,
+  LoaderCircle,
   Palette,
   Pencil,
   Plus,
   Search,
+  SlidersHorizontal,
   StickyNote,
   Trash2,
   Unlink,
   Upload,
   UserRound,
+  X,
 } from "lucide-react";
 import { api, type CodeTreeItem, type Source } from "@/lib/api";
+import {
+  addCodeSetMembers,
+  createCodeSet,
+  deleteCodeSet,
+  getCodeSet,
+  listCodeSets,
+  removeCodeSetMembers,
+  renameCodeSet,
+  type CodeSetSummary,
+} from "@/lib/codeSetsApi";
 
-import { BarHeader, Button, IconButton, Input, LeftBar, Menu, MenuItem } from "@/components/ui/orchestrator";
+import {
+  BarHeader,
+  Button,
+  IconButton,
+  Input,
+  LeftBar,
+  Menu,
+  MenuItem,
+  Modal,
+  Select,
+} from "@/components/ui/orchestrator";
 import { InlineNameEdit } from "@/components/ui/InlineNameEdit";
 import { isPdf } from "@/lib/media";
 import { useToast } from "@/lib/toast";
@@ -64,6 +88,14 @@ export function Sidebar() {
   const setFileQuery = useProjectStore((s) => s.setFileQuery);
   const [colorMenu, setColorMenu] = useState<{ item: CodeTreeItem; x: number; y: number } | null>(null);
   const [palette, setPalette] = useState<string[]>([]);
+  // Code sets (MAXQDA-style named subsets of codes): the set list, the
+  // select's active entry, the APPLIED filter (client-side tree visibility)
+  // and the manage/membership-editor popups.
+  const [codeSets, setCodeSets] = useState<CodeSetSummary[]>([]);
+  const [activeSetId, setActiveSetId] = useState<number | null>(null);
+  const [appliedSet, setAppliedSet] = useState<{ id: number; name: string; cids: Set<number> } | null>(null);
+  const [manageMenu, setManageMenu] = useState<{ x: number; y: number } | null>(null);
+  const [membersEditor, setMembersEditor] = useState<{ set: CodeSetSummary; members: Set<number> } | null>(null);
 
   const sources = useProjectStore((s) => s.sources);
   const codeTree = useProjectStore((s) => s.codeTree);
@@ -77,6 +109,28 @@ export function Sidebar() {
   const hiddenCodes = useProjectStore((s) => s.hiddenCodes);
   const toggleHiddenCode = useProjectStore((s) => s.toggleHiddenCode);
   const view = useProjectStore((s) => s.view);
+
+  // Refresh the set list whenever a project opens/closes. The applied
+  // filter is a client-side snapshot and is dropped on close.
+  useEffect(() => {
+    if (!projectOpen) {
+      setCodeSets([]);
+      setActiveSetId(null);
+      setAppliedSet(null);
+      return;
+    }
+    listCodeSets()
+      .then((sets) => {
+        setCodeSets(sets);
+        setActiveSetId((prev) =>
+          prev != null && sets.some((s) => s.id === prev) ? prev : (sets[0]?.id ?? null),
+        );
+      })
+      .catch((e) => {
+        const detail = e instanceof Error ? e.message : t("codeSets.loadError");
+        setToolbarError(detail);
+      });
+  }, [projectOpen, t]);
 
   useEffect(() => {
     if (!menu) return;
@@ -126,11 +180,41 @@ export function Sidebar() {
     return byParent;
   }, [codeTree]);
 
+  /** When a code set is applied: the tree keys (``kind:id``) that stay
+   *  visible. Codes outside the set are pruned; categories survive only
+   *  when at least one visible code lives in their subtree. Purely a
+   *  client-side view state — nothing is deleted. */
+  const filteredKeys = useMemo(() => {
+    if (!appliedSet) return null;
+    const visible = new Set<string>();
+    const walk = (parentKey: string): boolean => {
+      let anyVisible = false;
+      for (const item of treeItems.get(parentKey) ?? []) {
+        if (item.kind === "category") {
+          if (walk(`cat:${item.id}`)) {
+            visible.add(`cat:${item.id}`);
+            anyVisible = true;
+          }
+        } else if (appliedSet.cids.has(item.id)) {
+          visible.add(`code:${item.id}`);
+          anyVisible = true;
+        }
+      }
+      return anyVisible;
+    };
+    walk("root");
+    return visible;
+  }, [treeItems, appliedSet]);
+
   const flatMatches = useMemo(() => {
     const q = query.trim().toLowerCase();
     if (!q) return [];
-    return codeTree.filter((item) => item.name.toLowerCase().includes(q));
-  }, [codeTree, query]);
+    return codeTree.filter(
+      (item) =>
+        item.name.toLowerCase().includes(q) &&
+        (!filteredKeys || filteredKeys.has(`${item.kind}:${item.id}`)),
+    );
+  }, [codeTree, query, filteredKeys]);
 
   /** Depth-first flattened tree order (used for Tab-cycling the editor). */
   const flatTree = useMemo(() => {
@@ -475,6 +559,121 @@ export function Sidebar() {
   }
 
   /* ------------------------------------------------------------------ */
+  /* Code sets                                                           */
+  /* ------------------------------------------------------------------ */
+
+  /** Apply the active set: snapshot its members and filter the tree. */
+  async function applyCodeSet() {
+    if (activeSetId == null) return;
+    setToolbarError(null);
+    try {
+      const detail = await getCodeSet(activeSetId);
+      const set = codeSets.find((s) => s.id === activeSetId);
+      const name = set?.name ?? `${activeSetId}`;
+      setAppliedSet({ id: activeSetId, name, cids: new Set(detail.members.map((m) => m.cid)) });
+      toast.success(t("codeSets.applied", { name }));
+    } catch (e) {
+      const detail = e instanceof Error ? e.message : t("codeSets.applyError");
+      setToolbarError(detail);
+      toast.error(detail);
+    }
+  }
+
+  async function createSet() {
+    const name = window.prompt(t("codeSets.createPrompt"));
+    if (name == null) return;
+    const trimmed = name.trim();
+    if (!trimmed) return;
+    setToolbarError(null);
+    try {
+      const created = await createCodeSet(trimmed);
+      setCodeSets((prev) => [...prev, created]);
+      setActiveSetId(created.id);
+      toast.success(t("codeSets.created", { name: trimmed }));
+    } catch (e) {
+      const detail = e instanceof Error ? e.message : t("codeSets.createError");
+      setToolbarError(detail);
+      toast.error(detail);
+    }
+  }
+
+  async function renameActiveSet() {
+    const set = codeSets.find((s) => s.id === activeSetId);
+    if (!set) return;
+    const name = window.prompt(t("codeSets.renamePrompt", { name: set.name }), set.name);
+    if (name == null) return;
+    const trimmed = name.trim();
+    if (!trimmed || trimmed === set.name) return;
+    setToolbarError(null);
+    try {
+      const updated = await renameCodeSet(set.id, trimmed);
+      setCodeSets((prev) => prev.map((s) => (s.id === set.id ? { ...s, name: updated.name } : s)));
+      if (appliedSet?.id === set.id) setAppliedSet({ ...appliedSet, name: updated.name });
+      toast.success(t("codeSets.renamed", { name: trimmed }));
+    } catch (e) {
+      const detail = e instanceof Error ? e.message : t("codeSets.renameError");
+      setToolbarError(detail);
+      toast.error(detail);
+    }
+  }
+
+  async function deleteActiveSet() {
+    const set = codeSets.find((s) => s.id === activeSetId);
+    if (!set) return;
+    if (!window.confirm(t("codeSets.deleteConfirm", { name: set.name }))) return;
+    setToolbarError(null);
+    try {
+      await deleteCodeSet(set.id);
+      setCodeSets((prev) => prev.filter((s) => s.id !== set.id));
+      if (appliedSet?.id === set.id) setAppliedSet(null);
+      setActiveSetId(null);
+      toast.success(t("codeSets.deleted", { name: set.name }));
+    } catch (e) {
+      const detail = e instanceof Error ? e.message : t("codeSets.deleteError");
+      setToolbarError(detail);
+      toast.error(detail);
+    }
+  }
+
+  /** Open the membership editor for the active set (fetches its members). */
+  async function openMembersEditor() {
+    const set = codeSets.find((s) => s.id === activeSetId);
+    if (!set) return;
+    setToolbarError(null);
+    try {
+      const detail = await getCodeSet(set.id);
+      setMembersEditor({ set, members: new Set(detail.members.map((m) => m.cid)) });
+    } catch (e) {
+      const detail = e instanceof Error ? e.message : t("codeSets.loadError");
+      setToolbarError(detail);
+      toast.error(detail);
+    }
+  }
+
+  /** Sync the editor's checked codes: add/remove the diff, refresh counts,
+   *  and re-snapshot the filter when the applied set was edited. */
+  async function saveMembers(cids: number[]) {
+    if (!membersEditor) return;
+    const { set, members } = membersEditor;
+    const toAdd = cids.filter((c) => !members.has(c));
+    const toRemove = [...members].filter((c) => !cids.includes(c));
+    if (toAdd.length > 0) await addCodeSetMembers(set.id, toAdd);
+    if (toRemove.length > 0) await removeCodeSetMembers(set.id, toRemove);
+    const updated = await listCodeSets();
+    setCodeSets(updated);
+    if (appliedSet?.id === set.id) {
+      const detail = await getCodeSet(set.id);
+      setAppliedSet({
+        id: set.id,
+        name: set.name,
+        cids: new Set(detail.members.map((m) => m.cid)),
+      });
+    }
+    setMembersEditor(null);
+    toast.success(t("codeSets.membersSaved"));
+  }
+
+  /* ------------------------------------------------------------------ */
   /* Context menu                                                        */
   /* ------------------------------------------------------------------ */
 
@@ -630,6 +829,39 @@ export function Sidebar() {
     menuStyle = { left: pos.x, top: pos.y };
   }
 
+  /** Flat code list for the membership editor: every code with its
+   *  category/sub-code path label (``A / B / Code``), sorted by label.
+   *  Cycle-guarded like the backend tree (legacy projects can have
+   *  self-references). */
+  const codeSetOptions = useMemo(() => {
+    const cats = new Map<number, CodeTreeItem>();
+    const codes = new Map<number, CodeTreeItem>();
+    for (const item of codeTree) {
+      if (item.kind === "category") cats.set(item.id, item);
+      else codes.set(item.id, item);
+    }
+    const pathOf = (item: CodeTreeItem): string => {
+      const parts: string[] = [];
+      const seen = new Set<string>();
+      let cur: CodeTreeItem | undefined = item;
+      while (cur && !seen.has(`${cur.kind}:${cur.id}`)) {
+        seen.add(`${cur.kind}:${cur.id}`);
+        parts.push(cur.name);
+        if (cur.kind === "category" || !cur.subcode) {
+          cur = cur.parent_id != null ? cats.get(cur.parent_id) : undefined;
+        } else {
+          cur = cur.parent_id != null ? codes.get(cur.parent_id) : undefined;
+        }
+      }
+      parts.reverse();
+      return parts.join(" / ");
+    };
+    return codeTree
+      .filter((item) => item.kind === "code")
+      .map((item) => ({ cid: item.id, label: pathOf(item), color: item.color }))
+      .sort((a, b) => a.label.localeCompare(b.label));
+  }, [codeTree]);
+
   /* ------------------------------------------------------------------ */
   /* Rendering                                                           */
   /* ------------------------------------------------------------------ */
@@ -637,7 +869,9 @@ export function Sidebar() {
   const MAX_TREE_DEPTH = 64;
 
   function renderCodeNode(parent: string, depth: number) {
-    const items = treeItems.get(parent) ?? [];
+    const items = (treeItems.get(parent) ?? []).filter(
+      (item) => !filteredKeys || filteredKeys.has(`${item.kind}:${item.id}`),
+    );
     return items.map((item) => {
       const key = `${item.kind}:${item.id}`;
       const isCollapsed = collapsed[key] ?? false;
@@ -915,6 +1149,54 @@ export function Sidebar() {
           className="w-full pl-7!"
         />
       </div>
+      {view.kind === "coding" && (
+        <div className="flex shrink-0 items-center gap-1 border-b border-border px-2 py-1">
+          <Select
+            value={activeSetId ?? ""}
+            onChange={(e) => setActiveSetId(e.target.value ? Number(e.target.value) : null)}
+            aria-label={t("codeSets.selectAria")}
+            className={`min-w-0 flex-1 ${
+              appliedSet ? "border-accent text-accent" : ""
+            }`}
+          >
+            {codeSets.length === 0 ? (
+              <option value="">{t("codeSets.none")}</option>
+            ) : (
+              codeSets.map((s) => (
+                <option key={s.id} value={s.id}>
+                  {s.name} ({s.member_count})
+                </option>
+              ))
+            )}
+          </Select>
+          {appliedSet && (
+            <IconButton
+              label={t("codeSets.clearFilter")}
+              title={t("codeSets.clearFilter")}
+              size="sm"
+              onClick={() => setAppliedSet(null)}
+            >
+              <X size={14} aria-hidden />
+            </IconButton>
+          )}
+          <Button
+            variant={appliedSet ? "primaryCompact" : "secondary"}
+            className="shrink-0 px-2 text-xs"
+            disabled={activeSetId == null}
+            onClick={() => void applyCodeSet()}
+          >
+            {t("codeSets.apply")}
+          </Button>
+          <IconButton
+            label={t("codeSets.manage")}
+            title={t("codeSets.manage")}
+            size="sm"
+            onClick={(e) => setManageMenu({ x: e.clientX, y: e.clientY })}
+          >
+            <SlidersHorizontal size={14} aria-hidden />
+          </IconButton>
+        </div>
+      )}
       {view.kind === "coding" && toolbarError && (
         <p
           role="alert"
@@ -1065,7 +1347,211 @@ export function Sidebar() {
           </Menu>
         </>
       )}
+      {/* Code-set actions (create / edit members / rename / delete) */}
+      {manageMenu && (
+        <>
+          <div
+            className="fixed inset-0 z-30"
+            onClick={() => setManageMenu(null)}
+            onContextMenu={(e) => {
+              e.preventDefault();
+              setManageMenu(null);
+            }}
+            aria-hidden
+          />
+          <Menu
+            position="fixed"
+            className="min-w-44"
+            style={{
+              left: Math.min(manageMenu.x, window.innerWidth - 190),
+              top: Math.min(manageMenu.y, window.innerHeight - 200),
+            }}
+            role="menu"
+            aria-label={t("codeSets.manageMenuAria")}
+          >
+            <MenuItem
+              role="menuitem"
+              onClick={() => {
+                setManageMenu(null);
+                void createSet();
+              }}
+            >
+              <Plus size={14} aria-hidden />
+              {t("codeSets.create")}
+            </MenuItem>
+            <MenuItem
+              role="menuitem"
+              disabled={activeSetId == null}
+              onClick={() => {
+                setManageMenu(null);
+                void openMembersEditor();
+              }}
+            >
+              <SlidersHorizontal size={14} aria-hidden />
+              {t("codeSets.editMembers")}
+            </MenuItem>
+            <MenuItem
+              role="menuitem"
+              disabled={activeSetId == null}
+              onClick={() => {
+                setManageMenu(null);
+                void renameActiveSet();
+              }}
+            >
+              <Pencil size={14} aria-hidden />
+              {t("codeSets.rename")}
+            </MenuItem>
+            <MenuItem
+              role="menuitem"
+              disabled={activeSetId == null}
+              className="text-danger"
+              onClick={() => {
+                setManageMenu(null);
+                void deleteActiveSet();
+              }}
+            >
+              <Trash2 size={14} aria-hidden />
+              {t("codeSets.delete")}
+            </MenuItem>
+          </Menu>
+        </>
+      )}
+      {/* Code-set membership editor */}
+      <CodeSetMembersModal
+        open={membersEditor != null}
+        set={membersEditor?.set ?? null}
+        members={membersEditor?.members ?? null}
+        codes={codeSetOptions}
+        onClose={() => setMembersEditor(null)}
+        onSave={(cids) => saveMembers(cids)}
+        t={t}
+      />
     </LeftBar>
+  );
+}
+
+interface CodeSetOption {
+  cid: number;
+  label: string;
+  color: string | null;
+}
+
+/** Membership editor: every code of the project with a checkbox for the
+ *  active set. Saving syncs the diff (add + remove) through the API. */
+function CodeSetMembersModal({
+  open,
+  set,
+  members,
+  codes,
+  onClose,
+  onSave,
+  t,
+}: {
+  open: boolean;
+  set: CodeSetSummary | null;
+  members: Set<number> | null;
+  codes: CodeSetOption[];
+  onClose: () => void;
+  onSave: (cids: number[]) => Promise<void>;
+  t: (key: string, params?: Record<string, string | number>) => string;
+}) {
+  const [draft, setDraft] = useState<Set<number>>(new Set());
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (open && members) setDraft(new Set(members));
+  }, [open, members]);
+
+  const toggle = (cid: number) => {
+    setDraft((prev) => {
+      const next = new Set(prev);
+      if (next.has(cid)) next.delete(cid);
+      else next.add(cid);
+      return next;
+    });
+  };
+
+  const save = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      await onSave([...draft]);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : t("codeSets.membersSaveError"));
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Modal
+      open={open}
+      onClose={busy ? undefined : onClose}
+      title={set ? t("codeSets.membersTitle", { name: set.name }) : undefined}
+      icon={<SlidersHorizontal size={14} aria-hidden />}
+      size="lg"
+      panelClassName="w-[32rem] max-w-[92vw]"
+    >
+      <div className="flex max-h-[65vh] flex-col">
+        <div className="qc-scroll min-h-0 flex-1 overflow-y-auto px-2 py-1">
+          {codes.length === 0 ? (
+            <p className="px-2 py-3 text-center text-sm text-text-secondary">
+              {t("codeSets.noCodes")}
+            </p>
+          ) : (
+            codes.map((code) => (
+              <label
+                key={code.cid}
+                className="flex cursor-pointer items-center gap-2 rounded-sm px-2 py-1 text-sm hover:bg-surface-higher"
+              >
+                <input
+                  type="checkbox"
+                  checked={draft.has(code.cid)}
+                  onChange={() => toggle(code.cid)}
+                  className="shrink-0 accent-accent"
+                />
+                <span
+                  className="inline-block h-3 w-3 shrink-0 rounded-sm border border-border"
+                  style={{ backgroundColor: code.color ?? "#ccc" }}
+                  aria-hidden
+                />
+                <span className="min-w-0 truncate" title={code.label}>
+                  {code.label}
+                </span>
+              </label>
+            ))
+          )}
+        </div>
+        {error && (
+          <p
+            role="alert"
+            className="flex shrink-0 items-center gap-1.5 px-3 pt-2 text-xs text-danger"
+          >
+            <CircleAlert size={12} className="shrink-0" aria-hidden />
+            <span className="min-w-0 truncate">{error}</span>
+          </p>
+        )}
+        <div className="flex items-center justify-end gap-2 px-3 py-2">
+          <Button variant="secondary" onClick={onClose} disabled={busy}>
+            {t("common.cancel")}
+          </Button>
+          <Button
+            variant="primary"
+            icon={
+              busy ? (
+                <LoaderCircle size={12} className="animate-spin" aria-hidden />
+              ) : (
+                <Check size={12} aria-hidden />
+              )
+            }
+            disabled={busy}
+            onClick={() => void save()}
+          >
+            {t("codeSets.membersSave")}
+          </Button>
+        </div>
+      </div>
+    </Modal>
   );
 }
 

@@ -21,7 +21,9 @@ import {
   FileText,
   FileType,
   LoaderCircle,
+  Minus,
   Pencil,
+  Plus,
   Sparkles,
   Rows3,
   Trash2,
@@ -29,6 +31,7 @@ import {
 } from "lucide-react";
 import { api, fetchWithTimeout, type Annotation, type CodeTreeItem, type Coding, type ImageCoding, type Source } from "@/lib/api";
 import { sourceFileUrl } from "@/lib/api";
+import { patchCodingWeight } from "@/features/coding/codingApi";
 import { CodePicker, type PickedCode } from "@/features/coding/CodePicker";
 import { AutocodeDialog } from "@/features/coding/AutocodeDialog";
 import { TextCoder } from "@/features/coding/TextCoder";
@@ -459,6 +462,18 @@ export function PdfCoder({ source }: { source: Source }) {
     setCodes(await api.codesFlat());
   }, []);
 
+  // History undo/redo: reload codings/annotations when the audit log reverts
+  // a change (the shell only refreshes project metadata).
+  useEffect(() => {
+    const handle = () => {
+      void refreshCodings();
+      void refreshTextCodings();
+      void refreshCodes();
+    };
+    window.addEventListener("qc:codings-changed", handle);
+    return () => window.removeEventListener("qc:codings-changed", handle);
+  }, [refreshCodings, refreshTextCodings, refreshCodes]);
+
   function clampPage(p: number): number {
     return Math.min(Math.max(1, p), Math.max(1, numPages));
   }
@@ -685,6 +700,22 @@ export function PdfCoder({ source }: { source: Source }) {
         await refreshCodings();
       } catch (e) {
         setErrMsg(e instanceof Error ? e.message : t("coder.removeError"));
+      }
+    })();
+  }
+
+  /** Segment weight (backend rows carry it; 0 = no weight). */
+  const imageWeight = (row: ImageCoding): number =>
+    (row as ImageCoding & { weight?: number }).weight ?? 0;
+
+  /** Stepper update of a coded region's weight (0-100; 0 = no weight). */
+  function updateCodingWeight(row: ImageCoding, weight: number) {
+    void (async () => {
+      try {
+        await patchCodingWeight("image", row.imid, weight);
+        await refreshCodings();
+      } catch (e) {
+        setErrMsg(e instanceof Error ? e.message : t("coder.weightError"));
       }
     })();
   }
@@ -1052,6 +1083,33 @@ export function PdfCoder({ source }: { source: Source }) {
                   page: selectedCoding.pdf_page ?? "?",
                   date: selectedCoding.date,
                 })}
+              </span>
+              <span className="flex items-center gap-1">
+                <span className="text-xs text-text-secondary">{t("coder.weight")}</span>
+                <IconButton
+                  label={t("coder.weightDec")}
+                  title={t("coder.weightDec")}
+                  size="sm"
+                  disabled={imageWeight(selectedCoding) === 0}
+                  onClick={() => updateCodingWeight(selectedCoding, imageWeight(selectedCoding) - 1)}
+                >
+                  <Minus size={12} aria-hidden />
+                </IconButton>
+                <span
+                  className="min-w-5 text-center text-xs text-text-secondary"
+                  aria-label={t("coder.weight")}
+                >
+                  {imageWeight(selectedCoding)}
+                </span>
+                <IconButton
+                  label={t("coder.weightInc")}
+                  title={t("coder.weightInc")}
+                  size="sm"
+                  disabled={imageWeight(selectedCoding) >= 100}
+                  onClick={() => updateCodingWeight(selectedCoding, imageWeight(selectedCoding) + 1)}
+                >
+                  <Plus size={12} aria-hidden />
+                </IconButton>
               </span>
               <div className="flex-1" />
               <IconButton

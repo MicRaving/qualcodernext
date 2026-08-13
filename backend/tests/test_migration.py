@@ -34,7 +34,7 @@ LEGACY_TABLES = [
     "CREATE TABLE journal (jid integer primary key, name text, jentry text, date text, owner text)",
 ]
 
-ALL_VERSIONS = [f"v{v}" for v in range(2, 26)]
+ALL_VERSIONS = [f"v{v}" for v in range(2, 30)]
 
 
 @pytest.fixture
@@ -98,7 +98,7 @@ async def test_full_chain_sets_final_version(v2_db):
     cur = await v2_db.cursor()
     await cur.execute("SELECT databaseversion, about FROM project")
     row = await cur.fetchone()
-    assert row[0] == "v25"
+    assert row[0] == "v29"
     assert row[1] == "4.0-test"
 
 
@@ -262,6 +262,59 @@ async def test_v25_adds_qtt_tables(v2_db):
         "SELECT 1 FROM sqlite_master WHERE type='index' AND name='idx_qtt_item_sheet_id'"
     )
     assert await cur.fetchone() is not None
+
+
+async def test_v26_adds_comment_table(v2_db):
+    """v26 adds the comment table + target index."""
+    chain = MigrationChain(v2_db)
+    applied = await chain.run_all("4.0-test", "tester")
+    assert "v26" in applied
+    objects = await _objects(v2_db)
+    assert "comment" in objects
+    cur = await v2_db.cursor()
+    await cur.execute("PRAGMA table_info(comment)")
+    cols = {row[1] for row in await cur.fetchall()}
+    assert {"id", "target_kind", "target_id", "body", "owner", "created"} <= cols
+    await cur.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='index' AND name='idx_comment_target'"
+    )
+    assert await cur.fetchone() is not None
+
+
+async def test_v27_adds_weight_columns(v2_db):
+    """v27 adds the weight column to the three coding tables."""
+    chain = MigrationChain(v2_db)
+    applied = await chain.run_all("4.0-test", "tester")
+    assert "v27" in applied
+    for table in ("code_text", "code_image", "code_av"):
+        cols = await _columns(v2_db, table)
+        assert "weight" in cols
+
+
+async def test_v28_adds_memo_type_columns(v2_db):
+    """v28 adds memo_type to code_name and source."""
+    chain = MigrationChain(v2_db)
+    applied = await chain.run_all("4.0-test", "tester")
+    assert "v28" in applied
+    for table in ("code_name", "source"):
+        cols = await _columns(v2_db, table)
+        assert "memo_type" in cols
+
+
+async def test_v29_adds_code_set_tables(v2_db):
+    """v29 adds the code_set tables + member index."""
+    chain = MigrationChain(v2_db)
+    applied = await chain.run_all("4.0-test", "tester")
+    assert "v29" in applied
+    objects = await _objects(v2_db)
+    assert {"code_set", "code_set_member"} <= objects
+    cur = await v2_db.cursor()
+    await cur.execute("PRAGMA table_info(code_set)")
+    cols = {row[1] for row in await cur.fetchall()}
+    assert {"id", "name", "owner", "created"} <= cols
+    await cur.execute("PRAGMA table_info(code_set_member)")
+    member_cols = {row[1] for row in await cur.fetchall()}
+    assert {"set_id", "cid"} <= member_cols
 
 
 async def test_chain_is_idempotent(v2_db):

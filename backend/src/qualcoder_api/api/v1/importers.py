@@ -1,4 +1,4 @@
-"""Interchange import API — RQDA, Taguette, Transana, RIS, Survey CSV, XLSX, SPSS uploads."""
+"""Interchange import API — RQDA, Taguette, Transana, NVivo, RIS, Survey CSV, XLSX, SPSS uploads."""
 
 from __future__ import annotations
 
@@ -109,17 +109,35 @@ async def import_auto(
     """Import an interchange file with automatic format detection.
 
     Detects REFI-QDA (.qdp/.qdc XML), RQDA, Taguette and Transana
-    databases, RIS bibliographies, survey CSVs, Excel .xlsx workbooks,
-    SPSS .sav data files, plain-text codebooks and zipped .qda projects
-    from the file content. ``qualitative_headers`` only applies to
-    survey-style imports (CSV/XLSX/SAV).
+    databases, NVivo (.nvpx) projects, RIS bibliographies, survey CSVs,
+    Excel .xlsx workbooks, SPSS .sav data files, plain-text codebooks and
+    zipped .qda projects from the file content. ``qualitative_headers``
+    only applies to survey-style imports (CSV/XLSX/SAV).
     """
     if svc.project_path == "" or svc.session_factory is None:
         raise HTTPException(status_code=409, detail="no project is open")
     tmp = await _save_upload(file, svc, "import")
     try:
         try:
-            kind = importers.detect_import_kind(tmp)
+            # A zip whose XML carries the NVivo marker (NvivoProject root or
+            # a __nvivo bundle) routes to the NVivo importer before the
+            # generic zip/xlsx/merge sniffing takes over.
+            kind: str | None = None
+            with open(tmp, "rb") as fh:  # noqa: ASYNC230 - small local temp read
+                head = fh.read(4)
+            if head.startswith(b"PK\x03\x04"):
+                import zipfile
+
+                from qualcoder_api.interchange.nvivo_import import archive_has_nvivo_marker
+
+                try:
+                    with zipfile.ZipFile(tmp) as archive:
+                        if archive_has_nvivo_marker(archive):
+                            kind = "nvivo"
+                except zipfile.BadZipFile:
+                    kind = None
+            if kind is None:
+                kind = importers.detect_import_kind(tmp)
         except ValueError as err:
             raise HTTPException(status_code=422, detail=str(err)) from err
 
@@ -156,6 +174,10 @@ async def import_auto(
 
             elif kind == "codebook":
                 _importer = codebook.import_codebook
+            elif kind == "nvivo":
+                from qualcoder_api.interchange.nvivo_import import import_nvivo
+
+                _importer = import_nvivo
             else:
                 _importer = {
                     "rqda": importers.import_rqda,
@@ -213,6 +235,25 @@ async def import_transana(
     keywords become codes and keyword assignments become text/AV codings.
     """
     return await _run_import(svc, file, codername, importers.import_transana, "transana")
+
+
+@router.post("/nvivo")
+async def import_nvivo(
+    svc: ServiceDep,
+    db: DbDep,
+    file: Annotated[UploadFile, File()],
+    codername: str | None = Form(None),
+) -> dict:
+    """Import an NVivo .nvpx project (a ZIP of project XML).
+
+    Best-effort: documents with text content become text sources, nodes
+    become codes (node folders become categories), and codings with
+    parseable character positions become text codings — anything opaque is
+    skipped and counted instead of failing the import.
+    """
+    from qualcoder_api.interchange.nvivo_import import import_nvivo
+
+    return await _run_import(svc, file, codername, import_nvivo, "nvivo")
 
 
 @router.post("/ris")

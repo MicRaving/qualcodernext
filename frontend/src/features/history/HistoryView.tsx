@@ -125,6 +125,7 @@ export function HistoryView() {
       setRedoStack((s) => [...s.slice(-9), row.id]);
       setActionMsg(res.message);
       await useProjectStore.getState().refreshProject();
+      window.dispatchEvent(new CustomEvent("qc:codings-changed"));
       await load();
     } catch (e) {
       setError(e instanceof Error ? e.message : t("history.undoError"));
@@ -141,6 +142,7 @@ export function HistoryView() {
       setRedoStack((s) => s.slice(0, -1));
       setActionMsg(res.message);
       await useProjectStore.getState().refreshProject();
+      window.dispatchEvent(new CustomEvent("qc:codings-changed"));
       await load();
     } catch (e) {
       setError(e instanceof Error ? e.message : t("history.redoError"));

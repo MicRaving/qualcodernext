@@ -299,7 +299,7 @@ test("sidebar code click codes the selected text", async ({ page }) => {
 test("history view lists project changes and filters", async ({ page }) => {
   await ensureProjectOpen(page);
 
-  await page.getByRole("button", { name: "History" }).click();
+  await page.getByRole("button", { name: "History", exact: true }).click();
   await expect(page.getByRole("heading", { name: "History" })).toBeVisible();
 
   // Earlier tests created codes + codings in this project; the audit log
@@ -318,7 +318,7 @@ test("history view lists project changes and filters", async ({ page }) => {
   await expect(page.getByText("Code created", { exact: true })).toHaveCount(0);
 
   // The history pane is toggleable: clicking History again closes it.
-  await page.getByRole("button", { name: "History" }).click();
+  await page.getByRole("button", { name: "History", exact: true }).click();
   await expect(page.getByRole("heading", { name: "History" })).toHaveCount(0);
 });
 
@@ -358,7 +358,7 @@ test("autocode + SQL report", async ({ page }) => {
   });
 
   // SQL report: count codings per code, expect the RainCode row.
-  await page.getByRole("button", { name: "Reports" }).click();
+  await page.getByRole("button", { name: "Reports", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Analysis" }).first()).toBeVisible();
   await page.getByRole("button", { name: "SQL report" }).click();
 
@@ -427,7 +427,7 @@ test("interchange export and import", async ({ page }) => {
   await ensureProjectOpen(page);
 
   // Import/Export lives in Settings now.
-  await page.getByRole("button", { name: "Settings" }).click();
+  await page.getByRole("button", { name: "Settings", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Settings" }).first()).toBeVisible();
   await expect(page.getByText("Export", { exact: true }).first()).toBeVisible();
   await expect(page.getByText("Import", { exact: true }).first()).toBeVisible();

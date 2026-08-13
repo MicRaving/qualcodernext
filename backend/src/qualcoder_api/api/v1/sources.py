@@ -7,7 +7,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, File, Form, HTTPException, Response, UploadFile
 from fastapi.responses import FileResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import func, select, text
 
 from qualcoder_api.api.v1.deps import DbDep, ServiceDep
@@ -23,6 +23,7 @@ router = APIRouter(prefix="/sources", tags=["sources"])
 class SourceUpdate(BaseModel):
     name: str | None = None
     memo: str | None = None
+    memo_type: str | None = Field(None, max_length=200)
     owner: str | None = None
 
 
@@ -92,9 +93,15 @@ async def list_sources(db: DbDep) -> list[SourceWithTranscript]:
             ).where(tables.source.c.id.in_(av_ids))
         )
         nonempty = {r[0] for r in rows if (r[1] or 0) > 0}
+    # The list query omits memo_type (the repository selects explicit
+    # columns); fetch the per-source type ids in one extra pass.
+    memo_type_rows = await db.execute(
+        select(tables.source.c.id, tables.source.c.memo_type)
+    )
+    memo_types = {r[0]: (r[1] or "") for r in memo_type_rows}
     return [
         SourceWithTranscript(
-            **s.model_dump(),
+            **{**s.model_dump(), "memo_type": memo_types.get(s.id, "")},
             has_transcript=s.av_text_id is not None and s.av_text_id in nonempty,
         )
         for s in sources
@@ -360,6 +367,7 @@ async def link_source(req: LinkRequest, db: DbDep, svc: ServiceDep) -> Source:
 @router.patch("/{source_id}", response_model=Source)
 async def update_source(source_id: int, req: SourceUpdate, db: DbDep) -> Source:
     from sqlalchemy import select
+    from sqlalchemy import update as sa_update
 
     from qualcoder_api.persistence import tables
 
@@ -372,9 +380,20 @@ async def update_source(source_id: int, req: SourceUpdate, db: DbDep) -> Source:
     ).first()
     old = dict(old_row._mapping) if old_row is not None else {}
     source = await SourceRepository(db).update_source(
-        source_id, **req.model_dump(exclude_none=True)
+        source_id, **req.model_dump(exclude_none=True, exclude={"memo_type"})
     )
     if source is None:
+        raise HTTPException(status_code=404, detail="source not found")
+    # memo_type is not a repository field (yet) — anchor the update here.
+    if req.memo_type is not None:
+        await db.execute(
+            sa_update(tables.source)
+            .where(tables.source.c.id == source_id)
+            .values(memo_type=req.memo_type)
+        )
+        await db.commit()
+        source = await SourceRepository(db).get_source(source_id)
+    if source is None:  # pragma: no cover - row vanished mid-update
         raise HTTPException(status_code=404, detail="source not found")
     await audit.record(
         db, user=get_codername(), action="source.update", entity="source",

@@ -41,6 +41,7 @@ class Source(BaseModel):
     fulltext: str | None = None
     mediapath: str | None = None
     memo: str = ""
+    memo_type: str = ""
     owner: str = ""
     date: str = ""
     av_text_id: int | None = None
@@ -63,6 +64,7 @@ class Code(BaseModel):
     cid: int = 0
     name: str = ""
     memo: str = ""
+    memo_type: str = ""
     catid: int | None = None
     owner: str = ""
     date: str = ""
@@ -99,6 +101,7 @@ class Coding(BaseModel):
     memo: str = ""
     avid: int | None = None
     important: int = 0
+    weight: int = 0
 
 
 class ImageCoding(BaseModel):
@@ -118,6 +121,7 @@ class ImageCoding(BaseModel):
     owner: str = ""
     important: int = 0
     pdf_page: int | None = None
+    weight: int = 0
 
 
 class AVCoding(BaseModel):
@@ -134,6 +138,7 @@ class AVCoding(BaseModel):
     date: str = ""
     owner: str = ""
     important: int = 0
+    weight: int = 0
 
 
 class Case(BaseModel):

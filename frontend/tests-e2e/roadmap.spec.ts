@@ -163,7 +163,7 @@ test("promote/demote moves codes in the hierarchy via the context menu", async (
 test("reports registry lists the roadmap reports and navigates to them", async ({ page }) => {
   await ensureProjectOpen(page);
 
-  await page.getByRole("button", { name: "Reports" }).click();
+  await page.getByRole("button", { name: "Reports", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Analysis" }).first()).toBeVisible();
 
   // The new analysis entries are registered in the left bar.
@@ -250,7 +250,7 @@ test("attribute type with value labels renders a select in the case properties",
   await ensureProjectOpen(page);
 
   // Create a case via the Cases view.
-  await page.getByRole("button", { name: "Cases" }).click();
+  await page.getByRole("button", { name: "Cases", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Cases" }).first()).toBeVisible();
   await page.getByRole("button", { name: "Add", exact: true }).first().click();
   const caseInput = page.getByTestId("inline-name-edit");
@@ -277,7 +277,7 @@ test("attribute type with value labels renders a select in the case properties",
 
   // Re-enter the case so the properties editor reloads the type list.
   await page.getByRole("button", { name: "Coding", exact: true }).click();
-  await page.getByRole("button", { name: "Cases" }).click();
+  await page.getByRole("button", { name: "Cases", exact: true }).click();
   await page.getByText("MoodCase").first().click();
 
   // The labelled type renders as a dropdown (label + raw value) instead of

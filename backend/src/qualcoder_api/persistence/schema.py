@@ -17,11 +17,12 @@ _SCHEMA_SQL: list[str] = [
     "bookmarkpos integer, codername text, recently_used_codes text, avbookmarkfile integer, "
     "avbookmarkmsec integer, avbookmarktextpos integer)",
     "CREATE TABLE source (id integer primary key, name text, fulltext text, mediapath text, memo text, "
-    "owner text, date text, av_text_id integer, risid integer, unique(name))",
+    "owner text, date text, av_text_id integer, risid integer, memo_type text not null default '', unique(name))",
     "CREATE TABLE code_image (imid integer primary key,id integer,x1 integer, y1 integer, width integer, "
-    "height integer, cid integer, memo text, date text, owner text, important integer, pdf_page integer)",
+    "height integer, cid integer, memo text, date text, owner text, important integer, pdf_page integer, "
+    "weight integer)",
     "CREATE TABLE code_av (avid integer primary key,id integer,pos0 integer, pos1 integer, cid integer, "
-    "memo text, date text, owner text, important integer)",
+    "memo text, date text, owner text, important integer, weight integer)",
     "CREATE TABLE annotation (anid integer primary key, fid integer,pos0 integer, pos1 integer, memo text, "
     "owner text, date text, unique(fid,pos0,pos1,owner))",
     "CREATE TABLE link (id integer primary key autoincrement, from_fid integer, from_pos0 integer, "
@@ -39,10 +40,10 @@ _SCHEMA_SQL: list[str] = [
     "CREATE TABLE code_cat (catid integer primary key, name text, owner text, date text, memo text, "
     "supercatid integer, unique(name))",
     "CREATE TABLE code_text (ctid integer primary key, cid integer, fid integer,seltext text, pos0 integer, "
-    "pos1 integer, owner text, date text, memo text, avid integer, important integer, "
+    "pos1 integer, owner text, date text, memo text, avid integer, important integer, weight integer, "
     "unique(cid,fid,pos0,pos1, owner))",
     "CREATE TABLE code_name (cid integer primary key, name text, memo text, catid integer, owner text,"
-    "date text, color text, supercid integer, unique(name))",
+    "date text, color text, supercid integer, memo_type text not null default '', unique(name))",
     "CREATE TABLE journal (jid integer primary key, name text, jentry text, date text, owner text, unique(name))",
     "CREATE TABLE stored_sql (title text, description text, grouper text, ssql text, unique(title))",
     "CREATE TABLE graph (grid integer primary key, name text, description text, "
@@ -88,6 +89,10 @@ _SCHEMA_SQL: list[str] = [
     "research_question text, purpose text, framework text, owner text, date text);",
     "CREATE TABLE qtt_item (id integer primary key autoincrement, sheet_id integer, section text, kind text, "
     "payload_json text, owner text, date text);",
+    "CREATE TABLE code_set (id integer primary key autoincrement, name text, owner text, created text, unique(name));",
+    "CREATE TABLE code_set_member (set_id integer, cid integer, primary key(set_id, cid));",
+    "CREATE TABLE comment (id integer primary key autoincrement, target_kind text, target_id integer, "
+    "body text, owner TEXT, created text)",
 ]
 
 # Hot-path indexes (created for new projects; the migration chain adds the
@@ -115,6 +120,7 @@ _INDEX_SQL: list[str] = [
     "CREATE INDEX IF NOT EXISTS idx_code_name_cat ON code_name(catid)",
     "CREATE INDEX IF NOT EXISTS idx_code_name_super ON code_name(supercid)",
     "CREATE INDEX IF NOT EXISTS idx_attribute_name ON attribute(name)",
+    "CREATE INDEX IF NOT EXISTS idx_comment_target ON comment(target_kind, target_id)",
 ]
 
 # Extra tables/views beyond the v14 core (added at project-open time).
@@ -156,7 +162,7 @@ async def create_new_project_schema(
     await cur.execute(
         "INSERT INTO project VALUES(?,?,?,?,?,?,?,?,?,?,?)",
         (
-            "v25",
+            "v29",
             datetime.datetime.now().astimezone().strftime("%Y-%m-%d %H:%M:%S"),
             "",
             app_version,

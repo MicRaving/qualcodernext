@@ -122,7 +122,7 @@ test("create project, import a file, autocode it, and run a report", async ({ pa
 
   // ----------------------------------------------------------------- report
   await test.step("code frequencies report shows the new code", async () => {
-    await page.getByRole("button", { name: "Reports" }).click();
+    await page.getByRole("button", { name: "Reports", exact: true }).click();
     await expect(page.getByRole("heading", { name: "Analysis" }).first()).toBeVisible();
 
     await page.getByRole("button", { name: /Code frequencies/ }).click();
@@ -155,7 +155,7 @@ test("settings and AI status", async ({ page }) => {
     timeout: 30_000,
   });
 
-  await page.getByRole("button", { name: "Settings" }).click();
+  await page.getByRole("button", { name: "Settings", exact: true }).click();
   await expect(page.getByText("Appearance", { exact: true })).toBeVisible();
   await expect(page.getByText("AI assistant", { exact: true })).toBeVisible();
 });

@@ -15,6 +15,14 @@ import {
 } from "lucide-react";
 import { api, type Annotation, type CodeDetails, type SourceDetails } from "@/lib/api";
 import {
+  addComment,
+  deleteComment,
+  fetchComments,
+  formatCommentTime,
+  type Comment,
+  type CommentTargetKind,
+} from "@/features/shell/commentsApi";
+import {
   deleteLink,
   fetchIncomingLinks,
   fetchOutgoingLinks,
@@ -169,6 +177,118 @@ function MemoEditor({
   );
 }
 
+/**
+ * Comments — threaded comments on the inspected entity. The thread loads
+ * from GET /comments (oldest first); the inline box adds a comment, each
+ * row has a delete button, and the thread refreshes after both.
+ */
+function CommentsSection({
+  targetKind,
+  targetId,
+}: {
+  targetKind: CommentTargetKind;
+  targetId: number;
+}) {
+  const { t } = useI18n();
+  const [comments, setComments] = useState<Comment[]>([]);
+  const [draft, setDraft] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const load = useCallback(async () => {
+    try {
+      setComments(await fetchComments(targetKind, targetId));
+      setError(null);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : t("inspector.commentsLoadError"));
+    }
+  }, [targetKind, targetId, t]);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  async function handleAdd() {
+    const body = draft.trim();
+    if (!body || busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await addComment(targetKind, targetId, body);
+      setDraft("");
+      await load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : t("inspector.commentsAddError"));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleDelete(commentId: number) {
+    if (!window.confirm(t("inspector.deleteComment"))) return;
+    setError(null);
+    try {
+      await deleteComment(commentId);
+      await load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : t("inspector.commentsDeleteError"));
+    }
+  }
+
+  return (
+    <div className="px-3 py-2">
+      <div className="mb-1">
+        <SectionLabel>{t("inspector.comments")}</SectionLabel>
+      </div>
+      {error && <p className="mb-1 text-xs text-danger">{error}</p>}
+      {comments.length === 0 ? (
+        <p className="text-sm text-text-secondary">{t("inspector.noComments")}</p>
+      ) : (
+        <ul className="flex flex-col gap-1.5">
+          {comments.map((c) => (
+            <li key={c.id} className="rounded-sm bg-surface-higher px-2 py-1.5">
+              <div className="flex items-center justify-between gap-2">
+                <p className="truncate text-xs text-text-secondary">
+                  {c.owner} · {formatCommentTime(c.created, t)}
+                </p>
+                <IconButton
+                  label={t("inspector.deleteComment")}
+                  title={t("inspector.deleteComment")}
+                  size="sm"
+                  className="shrink-0 hover:text-danger"
+                  onClick={() => void handleDelete(c.id)}
+                >
+                  <Trash2 size={11} aria-hidden />
+                </IconButton>
+              </div>
+              <p className="whitespace-pre-wrap text-sm text-text-primary">{c.body}</p>
+            </li>
+          ))}
+        </ul>
+      )}
+      <div className="mt-2">
+        <Textarea
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          placeholder={t("inspector.commentPlaceholder")}
+          aria-label={t("inspector.commentPlaceholder")}
+          rows={2}
+          className="min-h-10 w-full resize-none p-1.5"
+        />
+        <div className="mt-1.5 flex items-center justify-end gap-1.5">
+          <Button
+            variant="primary"
+            disabled={!draft.trim() || busy}
+            onClick={() => void handleAdd()}
+          >
+            {t("inspector.addComment")}
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function CodeDetailsPanel({ details }: { details: CodeDetails }) {
   const { t } = useI18n();
   const selectCode = useProjectStore((s) => s.selectCode);
@@ -254,6 +374,8 @@ function CodeDetailsPanel({ details }: { details: CodeDetails }) {
           </ul>
         )}
       </div>
+
+      <CommentsSection targetKind="code" targetId={details.code.cid} />
 
       <div className="border-t border-border p-2">
         <button
@@ -734,6 +856,8 @@ function FileDetailsPanel({ details }: { details: SourceDetails }) {
       </div>
 
       <MemoEditor key={src.id} memo={src.memo} onSave={saveMemo} />
+
+      <CommentsSection targetKind="source" targetId={src.id} />
     </div>
   );
 }

@@ -49,6 +49,8 @@ SYNC_ENTITIES = {
     "graph", "gr_cdct_text_item", "gr_case_text_item", "gr_file_text_item",
     "gr_free_text_item", "gr_memo_item", "gr_cdct_line_item",
     "gr_free_line_item", "gr_pix_item", "gr_av_item",
+    "link", "dictionary", "dictionary_entry", "qtt_sheet", "qtt_item",
+    "creative_item", "comment", "code_set", "code_set_member",
 }
 
 # Map model/dict attribute names to raw table columns for rows that differ.

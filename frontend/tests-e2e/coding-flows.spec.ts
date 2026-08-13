@@ -80,7 +80,7 @@ async function createProject(page: Page) {
 test("graph create updates list, delete works", async ({ page }) => {
   await createProject(page);
 
-  await page.getByRole("button", { name: "Reports" }).click();
+  await page.getByRole("button", { name: "Reports", exact: true }).click();
   await page.getByRole("button", { name: "Graphs", exact: true }).click();
   await expect(page.getByLabel("Select graph…")).toBeVisible({ timeout: 15_000 });
 

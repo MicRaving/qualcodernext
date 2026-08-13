@@ -52,7 +52,7 @@ async def test_created_project_is_valid_v14(project_dir: Path, app_version: str)
     cur = await conn.cursor()
     await cur.execute("SELECT databaseversion, codername, about FROM project")
     row = await cur.fetchone()
-    assert row == ("v25", "tester", app_version)
+    assert row == ("v29", "tester", app_version)
     await cur.execute("SELECT name FROM sqlite_master WHERE type='view' AND name='code_text_visible'")
     assert await cur.fetchone() is not None
     await conn.close()
@@ -73,7 +73,7 @@ async def test_open_project_roundtrip(project_dir: Path, app_version: str):
     assert opener.project_name == project_dir.name
     header = await opener._get_header()
     assert header is not None
-    assert header.databaseversion == "v25"
+    assert header.databaseversion == "v29"
     await opener.close_project()
 
 
@@ -121,7 +121,7 @@ async def test_open_project_migrates_legacy(tmp_path, app_version: str):
     conn = await aiosqlite.connect(legacy / "data.qda")
     cur = await conn.cursor()
     await cur.execute("SELECT databaseversion FROM project")
-    assert (await cur.fetchone())[0] == "v25"
+    assert (await cur.fetchone())[0] == "v29"
     await conn.close()
     await svc.close_project()
 

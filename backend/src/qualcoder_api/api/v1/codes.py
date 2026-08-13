@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import select, text, union
 
 from qualcoder_api.api.v1.deps import DbDep
@@ -28,6 +28,7 @@ class CodeCreate(BaseModel):
 class CodeUpdate(BaseModel):
     name: str | None = None
     memo: str | None = None
+    memo_type: str | None = Field(None, max_length=200)
     color: str | None = None
     catid: int | None = None
     supercid: int | None = None
@@ -57,6 +58,7 @@ class CodeTreeItem(BaseModel):
     color: str | None = None
     parent_id: int | None = None
     memo: str = ""
+    memo_type: str = ""
     subcode: bool = False
 
 
@@ -103,6 +105,7 @@ async def code_tree(db: DbDep) -> list[CodeTreeItem]:
         CodeTreeItem(
             kind="code", id=code.cid, name=code.name,
             color=code.color, parent_id=code.supercid or code.catid, memo=code.memo,
+            memo_type=code.memo_type,
             subcode=code.supercid is not None,
         )
         for code in codes
@@ -170,7 +173,7 @@ async def update_code(cid: int, req: CodeUpdate, db: DbDep) -> Code:
             raise HTTPException(status_code=422, detail=str(err)) from err
         if code is None:
             raise HTTPException(status_code=404, detail="code not found")
-    if req.memo is not None or req.color is not None or req.catid is not None:
+    if req.memo is not None or req.memo_type is not None or req.color is not None or req.catid is not None:
         values = req.model_dump(exclude_none=True, exclude={"name", "supercid"})
         if values:
             from sqlalchemy import update as sa_update

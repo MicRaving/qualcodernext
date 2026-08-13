@@ -9,25 +9,28 @@ driven through the UI and asserted (not merely that its screen exists).
 Legend: A=advanced.spec.ts · App=app.spec.ts · CF=coding-flows.spec.ts ·
 F=features.spec.ts · IA=inspector-annotation.spec.ts · M=media.spec.ts ·
 R=roadmap.spec.ts · S=smoke-features.spec.ts · T=tasks-a11y.spec.ts ·
-CG=coverage-gaps.spec.ts
+CG=coverage-gaps.spec.ts · W=coverage-wave.spec.ts
 
 ## Summary
 
 | | Count |
 |---|---|
-| Covered operations | **46** |
-| Gaps | **83** |
+| Covered operations | **55** |
+| Gaps | **74** |
 | Total documented operations | **129** |
 
 Top gaps worth filling next (quick to script, high value):
-1. **Files row context menu** (Rename / Edit memo / Delete / Assign to case /
-   Replace file) — the whole right-click surface of the file table is untested.
-2. **History undo/redo** — audit-log rows carry undo icons; nothing clicks one.
-3. **Notes workspace** — journal entry create/edit/save; memo tree add/edit.
-4. **AV transcript coding** — the transcript pane is a full text-coder surface
+1. **History undo/redo** — W now drives per-row undo + redo (audit-log rows
+   carry undo icons); detail modal + pagination remain untested.
+2. **Notes workspace** — W covers journal create/edit/save and the code-memo
+   tree (add/save); annotation tabs, memo delete and "open file" remain.
+3. **AV transcript coding** — the transcript pane is a full text-coder surface
    but only manual-mode editing is covered.
-5. **Sentiment / Stats / File×code / Text-corpus reports** — 4 of 15 reports
-   have zero interaction coverage (only registry presence).
+4. **Sentiment / Stats / Summary-table** — W runs the lexicon scoring, the
+   crosstab (chi-square) and the file×code grid; the other report modes
+   (AI sentiment, group comparison, case scope) stay untested.
+5. **Files row context menu** — W drives rename + delete and asserts
+   Assign-to-case / Replace presence; the "heavy" entries still lack a run.
 
 ---
 
@@ -86,9 +89,9 @@ Top gaps worth filling next (quick to script, high value):
 | Selection | Batch transcribe (enabled path on AV media) | T (disabled state only) | **Gap** |
 | Selection | Batch autocode → queued background jobs | T | — |
 | Selection | Delete selected (danger, confirm) | — | **Gap** |
-| Context menu | Right-click row → Rename / Edit memo / Delete | — | **Gap** |
-| Context menu | Assign to case (prompt) | — | **Gap** |
-| Context menu | Replace file (text sources) | — | **Gap** |
+| Context menu | Right-click row → Rename / Edit memo / Delete | W | — |
+| Context menu | Assign to case (prompt) | W (presence) | — |
+| Context menu | Replace file (text sources) | W (presence) | — |
 | Filters | Saved filters: save/apply/delete | — | **Gap** |
 | URL import | UrlImportDialog (reddit/youtube/article/html) | — | **Gap** |
 | Repair | Broken-links list + per-row "Fix" | — | **Gap** |
@@ -189,10 +192,10 @@ Top gaps worth filling next (quick to script, high value):
 | Area | User operation | Covered? | Gap? |
 |---|---|---|---|
 | Ribbon | Journal ribbon nav | S | — |
-| Journal | Add entry; edit text; Save; rename; delete | — | **Gap** |
+| Journal | Add entry; edit text; Save; rename; delete | W (add/edit/save) | — |
 | Annotations | Tab lists all annotations; inline memo edit; delete; move file | — | **Gap** |
 | Annotations | Add from the Notes list header | — | **Gap** |
-| Memos | Code-memo tree; files-with-memos; add/save/delete memo | — | **Gap** |
+| Memos | Code-memo tree; files-with-memos; add/save/delete memo | W (code tree, add/save) | — |
 | Memos | "Open file" from a file memo | — | **Gap** |
 
 ## Analysis — reports (analyze.md)
@@ -209,9 +212,9 @@ Top gaps worth filling next (quick to script, high value):
 | Text & corpus | Word cloud / exact matches / file summary / attributes tabs; CSV | — | **Gap** |
 | Dictionary | Create dictionary; add term→code entry; autocode all sources | CG | — |
 | Dictionary | Import (.txt/.csv); frequency matrix + normalize; CSV | — | **Gap** |
-| Stats | Crosstab (chi-square); group comparison; code-by-variable; CSV | — | **Gap** |
-| Summary table | Document/case × code grid; inline memo edit | — | **Gap** |
-| Sentiment | Lexicon mode run; AI mode; distribution chips; CSV | — | **Gap** |
+| Stats | Crosstab (chi-square); group comparison; code-by-variable; CSV | W (crosstab chi-square) | — |
+| Summary table | Document/case × code grid; inline memo edit | W | — |
+| Sentiment | Lexicon mode run; AI mode; distribution chips; CSV | W (lexicon + chips) | — |
 | Document compare | Two-file chart; stats; block click → jump; CSV | — | **Gap** |
 | Codebook | Download codebook; copy to clipboard; memos toggle | S (button presence) | — |
 | References | RIS table; open source; detach/attach; delete; CSV | — | **Gap** |
@@ -301,7 +304,7 @@ Top gaps worth filling next (quick to script, high value):
 | Filters | Filter by action (narrows list) | F | — |
 | Filters | Filter by coder; refresh button | — | **Gap** |
 | Search | Client-side text search | — | **Gap** |
-| Undo | Per-row undo; redo stack | — | **Gap** |
+| Undo | Per-row undo; redo stack | W | — |
 | Details | Card click → detail modal (diff for source edits) | — | **Gap** |
 | Pagination | 100 rows/page, prev/next, range readout | — | **Gap** |
 

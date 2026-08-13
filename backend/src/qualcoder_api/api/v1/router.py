@@ -10,9 +10,11 @@ from pydantic import BaseModel, Field
 
 from qualcoder_api.api.v1.ai import router as ai_router
 from qualcoder_api.api.v1.audit import router as audit_router
+from qualcoder_api.api.v1.code_sets import router as code_sets_router
 from qualcoder_api.api.v1.coders import router as coders_router
 from qualcoder_api.api.v1.codes import router as codes_router
 from qualcoder_api.api.v1.codings import router as codings_router
+from qualcoder_api.api.v1.comments import router as comments_router
 from qualcoder_api.api.v1.compare import router as compare_router
 from qualcoder_api.api.v1.creative import router as creative_router
 from qualcoder_api.api.v1.dictionaries import router as dictionaries_router
@@ -68,6 +70,8 @@ router.include_router(scrape_router)
 router.include_router(creative_router)
 router.include_router(publish_router)
 router.include_router(qtt_router)
+router.include_router(comments_router)
+router.include_router(code_sets_router)
 
 
 def get_service() -> ProjectService:

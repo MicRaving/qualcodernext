@@ -21,13 +21,16 @@ import {
   FilePen,
   Link as LinkIcon,
   LoaderCircle,
+  Minus,
   Pencil,
+  Plus,
   Rows3,
   Save,
   ScrollText,
   Sparkles,
   Star,
   StickyNote,
+  Tag,
   Trash2,
   Undo2,
   X,
@@ -36,11 +39,14 @@ import {
   Button,
   ErrorBanner,
   IconButton,
+  Input,
   LoadingState,
+  Select,
   Textarea,
   ViewHeader,
 } from "@/components/ui/orchestrator";
 import { AutocodeDialog } from "@/features/coding/AutocodeDialog";
+import { patchCodingWeight } from "@/features/coding/codingApi";
 import {
   api,
   type Annotation,
@@ -201,6 +207,10 @@ export function TextCoder({
   const [pickerOpen, setPickerOpen] = useState(false);
   const [annotateOpen, setAnnotateOpen] = useState(false);
   const [annotateMemo, setAnnotateMemo] = useState("");
+  const [inVivoOpen, setInVivoOpen] = useState(false);
+  const [inVivoName, setInVivoName] = useState("");
+  const [inVivoCat, setInVivoCat] = useState<number | null>(null);
+  const [inVivoBusy, setInVivoBusy] = useState(false);
 
   const [selectedSeg, setSelectedSeg] = useState<RenderedSegment | null>(null);
   const [selectedAnnSeg, setSelectedAnnSeg] = useState<AnnotationSegment | null>(null);
@@ -349,6 +359,9 @@ export function TextCoder({
     setToolbarPos(null);
     setPickerOpen(false);
     setAnnotateOpen(false);
+    setInVivoOpen(false);
+    setInVivoName("");
+    setInVivoCat(null);
     setSelectedSeg(null);
     setSelectedAnnSeg(null);
     setEditingAnnMemo(null);
@@ -407,6 +420,17 @@ export function TextCoder({
     if (controlled) onCodesChange?.(next);
     else setLocalCodes(next);
   }, [controlled, onCodesChange]);
+
+  // History undo/redo: reload codings/annotations when the audit log reverts
+  // a change (the shell only refreshes project metadata).
+  useEffect(() => {
+    const handle = () => {
+      void refreshCodings();
+      void refreshAnnotations();
+    };
+    window.addEventListener("qc:codings-changed", handle);
+    return () => window.removeEventListener("qc:codings-changed", handle);
+  }, [refreshCodings, refreshAnnotations]);
 
   const refreshLinks = useCallback(async () => {
     setLinks(await fetchOutgoingLinks(sourceId));
@@ -495,6 +519,15 @@ export function TextCoder({
     return m;
   }, [codes]);
 
+  /** Segment weight (backend rows carry it; 0 = no weight). */
+  const weightOf = (row: Coding & { weight?: number }): number => row.weight ?? 0;
+
+  /** Top-level code categories for the in-vivo popover's optional target. */
+  const categories = useMemo(
+    () => storeCodeTree.filter((c) => c.kind === "category"),
+    [storeCodeTree],
+  );
+
   const colorByCid = useMemo(() => {
     const m: Record<number, string> = {};
     for (const [id, c] of codeById) m[id] = c.color ?? FALLBACK_CODE_COLOR;
@@ -553,6 +586,7 @@ export function TextCoder({
   const hideToolbar = useCallback(() => {
     setToolbarPos(null);
     setAnnotateOpen(false);
+    setInVivoOpen(false);
   }, []);
 
   function handleDocMouseUp() {
@@ -620,6 +654,10 @@ export function TextCoder({
         setAnnotateOpen(false);
         return;
       }
+      if (inVivoOpen) {
+        setInVivoOpen(false);
+        return;
+      }
       setToolbarPos(null);
       setSelectedSeg(null);
       setSelectedAnnSeg(null);
@@ -652,6 +690,47 @@ export function TextCoder({
       }
     })();
     void refreshCodes().catch(() => undefined);
+  }
+
+  /** In-vivo coding: create a NEW code from the selection text, then code
+   *  the current selection with it. */
+  function codeInVivo() {
+    const name = inVivoName.trim();
+    const sel = selection;
+    if (!name || inVivoBusy || !sel) return;
+    setInVivoBusy(true);
+    void (async () => {
+      try {
+        const res = await api.createCode(name, { catid: inVivoCat });
+        await api.createTextCoding({
+          cid: res.cid,
+          fid: sourceId,
+          seltext: text.slice(sel.start, sel.end),
+          pos0: sel.start,
+          pos1: sel.end,
+        });
+        await refreshCodings();
+        setInVivoOpen(false);
+      } catch (e) {
+        setErrMsg(e instanceof Error ? e.message : t("coder.inVivoCreateError"));
+      } finally {
+        setInVivoBusy(false);
+        clearSelection();
+      }
+    })();
+    void refreshCodes().catch(() => undefined);
+  }
+
+  /** Stepper update of a segment's weight (0-100; 0 = no weight). */
+  function updateCodingWeight(row: Coding, weight: number) {
+    void (async () => {
+      try {
+        await patchCodingWeight("text", row.ctid, weight);
+        await refreshCodings();
+      } catch (e) {
+        setErrMsg(e instanceof Error ? e.message : t("coder.weightError"));
+      }
+    })();
   }
 
   // Clicking a code in the left sidebar assigns it to the selected part.
@@ -703,6 +782,14 @@ export function TextCoder({
   function openAnnotate() {
     setAnnotateMemo("");
     setAnnotateOpen(true);
+    setInVivoOpen(false);
+  }
+
+  function openInVivo() {
+    setInVivoName("");
+    setInVivoCat(null);
+    setAnnotateOpen(false);
+    setInVivoOpen(true);
   }
 
   function saveAnnotation() {
@@ -1320,6 +1407,30 @@ export function TextCoder({
                   )}
                   {code?.memo && <span className="truncate text-xs text-text-secondary">{code.memo}</span>}
                   <span className="text-xs text-text-secondary">{r.date}</span>
+                  <span className="flex items-center gap-1">
+                    <span className="text-xs text-text-secondary">{t("coder.weight")}</span>
+                    <IconButton
+                      label={t("coder.weightDec")}
+                      title={t("coder.weightDec")}
+                      size="sm"
+                      disabled={weightOf(r) === 0}
+                      onClick={() => updateCodingWeight(r, weightOf(r) - 1)}
+                    >
+                      <Minus size={12} aria-hidden />
+                    </IconButton>
+                    <span className="min-w-5 text-center text-xs text-text-secondary" aria-label={t("coder.weight")}>
+                      {weightOf(r)}
+                    </span>
+                    <IconButton
+                      label={t("coder.weightInc")}
+                      title={t("coder.weightInc")}
+                      size="sm"
+                      disabled={weightOf(r) >= 100}
+                      onClick={() => updateCodingWeight(r, weightOf(r) + 1)}
+                    >
+                      <Plus size={12} aria-hidden />
+                    </IconButton>
+                  </span>
                   <div className="flex-1" />
                   <IconButton
                     label={t("coder.removeFor", { name: code?.name ?? "code" })}
@@ -1430,6 +1541,50 @@ export function TextCoder({
                 </Button>
               </div>
             </div>
+          ) : inVivoOpen ? (
+            <div
+              className={`w-64 p-2 ${cls.popup}`}
+              role="dialog"
+              aria-modal="true"
+              aria-label={t("coder.inVivo")}
+            >
+              <Input
+                autoFocus
+                value={inVivoName}
+                onChange={(e) => setInVivoName(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") codeInVivo();
+                }}
+                placeholder={t("coder.inVivoNamePlaceholder")}
+                aria-label={t("coder.inVivoNamePlaceholder")}
+              />
+              <Select
+                value={inVivoCat ?? ""}
+                onChange={(e) => setInVivoCat(e.target.value === "" ? null : Number(e.target.value))}
+                aria-label={t("coder.inVivoCategory")}
+                className="mt-1.5 w-full"
+              >
+                <option value="">{t("coder.inVivoNoCategory")}</option>
+                {categories.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.name}
+                  </option>
+                ))}
+              </Select>
+              <div className="mt-2 flex justify-end gap-1.5">
+                <Button variant="secondary" onClick={() => setInVivoOpen(false)}>
+                  {t("common.cancel")}
+                </Button>
+                <Button
+                  variant="primary"
+                  icon={inVivoBusy ? <LoaderCircle size={12} className="animate-spin" aria-hidden /> : <Tag size={12} aria-hidden />}
+                  onClick={codeInVivo}
+                  disabled={inVivoBusy || inVivoName.trim() === ""}
+                >
+                  {t("common.create")}
+                </Button>
+              </div>
+            </div>
           ) : qttOpen ? (
             <Menu role="menu" className="w-64" aria-label={t("qtt.sendTitle")}>
               <div className="border-b border-border px-2 py-1 text-[11px] font-medium uppercase tracking-wide text-text-secondary">
@@ -1494,6 +1649,14 @@ export function TextCoder({
               </Button>
               <Button variant="secondary" icon={<StickyNote size={12} aria-hidden />} onClick={openAnnotate}>
                 {t("coder.annotate")}
+              </Button>
+              <Button
+                variant="secondary"
+                icon={<Tag size={12} aria-hidden />}
+                onClick={openInVivo}
+                title={t("coder.inVivo")}
+              >
+                {t("coder.inVivo")}
               </Button>
               <Button
                 variant="secondary"

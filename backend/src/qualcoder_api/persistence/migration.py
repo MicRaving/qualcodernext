@@ -284,6 +284,10 @@ class MigrationChain:
         applied += await self.migrate_v23(app_version)
         applied += await self.migrate_v24(app_version)
         applied += await self.migrate_v25(app_version)
+        applied += await self.migrate_v26(app_version)
+        applied += await self.migrate_v27(app_version)
+        applied += await self.migrate_v28(app_version)
+        applied += await self.migrate_v29(app_version)
         return applied
 
     async def migrate_v21(self, app_version: str) -> list[str]:
@@ -404,6 +408,109 @@ class MigrationChain:
             await cur.execute('update project set databaseversion="v25", about=?', [app_version])
             await self.conn.commit()
             return ["v25"]
+        return []
+
+    async def migrate_v26(self, app_version: str) -> list[str]:
+        """v26: threaded comments — free-text notes pinned to any project
+        entity (``comment`` row): the target is addressed by kind + id
+        (``target_kind``/``target_id``) with the whitelist enforced at the
+        API layer. Indexed by (target_kind, target_id) so each thread read
+        is a single lookup."""
+        if self.conn is None:
+            return []
+        cur = await self.conn.cursor()
+        if not await self._has_table(cur, "comment"):
+            await cur.execute(
+                "CREATE TABLE comment (id integer primary key autoincrement, target_kind text, "
+                "target_id integer, body text, owner TEXT, created text)"
+            )
+            await cur.execute(
+                "CREATE INDEX IF NOT EXISTS idx_comment_target "
+                "ON comment(target_kind, target_id)"
+            )
+            await cur.execute('update project set databaseversion="v26", about=?', [app_version])
+            await self.conn.commit()
+            return ["v26"]
+        return []
+
+    async def migrate_v27(self, app_version: str) -> list[str]:
+        """v27: segment weights (MAXQDA-style) — ``weight`` (0-100) on
+        code_text/code_image/code_av. Added as NOT NULL with a default so
+        existing segments start unweighted (0 = no weight)."""
+        if self.conn is None:
+            return []
+        cur = await self.conn.cursor()
+        changed = False
+        for table in ("code_text", "code_image", "code_av"):
+            if await self._has_table(cur, table) and not await self._has_column(
+                cur, table, "weight"
+            ):
+                await cur.execute(
+                    f"ALTER TABLE {table} ADD weight INTEGER NOT NULL DEFAULT 0"
+                )
+                await self.conn.commit()
+                changed = True
+        if changed:
+            await cur.execute('update project set databaseversion="v27", about=?', [app_version])
+            await self.conn.commit()
+            return ["v27"]
+        return []
+
+    async def migrate_v28(self, app_version: str) -> list[str]:
+        """v28: MAXQDA-style memo types — ``memo_type`` on code_name and
+        source (a stable type id like "idea" / "theory"; the frontend maps
+        ids to icons). Untyped memos keep '' and render as "general"."""
+        if self.conn is None:
+            return []
+        cur = await self.conn.cursor()
+        changed = False
+        if await self._has_table(cur, "code_name") and not await self._has_column(
+            cur, "code_name", "memo_type"
+        ):
+            await cur.execute("ALTER TABLE code_name ADD memo_type TEXT NOT NULL DEFAULT ''")
+            await self.conn.commit()
+            changed = True
+        if await self._has_table(cur, "source") and not await self._has_column(
+            cur, "source", "memo_type"
+        ):
+            await cur.execute("ALTER TABLE source ADD memo_type TEXT NOT NULL DEFAULT ''")
+            await self.conn.commit()
+            changed = True
+        if changed:
+            await cur.execute('update project set databaseversion="v28", about=?', [app_version])
+            await self.conn.commit()
+            return ["v28"]
+        return []
+
+    async def migrate_v29(self, app_version: str) -> list[str]:
+        """v29: code sets (MAXQDA-style) — named subsets of codes.
+
+        ``code_set`` holds the named set (name is unique); ``code_set_member``
+        maps set → code with a composite primary key so every code is a
+        member at most once per set.
+        """
+        if self.conn is None:
+            return []
+        cur = await self.conn.cursor()
+        changed = False
+        if not await self._has_table(cur, "code_set"):
+            await cur.execute(
+                "CREATE TABLE code_set (id integer primary key autoincrement, name text, "
+                "owner text, created text, unique(name))"
+            )
+            await self.conn.commit()
+            changed = True
+        if not await self._has_table(cur, "code_set_member"):
+            await cur.execute(
+                "CREATE TABLE code_set_member (set_id integer, cid integer, "
+                "primary key(set_id, cid))"
+            )
+            await self.conn.commit()
+            changed = True
+        if changed:
+            await cur.execute('update project set databaseversion="v29", about=?', [app_version])
+            await self.conn.commit()
+            return ["v29"]
         return []
 
     async def migrate_v20(self) -> list[str]:

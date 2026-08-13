@@ -5,21 +5,30 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  BookOpen,
   ChevronDown,
   ChevronRight,
+  ClipboardList,
   FileText,
+  FlaskConical,
   FolderOpen,
   Hash,
+  HelpCircle,
   Info,
+  Lightbulb,
   LoaderCircle,
+  Mic,
   NotebookPen,
   Pencil,
   Save,
+  ScanEye,
   Search,
+  Star,
   StickyNote,
   Trash2,
+  type LucideIcon,
 } from "lucide-react";
-import { api, type Source } from "@/lib/api";
+import { api, ApiError, fetchWithTimeout, initApiBase, type Source } from "@/lib/api";
 import {
   BarHeader,
   Button,
@@ -36,6 +45,76 @@ import { useI18n } from "@/lib/i18n";
 import { useProjectStore } from "@/stores/project";
 
 const MAX_TREE_DEPTH = 64;
+
+// ---------------------------------------------------------------------------
+// Memo types (MAXQDA-style): stable ids mapped to lucide icons. The backend
+// stores only the id ("" = untyped, rendered as "general"); names come from
+// the locale dictionaries via the labelKey.
+// ---------------------------------------------------------------------------
+
+const MEMO_TYPE_IDS = [
+  "idea",
+  "theory",
+  "summary",
+  "observation",
+  "method",
+  "question",
+  "review",
+  "interview",
+  "editorial",
+  "general",
+] as const;
+
+type MemoTypeId = (typeof MEMO_TYPE_IDS)[number];
+
+const MEMO_TYPES: Record<MemoTypeId, { icon: LucideIcon; labelKey: string }> = {
+  idea: { icon: Lightbulb, labelKey: "notes.memoType.idea" },
+  theory: { icon: BookOpen, labelKey: "notes.memoType.theory" },
+  summary: { icon: ClipboardList, labelKey: "notes.memoType.summary" },
+  observation: { icon: ScanEye, labelKey: "notes.memoType.observation" },
+  method: { icon: FlaskConical, labelKey: "notes.memoType.method" },
+  question: { icon: HelpCircle, labelKey: "notes.memoType.question" },
+  review: { icon: Star, labelKey: "notes.memoType.review" },
+  interview: { icon: Mic, labelKey: "notes.memoType.interview" },
+  editorial: { icon: NotebookPen, labelKey: "notes.memoType.editorial" },
+  general: { icon: FileText, labelKey: "notes.memoType.general" },
+};
+
+/** api.ts does not (yet) carry memo_type on its payload types — the field is
+ *  read through this intersection (the backend always includes it). */
+type MemoTypeAware = { memo_type?: string };
+
+/** Normalize a stored memo_type id: unknown/empty ids fall back to "general". */
+function memoTypeOf(raw: string | null | undefined): MemoTypeId {
+  return raw && Object.prototype.hasOwnProperty.call(MEMO_TYPES, raw)
+    ? (raw as MemoTypeId)
+    : "general";
+}
+
+/** PATCH memo_type through the code/source endpoints (local-fetch pattern —
+ *  api.patchCode/patchSource payload types have no memo_type yet). */
+async function patchMemoType(
+  kind: "code" | "file",
+  id: number,
+  memoType: string,
+): Promise<void> {
+  const base = await initApiBase();
+  const path = kind === "code" ? `/codes/${id}` : `/sources/${id}`;
+  const res = await fetchWithTimeout(`${base}${path}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ memo_type: memoType }),
+  });
+  if (!res.ok) {
+    throw new ApiError(res.status, `API error ${res.status} on ${path}`);
+  }
+}
+
+/** The icon chip shown next to a memo row / picker button. */
+function MemoTypeIcon({ type, size }: { type: MemoTypeId; size: number }) {
+  const Icon = MEMO_TYPES[type].icon;
+  return <Icon size={size} aria-hidden />;
+}
 
 /** Left bar: the journal list by default. Annotations and memos have no tab
  *  switcher anymore — those views are opened from the file inspector's
@@ -607,7 +686,14 @@ function MemoItems() {
   const byParent = useMemo(() => {
     const map = new Map<
       string,
-      { id: number; name: string; memo: string | null; kind: string; color: string | null }[]
+      {
+        id: number;
+        name: string;
+        memo: string | null;
+        memoType: MemoTypeId;
+        kind: string;
+        color: string | null;
+      }[]
     >();
     for (const item of codeTree) {
       if (q && !item.name.toLowerCase().includes(q) && !(item.memo ?? "").toLowerCase().includes(q)) {
@@ -620,7 +706,14 @@ function MemoItems() {
             ? `cat:${item.parent_id}`
             : `code:${item.parent_id}`;
       const list = map.get(parentKey) ?? [];
-      list.push({ id: item.id, name: item.name, memo: item.memo, kind: item.kind, color: item.color });
+      list.push({
+        id: item.id,
+        name: item.name,
+        memo: item.memo,
+        memoType: memoTypeOf((item as MemoTypeAware).memo_type),
+        kind: item.kind,
+        color: item.color,
+      });
       map.set(parentKey, list);
     }
     return map;
@@ -673,7 +766,10 @@ function MemoItems() {
               />
               <span className="truncate">{item.name}</span>
               {item.memo ? (
-                <span className="ml-auto shrink-0 text-[10px] text-text-secondary">memo</span>
+                <span className="ml-auto flex shrink-0 items-center gap-1 text-[10px] text-text-secondary">
+                  <MemoTypeIcon type={item.memoType} size={12} />
+                  <span>memo</span>
+                </span>
               ) : (
                 hasChildren && <span className="ml-auto shrink-0 text-[10px] text-text-secondary" />
               )}
@@ -740,7 +836,10 @@ function MemoItems() {
                 >
                   <FileText size={13} className="shrink-0 text-text-secondary" aria-hidden />
                   <span className="truncate">{s.name}</span>
-                  <span className="ml-auto shrink-0 text-[10px] text-text-secondary">memo</span>
+                  <span className="ml-auto flex shrink-0 items-center gap-1 text-[10px] text-text-secondary">
+                    <MemoTypeIcon type={memoTypeOf((s as MemoTypeAware).memo_type)} size={12} />
+                    <span>memo</span>
+                  </span>
                 </button>
               </div>
             ))}
@@ -870,6 +969,24 @@ function MemoEditor() {
     }
   }
 
+  /** Persist a picked memo type through the PATCH endpoint. */
+  async function persistMemoType(typeId: MemoTypeId) {
+    if (saving || (!selectedCode && !selectedFile)) return;
+    const kind = selectedCode ? "code" : "file";
+    const targetId = selectedCode?.id ?? selectedFile?.id;
+    if (targetId == null || typeId === memoTypeOf(((selectedCode ?? selectedFile) as MemoTypeAware | null)?.memo_type)) return;
+    setSaving(true);
+    setError(null);
+    try {
+      await patchMemoType(kind, targetId, typeId);
+      await refreshProject();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : t("notes.memoError"));
+    } finally {
+      setSaving(false);
+    }
+  }
+
   const selected = selectedCode ?? selectedFile;
   const isCode = selectedCode != null;
 
@@ -931,6 +1048,29 @@ function MemoEditor() {
         }
       />
       <div className="flex min-h-0 flex-1 flex-col p-4">
+        <div className="mb-2 flex shrink-0 flex-wrap items-center gap-1">
+          <span className="mr-1 shrink-0 text-xs font-medium uppercase tracking-wide text-text-secondary">
+            {t("notes.memoTypeLabel")}
+          </span>
+          {MEMO_TYPE_IDS.map((id) => {
+            const label = t(MEMO_TYPES[id].labelKey);
+            const active = id === memoTypeOf((selected as MemoTypeAware).memo_type);
+            return (
+              <IconButton
+                key={id}
+                label={label}
+                title={label}
+                size="row"
+                aria-pressed={active}
+                disabled={saving}
+                className={active ? "bg-accent/10 text-accent" : "text-text-secondary"}
+                onClick={() => void persistMemoType(id)}
+              >
+                <MemoTypeIcon type={id} size={14} />
+              </IconButton>
+            );
+          })}
+        </div>
         <textarea
           value={draft}
           onChange={(e) => {

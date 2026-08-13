@@ -21,6 +21,7 @@ const FORMAT_HELP: [string, string][] = [
   ["rqda", "RQDA (.rqda) — a QualCoder v3 project file with codes, sources, codings and cases."],
   ["taguette", "Taguette (.tag / .json) — codes and coded excerpts from a Taguette export."],
   ["transana", "Transana (.tprd) — an SQLite database with media transcripts, keyword codes and time-based codings."],
+  ["nvivo", "NVivo (.nvpx) — best-effort import: documents, codes, codings when positions are available."],
   ["ris", "RIS (.ris) — bibliographic references imported as journal references."],
   ["survey", "Survey (.csv) — spreadsheet columns imported as cases with attributes; qualitative columns become text files per row."],
   ["xlsx", "Excel (.xlsx) — multi-column sheets imported like a survey CSV; other sheets become one text file per sheet."],
@@ -42,6 +43,7 @@ function detectFormat(name: string): string {
   if (ext === "rqda") return "rqda";
   if (ext === "tag" || ext === "json") return "taguette";
   if (ext === "tprd") return "transana";
+  if (ext === "nvpx") return "nvivo";
   if (ext === "ris") return "ris";
   if (ext === "csv") return "survey";
   if (ext === "xlsx" || ext === "xls") return "xlsx";
@@ -51,12 +53,20 @@ function detectFormat(name: string): string {
   return "refi";
 }
 
+/** Display label for a format kind (NVivo is localized here — importLabel
+ *  has no NVivo entry by design, its unknown-kind fallback stays raw). */
+function formatLabel(t: (key: string) => string, kind: string): string {
+  if (kind === "nvivo") return t("interchange.formatNvivo");
+  return importLabel(kind);
+}
+
 function FormatHelpList() {
+  const { t } = useI18n();
   return (
     <ul className="space-y-1.5">
       {FORMAT_HELP.map(([key, help]) => (
         <li key={key} className="text-xs leading-relaxed text-text-secondary">
-          {importLabel(key)}
+          {formatLabel(t, key)}
           {" — "}
           {help}
         </li>
@@ -132,7 +142,7 @@ export function InterchangeView({ embedded = false }: { embedded?: boolean }) {
           <span className="min-w-0 flex-1 truncate">{pending.name}</span>
         </p>
         <p className="mt-0.5 text-[10px] text-text-secondary">
-          {importLabel(detectFormat(pending.name))}
+          {formatLabel(t, detectFormat(pending.name))}
         </p>
         <div className="mt-2 flex items-center justify-end gap-2">
           <Button variant="secondary" onClick={() => setPending(null)}>

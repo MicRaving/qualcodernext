@@ -75,6 +75,12 @@ The specs run alphabetically in one serial worker (see "Why serial" below):
     trashcan incl. the reassignment prompt, background-tasks section), sidebar
     drag-hide, display-mode a11y classes, and the PDF coder's plain-text pane
     (PDF + text side by side). Shares ONE project across its first four tests.
+11. **Coverage wave** (`coverage-wave.spec.ts`) — History per-row undo/redo of
+    a coding, Notes journal entry + code memo via the memos tab, the Files row
+    context menu (rename/delete, Assign-to-case/Replace presence), the
+    Sentiment lexicon report, the Statistics crosstab (chi-square) and the
+    Summary-table file×code grid with a cell memo edit. Shares ONE project
+    across its seven tests.
 
 Flaky media-dependent flows (whisper transcription without a spoken fixture,
 headless autoplay) carry explicit skip/fallback annotations instead of

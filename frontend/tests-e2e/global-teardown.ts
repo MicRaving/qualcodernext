@@ -13,8 +13,8 @@ const SERVERS_FILE = path.join(FRONTEND_DIR, "tests-e2e", ".servers.json");
 const SETTINGS_FILE = path.join(os.homedir(), ".qualcoder", "settings.json");
 // All temp project dirs the specs create (qc-e2e is the classic one; the
 // per-file shared projects live in their own dirs).
-const E2E_TMP_DIRS = ["qc-e2e", "qc-tabtest", "qc-roadmap", "qc-tasks", "qc-gaps"].map((d) =>
-  path.join(os.tmpdir(), d),
+const E2E_TMP_DIRS = ["qc-e2e", "qc-tabtest", "qc-roadmap", "qc-tasks", "qc-gaps", "qc-wave"].map(
+  (d) => path.join(os.tmpdir(), d),
 );
 
 function killTree(pid: number) {

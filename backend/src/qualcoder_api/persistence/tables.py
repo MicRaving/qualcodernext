@@ -50,6 +50,8 @@ source = Table(
     Column("date", String),
     Column("av_text_id", Integer),
     Column("risid", Integer),
+    # MAXQDA-style memo type id (v28); "" = untyped (renders as "general").
+    Column("memo_type", String, nullable=False, server_default=text("''")),
 )
 
 code_image = Table(
@@ -67,6 +69,7 @@ code_image = Table(
     Column("owner", String),
     Column("important", Integer),
     Column("pdf_page", Integer),
+    Column("weight", Integer),
 )
 
 code_av = Table(
@@ -81,6 +84,7 @@ code_av = Table(
     Column("date", String),
     Column("owner", String),
     Column("important", Integer),
+    Column("weight", Integer),
 )
 
 annotation = Table(
@@ -197,6 +201,7 @@ code_text = Table(
     Column("memo", Text),
     Column("avid", Integer),
     Column("important", Integer),
+    Column("weight", Integer),
     UniqueConstraint("cid", "fid", "pos0", "pos1", "owner", name="u_code_text"),
 )
 
@@ -211,6 +216,8 @@ code_name = Table(
     Column("date", String),
     Column("color", String),
     Column("supercid", Integer),
+    # MAXQDA-style memo type id (v28); "" = untyped (renders as "general").
+    Column("memo_type", String, nullable=False, server_default=text("''")),
 )
 
 journal = Table(
@@ -514,6 +521,24 @@ qtt_item = Table(
     Column("date", String),
 )
 
+code_set = Table(
+    "code_set",
+    metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("name", String, nullable=False),
+    Column("owner", String),
+    Column("created", String),
+    UniqueConstraint("name", name="u_code_set_name"),
+)
+
+code_set_member = Table(
+    "code_set_member",
+    metadata,
+    # Composite primary key (set_id, cid) — exactly one membership per pair.
+    Column("set_id", Integer, primary_key=True),
+    Column("cid", Integer, primary_key=True),
+)
+
 # Tables whose `owner` column feeds the coder_names table.
 OWNER_TABLES = [
     "code_image",
@@ -534,6 +559,9 @@ OWNER_TABLES = [
     "journal",
     "manage_files_display",
     "files_filter",
+    "comment",
+    "code_set",
+    "dictionary",
 ]
 
 # Visibility views over the coding/annotation tables.
@@ -546,3 +574,16 @@ VISIBILITY_VIEWS = (
 
 # system coder name from the legacy speakers module
 SYSTEM_CODER_NAME = "system"
+
+comment = Table(
+    "comment",
+    metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    # One of the whitelisted TARGET_KINDS: source / code / case / coding /
+    # annotation / creative_item / qtt_item.
+    Column("target_kind", String),
+    Column("target_id", Integer),
+    Column("body", Text),
+    Column("owner", String),
+    Column("created", String),
+)

@@ -224,7 +224,7 @@ test("dictionary autocode: create dictionary, add entry, code all sources", asyn
   await createCode(page, "HappyCode");
 
   // Dictionary report: create a dictionary and one term → code entry.
-  await page.getByRole("button", { name: "Reports" }).click();
+  await page.getByRole("button", { name: "Reports", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Analysis" }).first()).toBeVisible();
   await page.getByRole("button", { name: "Dictionary", exact: true }).click();
 
@@ -319,7 +319,7 @@ test("analyze publish dialog exports the current report as Word", async ({ page 
 
   // Code frequencies needs codings — the earlier tests created LinkCode and
   // HappyCode spans in this shared project.
-  await page.getByRole("button", { name: "Reports" }).click();
+  await page.getByRole("button", { name: "Reports", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Analysis" }).first()).toBeVisible();
   await page.getByRole("button", { name: /Code frequencies/ }).click();
   await expect(page.getByRole("row").filter({ hasText: "LinkCode" })).toBeVisible({

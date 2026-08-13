@@ -15,17 +15,21 @@ import {
   Link as LinkIcon,
   LoaderCircle,
   Mic,
+  Minus,
   Music,
   Pause,
   Play,
+  Plus,
   Save,
   Sparkles,
   StickyNote,
+  Tag,
   Trash2,
   Video,
   X,
 } from "lucide-react";
 import { api, sourceFileUrl, type AVCoding, type CodeTreeItem, type Coding, type Source } from "@/lib/api";
+import { patchCodingWeight } from "@/features/coding/codingApi";
 import { CodePicker, type PickedCode } from "@/features/coding/CodePicker";
 import { AutocodeDialog } from "@/features/coding/AutocodeDialog";
 import { TranscribeDialog } from "@/features/coding/TranscribeDialog";
@@ -45,6 +49,7 @@ import {
   Button,
   ErrorBanner,
   IconButton,
+  Input,
   LoadingState,
   Select,
   Textarea,
@@ -228,6 +233,10 @@ export function AvCoder({ source }: { source: Source }) {
   const [tAnnotateOpen, setTAnnotateOpen] = useState(false);
   const [tAnnotateMemo, setTAnnotateMemo] = useState("");
   const [tPickerOpen, setTPickerOpen] = useState(false);
+  const [tInVivoOpen, setTInVivoOpen] = useState(false);
+  const [tInVivoName, setTInVivoName] = useState("");
+  const [tInVivoCat, setTInVivoCat] = useState<number | null>(null);
+  const [tInVivoBusy, setTInVivoBusy] = useState(false);
   const tSelRef = useRef(tSel);
   tSelRef.current = tSel;
   /** Which coding gesture the user last performed: a transcript text
@@ -326,6 +335,36 @@ export function AvCoder({ source }: { source: Source }) {
       await loadTranscriptCodings();
     } catch (e) {
       setTError(e instanceof Error ? e.message : t("coder.createError"));
+    }
+  }
+
+  /** In-vivo coding: create a NEW code from the selected transcript text,
+   *  then code the current transcript selection with it. */
+  async function codeTranscriptInVivo() {
+    const name = tInVivoName.trim();
+    const sel = tSelRef.current;
+    if (!name || tInVivoBusy || !sel || transcriptId == null) return;
+    setTInVivoBusy(true);
+    setTError(null);
+    try {
+      const res = await api.createCode(name, { catid: tInVivoCat });
+      const pos0 = renderedToRaw(transcriptRaw, crAt, sel.start);
+      const pos1 = renderedToRaw(transcriptRaw, crAt, sel.end);
+      await api.createTextCoding({
+        cid: res.cid,
+        fid: transcriptId,
+        seltext: transcriptRaw.slice(pos0, pos1),
+        pos0,
+        pos1,
+      });
+      setTSel(null);
+      setTInVivoOpen(false);
+      await useProjectStore.getState().refreshProject();
+      await loadTranscriptCodings();
+    } catch (e) {
+      setTError(e instanceof Error ? e.message : t("coder.inVivoCreateError"));
+    } finally {
+      setTInVivoBusy(false);
     }
   }
 
@@ -454,6 +493,12 @@ export function AvCoder({ source }: { source: Source }) {
     return map;
   }, [codes]);
 
+  /** Top-level code categories for the in-vivo popover's optional target. */
+  const categories = useMemo(
+    () => storeCodeTree.filter((c) => c.kind === "category"),
+    [storeCodeTree],
+  );
+
   const codeColor = (coding: AVCoding) => colorByCid.get(coding.cid) ?? "rgba(0,0,0,0.15)";
 
   const load = useCallback(async () => {
@@ -531,6 +576,14 @@ export function AvCoder({ source }: { source: Source }) {
 
   useEffect(() => {
     void loadTranscriptCodings();
+  }, [loadTranscriptCodings]);
+
+  // History undo/redo: reload transcript codings when the audit log reverts
+  // a change (the shell only refreshes project metadata).
+  useEffect(() => {
+    const handle = () => void loadTranscriptCodings();
+    window.addEventListener("qc:codings-changed", handle);
+    return () => window.removeEventListener("qc:codings-changed", handle);
   }, [loadTranscriptCodings]);
 
   // --- media element wiring --------------------------------------------
@@ -751,6 +804,8 @@ export function AvCoder({ source }: { source: Source }) {
     setTranscribeMode(false);
     setTranscribeDraft("");
     setTSel(null);
+    setTInVivoOpen(false);
+    setTInVivoName("");
   }, [transcriptId]);
 
   function handleTimelineClick(e: React.MouseEvent) {
@@ -827,6 +882,22 @@ export function AvCoder({ source }: { source: Source }) {
     setPickerOpen(false);
     if (pendingStart === null) return;
     await codeRange(code.cid, pendingStart, currentMs);
+  }
+
+  /** Segment weight (backend rows carry it; 0 = no weight). */
+  const avWeight = (coding: AVCoding): number =>
+    (coding as AVCoding & { weight?: number }).weight ?? 0;
+
+  /** Stepper update of a time-range coding's weight (0-100; 0 = no weight). */
+  function updateCodingWeight(coding: AVCoding, weight: number) {
+    void (async () => {
+      try {
+        await patchCodingWeight("av", coding.avid, weight);
+        await load();
+      } catch (e) {
+        setError(e instanceof Error ? e.message : t("coder.weightError"));
+      }
+    })();
   }
 
   async function handleDelete(coding: AVCoding) {
@@ -1191,7 +1262,7 @@ export function AvCoder({ source }: { source: Source }) {
             </div>
             )}
             {/* Floating selection toolbar (code / annotate) */}
-            {tSel && !tAnnotateOpen && (
+            {tSel && !tAnnotateOpen && !tInVivoOpen && (
               <div
                 className="fixed z-40 flex items-center gap-1 rounded-md border border-border bg-surface p-1 shadow-lg"
                 style={{ left: Math.min(tSel.left, window.innerWidth - 200), top: tSel.top }}
@@ -1222,6 +1293,19 @@ export function AvCoder({ source }: { source: Source }) {
                 </Button>
                 <Button
                   variant="secondary"
+                  icon={<Tag size={12} aria-hidden />}
+                  onClick={() => {
+                    setTInVivoName("");
+                    setTInVivoCat(null);
+                    setTAnnotateOpen(false);
+                    setTInVivoOpen(true);
+                  }}
+                  title={t("coder.inVivo")}
+                >
+                  {t("coder.inVivo")}
+                </Button>
+                <Button
+                  variant="secondary"
                   icon={<LinkIcon size={12} aria-hidden />}
                   onClick={() => void copyTranscriptLink()}
                   title={t("coder.linkCopied")}
@@ -1238,6 +1322,61 @@ export function AvCoder({ source }: { source: Source }) {
                     {t("coder.pasteLinkHere")}
                   </Button>
                 )}
+              </div>
+            )}
+            {/* In-vivo popover: create a new code and code the selection */}
+            {tInVivoOpen && (
+              <div
+                className={`fixed z-40 w-64 p-2 ${cls.popup}`}
+                style={{ left: Math.min(tSel?.left ?? 0, window.innerWidth - 280), top: tSel?.top ?? 0 }}
+                role="dialog"
+                aria-modal="true"
+                aria-label={t("coder.inVivo")}
+              >
+                <Input
+                  autoFocus
+                  value={tInVivoName}
+                  onChange={(e) => setTInVivoName(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") void codeTranscriptInVivo();
+                  }}
+                  placeholder={t("coder.inVivoNamePlaceholder")}
+                  aria-label={t("coder.inVivoNamePlaceholder")}
+                />
+                <Select
+                  value={tInVivoCat ?? ""}
+                  onChange={(e) =>
+                    setTInVivoCat(e.target.value === "" ? null : Number(e.target.value))
+                  }
+                  aria-label={t("coder.inVivoCategory")}
+                  className="mt-1.5 w-full"
+                >
+                  <option value="">{t("coder.inVivoNoCategory")}</option>
+                  {categories.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.name}
+                    </option>
+                  ))}
+                </Select>
+                <div className="mt-2 flex justify-end gap-1.5">
+                  <Button variant="secondary" onClick={() => setTInVivoOpen(false)}>
+                    {t("common.cancel")}
+                  </Button>
+                  <Button
+                    variant="primary"
+                    icon={
+                      tInVivoBusy ? (
+                        <LoaderCircle size={12} className="animate-spin" aria-hidden />
+                      ) : (
+                        <Tag size={12} aria-hidden />
+                      )
+                    }
+                    onClick={() => void codeTranscriptInVivo()}
+                    disabled={tInVivoBusy || tInVivoName.trim() === ""}
+                  >
+                    {t("common.create")}
+                  </Button>
+                </div>
               </div>
             )}
             {/* Annotate popover */}
@@ -1346,6 +1485,30 @@ export function AvCoder({ source }: { source: Source }) {
             {formatTime(selected.pos0)} – {formatTime(selected.pos1)}
           </span>
           <span className="truncate text-xs text-text-secondary">{selected.memo || t("common.noMemo")}</span>
+          <span className="flex items-center gap-1">
+            <span className="text-xs text-text-secondary">{t("coder.weight")}</span>
+            <IconButton
+              label={t("coder.weightDec")}
+              title={t("coder.weightDec")}
+              size="sm"
+              disabled={avWeight(selected) === 0}
+              onClick={() => updateCodingWeight(selected, avWeight(selected) - 1)}
+            >
+              <Minus size={12} aria-hidden />
+            </IconButton>
+            <span className="min-w-5 text-center text-xs text-text-secondary" aria-label={t("coder.weight")}>
+              {avWeight(selected)}
+            </span>
+            <IconButton
+              label={t("coder.weightInc")}
+              title={t("coder.weightInc")}
+              size="sm"
+              disabled={avWeight(selected) >= 100}
+              onClick={() => updateCodingWeight(selected, avWeight(selected) + 1)}
+            >
+              <Plus size={12} aria-hidden />
+            </IconButton>
+          </span>
           <div className="flex-1" />
           <Button
             variant="danger"
