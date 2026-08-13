@@ -19,10 +19,16 @@ Modes:
 - ``article`` — page fetched with urllib, cleaned with trafilatura
   (falling back to the project's own ``html_to_text``).
 - ``html``    — raw page HTML saved verbatim as a ``.html`` source.
+- ``pdf``     — page fetched with urllib and rendered to a PDF document
+  with PyMuPDF's Story engine (mirroring the ``GET /sources/{id}/pdf``
+  export; a text-only fallback PDF when the layout render fails). Stored
+  as a ``.pdf`` source the PdfCoder can open.
 """
 
 from __future__ import annotations
 
+import asyncio
+import concurrent.futures
 import json
 import logging
 import re
@@ -43,7 +49,14 @@ USER_AGENT = (
 )
 FETCH_TIMEOUT = 45
 
-REDDIT_HOSTS = ("reddit.com", "old.reddit.com", "m.reddit.com")
+REDDIT_HOSTS = (
+    "reddit.com",
+    "www.reddit.com",
+    "old.reddit.com",
+    "m.reddit.com",
+    "np.reddit.com",
+    "new.reddit.com",
+)
 YOUTUBE_HOSTS = ("youtube.com", "m.youtube.com", "youtu.be")
 
 _PREFERRED_CAPTION_LANGS = ("en", "en-US", "en-GB", "en-orig")
@@ -170,6 +183,20 @@ def _format_duration(seconds: object) -> str:
 # Reddit
 # ----------------------------------------------------------------------
 
+#: Every subdomain variant serves the same anonymous ``.json`` API —
+#: normalize to the canonical host so old/np/m links behave identically.
+_REDDIT_CANONICAL_HOST = "www.reddit.com"
+
+
+def _reddit_normalize_host(url: str) -> str:
+    """Map old/m/np/new/wwww reddit hosts onto www.reddit.com."""
+    parsed = urlparse(url)
+    host = (parsed.netloc or "").lower()
+    if host in REDDIT_HOSTS:
+        return parsed._replace(netloc=_REDDIT_CANONICAL_HOST).geturl()
+    return url
+
+
 def _reddit_json_url(url: str) -> str:
     """Append ``.json`` to the path, keeping the query string and fragment."""
     parsed = urlparse(url)
@@ -238,12 +265,37 @@ def _reddit_comments(comments_listing: object) -> list[str]:
     return lines
 
 
+def _reddit_block_reason(payload: object) -> str | None:
+    """A clear error for banned/quarantined/blocked JSON bodies.
+
+    Reddit answers some blocked requests with HTTP 200 plus a small JSON
+    object (``{"reason": "banned", "error": 403}``, ``{"reason":
+    "quarantined"}``) instead of an HTTP error — surface those instead of
+    failing on the generic "unexpected Reddit response shape" path.
+    """
+    if not isinstance(payload, dict) or "data" in payload:
+        return None
+    reason = payload.get("reason")
+    if isinstance(reason, str):
+        return (
+            f"Reddit reports this page as {reason} — it cannot be "
+            "fetched anonymously"
+        )
+    if payload.get("error") == 403:
+        return "subreddit may be private or blocked"
+    return None
+
+
 def scrape_reddit(url: str) -> ScrapedContent:
     """Fetch a Reddit submission + comments through the anonymous .json API."""
     try:
-        raw = fetch_url(_reddit_json_url(url))
+        raw = fetch_url(_reddit_json_url(_reddit_normalize_host(url)))
     except ScrapeError as err:
-        if err.code in (403, 429):
+        if err.code == 403:
+            raise ScrapeError(
+                "subreddit may be private or blocked — it cannot be fetched anonymously"
+            ) from err
+        if err.code == 429:
             raise ScrapeError("Reddit rate-limited — wait a minute and retry") from err
         raise
 
@@ -251,6 +303,10 @@ def scrape_reddit(url: str) -> ScrapedContent:
         payload = json.loads(raw.decode("utf-8", errors="replace"))
     except ValueError as err:
         raise ScrapeError("Reddit response is not JSON") from err
+
+    blocked = _reddit_block_reason(payload)
+    if blocked is not None:
+        raise ScrapeError(blocked)
 
     post_listing, comments_listing = _reddit_listing_payload(payload)
     post = _first_child(post_listing)
@@ -484,6 +540,99 @@ def _youtube_comments(info: dict) -> list[str]:
     return lines
 
 
+#: Hard cap for a single yt-dlp extraction — it can hang on flaky networks.
+_YT_TIMEOUT_SECONDS = 90
+#: Shown when yt-dlp signals an internal abort (never a "real" failure).
+_YT_ABORT_MESSAGE = (
+    "YouTube extraction was interrupted — try again, or import the "
+    "video page as 'Article' mode instead"
+)
+_YT_TIMEOUT_MESSAGE = (
+    f"YouTube extraction timed out after {_YT_TIMEOUT_SECONDS} seconds — "
+    "try again, or import the video page as 'Article' mode instead"
+)
+#: Markers some platforms report through ``DownloadError`` when yt-dlp
+#: aborts (e.g. "signal aborted without reason") instead of raising.
+_YT_ABORT_MARKERS = ("signal aborted", "aborted", "interrupted")
+#: Dedicated executor for yt-dlp extractions: a timed-out call keeps its
+#: thread (threads cannot be killed) but must never block loop teardown.
+_YT_EXTRACTOR_EXECUTOR = concurrent.futures.ThreadPoolExecutor(
+    max_workers=1, thread_name_prefix="yt-extract"
+)
+
+
+class _YouTubeAbortError(ScrapeError):
+    """yt-dlp's internal abort signal surfaced as a retryable error."""
+
+
+def _is_yt_abort(err: BaseException) -> bool:
+    """True when a yt-dlp error is the internal abort signal, not a real failure."""
+    message = str(err).lower()
+    return any(marker in message for marker in _YT_ABORT_MARKERS)
+
+
+def _yt_extract_sync(url: str, options: dict) -> dict:
+    """Blocking yt-dlp call: video metadata (+ comments when requested).
+
+    yt-dlp aborts long extractions (e.g. huge comment threads) by raising
+    ``KeyboardInterrupt``/``SystemExit`` out of ``extract_info`` — or a
+    ``DownloadError`` naming the abort on some platforms. Both are mapped
+    to a friendly, actionable ``ScrapeError`` instead of the raw signal
+    propagating into the import pipeline.
+    """
+    try:
+        ydl = yt_dlp.YoutubeDL(options)
+        try:
+            info = ydl.extract_info(url, download=False)
+        except (KeyboardInterrupt, SystemExit) as err:
+            raise _YouTubeAbortError(_YT_ABORT_MESSAGE) from err
+        finally:
+            ydl.close()
+    except yt_dlp.utils.DownloadError as err:
+        if _is_yt_abort(err):
+            raise _YouTubeAbortError(_YT_ABORT_MESSAGE) from err
+        raise ScrapeError(f"YouTube extraction failed: {err}") from err
+    if not isinstance(info, dict):
+        raise ScrapeError("YouTube returned no metadata")
+    return info
+
+
+def _yt_dlp_extract(url: str, options: dict) -> dict:
+    """Run ``_yt_extract_sync`` off-loop with an abort + timeout guard.
+
+    The yt-dlp call runs in a thread under ``asyncio.wait_for`` so a hung
+    network cannot block the import: the timeout surfaces a friendly
+    error. When no event loop is running (the API's worker thread, unit
+    tests) the guard drives its own loop; inside an async caller the guard
+    runs on a private loop in a thread so the caller's loop is never
+    blocked.
+    """
+    async def _guarded() -> dict:
+        loop = asyncio.get_running_loop()
+        return await asyncio.wait_for(
+            loop.run_in_executor(_YT_EXTRACTOR_EXECUTOR, _yt_extract_sync, url, options),
+            timeout=_YT_TIMEOUT_SECONDS,
+        )
+
+    def _run_guarded() -> dict:
+        try:
+            return asyncio.run(_guarded())
+        except TimeoutError as err:
+            raise ScrapeError(_YT_TIMEOUT_MESSAGE) from err
+
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return _run_guarded()
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+        future = pool.submit(_run_guarded)
+        try:
+            return future.result(timeout=_YT_TIMEOUT_SECONDS + 15)
+        except TimeoutError as err:
+            raise ScrapeError(_YT_TIMEOUT_MESSAGE) from err
+
+
 def scrape_youtube(url: str) -> ScrapedContent:
     """Extract video metadata and the comment thread (captions only as fallback).
 
@@ -492,6 +641,12 @@ def scrape_youtube(url: str) -> ScrapedContent:
     unavailable (e.g. disabled). When the installed yt-dlp cannot extract
     comments (``_YT_DLP_COMMENTS_SUPPORTED`` False), the output is header
     + description only, with a note, and captions are not fetched either.
+
+    The yt-dlp call is guarded against its internal abort signal (huge
+    comment threads can abort extraction): the first abort is retried once
+    WITHOUT ``getcomments`` so the metadata survives and the import falls
+    back to captions or the plain header; a second abort — or a timeout —
+    surfaces a friendly error instead of the raw signal.
     """
     options = {
         "noplaylist": True,
@@ -504,13 +659,17 @@ def scrape_youtube(url: str) -> ScrapedContent:
     if _YT_DLP_COMMENTS_SUPPORTED:
         options["getcomments"] = True
     try:
-        ydl = yt_dlp.YoutubeDL(options)
-        try:
-            info = ydl.extract_info(url, download=False)
-        finally:
-            ydl.close()
-    except yt_dlp.utils.DownloadError as err:
-        raise ScrapeError(f"YouTube extraction failed: {err}") from err
+        info = _yt_dlp_extract(url, options)
+    except _YouTubeAbortError:
+        if not options.get("getcomments"):
+            raise
+        # Comment extraction can abort on very large threads — retry once
+        # with metadata only; the normal flow then falls back to captions
+        # or the plain header.
+        logger.warning(
+            "YouTube comment extraction aborted for %s — retrying without comments", url
+        )
+        info = _yt_dlp_extract(url, {**options, "getcomments": False})
     if not isinstance(info, dict):
         raise ScrapeError("YouTube returned no metadata")
 
@@ -609,6 +768,95 @@ def scrape_html(url: str) -> ScrapedContent:
 
 
 # ----------------------------------------------------------------------
+# PDF capture (PyMuPDF Story render)
+# ----------------------------------------------------------------------
+
+#: Applied on top of PyMuPDF's default stylesheet — the same treatment the
+#: HTML-source export uses in ``api/v1/sources.py``.
+_PDF_USER_CSS = (
+    "body { font-family: sans-serif; font-size: 10pt; line-height: 1.5; "
+    "color: #1a1a1a; }"
+)
+
+
+def _story_render(html: str, css: str | None) -> bytes:
+    """Render an HTML string to PDF bytes through PyMuPDF's Story engine.
+
+    The pagination callback receives ``(page_number, filled)`` and returns
+    the ``(mediabox, content rect, transform)`` for the next page; the
+    DocumentWriter creates pages automatically as the content overflows.
+    MuPDF substitutes its embedded fallback fonts for characters the page's
+    own fonts cannot cover, so arbitrary unicode round-trips intact.
+    """
+    from io import BytesIO
+
+    import fitz
+
+    buf = BytesIO()
+    writer = fitz.DocumentWriter(buf)
+    rect = fitz.paper_rect("a4")
+    story = fitz.Story(html=html, user_css=css)
+    story.write(writer, lambda _number, _filled: (rect, rect, fitz.Identity))
+    writer.close()
+    return buf.getvalue()
+
+
+def _text_pdf(text: str) -> bytes:
+    """Fallback: the extracted plain text as a minimal escaped-PDF document.
+
+    Rendered through the same Story engine WITHOUT any CSS, so it cannot
+    fail on unsupported styles and keeps unicode via MuPDF's fallback
+    fonts — plain ``insert_text`` with a base-14 font would corrupt
+    non-WinAnsi characters, so it is avoided here.
+    """
+    import html as html_module
+
+    paragraphs: list[str] = []
+    for block in (text or "").split("\n\n"):
+        block = block.strip()
+        if not block:
+            continue
+        paragraphs.append(html_module.escape(block).replace("\n", "<br/>"))
+    body = "".join(f"<p>{p}</p>" for p in paragraphs)
+    return _story_render(f"<html><body>{body}</body></html>", None)
+
+
+def scrape_pdf(url: str) -> ScrapedContent:
+    """Capture mode: render the page's HTML to a PDF document.
+
+    Mirrors the ``GET /sources/{id}/pdf`` export: the fetched HTML goes
+    through PyMuPDF's Story layout engine on A4 pages. When the layout
+    render fails (unsupported CSS/markup) a minimal text-only PDF is
+    produced instead, so the import always yields a parseable document
+    the PdfCoder can open.
+    """
+    from qualcoder_api.services.import_service import (
+        decode_text_with_best_encoding,
+        html_to_text,
+    )
+
+    raw = fetch_url(url)
+    html = decode_text_with_best_encoding(raw)
+    title = _page_title(html) or _host_for_name(url)
+    try:
+        data = _story_render(html, _PDF_USER_CSS)
+    except Exception as err:  # any render failure -> text-only fallback
+        logger.warning("HTML -> PDF render failed for %s: %s", url, err)
+        text = html_to_text(html).strip()
+        if not text:
+            raise ScrapeError("could not render the page to PDF") from err
+        try:
+            data = _text_pdf(text)
+        except Exception as err2:  # pragma: no cover - minimal render never fails
+            raise ScrapeError("could not render the page to PDF") from err2
+    return ScrapedContent(
+        filename=f"{sanitize_name(title, 'page')}.pdf",
+        data=data,
+        mode="pdf",
+    )
+
+
+# ----------------------------------------------------------------------
 # Orchestrator
 # ----------------------------------------------------------------------
 
@@ -623,4 +871,6 @@ def scrape_url(url: str, mode: str = "auto") -> ScrapedContent:
         return scrape_youtube(url)
     if resolved == "html":
         return scrape_html(url)
+    if resolved == "pdf":
+        return scrape_pdf(url)
     return scrape_article(url)

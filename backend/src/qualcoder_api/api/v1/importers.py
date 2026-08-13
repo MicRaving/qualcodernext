@@ -2,7 +2,12 @@
 
 from __future__ import annotations
 
+import asyncio
+import csv
+import io
 import os
+import tempfile
+from pathlib import Path
 from typing import Annotated, Any
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
@@ -11,6 +16,36 @@ from qualcoder_api.api.v1.deps import DbDep, ServiceDep
 from qualcoder_api.interchange import importers
 
 router = APIRouter(prefix="/interchange/import", tags=["interchange"])
+
+#: Kinds the auto endpoint accepts as an explicit ``force_kind`` override
+#: (file-based importers only — Zotero reads a local API, not an upload).
+FORCEABLE_KINDS = frozenset(
+    {"refi", "rqda", "taguette", "transana", "nvivo", "ris", "survey", "xlsx", "sav", "codebook", "merge"}
+)
+
+
+def _detect_kind(tmp: str) -> str:
+    """Sniff an interchange upload the same way ``import_auto`` routes it.
+
+    NVivo bundles are zips whose XML carries the NVivo marker; they must be
+    recognized before the generic zip/xlsx/merge sniffing. Everything else
+    delegates to ``importers.detect_import_kind`` (raises ``ValueError`` for
+    unsupported files).
+    """
+    with open(tmp, "rb") as fh:
+        head = fh.read(4)
+    if head.startswith(b"PK\x03\x04"):
+        import zipfile
+
+        from qualcoder_api.interchange.nvivo_import import archive_has_nvivo_marker
+
+        try:
+            with zipfile.ZipFile(tmp) as archive:
+                if archive_has_nvivo_marker(archive):
+                    return "nvivo"
+        except zipfile.BadZipFile:
+            pass
+    return importers.detect_import_kind(tmp)
 
 
 async def _run_import(svc, file: UploadFile, codername: str | None, importer, kind: str) -> dict:
@@ -105,6 +140,7 @@ async def import_auto(
     file: Annotated[UploadFile, File()],
     codername: str | None = Form(None),
     qualitative_headers: str | None = Form(None),
+    force_kind: str | None = Form(None),
 ) -> dict:
     """Import an interchange file with automatic format detection.
 
@@ -112,32 +148,23 @@ async def import_auto(
     databases, NVivo (.nvpx) projects, RIS bibliographies, survey CSVs,
     Excel .xlsx workbooks, SPSS .sav data files, plain-text codebooks and
     zipped .qda projects from the file content. ``qualitative_headers``
-    only applies to survey-style imports (CSV/XLSX/SAV).
+    only applies to survey-style imports (CSV/XLSX/SAV). ``force_kind``
+    skips the content sniffing and routes the file to the named importer
+    (used by the import preview manager's format override).
     """
     if svc.project_path == "" or svc.session_factory is None:
         raise HTTPException(status_code=409, detail="no project is open")
     tmp = await _save_upload(file, svc, "import")
     try:
         try:
-            # A zip whose XML carries the NVivo marker (NvivoProject root or
-            # a __nvivo bundle) routes to the NVivo importer before the
-            # generic zip/xlsx/merge sniffing takes over.
-            kind: str | None = None
-            with open(tmp, "rb") as fh:  # noqa: ASYNC230 - small local temp read
-                head = fh.read(4)
-            if head.startswith(b"PK\x03\x04"):
-                import zipfile
-
-                from qualcoder_api.interchange.nvivo_import import archive_has_nvivo_marker
-
-                try:
-                    with zipfile.ZipFile(tmp) as archive:
-                        if archive_has_nvivo_marker(archive):
-                            kind = "nvivo"
-                except zipfile.BadZipFile:
-                    kind = None
-            if kind is None:
-                kind = importers.detect_import_kind(tmp)
+            if force_kind:
+                kind = force_kind.strip().lower()
+                if kind not in FORCEABLE_KINDS:
+                    raise HTTPException(
+                        status_code=422, detail=f"unsupported format override: {force_kind}"
+                    )
+            else:
+                kind = _detect_kind(tmp)
         except ValueError as err:
             raise HTTPException(status_code=422, detail=str(err)) from err
 
@@ -197,6 +224,142 @@ async def import_auto(
         raise HTTPException(status_code=422, detail=str(err)) from err
     finally:
         os.remove(tmp)
+
+
+@router.post("/preview")
+async def preview_interchange(
+    file: Annotated[UploadFile, File()],
+    force_kind: str | None = Form(None),
+) -> dict:
+    """Sniff an interchange upload and return a lightweight content preview.
+
+    Returns the detected format plus, where cheap to extract, a sample of
+    the parsed content: ``columns`` + ``rows_sample`` (first ~15 rows) and
+    the detected qualitative (free-text) columns for survey CSVs / Excel
+    workbooks / SPSS files, or ``lines`` for plain-text codebooks. Other
+    formats (REFI-QDA, RQDA, NVivo, archives…) return the format only —
+    the UI falls back to the per-format help text. ``force_kind`` lets the
+    caller re-interpret the file as another format (the manager's override
+    select). Read-only: no project is required and nothing is imported.
+    """
+    fd, tmp = tempfile.mkstemp(
+        prefix="qc_preview_", suffix=os.path.splitext(file.filename or "")[1]
+    )
+    os.close(fd)
+    try:
+        with open(tmp, "wb") as out:  # noqa: ASYNC230 - small local temp write
+            while chunk := await file.read(1 << 20):
+                out.write(chunk)
+        try:
+            if force_kind:
+                kind = force_kind.strip().lower()
+                if kind not in FORCEABLE_KINDS:
+                    raise HTTPException(
+                        status_code=422, detail=f"unsupported format override: {force_kind}"
+                    )
+            else:
+                kind = _detect_kind(tmp)
+            preview = await _preview_for_kind(tmp, kind)
+        except ValueError as err:
+            raise HTTPException(status_code=422, detail=str(err)) from err
+        return {"format": kind, **preview}
+    finally:
+        os.remove(tmp)
+
+
+def _looks_numeric(value: str) -> bool:
+    """A cell counts as numeric when it parses as a float (empty = neutral)."""
+    stripped = value.strip()
+    if not stripped:
+        return True
+    try:
+        float(stripped)
+        return True
+    except ValueError:
+        return False
+
+
+async def _preview_tabular(path: str, kind: str) -> dict:
+    """Sample columns + first rows of a survey CSV / Excel workbook / SPSS file.
+
+    Returns ``{"columns", "rows_sample", "qual_columns", "lines"}`` where
+    ``qual_columns`` are the string-ish columns (excluding the case-name
+    column) the import manager prefills into the qualitative-columns input.
+    """
+    columns: list[str] = []
+    sample: list[list[str]] = []
+    qual: list[str] = []
+    if kind == "survey":
+        raw = Path(path).read_bytes()
+        try:
+            text = raw.decode("utf-8-sig")
+        except UnicodeDecodeError:
+            text = raw.decode("utf-8")
+        try:
+            rows = [
+                row for row in csv.reader(io.StringIO(text)) if any(cell.strip() for cell in row)
+            ]
+            if rows and all(len(row) == 1 for row in rows):
+                rows = [
+                    row
+                    for row in csv.reader(io.StringIO(text), delimiter=";")
+                    if any(cell.strip() for cell in row)
+                ]
+        except csv.Error as err:
+            raise ValueError(f"Invalid survey CSV: {err}") from err
+        if not rows:
+            raise ValueError("Survey CSV is empty")
+        columns = [h.strip() for h in rows[0]]
+        sample = rows[1:16]
+    elif kind == "xlsx":
+        try:
+            sheets = await asyncio.to_thread(importers._read_xlsx_sheets, path)
+        except Exception as err:  # openpyxl raises on malformed workbooks
+            raise ValueError(f"Invalid XLSX file: {err}") from err
+        sheet_rows = next(
+            (rows for rows in sheets.values() if importers._sheet_looks_like_survey(rows)),
+            None,
+        )
+        if sheet_rows is None:
+            return {"columns": None, "rows_sample": None, "qual_columns": None, "lines": None}
+        columns = sheet_rows[0]
+        sample = sheet_rows[1:16]
+    else:  # sav
+        try:
+            import pyreadstat
+
+            df, meta = await asyncio.to_thread(lambda: pyreadstat.read_sav(path, row_limit=16))
+        except Exception as err:  # pyreadstat raises ReadstatError on unreadable files
+            raise ValueError(f"Invalid SPSS .sav file: {err}") from err
+        columns = list(meta.column_names)
+        if columns:
+            var_types = getattr(meta, "readstat_variable_types", {}) or {}
+            qual = [
+                col for col in columns[1:] if var_types.get(col) not in ("double", "integer")
+            ]
+            sample = [
+                [importers._sav_cell(record[col]) for col in columns] for _, record in df.iterrows()
+            ]
+        return {"columns": columns, "rows_sample": sample, "qual_columns": qual, "lines": None}
+
+    for idx, col in enumerate(columns):
+        if idx == 0:  # first column is the case name — not a qualitative field
+            continue
+        values = [row[idx] for row in sample if idx < len(row)]
+        if any(not _looks_numeric(v) for v in values):
+            qual.append(col)
+    return {"columns": columns, "rows_sample": sample, "qual_columns": qual, "lines": None}
+
+
+async def _preview_for_kind(path: str, kind: str) -> dict:
+    """Build the preview payload for a detected kind (no preview = format only)."""
+    if kind in ("survey", "xlsx", "sav"):
+        return await _preview_tabular(path, kind)
+    if kind == "codebook":
+        text = Path(path).read_bytes().decode("utf-8", errors="replace")
+        lines = [line.rstrip() for line in text.splitlines() if line.strip()]
+        return {"columns": None, "rows_sample": None, "qual_columns": None, "lines": lines[:15]}
+    return {"columns": None, "rows_sample": None, "qual_columns": None, "lines": None}
 
 
 @router.post("/rqda")

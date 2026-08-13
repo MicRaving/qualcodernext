@@ -5,14 +5,20 @@
  * pattern (two independent always-visible toggle panes with a draggable
  * divider).
  *
- * Coding happens on the PLAIN TEXT side (html sources are media_type
- * "text", so TextCoder codes them as text); the WEBPAGE side is
- * view-only — the raw file is rendered in a sandboxed iframe
- * (`sandbox="allow-same-origin"` only, no scripts). Live-sync of codings
- * between the panes is intentionally NOT implemented: the webpage is a
- * read-only snapshot of the captured page, so the text side is the single
- * owner of the coding state (the PdfCoder's text-overlay matching does
- * not apply to arbitrary webpages).
+ *  Coding happens on the PLAIN TEXT side (html sources are media_type
+ *  "text", so TextCoder codes them as text); the WEBPAGE side is
+ *  view-only — the raw file is rendered in a sandboxed iframe
+ *  (`sandbox="allow-same-origin"` only, no scripts). Live-sync of codings
+ *  between the panes is intentionally NOT implemented: the webpage is a
+ *  read-only snapshot of the captured page, so the text side is the single
+ *  owner of the coding state (the PdfCoder's text-overlay matching does
+ *  not apply to arbitrary webpages).
+ *
+ *  The raw bytes come from the file-serving endpoint, which sends
+ *  application/octet-stream without a charset (and res.text() would
+ *  unconditionally decode UTF-8). Snapshot pages may declare a different
+ *  charset, so the bytes are decoded honoring the BOM or the charset
+ *  declared in the page head, falling back to UTF-8 with replacement.
  */
 import {
   useCallback,
@@ -36,6 +42,54 @@ import { TextCoder } from "@/features/coding/TextCoder";
 import { cn } from "@/lib/utils";
 import { useI18n } from "@/lib/i18n";
 import { Button, ErrorBanner, LoadingState, ViewHeader } from "@/components/ui/orchestrator";
+
+/* --------------------------------------------------------- html decoding */
+
+// Browsers sniff the first 1024 bytes for a charset declaration; do the same.
+const HTML_CHARSET_SCAN_BYTES = 1024;
+
+/** Charset declared by a snapshot: response header, <meta charset>, XML prolog. */
+function detectHtmlCharset(headers: Headers, head: Uint8Array): string | null {
+  const header = /charset\s*=\s*["']?([\w-]+)/i.exec(headers.get("content-type") ?? "");
+  if (header?.[1]) return header[1];
+  // Latin-1 view of the bytes keeps positions 1:1 so ASCII patterns
+  // (charset="…") match regardless of the file's actual encoding.
+  const headAscii = new TextDecoder("latin1").decode(head);
+  const meta = /<meta[^>]+charset\s*=\s*["']?([\w-]+)/i.exec(headAscii);
+  if (meta?.[1]) return meta[1];
+  const xml = /<\?xml[^>]+encoding\s*=\s*["']([\w-]+)/i.exec(headAscii);
+  if (xml?.[1]) return xml[1];
+  return null;
+}
+
+/** Decode raw HTML bytes honoring BOM/declared charset; else UTF-8 with replacement. */
+function decodeHtmlBytes(bytes: Uint8Array, declared: string | null): string {
+  if (bytes.length >= 2) {
+    if (bytes[0] === 0xff && bytes[1] === 0xfe) {
+      // UTF-16LE BOM — strip the BOM and decode natively.
+      return new TextDecoder("utf-16le", { fatal: false }).decode(bytes.subarray(2));
+    }
+    if (bytes[0] === 0xfe && bytes[1] === 0xff) {
+      // UTF-16BE BOM — no browser-safe BE decoder, so byte-swap to LE.
+      const src = bytes.subarray(2);
+      const swapped = new Uint8Array(src.length);
+      for (let i = 0; i + 1 < src.length; i += 2) {
+        swapped[i] = src[i + 1];
+        swapped[i + 1] = src[i];
+      }
+      return new TextDecoder("utf-16le", { fatal: false }).decode(swapped);
+    }
+  }
+  const candidates = declared ? [declared, "utf-8"] : ["utf-8"];
+  for (const charset of candidates) {
+    try {
+      return new TextDecoder(charset, { fatal: false }).decode(bytes);
+    } catch {
+      // Unknown/unsupported encoding label — try the next candidate.
+    }
+  }
+  return new TextDecoder("utf-8", { fatal: false }).decode(bytes);
+}
 
 export function HtmlCoder({ source }: { source: Source }) {
   const { t } = useI18n();
@@ -135,9 +189,11 @@ export function HtmlCoder({ source }: { source: Source }) {
       try {
         const res = await fetchWithTimeout(sourceFileUrl(source.id), undefined, 60_000);
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const text = await res.text();
+        const bytes = new Uint8Array(await res.arrayBuffer());
         if (cancelled) return;
-        setHtml(text);
+        const scanLen = Math.min(bytes.length, HTML_CHARSET_SCAN_BYTES);
+        const declared = detectHtmlCharset(res.headers, bytes.subarray(0, scanLen));
+        setHtml(decodeHtmlBytes(bytes, declared));
       } catch (e) {
         if (!cancelled) {
           setHtml(null);

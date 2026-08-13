@@ -1,12 +1,24 @@
 import { describe, expect, it } from "vitest";
 import {
+  AUDIO_EXTENSIONS,
+  IMAGE_EXTENSIONS,
+  TEXT_EXTENSIONS,
+  VIDEO_EXTENSIONS,
   canTranscribeSource,
   hasRealTranscript,
+  isAudioFilename,
+  isDocumentFilename,
   isHtml,
+  isImageFilename,
   isPdf,
+  isVideoFilename,
   usesHtmlCoder,
   usesPdfCoder,
 } from "@/lib/media";
+
+function extNames(exts: readonly string[]): string[] {
+  return exts.map((ext) => `sample${ext}`);
+}
 
 describe("media helpers", () => {
   it("detects pdf by extension", () => {
@@ -35,6 +47,47 @@ describe("media helpers", () => {
     expect(usesHtmlCoder({ name: "notes.txt", media_type: "text" })).toBe(false);
     expect(usesHtmlCoder({ name: "paper.pdf", media_type: "text" })).toBe(false);
     expect(usesHtmlCoder({ name: "page.html", media_type: "video" })).toBe(false);
+  });
+
+  it("classifies every audio extension", () => {
+    for (const name of extNames(AUDIO_EXTENSIONS)) {
+      expect(isAudioFilename(name)).toBe(true);
+    }
+    expect(isAudioFilename("recording.OPUS")).toBe(true);
+    expect(isAudioFilename("clip.webm")).toBe(false);
+    expect(isAudioFilename("clip.mp4")).toBe(false);
+    expect(isAudioFilename("notes.txt")).toBe(false);
+  });
+
+  it("classifies every video extension", () => {
+    for (const name of extNames(VIDEO_EXTENSIONS)) {
+      expect(isVideoFilename(name)).toBe(true);
+    }
+    expect(isVideoFilename("clip.M4V")).toBe(true);
+    // .ogg is audio (Vorbis/Opus), .webm stays video.
+    expect(isVideoFilename("talk.ogg")).toBe(false);
+    expect(isVideoFilename("talk.webm")).toBe(true);
+    expect(isVideoFilename("notes.txt")).toBe(false);
+  });
+
+  it("classifies every image extension", () => {
+    for (const name of extNames(IMAGE_EXTENSIONS)) {
+      expect(isImageFilename(name)).toBe(true);
+    }
+    expect(isImageFilename("photo.TIFF")).toBe(true);
+    expect(isImageFilename("photo.svg")).toBe(true);
+    expect(isImageFilename("notes.txt")).toBe(false);
+  });
+
+  it("classifies document (text/PDF) extensions", () => {
+    for (const name of extNames(TEXT_EXTENSIONS)) {
+      expect(isDocumentFilename(name)).toBe(true);
+    }
+    expect(isDocumentFilename("server.log")).toBe(true);
+    expect(isDocumentFilename("survey.csv")).toBe(true);
+    expect(isDocumentFilename("paper.pdf")).toBe(true);
+    expect(isDocumentFilename("clip.mp4")).toBe(false);
+    expect(isDocumentFilename("pic.png")).toBe(false);
   });
 
   it("treats only audio/video sources as transcribable", () => {

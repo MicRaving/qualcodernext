@@ -1394,7 +1394,9 @@ export const api = {
         Object.entries(opts ?? {}).filter(([, v]) => v !== undefined && v !== ""),
       ) as Record<string, string>,
     ).toString();
-    return request<{ models: string[] }>(`/ai/models${qs ? `?${qs}` : ""}`);
+    return request<{ models: string[]; error?: string }>(
+      `/ai/models${qs ? `?${qs}` : ""}`,
+    );
   },
   aiSaveSettings: (body: {
     enabled: boolean;

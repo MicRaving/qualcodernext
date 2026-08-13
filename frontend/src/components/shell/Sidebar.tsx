@@ -30,7 +30,7 @@ import {
   UserRound,
   X,
 } from "lucide-react";
-import { api, type CodeTreeItem, type Source } from "@/lib/api";
+import { api, ApiError, type CodeTreeItem, type Source } from "@/lib/api";
 import {
   addCodeSetMembers,
   createCodeSet,
@@ -116,12 +116,12 @@ export function Sidebar() {
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
   const [menu, setMenu] = useState<ContextMenu | null>(null);
   const [toolbarError, setToolbarError] = useState<string | null>(null);
-  /** Tree row selected for the toolbar promote/demote buttons. */
-  const [treeSelection, setTreeSelection] = useState<{ kind: "code" | "category"; id: number } | null>(null);
   /** Drop indicator while a code/category is dragged over the tree. */
   const [dropZone, setDropZone] = useState<DropZone | null>(null);
   /** Key of the row currently being dragged (dimmed during the drag). */
   const [draggingKey, setDraggingKey] = useState<string | null>(null);
+  /** OS file drag hovering the files leftbar (import affordance). */
+  const [fileDropActive, setFileDropActive] = useState(false);
   /** Inline name editing (no system prompts): which row is being edited. */
   const [editing, setEditing] = useState<{ kind: "code" | "category" | "file"; id: number } | null>(null);
   // Code search (coding view only); the files search lives in the store so
@@ -285,16 +285,6 @@ export function Sidebar() {
     walk("root");
     return out;
   }, [treeItems]);
-
-  /** The selected tree row (for the toolbar promote/demote buttons), derived
-   *  from the live tree so a stale selection (deleted/merged row) just
-   *  disables the buttons. */
-  const selectionItem = useMemo(() => {
-    if (!treeSelection) return null;
-    return (
-      codeTree.find((i) => i.kind === treeSelection.kind && i.id === treeSelection.id) ?? null
-    );
-  }, [codeTree, treeSelection]);
 
   /** Move the inline editor to the next row of the same list (Tab key).
    *  The tree is namespace-aware: in legacy projects category and code ids
@@ -472,7 +462,7 @@ export function Sidebar() {
     } catch (e) {
       const detail =
         e instanceof Error
-          ? e.message
+          ? friendlyTreeError(t, e.message)
           : source.kind === "category"
             ? t("sidebar.mergeCategoryError")
             : t("sidebar.mergeCodeError");
@@ -492,6 +482,23 @@ export function Sidebar() {
     const sel = useProjectStore.getState().inspectorSelection;
     if (sel?.kind === "code" && sel.id === item.id) {
       useProjectStore.getState().clearInspector();
+    }
+  }
+
+  /** Turn a backend tree-mutation error into a human-friendly line. Known
+   *  details (matched on the raw detail, so older backends still map) become
+   *  i18n messages; everything else drops the "API error <status> on <path>:"
+   *  prefix and shows the backend's own detail text. */
+  function friendlyTreeError(translator: (key: string) => string, message: string): string {
+    const detail = message.replace(/^API error \d+ on [^:]+: /, "");
+    switch (detail) {
+      case "code is already at the top level":
+      case "category is already at the top level":
+        return translator("tree.promoteTopLevel");
+      case "no previous sibling to demote under":
+        return translator("tree.demoteNoSibling");
+      default:
+        return detail;
     }
   }
 
@@ -596,7 +603,7 @@ export function Sidebar() {
       else await api.promoteCode(item.id);
       await useProjectStore.getState().refreshProject();
     } catch (e) {
-      const detail = e instanceof Error ? e.message : t("tree.promoteFail");
+      const detail = e instanceof Error ? friendlyTreeError(t, e.message) : t("tree.promoteFail");
       setToolbarError(detail);
       toast.error(detail);
     }
@@ -610,7 +617,7 @@ export function Sidebar() {
       else await api.demoteCode(item.id);
       await useProjectStore.getState().refreshProject();
     } catch (e) {
-      const detail = e instanceof Error ? e.message : t("tree.demoteFail");
+      const detail = e instanceof Error ? friendlyTreeError(t, e.message) : t("tree.demoteFail");
       setToolbarError(detail);
       toast.error(detail);
     }
@@ -628,7 +635,7 @@ export function Sidebar() {
       else await api.moveCode(drag.id, opts as CodeMoveOpts);
       await useProjectStore.getState().refreshProject();
     } catch (e) {
-      const detail = e instanceof Error ? e.message : t("tree.moveFail");
+      const detail = e instanceof Error ? friendlyTreeError(t, e.message) : t("tree.moveFail");
       setToolbarError(detail);
       toast.error(detail);
     }
@@ -657,15 +664,20 @@ export function Sidebar() {
 
   /** Resolve the drop zone from the pointer position: the top/bottom bands
    *  give the before/after insertion lines, the left indent gutter gives
-   *  the "into" (make child) zone, the row body gives the merge target. */
+   *  the "into" (make child) zone, the row body gives the merge target.
+   *  Must run inside the event handler itself: React nulls the synthetic
+   *  event's ``currentTarget`` once the handler returns, so calling this
+   *  from a state-updater callback (which runs at render time) would read
+   *  a null rect and crash the tree. */
   function computeDropZone(
-    e: ReactDragEvent<HTMLButtonElement>,
+    e: ReactDragEvent<HTMLDivElement>,
     item: CodeTreeItem,
     depth: number,
     drag: DragNode,
   ): DropZone | null {
     if (drag.kind === item.kind && drag.id === item.id) return null;
-    const rect = e.currentTarget.getBoundingClientRect();
+    const rect = e.currentTarget?.getBoundingClientRect();
+    if (!rect) return null;
     const y = (e.clientY - rect.top) / Math.max(1, rect.height);
     const x = e.clientX - rect.left;
     const key = `${item.kind}:${item.id}`;
@@ -688,22 +700,24 @@ export function Sidebar() {
     e.dataTransfer.setDragImage(ghost, 0, 0);
   }
 
-  function handleRowDragOver(e: ReactDragEvent<HTMLButtonElement>, item: CodeTreeItem, depth: number) {
+  function handleRowDragOver(e: ReactDragEvent<HTMLDivElement>, item: CodeTreeItem, depth: number) {
     const drag = dragNode;
     if (!drag) return;
     e.preventDefault();
     e.dataTransfer.dropEffect = "move";
+    // Compute the zone HERE (while currentTarget is still valid) and only
+    // compare inside the updater — reading the event there would throw.
+    const next = computeDropZone(e, item, depth, drag);
     setDropZone((prev) => {
-      const next = computeDropZone(e, item, depth, drag);
       return prev?.mode === next?.mode && prev?.key === next?.key ? prev : next;
     });
   }
 
-  function handleRowDragLeave(e: ReactDragEvent<HTMLButtonElement>) {
+  function handleRowDragLeave(e: ReactDragEvent<HTMLDivElement>) {
     if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setDropZone(null);
   }
 
-  function handleRowDrop(e: ReactDragEvent<HTMLButtonElement>, item: CodeTreeItem, depth: number) {
+  function handleRowDrop(e: ReactDragEvent<HTMLDivElement>, item: CodeTreeItem, depth: number) {
     const drag = dragNode;
     if (!drag) return;
     e.preventDefault();
@@ -736,6 +750,61 @@ export function Sidebar() {
     dragNode = null;
     setDraggingKey(null);
     setDropZone(null);
+  }
+
+  /* ------------------------------------------------------------------ */
+  /* OS file drop on the files leftbar (same import path as FileManager) */
+  /* ------------------------------------------------------------------ */
+
+  /** Import dropped OS files one by one through the API (409 = duplicate). */
+  async function importDroppedFiles(files: File[]) {
+    if (files.length === 0) return;
+    setToolbarError(null);
+    useProjectStore.getState().setImportState({ done: 0, total: files.length });
+    const dupes: string[] = [];
+    let failed: string | null = null;
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i];
+      try {
+        await api.importSource(file);
+      } catch (e) {
+        if (e instanceof ApiError && e.status === 409) {
+          dupes.push(file.name);
+        } else {
+          failed = e instanceof Error ? e.message : t("files.importFailed", { name: file.name });
+        }
+      }
+      useProjectStore.getState().setImportState({ done: i + 1, total: files.length });
+    }
+    useProjectStore.getState().setImportState(null);
+    if (dupes.length > 0) {
+      toast.error(
+        t("files.skipped", { names: dupes.map((n) => t("files.duplicate", { name: n })).join(", ") }),
+      );
+    }
+    if (failed) toast.error(failed);
+    await useProjectStore.getState().refreshProject();
+  }
+
+  /** The files leftbar is a drop target for OS files (documents, PDFs,
+   *  images, audio, video) — everything goes through api.importSource. */
+  function handleFileDragOver(e: ReactDragEvent<HTMLDivElement>) {
+    if (e.dataTransfer.types.includes("Files")) {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = "copy";
+      setFileDropActive(true);
+    }
+  }
+
+  function handleFileDragLeave(e: ReactDragEvent<HTMLDivElement>) {
+    if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setFileDropActive(false);
+  }
+
+  function handleFileDrop(e: ReactDragEvent<HTMLDivElement>) {
+    e.preventDefault();
+    setFileDropActive(false);
+    const files = Array.from(e.dataTransfer.files);
+    if (files.length > 0) void importDroppedFiles(files);
   }
 
   /** All ``kind:id`` keys of the subtree rooted at ``item`` (inclusive) —
@@ -930,6 +999,16 @@ export function Sidebar() {
           icon: <GitMerge size={14} aria-hidden />,
           run: close(() => openMergeMenu(menu.item, "category", menu.x, menu.y)),
         },
+        {
+          label: t("tree.promote"),
+          icon: <IndentDecrease size={14} aria-hidden />,
+          run: close(() => void promoteItem(menu.item)),
+        },
+        {
+          label: t("tree.demote"),
+          icon: <IndentIncrease size={14} aria-hidden />,
+          run: close(() => void demoteItem(menu.item)),
+        },
       );
     } else {
       menuActions.push(
@@ -978,6 +1057,16 @@ export function Sidebar() {
               },
             ]
           : []),
+        {
+          label: t("tree.promote"),
+          icon: <IndentDecrease size={14} aria-hidden />,
+          run: close(() => void promoteItem(menu.item)),
+        },
+        {
+          label: t("tree.demote"),
+          icon: <IndentIncrease size={14} aria-hidden />,
+          run: close(() => void demoteItem(menu.item)),
+        },
       );
     }
   }
@@ -1080,17 +1169,21 @@ export function Sidebar() {
               aria-hidden
             />
           )}
-          <div className="group flex items-center">
+          {/* The row box (button + row actions) is the drop target — the
+              whole row incl. its edges must accept the drop, so the handlers
+              live on the wrapper, not on the draggable button. */}
+          <div
+            className="group flex items-center"
+            onDragOver={(e) => handleRowDragOver(e, item, depth)}
+            onDragLeave={handleRowDragLeave}
+            onDrop={(e) => handleRowDrop(e, item, depth)}
+          >
             <button
             type="button"
             draggable={!editingThis}
             onDragStart={(e) => handleRowDragStart(e, item)}
-            onDragOver={(e) => handleRowDragOver(e, item, depth)}
-            onDragLeave={handleRowDragLeave}
-            onDrop={(e) => handleRowDrop(e, item, depth)}
             onDragEnd={handleRowDragEnd}
             onClick={() => {
-              setTreeSelection({ kind: item.kind, id: item.id });
               if (item.kind === "category") {
                 if (hasChildren) setCollapsed((c) => ({ ...c, [key]: !isCollapsed }));
               } else {
@@ -1108,7 +1201,6 @@ export function Sidebar() {
             }}
             onContextMenu={(e) => {
               e.preventDefault();
-              setTreeSelection({ kind: item.kind, id: item.id });
               setMenu({ kind: "code", x: e.clientX, y: e.clientY, item });
             }}
             className={`flex min-w-0 flex-1 items-center gap-1.5 rounded-sm px-2 py-1 text-left text-sm hover:bg-surface-higher ${
@@ -1321,30 +1413,6 @@ export function Sidebar() {
             title={t("nav.codes")}
             actions={
               <>
-                <IconButton
-                  label={t("tree.promote")}
-                  title={t("tree.promote")}
-                  size="sm"
-                  disabled={!selectionItem}
-                  className="disabled:opacity-40"
-                  onClick={() => {
-                    if (selectionItem) void promoteItem(selectionItem);
-                  }}
-                >
-                  <IndentDecrease size={14} aria-hidden />
-                </IconButton>
-                <IconButton
-                  label={t("tree.demote")}
-                  title={t("tree.demote")}
-                  size="sm"
-                  disabled={!selectionItem}
-                  className="disabled:opacity-40"
-                  onClick={() => {
-                    if (selectionItem) void demoteItem(selectionItem);
-                  }}
-                >
-                  <IndentIncrease size={14} aria-hidden />
-                </IconButton>
                 <Button
                   variant="primary"
                   icon={<Plus size={12} aria-hidden />}
@@ -1452,18 +1520,18 @@ export function Sidebar() {
           <span className="min-w-0 truncate">{toolbarError}</span>
         </p>
       )}
-      <div
-        className={view.kind === "coding" ? "pt-1" : undefined}
-        onDragOver={(e) => {
-          // Dropping on empty tree space cancels the drag (no zone).
-          if (dragNode && e.target === e.currentTarget) {
-            e.preventDefault();
-            setDropZone(null);
-          }
-        }}
-      >
-        {view.kind === "coding" ? (
-          query.trim() ? (
+      {view.kind === "coding" ? (
+        <div
+          className="pt-1"
+          onDragOver={(e) => {
+            // Dropping on empty tree space cancels the drag (no zone).
+            if (dragNode && e.target === e.currentTarget) {
+              e.preventDefault();
+              setDropZone(null);
+            }
+          }}
+        >
+          {query.trim() ? (
             <div className="pb-2">
               {flatMatches.length === 0 ? (
                 <p className="px-2 py-3 text-center text-sm text-text-secondary">
@@ -1475,7 +1543,6 @@ export function Sidebar() {
                     key={`${item.kind}:${item.id}`}
                     type="button"
                     onClick={() => {
-                      setTreeSelection({ kind: item.kind, id: item.id });
                       if (item.kind !== "category") {
                         setActiveCode(item.id);
                         void selectCode(item.id);
@@ -1486,7 +1553,6 @@ export function Sidebar() {
                     }}
                     onContextMenu={(e) => {
                       e.preventDefault();
-                      setTreeSelection({ kind: item.kind, id: item.id });
                       setMenu({ kind: "code", x: e.clientX, y: e.clientY, item });
                     }}
                     className={`flex w-full items-center gap-1.5 rounded-sm px-2 py-1 text-left text-sm hover:bg-surface-higher ${
@@ -1522,11 +1588,29 @@ export function Sidebar() {
             </div>
           ) : (
             renderCodeNode("root", 0)
-          )
-        ) : (
-          renderFileGroups()
-        )}
-      </div>
+          )}
+        </div>
+      ) : (
+        /* Files view: the whole group area accepts OS file drops. */
+        <div
+          className="relative"
+          onDragOver={handleFileDragOver}
+          onDragLeave={handleFileDragLeave}
+          onDrop={handleFileDrop}
+        >
+          {fileDropActive && (
+            <div
+              aria-hidden
+              className="pointer-events-none absolute inset-0 z-20 flex flex-col items-center justify-center gap-1.5 border-2 border-dashed border-accent bg-accent/10"
+            >
+              <Upload size={22} className="text-accent" aria-hidden />
+              <p className="text-sm font-medium text-accent">{t("files.dropImport")}</p>
+              <p className="text-xs text-text-secondary">{t("files.dropImportHint")}</p>
+            </div>
+          )}
+          {renderFileGroups()}
+        </div>
+      )}
 
       {/* Context menu */}
       {menu && menuStyle && (

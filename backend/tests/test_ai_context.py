@@ -73,15 +73,20 @@ async def add_code(client, name: str) -> int:
     return res.json()["cid"]
 
 
-async def add_coding(client, cid: int, fid: int, pos0: int = 0) -> None:
+async def set_code_memo(client, cid: int, memo: str) -> None:
+    res = await client.patch(f"/api/v1/codes/{cid}", json={"memo": memo})
+    assert res.status_code == 200, res.text
+
+
+async def add_coding(client, cid: int, fid: int, pos0: int = 0, seltext: str = "snippet") -> None:
     res = await client.post(
         "/api/v1/codings/text",
         json={
             "cid": cid,
             "fid": fid,
-            "seltext": "snippet",
+            "seltext": seltext,
             "pos0": pos0,
-            "pos1": pos0 + 6,
+            "pos1": pos0 + len(seltext),
             "owner": "tester",
         },
     )
@@ -171,7 +176,7 @@ async def test_chat_media_sources_show_media_type(project_client, tmp_path, monk
         monkeypatch,
         {"/chat/completions": {"choices": [{"message": {"content": "ok"}}]}},
     )
-    res = await client.post("/api/v1/ai/chat", json={"message": "hi", "mode": "code_analysis"})
+    res = await client.post("/api/v1/ai/chat", json={"message": "hi", "mode": "general"})
     assert res.status_code == 200, res.text
     content = fake.calls[0]["json"]["messages"][1]["content"]
     assert "- clip.mp3 (audio)" in content
@@ -205,11 +210,194 @@ async def test_chat_context_capped_at_3000_chars(project_client, tmp_path, monke
         monkeypatch,
         {"/chat/completions": {"choices": [{"message": {"content": "ok"}}]}},
     )
-    res = await client.post("/api/v1/ai/chat", json={"message": "hi", "mode": "code_analysis"})
+    res = await client.post("/api/v1/ai/chat", json={"message": "hi", "mode": "general"})
     assert res.status_code == 200, res.text
     content = fake.calls[0]["json"]["messages"][1]["content"]
     block = content.split("\n\n", 1)[0]
+    assert block.startswith("PROJECT CONTEXT")
     assert len(block) <= 3000
+
+
+# ----------------------------------------------------------------------
+# Code-analysis context (code tree + memos + example segments)
+# ----------------------------------------------------------------------
+
+async def test_chat_code_analysis_includes_memos_and_examples(
+    project_client, tmp_path, monkeypatch
+):
+    client, _ = project_client
+    await enable_ai(client, monkeypatch, tmp_path)
+    fid = await import_text(client, "alpha.txt", "Alpha body with a happy quote inside.")
+    happy_cid = await add_code(client, "Happiness")
+    sad_cid = await add_code(client, "Sadness")
+    await set_code_memo(client, sad_cid, "Sadness captures everything gloomy in the interviews.")
+    await add_coding(client, happy_cid, fid, seltext="a happy quote")
+    await add_coding(client, sad_cid, fid, seltext="a gloomy remark")
+    await add_coding(client, sad_cid, fid, pos0=20, seltext="another gloomy remark")
+    await add_coding(client, sad_cid, fid, pos0=50, seltext="third gloomy remark")
+    await add_coding(client, sad_cid, fid, pos0=80, seltext="fourth gloomy remark")
+    fake = patch_client(
+        monkeypatch,
+        {"/chat/completions": {"choices": [{"message": {"content": "ok"}}]}},
+    )
+    res = await client.post(
+        "/api/v1/ai/chat", json={"message": "analyze", "mode": "code_analysis"}
+    )
+    assert res.status_code == 200, res.text
+    content = fake.calls[0]["json"]["messages"][1]["content"]
+    assert "CODE ANALYSIS CONTEXT" in content
+    assert content.endswith("\n\nanalyze")
+    assert "- Happiness" in content
+    assert "- Sadness" in content
+    assert "Codings: 1" in content
+    assert "Codings: 4" in content
+    assert "Memo: Sadness captures" in content
+    assert 'Example: "a gloomy remark" (alpha.txt)' in content
+    assert 'Example: "another gloomy remark" (alpha.txt)' in content
+    assert "third gloomy remark" not in content
+    assert "fourth gloomy remark" not in content
+
+
+async def test_chat_code_analysis_shows_category_path_and_truncates(
+    project_client, tmp_path, monkeypatch
+):
+    client, _ = project_client
+    await enable_ai(client, monkeypatch, tmp_path)
+    fid = await import_text(client, "alpha.txt", "Body.")
+    res = await client.post(
+        "/api/v1/codes/categories", json={"name": "Emotions"}
+    )
+    assert res.status_code == 201, res.text
+    catid = res.json()["catid"]
+    res = await client.post(
+        "/api/v1/codes", json={"name": "Happiness", "catid": catid}
+    )
+    assert res.status_code == 201, res.text
+    happy_cid = res.json()["cid"]
+    await set_code_memo(client, happy_cid, "memo word " * 30)
+    await add_coding(client, happy_cid, fid, seltext="word " * 30)
+    fake = patch_client(
+        monkeypatch,
+        {"/chat/completions": {"choices": [{"message": {"content": "ok"}}]}},
+    )
+    res = await client.post(
+        "/api/v1/ai/chat", json={"message": "analyze", "mode": "code_analysis"}
+    )
+    assert res.status_code == 200, res.text
+    content = fake.calls[0]["json"]["messages"][1]["content"]
+    assert "- Happiness (path: Emotions)" in content
+    memo_line = next(line for line in content.splitlines() if line.startswith("  Memo: "))
+    assert len(memo_line) <= 200 + len("  Memo: ")
+    example_line = next(line for line in content.splitlines() if line.startswith('  Example: "'))
+    assert len(example_line) <= 120 + len('  Example: "" (alpha.txt)')
+
+
+async def test_chat_code_analysis_capped_at_5000_chars(project_client, tmp_path, monkeypatch):
+    client, _ = project_client
+    await enable_ai(client, monkeypatch, tmp_path)
+    for i in range(40):
+        cid = await add_code(client, f"Code number {i:02d} " + ("x" * 90))
+        await set_code_memo(client, cid, "m" * 250)
+    fake = patch_client(
+        monkeypatch,
+        {"/chat/completions": {"choices": [{"message": {"content": "ok"}}]}},
+    )
+    res = await client.post(
+        "/api/v1/ai/chat", json={"message": "hi", "mode": "code_analysis"}
+    )
+    assert res.status_code == 200, res.text
+    content = fake.calls[0]["json"]["messages"][1]["content"]
+    block = content.split("CODE ANALYSIS CONTEXT", 1)[1].split("\n\n", 1)[0]
+    assert block.startswith("\nCodes: 40 total, 30 shown")
+    assert len(block) <= 5000
+
+
+# ----------------------------------------------------------------------
+# Text-analysis context (open-source fulltext)
+# ----------------------------------------------------------------------
+
+async def test_chat_text_analysis_with_source_id_includes_text(
+    project_client, tmp_path, monkeypatch
+):
+    client, _ = project_client
+    await enable_ai(client, monkeypatch, tmp_path)
+    body = "The first interview participant described her daily routine in detail."
+    fid = await import_text(client, "interview.txt", body)
+    fake = patch_client(
+        monkeypatch,
+        {"/chat/completions": {"choices": [{"message": {"content": "ok"}}]}},
+    )
+    res = await client.post(
+        "/api/v1/ai/chat",
+        json={"message": "what is this about?", "mode": "text_analysis", "source_id": fid},
+    )
+    assert res.status_code == 200, res.text
+    content = fake.calls[0]["json"]["messages"][1]["content"]
+    assert "TEXT ANALYSIS SOURCE\n# interview.txt\n\n" in content
+    assert body in content
+    assert content.endswith("\n\nwhat is this about?")
+
+
+async def test_chat_text_analysis_source_text_capped(project_client, tmp_path, monkeypatch):
+    client, _ = project_client
+    await enable_ai(client, monkeypatch, tmp_path)
+    body = "paragraph one. " * 500
+    fid = await import_text(client, "long.txt", body)
+    fake = patch_client(
+        monkeypatch,
+        {"/chat/completions": {"choices": [{"message": {"content": "ok"}}]}},
+    )
+    res = await client.post(
+        "/api/v1/ai/chat",
+        json={"message": "hi", "mode": "text_analysis", "source_id": fid},
+    )
+    assert res.status_code == 200, res.text
+    content = fake.calls[0]["json"]["messages"][1]["content"]
+    assert "TEXT ANALYSIS SOURCE\n# long.txt\n\n" in content
+    text_part = content.split("TEXT ANALYSIS SOURCE\n# long.txt\n\n", 1)[1].split("\n\n", 1)[0]
+    assert len(text_part) <= 6000
+    assert text_part == body[:6000]
+
+
+async def test_chat_text_analysis_without_source_id_falls_back_to_summary(
+    project_client, tmp_path, monkeypatch
+):
+    client, _ = project_client
+    await enable_ai(client, monkeypatch, tmp_path)
+    await import_text(client, "alpha.txt", "Body.")
+    await add_code(client, "Hope")
+    fake = patch_client(
+        monkeypatch,
+        {"/chat/completions": {"choices": [{"message": {"content": "ok"}}]}},
+    )
+    res = await client.post(
+        "/api/v1/ai/chat", json={"message": "explore", "mode": "text_analysis"}
+    )
+    assert res.status_code == 200, res.text
+    content = fake.calls[0]["json"]["messages"][1]["content"]
+    assert "PROJECT CONTEXT" in content
+    assert "- alpha.txt (text)" in content
+    assert "- Hope: 0 codings" in content
+    assert content.endswith("\n\nexplore")
+
+
+async def test_chat_text_analysis_unknown_source_skips_text(
+    project_client, tmp_path, monkeypatch
+):
+    client, _ = project_client
+    await enable_ai(client, monkeypatch, tmp_path)
+    fake = patch_client(
+        monkeypatch,
+        {"/chat/completions": {"choices": [{"message": {"content": "ok"}}]}},
+    )
+    res = await client.post(
+        "/api/v1/ai/chat",
+        json={"message": "hi", "mode": "text_analysis", "source_id": 99999},
+    )
+    assert res.status_code == 200, res.text
+    content = fake.calls[0]["json"]["messages"][1]["content"]
+    assert "PROJECT CONTEXT" in content
+    assert "TEXT ANALYSIS SOURCE" not in content
 
 
 # ----------------------------------------------------------------------

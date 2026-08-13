@@ -472,7 +472,8 @@ async def test_models_error_redacts_api_key_from_url(
     project_client, tmp_path, monkeypatch
 ):
     """httpx exceptions carry the request URL — the Gemini ``?key=`` fallback
-    would leak the API key into the error detail, so it must be redacted."""
+    would leak the API key into the error detail, so it must be redacted.
+    A 401 is mapped to a friendly "rejected the API key" message."""
     client, _ = project_client
     await configure_gemini(client, monkeypatch, tmp_path, api_key="AIzaSuperSecret")
     key_url = (
@@ -493,8 +494,149 @@ async def test_models_error_redacts_api_key_from_url(
     res = await client.get("/api/v1/ai/models?provider=gemini")
     body = res.json()
     assert body["models"] == []
+    assert body["error"] == (
+        "Gemini rejected the API key (401) — check the key in Settings."
+    )
     assert "AIzaSuperSecret" not in body["error"]
-    assert "key=" in body["error"]
+
+
+async def test_gemini_models_requires_api_key_error(project_client, tmp_path, monkeypatch):
+    """Gemini without an API key must say so instead of returning a silent
+    empty model list."""
+    client, _ = project_client
+    await configure_gemini(client, monkeypatch, tmp_path, api_key="")
+    fake = FakeGetClient({"/v1beta/models": {"models": []}})
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: fake)
+    res = await client.get("/api/v1/ai/models?provider=gemini")
+    assert res.status_code == 200, res.text
+    assert res.json() == {
+        "models": [],
+        "error": (
+            "Gemini requires a valid API key before its models can be listed "
+            "— enter your API key in Settings."
+        ),
+    }
+    assert fake.calls == []  # no provider request was attempted
+
+
+async def test_claude_models_rejected_api_key_403(project_client, tmp_path, monkeypatch):
+    """Claude maps a 403 to the same friendly "rejected the API key" detail
+    as 401."""
+    client, _ = project_client
+    settings_file = tmp_path / "settings.json"
+    monkeypatch.setattr(user_settings, "SETTINGS_FILE", settings_file)
+    await client.put(
+        "/api/v1/ai/settings",
+        json={
+            "enabled": True,
+            "provider": "claude",
+            "api_base": "https://api.anthropic.com/v1",
+            "model": "claude-sonnet-4-6",
+            "api_key": "sk-ant-secret",
+        },
+    )
+    request = httpx.Request("GET", "https://api.anthropic.com/v1/models")
+    fake = FakeGetClient(
+        {
+            "/models": httpx.HTTPStatusError(
+                "Client error '403 Forbidden' for url 'https://api.anthropic.com/v1/models'",
+                request=request,
+                response=FakeResponse({"error": {"message": "forbidden"}}, 403),
+            )
+        }
+    )
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: fake)
+    res = await client.get("/api/v1/ai/models?provider=claude")
+    body = res.json()
+    assert body["models"] == []
+    assert body["error"] == (
+        "Anthropic rejected the API key (403) — check the key in Settings."
+    )
+
+
+async def test_ollama_models_filter_and_dedupe(project_client, tmp_path, monkeypatch):
+    """Ollama lists everything it has pulled, including embedding, speech
+    and vision models — the /models list must keep chat models only. Tag
+    variants ("llama3.2:latest" vs "llama3.2:3b") collapse to one entry,
+    preferring ``:latest``; coder models stay."""
+    client, _ = project_client
+    settings_file = tmp_path / "settings.json"
+    monkeypatch.setattr(user_settings, "SETTINGS_FILE", settings_file)
+    res = await client.put(
+        "/api/v1/ai/settings",
+        json={
+            "enabled": True,
+            "provider": "ollama",
+            "api_base": "http://localhost:11434/v1",
+            "model": "llama3.2",
+            "api_key": "",
+        },
+    )
+    assert res.status_code == 200, res.text
+    fake = FakeGetClient(
+        {
+            "/v1/models": {
+                "data": [
+                    {"id": "llama3.2:latest"},
+                    {"id": "llama3.2:3b"},
+                    {"id": "nomic-embed-text"},
+                    {"id": "whisper-large"},
+                    {"id": "mistral:7b"},
+                    {"id": "llava:7b"},
+                    {"id": "qwen2.5-coder:7b"},
+                    {"id": "llama3.2-vision:latest"},
+                ]
+            }
+        }
+    )
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: fake)
+    res = await client.get("/api/v1/ai/models?provider=ollama")
+    assert res.status_code == 200, res.text
+    assert res.json() == {
+        "models": ["llama3.2:latest", "mistral:7b", "qwen2.5-coder:7b"]
+    }
+
+
+async def test_lmstudio_models_filter_and_quant_dedupe(
+    project_client, tmp_path, monkeypatch
+):
+    """LM Studio quant suffixes ("llama-3.1-8b-instruct:q4_k_m") collapse to
+    the bare base name; embedding / speech / vision-only ids are dropped."""
+    client, _ = project_client
+    settings_file = tmp_path / "settings.json"
+    monkeypatch.setattr(user_settings, "SETTINGS_FILE", settings_file)
+    res = await client.put(
+        "/api/v1/ai/settings",
+        json={
+            "enabled": True,
+            "provider": "lmstudio",
+            "api_base": "http://127.0.0.1:1234/v1",
+            "model": "",
+            "api_key": "",
+        },
+    )
+    assert res.status_code == 200, res.text
+    fake = FakeGetClient(
+        {
+            "/v1/models": {
+                "data": [
+                    {"id": "llama-3.1-8b-instruct:q4_k_m"},
+                    {"id": "llama-3.1-8b-instruct:q8_0"},
+                    {"id": "nomic-embed-text-v1.5"},
+                    {"id": "whisper-small"},
+                    {"id": "text-embedding-3-small"},
+                    {"id": "qwen2.5-coder-7b-instruct:q4_k_m"},
+                    {"id": "deepseek-vl2:q4_k_m"},
+                ]
+            }
+        }
+    )
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: fake)
+    res = await client.get("/api/v1/ai/models?provider=lmstudio")
+    assert res.status_code == 200, res.text
+    assert res.json() == {
+        "models": ["llama-3.1-8b-instruct", "qwen2.5-coder-7b-instruct"]
+    }
 
 
 async def test_models_local_provider_failure_has_error_too(

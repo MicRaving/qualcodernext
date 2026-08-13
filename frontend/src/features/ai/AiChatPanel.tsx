@@ -18,6 +18,7 @@ import {
 } from "@/lib/api";
 import { errorDetail, welcomeMessage } from "@/features/ai/format";
 import { useI18n } from "@/lib/i18n";
+import { useProjectStore } from "@/stores/project";
 import {
   ErrorBanner,
   IconButton,
@@ -68,6 +69,7 @@ async function chatWithMemos(opts: {
   mode: AiMode;
   promptId?: string;
   memoIds: number[];
+  sourceId?: number;
 }): Promise<{ reply: string }> {
   const base = await initApiBase();
   const res = await fetchWithTimeout(`${base}/ai/chat`, {
@@ -79,6 +81,7 @@ async function chatWithMemos(opts: {
       mode: opts.mode,
       prompt_id: opts.promptId,
       memo_ids: opts.memoIds,
+      source_id: opts.sourceId,
     }),
   });
   if (!res.ok) {
@@ -140,9 +143,9 @@ function MemoPicker({
     visibleKeys.length > 0 && visibleKeys.every((key) => selected.has(key));
 
   return (
-    <div className="shrink-0 border-t border-border bg-surface px-3 py-2">
-      <div className="mx-auto flex max-w-2xl flex-col gap-1.5">
-        <div className="flex items-center justify-between gap-1.5">
+    <div className="min-w-0 shrink-0 border-t border-border bg-surface px-3 py-2">
+      <div className="mx-auto flex min-w-0 w-full max-w-2xl flex-col gap-1.5">
+        <div className="flex min-w-0 items-center justify-between gap-1.5">
           <span className="text-[10px] font-semibold uppercase tracking-wide text-text-secondary">
             {t("ai.contextMemos")}
           </span>
@@ -165,7 +168,7 @@ function MemoPicker({
             </button>
           </div>
         </div>
-        <div className="flex items-center gap-1.5">
+        <div className="flex min-w-0 items-center gap-1.5">
           <Search size={12} className="shrink-0 text-text-secondary" aria-hidden />
           <Input
             value={query}
@@ -178,7 +181,7 @@ function MemoPicker({
             {t("ai.memosSelected", { count: selected.size })}
           </span>
         </div>
-        <div className="qc-scroll max-h-40 overflow-y-auto rounded-sm border border-border bg-bg p-1">
+        <div className="qc-scroll min-w-0 max-h-40 overflow-y-auto rounded-sm border border-border bg-bg p-1">
           {memos.length === 0 ? (
             <p className="px-2 py-3 text-center text-xs text-text-secondary">
               {t("ai.memosEmpty")}
@@ -232,6 +235,9 @@ export function AiChatPanel({
   const [memoQuery, setMemoQuery] = useState("");
   const [selectedKeys, setSelectedKeys] = useState<Set<string>>(new Set());
   const scrollRef = useRef<HTMLDivElement | null>(null);
+  // Text analysis shares the source currently open in the coder (when any).
+  const view = useProjectStore((s) => s.view);
+  const openSourceId = view.kind === "coding" ? view.sourceId : undefined;
 
   useEffect(() => {
     let cancelled = false;
@@ -324,6 +330,7 @@ export function AiChatPanel({
             mode,
             promptId: effectivePromptId,
             memoIds: selectedMemoIds,
+            sourceId: mode === "text_analysis" ? openSourceId : undefined,
           })
         : await api.aiChat(text, "", mode, effectivePromptId);
       setMessages((m) => [...m, { role: "assistant", text: res.reply }]);
@@ -344,30 +351,30 @@ export function AiChatPanel({
   const chipsDisabled = disabled || waiting || input.trim() === "";
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col bg-bg">
+    <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-bg">
       {disabled && (
         <ErrorBanner tone="warning">{welcomeMessage(false)}</ErrorBanner>
       )}
 
       {/* Messages */}
-      <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto p-3">
-        <div className="mx-auto flex max-w-2xl flex-col gap-2">
+      <div ref={scrollRef} className="min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto p-3">
+        <div className="mx-auto flex min-w-0 w-full max-w-2xl flex-col gap-2">
           {messages.map((m, i) =>
             m.role === "user" ? (
-              <div key={i} className="flex justify-end">
-                <div className="max-w-[80%] rounded-lg bg-accent px-3 py-1.5 text-sm text-[var(--qc-bg)]">
+              <div key={i} className="flex min-w-0 justify-end">
+                <div className="max-w-[80%] min-w-0 break-words rounded-lg bg-accent px-3 py-1.5 text-sm text-[var(--qc-bg)]">
                   {m.text}
                 </div>
               </div>
             ) : m.role === "error" ? (
-              <div key={i} className="flex justify-start">
-                <div className="max-w-[80%] rounded-lg border border-danger bg-danger/10 px-3 py-1.5 text-sm text-danger">
+              <div key={i} className="flex min-w-0 justify-start">
+                <div className="max-w-[80%] min-w-0 break-words rounded-lg border border-danger bg-danger/10 px-3 py-1.5 text-sm text-danger">
                   {m.text}
                 </div>
               </div>
             ) : (
-              <div key={i} className="flex justify-start">
-                <div className="max-w-[80%] rounded-lg bg-surface px-3 py-1.5 text-sm">
+              <div key={i} className="flex min-w-0 justify-start">
+                <div className="max-w-[80%] min-w-0 break-words rounded-lg bg-surface px-3 py-1.5 text-sm">
                   <span className="mb-0.5 block text-xs font-medium text-text-secondary">
                     {t("ai.assistantLabel")}
                   </span>
@@ -377,8 +384,8 @@ export function AiChatPanel({
             ),
           )}
           {waiting && (
-            <div className="flex justify-start">
-              <div className="flex items-center gap-2 rounded-lg bg-surface px-3 py-1.5 text-sm text-text-secondary">
+            <div className="flex min-w-0 justify-start">
+              <div className="flex min-w-0 items-center gap-2 rounded-lg bg-surface px-3 py-1.5 text-sm text-text-secondary">
                 <LoaderCircle size={14} className="animate-spin" aria-hidden />
                 {t("ai.thinking")}
               </div>
@@ -403,15 +410,15 @@ export function AiChatPanel({
         />
       )}
       {MEMO_MODES.has(mode) && memos === null && (
-        <p className="shrink-0 border-t border-border bg-surface px-3 py-1.5 text-center text-xs text-text-secondary">
+        <p className="min-w-0 shrink-0 border-t border-border bg-surface px-3 py-1.5 text-center text-xs text-text-secondary">
           {t("ai.memosLoading")}
         </p>
       )}
 
       {/* Input row */}
-      <div className="shrink-0 border-t border-border bg-surface p-3">
-        <div className="mx-auto flex max-w-2xl flex-col gap-1.5">
-          <div className="flex flex-wrap gap-1">
+      <div className="min-w-0 shrink-0 border-t border-border bg-surface p-3">
+        <div className="mx-auto flex min-w-0 w-full max-w-2xl flex-col gap-1.5">
+          <div className="flex min-w-0 flex-wrap gap-1">
             {QUICK_ACTIONS.map((action) => (
               <button
                 key={action.promptId}
@@ -424,7 +431,7 @@ export function AiChatPanel({
               </button>
             ))}
           </div>
-          <div className="flex items-end gap-2">
+          <div className="flex min-w-0 items-end gap-2">
             <Textarea
               value={input}
               onChange={(e) => setInput(e.target.value)}
@@ -433,7 +440,7 @@ export function AiChatPanel({
               placeholder={t("ai.chatPlaceholder")}
               aria-label={t("ai.messageAria")}
               disabled={disabled}
-              className="min-h-0 flex-1 resize-none px-2 py-1.5"
+              className="min-h-0 min-w-0 flex-1 resize-none px-2 py-1.5"
             />
             <button
               type="button"

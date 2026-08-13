@@ -37,6 +37,7 @@ import { useProjectStore } from "@/stores/project";
 import { useUpdatesStore } from "@/stores/updates";
 import type { UpdatesSettings } from "@/lib/api";
 import { Download } from "lucide-react";
+import { InterchangeView } from "@/features/interchange/InterchangeView";
 
 /**
  * Module-level draft of the AI settings pane. SettingsView unmounts whenever
@@ -140,6 +141,7 @@ export function SettingsView() {
   );
   const [models, setModels] = useState<string[]>([]);
   const [modelsLoading, setModelsLoading] = useState(false);
+  const [modelsError, setModelsError] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
 
   /** Service-status check button: "checking" → "ok"/"broken" for 3s. */
@@ -217,10 +219,13 @@ export function SettingsView() {
     const reqId = ++modelsReqId.current;
     const opts = { provider, api_base: apiBase, api_key: apiKey };
     setModelsLoading(true);
+    setModelsError(null);
     try {
       const res = await api.aiModels(opts);
       if (reqId !== modelsReqId.current) return; // superseded by a newer fetch
       setModels(res.models);
+      // A key-less Gemini (or rejected key) surfaces as a friendly detail.
+      setModelsError(res.error ?? null);
     } catch {
       if (reqId !== modelsReqId.current) return;
       setModels([]);
@@ -480,6 +485,11 @@ export function SettingsView() {
           </div>
         </section>
 
+        {/* Import / Export — embedded in the General area (no ribbon entry) */}
+        <section className="p-3">
+          <InterchangeView />
+        </section>
+
         {/* AI assistant */}
         <section className="p-3">
           <div className="flex items-center justify-between gap-2">
@@ -548,6 +558,10 @@ export function SettingsView() {
                   <span className="mt-1 flex items-center gap-1.5 text-xs text-text-secondary">
                     <LoaderCircle size={11} className="animate-spin" aria-hidden />
                     {t("settings.aiModelsLoading")}
+                  </span>
+                ) : modelsError ? (
+                  <span className="mt-1 block text-xs text-danger" role="alert">
+                    {modelsError}
                   </span>
                 ) : (
                   models.length === 0 &&

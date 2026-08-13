@@ -81,7 +81,7 @@ export function AiView() {
     <LeftBar
       borderSide="l"
       scroll={false}
-      className="h-full min-h-0"
+      className="h-full min-h-0 max-w-full overflow-hidden"
       header={
         <BarHeader
           title="AI"
@@ -98,6 +98,7 @@ export function AiView() {
                     }}
                     aria-label={t("ai.modeLabel")}
                     title={t("ai.modeLabel")}
+                    className="min-w-0 max-w-full"
                   >
                     {AI_MODES.map((m) => (
                       <option key={m} value={m}>
@@ -111,7 +112,7 @@ export function AiView() {
                       onChange={(e) => setPromptId(e.target.value)}
                       aria-label={t("ai.promptLabel")}
                       title={t("ai.promptLabel")}
-                      className="max-w-20"
+                      className="min-w-0 max-w-20"
                     >
                       <option value="">{t("ai.promptNone")}</option>
                       {modePrompts.map((p) => (
@@ -143,7 +144,7 @@ export function AiView() {
                   )}
                 </>
               )}
-              <div className="flex items-center gap-0.5 rounded-sm border border-border bg-bg p-0.5">
+              <div className="flex shrink-0 items-center gap-0.5 rounded-sm border border-border bg-bg p-0.5">
                 {TABS.map(({ kind, label, icon: Icon }) => (
                   <button
                     key={kind}

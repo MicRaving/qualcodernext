@@ -11,7 +11,6 @@ import {
   Download,
   Files,
   History,
-  Import,
   LayoutDashboard,
   Lightbulb,
   NotebookPen,
@@ -42,7 +41,6 @@ import { GraphsInspector, GraphsView } from "@/features/graphs/GraphsView";
 import { HistoryView } from "@/features/history/HistoryView";
 import { CreativePanel } from "@/features/creative/CreativePanel";
 import { SettingsView } from "@/features/settings/SettingsView";
-import { InterchangeView } from "@/features/interchange/InterchangeView";
 import { AiView } from "@/features/ai/AiView";
 import { api } from "@/lib/api";
 import { useToast } from "@/lib/toast";
@@ -163,7 +161,6 @@ const NAV_BUTTONS: { kind: WorkspaceView["kind"]; labelKey: string; icon: typeof
   { kind: "notes", labelKey: "nav.notes", icon: NotebookPen },
   { kind: "qtt", labelKey: "nav.qtt", icon: ScrollText },
   { kind: "analyze", labelKey: "nav.analyze", icon: BarChart3 },
-  { kind: "interchange", labelKey: "nav.interchange", icon: Import },
 ];
 
 const RIGHT_ICON_BUTTONS: { pane: "history" | "ai" | "creative"; labelKey: string; icon: typeof Files }[] = [
@@ -403,9 +400,14 @@ export function ProjectShell() {
               </button>
               {queueOpen && (
                 <Menu
+                  position="fixed"
                   role="menu"
-                  className="right-0 w-80 overflow-y-auto"
-                  style={{ maxHeight: "calc(100dvh - 3.5rem)" }}
+                  className="w-80 overflow-y-auto"
+                  style={{
+                    right: 8,
+                    maxHeight: "calc(100dvh - 3.5rem)",
+                    maxWidth: "calc(100vw - 16px)",
+                  }}
                 >
                   <div className="flex items-center gap-1 border-b border-border px-2 py-1">
                     <span className="min-w-0 flex-1 text-xs font-medium text-text-secondary">
@@ -471,11 +473,11 @@ export function ProjectShell() {
                         setDragId(null);
                       }}
                       onDragEnd={() => setDragId(null)}
-                      className={`px-2 py-1.5 ${dragId === job.id ? "opacity-50" : ""}`}
+                      className={`pl-2 pr-1 py-1.5 ${dragId === job.id ? "opacity-50" : ""}`}
                     >
                       <div className="flex items-center gap-2 text-xs">
                         <span
-                          className="flex min-w-0 items-center gap-1.5"
+                          className="flex min-w-0 flex-1 items-center gap-1.5"
                           title={
                             job.kind === "transcribe"
                               ? t("tasks.kindTranscribe")
@@ -517,7 +519,7 @@ export function ProjectShell() {
                           onClick={() => useProjectStore.getState().removeTask(job.id)}
                           aria-label={t("tasks.delete", { name: job.sourceName })}
                           title={t("tasks.delete", { name: job.sourceName })}
-                          className="shrink-0 rounded-sm p-0.5 text-text-secondary hover:bg-surface-higher hover:text-text-primary"
+                          className="ml-auto shrink-0 rounded-sm p-0.5 text-text-secondary hover:bg-surface-higher hover:text-text-primary"
                         >
                           <Trash2 size={12} aria-hidden />
                         </button>
@@ -636,8 +638,6 @@ export function ProjectShell() {
           <NotesEditor />
         ) : view.kind === "qtt" ? (
           <QttView />
-        ) : view.kind === "interchange" ? (
-          <InterchangeView />
         ) :         view.kind === "analyze" ? (
           analyzeUi.selectedId === "graphs" ? (
             <GraphsView />

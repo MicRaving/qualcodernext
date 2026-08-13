@@ -88,7 +88,7 @@ async def test_promote_root_code_rejected(project_client):
 
     res = await client.post(f"/api/v1/codes/{code['cid']}/promote")
     assert res.status_code == 422
-    assert res.json()["detail"] == "code is already at the top level"
+    assert res.json()["detail"] == "This code is already at the top level and cannot be promoted further."
 
     # The tree still loads and the code is untouched.
     tree = (await client.get("/api/v1/codes")).json()
@@ -147,11 +147,17 @@ async def test_demote_without_previous_sibling_rejected(project_client):
     # Sole root code and sole sub-code both have no previous sibling.
     res = await client.post(f"/api/v1/codes/{a['cid']}/demote")
     assert res.status_code == 422
-    assert res.json()["detail"] == "no previous sibling to demote under"
+    assert (
+        res.json()["detail"]
+        == "This code cannot be demoted — there is no sibling below it to move under."
+    )
 
     res = await client.post(f"/api/v1/codes/{b['cid']}/demote")
     assert res.status_code == 422
-    assert res.json()["detail"] == "no previous sibling to demote under"
+    assert (
+        res.json()["detail"]
+        == "This code cannot be demoted — there is no sibling below it to move under."
+    )
 
 
 async def test_demote_missing_code_404(project_client):
@@ -194,7 +200,10 @@ async def test_category_promote_top_level_rejected(project_client):
 
     res = await client.post(f"/api/v1/codes/categories/{cat['catid']}/promote")
     assert res.status_code == 422
-    assert res.json()["detail"] == "category is already at the top level"
+    assert (
+        res.json()["detail"]
+        == "This category is already at the top level and cannot be promoted further."
+    )
 
 
 async def test_category_demote_under_previous_sibling(project_client):
@@ -221,7 +230,10 @@ async def test_category_demote_without_previous_sibling_rejected(project_client)
 
     res = await client.post(f"/api/v1/codes/categories/{cat['catid']}/demote")
     assert res.status_code == 422
-    assert res.json()["detail"] == "no previous sibling to demote under"
+    assert (
+        res.json()["detail"]
+        == "This category cannot be demoted — there is no sibling below it to move under."
+    )
 
 
 async def test_category_demote_missing_404(project_client):

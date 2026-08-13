@@ -30,6 +30,18 @@ PROJECT_CONTEXT_MODES = ("general", "topic_exploration", "code_analysis", "text_
 PROJECT_CONTEXT_CODE_LINES = 30
 PROJECT_CONTEXT_SOURCE_LINES = 20
 
+# Code-analysis context: the code tree (name + category path) plus per-code
+# memo, coding count and 1-2 example coded segments, whole block capped.
+CODE_ANALYSIS_MAX_CHARS = 5000
+CODE_ANALYSIS_MAX_CODES = 30
+CODE_ANALYSIS_MEMO_CHARS = 200
+CODE_ANALYSIS_EXAMPLE_CHARS = 120
+CODE_ANALYSIS_EXAMPLES_PER_CODE = 2
+CODE_ANALYSIS_PATH_DEPTH = 5
+
+# Text-analysis context: fulltext of the open source, capped.
+SOURCE_CONTEXT_MAX_CHARS = 6000
+
 
 class AiUnavailable(Exception):
     """Raised when the AI backend is unreachable or misconfigured."""
@@ -127,6 +139,7 @@ class AiService:
         mode: str = "general",
         prompt_id: str | None = None,
         memo_ids: list[int] | None = None,
+        source_id: int | None = None,
     ) -> dict:
         ok, _ = self.is_configured(ai)
         if not ok:
@@ -136,7 +149,15 @@ class AiService:
             if memo_context:
                 context = f"{memo_context}\n\n{context}" if context else memo_context
         if mode in PROJECT_CONTEXT_MODES:
-            project_context = await self._project_context(ai)
+            if mode == "code_analysis":
+                project_context = await self._code_analysis_context(ai)
+            elif mode == "text_analysis" and source_id is not None:
+                # Unknown/empty source falls back to the project summary.
+                project_context = (
+                    await self._source_context(ai, source_id) or await self._project_context(ai)
+                )
+            else:
+                project_context = await self._project_context(ai)
             if project_context:
                 context = f"{project_context}\n\n{context}" if context else project_context
         from qualcoder_api.services.ai_prompts import prompt_for, system_prompt_for
@@ -272,6 +293,161 @@ class AiService:
         lines.append(f"Total codings: {total_codings}")
         lines.append(f"Cases: {case_count}")
         return _truncate_memo("\n".join(lines), PROJECT_CONTEXT_MAX_CHARS)
+
+    async def _code_analysis_context(self, ai: dict) -> str:
+        """Code-aware context for the ``code_analysis`` chat mode.
+
+        Shares the code tree (names with their category/sub-code path)
+        plus, per code: the memo/explanation (truncated to 200 chars), the
+        coding count, and up to 2 example coded segments (seltext,
+        truncated to 120 chars, with the source file name). At most 30
+        codes are shown and the whole block is capped at
+        ``CODE_ANALYSIS_MAX_CHARS``.
+
+        Same gating and failure behavior as ``_project_context`` (read-only
+        queries, skipped gracefully on any error).
+        """
+        if self.session_factory is None:
+            return ""
+        if not ai.get("enabled"):
+            return ""
+        if ai.get("mcp_permissions", "read") not in ("read", "full"):
+            return ""
+        from sqlalchemy import func, select
+
+        from qualcoder_api.persistence import tables
+
+        try:
+            async with self.session_factory() as session:
+                code_rows = (
+                    await session.execute(
+                        select(
+                            tables.code_name.c.cid,
+                            tables.code_name.c.name,
+                            tables.code_name.c.memo,
+                            tables.code_name.c.catid,
+                            tables.code_name.c.supercid,
+                        ).order_by(tables.code_name.c.name)
+                    )
+                ).all()
+                cat_rows = (
+                    await session.execute(
+                        select(
+                            tables.code_cat.c.catid,
+                            tables.code_cat.c.name,
+                            tables.code_cat.c.supercatid,
+                        )
+                    )
+                ).all()
+                counts: dict[int, int] = {}
+                for table in (tables.code_text, tables.code_image, tables.code_av):
+                    for cid, n in await session.execute(
+                        select(table.c.cid, func.count()).group_by(table.c.cid)
+                    ):
+                        counts[cid] = counts.get(cid, 0) + n
+                selected = code_rows[:CODE_ANALYSIS_MAX_CODES]
+                cid_list = [row.cid for row in selected]
+                examples: dict[int, list[tuple[str, str]]] = {cid: [] for cid in cid_list}
+                if cid_list:
+                    example_rows = (
+                        await session.execute(
+                            select(
+                                tables.code_text.c.cid,
+                                tables.code_text.c.seltext,
+                                tables.source.c.name,
+                            )
+                            .join(tables.source, tables.source.c.id == tables.code_text.c.fid)
+                            .where(tables.code_text.c.seltext.is_not(None))
+                            .where(tables.code_text.c.cid.in_(cid_list))
+                            .order_by(tables.code_text.c.ctid)
+                        )
+                    ).all()
+                    for cid, seltext, source_name in example_rows:
+                        if len(examples[cid]) >= CODE_ANALYSIS_EXAMPLES_PER_CODE:
+                            continue
+                        examples[cid].append((str(seltext), str(source_name) if source_name else ""))
+        except Exception:
+            # The chat must never fail because the summary query broke.
+            return ""
+        cats = {row.catid: (row.name, row.supercatid) for row in cat_rows}
+
+        def _tree_path(row) -> str:
+            """Ancestor names (category chain, then sub-code chain), root-first."""
+            parts: list[str] = []
+            catid = row.catid
+            depth = 0
+            while catid is not None and catid in cats and depth < CODE_ANALYSIS_PATH_DEPTH:
+                name, supercatid = cats[catid]
+                parts.append(name)
+                catid = supercatid
+                depth += 1
+            supercid = row.supercid
+            depth = 0
+            while supercid is not None and depth < CODE_ANALYSIS_PATH_DEPTH:
+                parent = next((r for r in code_rows if r.cid == supercid), None)
+                if parent is None:
+                    break
+                parts.append(parent.name)
+                supercid = parent.supercid
+                depth += 1
+            return " / ".join(reversed(parts))
+
+        lines = [
+            "CODE ANALYSIS CONTEXT",
+            f"Codes: {len(code_rows)} total, {len(selected)} shown",
+        ]
+        for row in selected:
+            name = row.name or f"code {row.cid}"
+            path = _tree_path(row)
+            lines.append(f"- {name} (path: {path})" if path else f"- {name}")
+            lines.append(f"  Codings: {counts.get(row.cid, 0)}")
+            if row.memo and str(row.memo).strip():
+                memo = _truncate_memo(str(row.memo), CODE_ANALYSIS_MEMO_CHARS)
+                lines.append(f"  Memo: {memo}")
+            for seltext, source_name in examples.get(row.cid, []):
+                sample = _truncate_memo(seltext, CODE_ANALYSIS_EXAMPLE_CHARS)
+                source = f" ({source_name})" if source_name else ""
+                lines.append(f'  Example: "{sample}"{source}')
+        return _truncate_memo("\n".join(lines), CODE_ANALYSIS_MAX_CHARS)
+
+    async def _source_context(self, ai: dict, source_id: int | None) -> str:
+        """Fulltext of one open source for the ``text_analysis`` chat mode.
+
+        Prefixed with the file name and capped at ``SOURCE_CONTEXT_MAX_CHARS``.
+        ``None``/unknown ids and empty fulltext produce "" — the caller then
+        falls back to the generic project summary. Same gating and failure
+        behavior as ``_project_context``.
+        """
+        if self.session_factory is None or source_id is None:
+            return ""
+        if not ai.get("enabled"):
+            return ""
+        if ai.get("mcp_permissions", "read") not in ("read", "full"):
+            return ""
+        from sqlalchemy import select
+
+        from qualcoder_api.persistence import tables
+
+        try:
+            async with self.session_factory() as session:
+                row = (
+                    await session.execute(
+                        select(tables.source.c.name, tables.source.c.fulltext).where(
+                            tables.source.c.id == source_id
+                        )
+                    )
+                ).one_or_none()
+        except Exception:
+            # The chat must never fail because the summary query broke.
+            return ""
+        if row is None:
+            return ""
+        name, fulltext = row
+        fulltext = (fulltext or "").strip()
+        if not fulltext:
+            return ""
+        text = _truncate_memo(fulltext, SOURCE_CONTEXT_MAX_CHARS)
+        return f"TEXT ANALYSIS SOURCE\n# {name or source_id}\n\n{text}"
 
     async def semantic_search(self, ai: dict, query: str, limit: int = 10) -> dict:
         ok, _ = self.is_configured(ai)

@@ -107,8 +107,7 @@ export type WorkspaceView =
   | { kind: "graphs" }
   | { kind: "history" }
   | { kind: "settings" }
-  | { kind: "ai" }
-  | { kind: "interchange" };
+  | { kind: "ai" };
 
 /** Which panel the right bar shows. Inspector is the default; AI, Settings,
  *  History and Creative are toggleable panes driven from the top bar. */

@@ -1,6 +1,89 @@
 /**
  * Media helpers matching backend semantics (core/enums.py).
+ *
+ * The extension sets mirror the backend's `core/enums.py` map — keep the
+ * two in sync. The backend derives `Source.media_type` from these sets, so
+ * the frontend helpers here are mostly defensive / for label + routing
+ * fallbacks.
  */
+
+export const TEXT_EXTENSIONS = [
+  ".txt",
+  ".md",
+  ".odt",
+  ".rtf",
+  ".docx",
+  ".htm",
+  ".html",
+  ".epub",
+  ".tex",
+  ".log",
+  ".csv",
+  ".pdf",
+] as const;
+
+export const IMAGE_EXTENSIONS = [
+  ".jpg",
+  ".jpeg",
+  ".png",
+  ".gif",
+  ".webp",
+  ".bmp",
+  ".tif",
+  ".tiff",
+  // SVG is view-only (browser-rasterised); HEIC is best-effort (browser
+  // support is limited).
+  ".svg",
+  ".heic",
+] as const;
+
+export const AUDIO_EXTENSIONS = [
+  ".wav",
+  ".mp3",
+  ".m4a",
+  ".opus",
+  ".oga",
+  ".ogg",
+  ".aac",
+  ".flac",
+  ".wma",
+  ".amr",
+] as const;
+
+export const VIDEO_EXTENSIONS = [
+  ".mkv",
+  ".mov",
+  ".mp4",
+  ".webm",
+  ".wmv",
+  ".m4v",
+  ".avi",
+  ".mpg",
+  ".mpeg",
+  ".3gp",
+  ".ts",
+] as const;
+
+function hasExtension(filename: string, extensions: readonly string[]): boolean {
+  const lower = filename.toLowerCase();
+  return extensions.some((ext) => lower.endsWith(ext));
+}
+
+export function isDocumentFilename(filename: string): boolean {
+  return hasExtension(filename, TEXT_EXTENSIONS);
+}
+
+export function isAudioFilename(filename: string): boolean {
+  return hasExtension(filename, AUDIO_EXTENSIONS);
+}
+
+export function isVideoFilename(filename: string): boolean {
+  return hasExtension(filename, VIDEO_EXTENSIONS);
+}
+
+export function isImageFilename(filename: string): boolean {
+  return hasExtension(filename, IMAGE_EXTENSIONS);
+}
 
 export function isPdf(filename: string): boolean {
   return filename.toLowerCase().endsWith(".pdf");

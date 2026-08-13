@@ -3,6 +3,8 @@ persistent index, MCP endpoint."""
 
 from __future__ import annotations
 
+import re
+
 from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel
 
@@ -28,6 +30,9 @@ class ChatRequest(BaseModel):
     mode: str = "general"  # general | help | topic_exploration | code_analysis | text_analysis | memo_analysis
     prompt_id: str | None = None
     memo_ids: list[int] | None = None
+    # text_analysis: the source currently open in the coder, so the chat
+    # can share its fulltext instead of the generic project summary.
+    source_id: int | None = None
 
 
 class SearchRequest(BaseModel):
@@ -58,6 +63,77 @@ def _provider_headers(provider: str, api_key: str) -> dict[str, str]:
 
 def _provider_requires_key(provider: str) -> bool:
     return provider in ("gemini", "gpt", "claude")
+
+
+# Friendly display names for the cloud providers (used in error messages).
+_PROVIDER_LABELS = {"gemini": "Gemini", "gpt": "OpenAI", "claude": "Anthropic"}
+
+
+def _provider_label(provider: str) -> str:
+    return _PROVIDER_LABELS.get(provider, provider)
+
+
+# Local models that are NOT usable as a chat model: embedding (bge /
+# nomic-embed / *-embed*), speech (whisper / tts / speech) and vision-only
+# (llava, bakllava, moondream, minicpm-v, *-vl, *-vision) families. Coder
+# models (qwen2.5-coder, ...) carry none of these markers and stay — they are
+# fully chat-capable. Best-effort heuristic: a falsely-dropped model can
+# still be chosen by typing its name manually (or via "custom").
+_LOCAL_NON_CHAT = re.compile(
+    r"(embed|bge|nomic-embed|whisper|speech|tts|llava|bakllava|moondream|"
+    r"minicpm-v|-vl(?:[-0-9:]|$)|vision|multimodal)",
+    re.IGNORECASE,
+)
+
+
+# LM Studio serves quant suffixes ("llama-3.1-8b-instruct:q4_k_m" /
+# "@q4_k_m"); collapse variants of the same base model to the bare name.
+_LMSTUDIO_QUANT = re.compile(
+    r"[:@](?:q\d+[a-z0-9_]*|(?:b|f|fp|bf)16|int\d+)$", re.IGNORECASE
+)
+
+
+def _ollama_base_and_tag(model_id: str) -> tuple[str, str]:
+    """Split an Ollama tag id ("llama3.2:3b") into base name and tag."""
+    if ":" in model_id:
+        base, _, tag = model_id.partition(":")
+        return base, tag
+    return model_id, ""
+
+
+def _better_ollama_variant(a: str, b: str) -> bool:
+    """True when variant ``a`` wins over ``b`` for the same base name:
+    bare name > ``:latest`` > shortest tag."""
+    _, ta = _ollama_base_and_tag(a)
+    _, tb = _ollama_base_and_tag(b)
+    if ta == tb:
+        return False
+    if not ta or (ta == "latest" and tb):
+        return True
+    if not tb or (tb == "latest" and ta):
+        return False
+    return len(ta) < len(tb)
+
+
+def _dedupe_local_models(ids: list[str], provider: str) -> list[str]:
+    """Collapse tag variants of the same base model to one entry.
+
+    Ollama tags ("llama3.2:latest", "llama3.2:3b") collapse to the preferred
+    variant (bare name > ``:latest`` > shortest tag). LM Studio quant
+    suffixes ("llama-3.1-8b-instruct:q4_k_m") collapse to the bare base name.
+    """
+    best: dict[str, str] = {}
+    for model_id in ids:
+        if provider == "ollama":
+            base, _ = _ollama_base_and_tag(model_id)
+            if base not in best or _better_ollama_variant(model_id, best[base]):
+                best[base] = model_id
+        elif provider == "lmstudio":
+            base = _LMSTUDIO_QUANT.sub("", model_id)
+            best.setdefault(base, base)
+        else:
+            best.setdefault(model_id, model_id)
+    return sorted(best.values())
 
 
 def _sanitize_error(detail: str) -> str:
@@ -127,9 +203,10 @@ async def ai_models(
 ) -> dict:
     """List the models the configured provider advertises (per-provider
     ``/models`` endpoints). Local providers (ollama/lmstudio/opencode-go)
-    answer quickly; cloud providers need an API key, so failures return an
-    empty list plus a sanitized ``error`` detail (the last exception,
-    key-redacted).
+    answer quickly; cloud providers need an API key — a missing key returns a
+    friendly ``error`` detail, and failures return an empty list plus a
+    sanitized ``error`` (the last exception, key-redacted; 401/403 map to a
+    "rejected the API key" message).
 
     Query params (``provider``/``api_base``/``api_key``), when provided,
     override the saved settings for this fetch only — they are never saved.
@@ -137,10 +214,9 @@ async def ai_models(
 
     The list is FILTERED per provider: chat models only, newest generations —
     Gemini/GPT video, TTS, embedding and image models are dropped — and
-    deduplicated (Ollama/LM Studio tag variants collapse to one entry).
+    deduplicated (Ollama/LM Studio tag variants collapse to one entry; local
+    embedding/speech/vision-only models are dropped too).
     """
-    import re
-
     import httpx
 
     ai = user_settings.get_ai_settings()
@@ -150,7 +226,13 @@ async def ai_models(
         return {"models": []}
     api_key = api_key or ai.get("api_key") or ""
     if _provider_requires_key(provider) and not api_key.strip():
-        return {"models": []}
+        return {
+            "models": [],
+            "error": (
+                f"{_provider_label(provider)} requires a valid API key before its "
+                "models can be listed — enter your API key in Settings."
+            ),
+        }
     data: dict | None = None
     last_error = ""
     for url, req_headers in _models_urls(provider, api_base, api_key):
@@ -160,6 +242,17 @@ async def ai_models(
                 resp.raise_for_status()
                 data = resp.json()
             break
+        except httpx.HTTPStatusError as err:
+            code = err.response.status_code
+            if code in (401, 403):
+                # The key is rejected — the fallback URLs carry the same
+                # key, so report it and stop.
+                last_error = (
+                    f"{_provider_label(provider)} rejected the API key ({code}) "
+                    "— check the key in Settings."
+                )
+                break
+            last_error = str(err)
         except Exception as err:
             last_error = str(err)
     if data is None:
@@ -189,22 +282,21 @@ async def ai_models(
     elif provider == "claude":
         keep = re.compile(r"^claude-(sonnet|opus|haiku)")
         drop = re.compile(r"(aws|bedrock|agent|vertex)")
+    elif provider in ("ollama", "lmstudio", "opencode-go"):
+        # Local providers: embedding / speech / vision-only models are not
+        # chat candidates — see _LOCAL_NON_CHAT for the documented rules.
+        keep = re.compile(r".+")
+        drop = _LOCAL_NON_CHAT
     else:
-        # Local / custom providers: everything they advertise is a candidate.
+        # Custom providers: everything they advertise is a candidate.
         keep = re.compile(r".+")
         drop = None
 
-    seen: set[str] = set()
-    models: list[str] = []
-    for m in ids:
-        if not keep.match(m) or (drop is not None and drop.search(m)):
-            continue
-        # Ollama/LM Studio serve tags ("llama3.2:latest"); collapse variants
-        # to the base name so the dropdown shows each model once.
-        base = m.split(":")[0] if provider in ("ollama", "lmstudio") else m
-        if base not in seen:
-            seen.add(base)
-            models.append(base)
+    models = [
+        m for m in ids if keep.match(m) and not (drop is not None and drop.search(m))
+    ]
+    if provider in ("ollama", "lmstudio"):
+        models = _dedupe_local_models(models, provider)
     return {"models": sorted(models)}
 
 
@@ -269,7 +361,7 @@ async def ai_chat(req: ChatRequest, svc: ServiceDep, session: DbDep) -> dict:
     try:
         return await AiService(svc.session_factory).chat(
             ai, req.message, req.context, mode=req.mode, prompt_id=req.prompt_id,
-            memo_ids=req.memo_ids,
+            memo_ids=req.memo_ids, source_id=req.source_id,
         )
     except AiUnavailable as err:
         raise HTTPException(status_code=503, detail=str(err)) from err

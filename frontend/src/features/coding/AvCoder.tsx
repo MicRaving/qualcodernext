@@ -20,7 +20,6 @@ import {
   Pause,
   Play,
   Plus,
-  Save,
   Sparkles,
   StickyNote,
   Tag,
@@ -143,6 +142,20 @@ export function AvCoder({ source }: { source: Source }) {
   /** The companion this view created itself — the transcriptId switch it
    *  causes must not tear down the transcription mode it just entered. */
   const createdTranscriptRef = useRef<number | null>(null);
+
+  // Continuous saving (mirrors the text coder's edit mode): every keystroke
+  // schedules a debounced commitEdit, and the latest draft lives in a ref so
+  // explicit flush points (insert, exit, unmount) always persist the newest
+  // text even while an earlier commit is still in flight.
+  const transcribeDraftRef = useRef("");
+  /** The last draft text known to be persisted (stored companion text on
+   *  entry, committed drafts afterwards). */
+  const transcribeSavedRef = useRef("");
+  const transcribeSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const transcribeSavingRef = useRef(false);
+  /** A flush was requested while a commit was in flight — run one more
+   *  once it finishes so newer keystrokes are never skipped. */
+  const transcribeNeedsAnotherRef = useRef(false);
 
   // Bookmark
   const [avBookmarkMs, setAvBookmarkMs] = useState<number | null>(null);
@@ -526,6 +539,10 @@ export function AvCoder({ source }: { source: Source }) {
   // serves as a mount-time fallback before the store has the source.
   const liveSource = useProjectStore((s) => s.sources.find((x) => x.id === source.id));
   const transcriptId = liveSource?.av_text_id ?? source.av_text_id ?? null;
+  /** Live id for the continuous-save helpers (timers and the unmount flush
+   *  run outside renders, where the state value would be stale). */
+  const transcribeIdRef = useRef(transcriptId);
+  transcribeIdRef.current = transcriptId;
 
   const loadTranscript = useCallback(async () => {
     if (!transcriptId) {
@@ -756,18 +773,29 @@ export function AvCoder({ source }: { source: Source }) {
   function toggleTranscribeMode() {
     setTSel(null);
     if (transcribeMode) {
-      if (transcribeDraft !== transcriptText && !window.confirm(t("coder.discardConfirm"))) return;
-      setTranscribeMode(false);
-      setTranscribeDraft("");
+      // Continuous saving: exiting never discards anything — a final flush
+      // persists the latest draft (there is no Save button to press).
+      void flushTranscribeSave();
+      exitTranscribeMode();
     } else {
       void enterTranscribeMode();
     }
   }
 
+  /** Leave transcription and show the stored (by now saved) transcript. */
+  function exitTranscribeMode() {
+    // The draft REF keeps the last text for an in-flight commit's follow-up
+    // flush; the controlled value is reset for the read-only panel.
+    setTranscribeMode(false);
+    setTranscribeDraft("");
+    void loadTranscript();
+  }
+
   /** Enter manual transcription. Without a transcript companion yet, an
    *  EMPTY one is created first (POST /sources/{id}/transcript) so the
    *  draft always has a save target — projects imported before the
-   *  import-time companion then transcribe exactly like new ones. */
+   *  import-time companion then transcribe exactly like new ones. The mode
+   *  starts with an empty draft, ready to type: no extra button presses. */
   async function enterTranscribeMode() {
     if (transcribeBusy) return;
     if (transcriptId == null) {
@@ -784,12 +812,18 @@ export function AvCoder({ source }: { source: Source }) {
       }
       setTranscribeBusy(false);
     }
+    transcribeDraftRef.current = transcriptText;
+    // The stored text is already persisted — nothing is committed until the
+    // draft actually diverges from it.
+    transcribeSavedRef.current = transcriptText;
     setTranscribeDraft(transcriptText);
     setTranscribeMode(true);
     requestAnimationFrame(() => transcribeAreaRef.current?.focus());
   }
 
-  /** Insert "[mm:ss] " for the current playback position at the caret. */
+  /** Insert "[mm:ss] " for the current playback position at the caret.
+   *  On an empty draft this is a plain pre-fill ("[00:00] ", caret after) —
+   *  no leading newline — so the very first insert press can start typing. */
   function insertTranscriptTimestamp() {
     const el = transcribeAreaRef.current;
     if (!el) return;
@@ -800,6 +834,8 @@ export function AvCoder({ source }: { source: Source }) {
       transcriptTimestamp(currentMsRef.current),
     );
     setTranscribeDraft(text);
+    transcribeDraftRef.current = text;
+    void flushTranscribeSave();
     // Re-apply the caret once React has committed the new value.
     requestAnimationFrame(() => {
       el.focus();
@@ -810,15 +846,20 @@ export function AvCoder({ source }: { source: Source }) {
   /** Tab: force a NEW segment — a line break plus the current timestamp,
    *  even MID-TEXT. Enter only prefixes a timestamp when the caret is at a
    *  line start; Tab always starts a fresh segment, so every timestamped
-   *  entry stays parseable as its own line. */
+   *  entry stays parseable as its own line. At a line start (or on an empty
+   *  draft) no break is added: the timestamp simply pre-fills the line. */
   function insertNewSegment() {
     const el = transcribeAreaRef.current;
     if (!el) return;
     const caret = el.selectionStart;
     const end = el.selectionEnd;
-    const insertion = `\n${transcriptTimestamp(currentMsRef.current)} `;
+    const before = transcribeDraft.slice(0, caret);
+    const ts = transcriptTimestamp(currentMsRef.current);
+    const insertion = before === "" || before.endsWith("\n") ? `${ts} ` : `\n${ts} `;
     const text = transcribeDraft.slice(0, caret) + insertion + transcribeDraft.slice(end);
     setTranscribeDraft(text);
+    transcribeDraftRef.current = text;
+    void flushTranscribeSave();
     requestAnimationFrame(() => {
       el.focus();
       el.setSelectionRange(caret + insertion.length, caret + insertion.length);
@@ -832,8 +873,16 @@ export function AvCoder({ source }: { source: Source }) {
     if (!window.confirm(t("avCoder.deleteTranscriptConfirm"))) return;
     setTranscribeBusy(true);
     setTError(null);
+    // No commit may still target a companion that is about to disappear.
+    if (transcribeSaveTimer.current) {
+      clearTimeout(transcribeSaveTimer.current);
+      transcribeSaveTimer.current = null;
+    }
+    transcribeNeedsAnotherRef.current = false;
     try {
       await api.deleteTranscript(source.id);
+      transcribeDraftRef.current = "";
+      transcribeSavedRef.current = "";
       setTranscribeMode(false);
       setTranscribeDraft("");
       await useProjectStore.getState().refreshProject();
@@ -844,26 +893,69 @@ export function AvCoder({ source }: { source: Source }) {
     }
   }
 
-  /** Persist the manual transcript through the commit-edit path, which
-   *  re-anchors (and reports deletions of) existing text codings, case text
-   *  and annotations; timeline codings live on the media file and are never
-   *  affected. */
-  async function saveTranscribe() {
-    if (transcriptId == null) return;
+  /** Debounced commit after typing stops (800 ms), mirroring the text
+   *  coder's edit mode. */
+  function scheduleTranscribeSave() {
+    if (transcribeSaveTimer.current) clearTimeout(transcribeSaveTimer.current);
+    transcribeSaveTimer.current = setTimeout(() => void flushTranscribeSave(), 800);
+  }
+
+  /** Persist the draft through the commit-edit path, which re-anchors (and
+   *  reports deletions of) existing text codings, case text and
+   *  annotations; timeline codings live on the media file and are never
+   *  affected. Commits are serialized so the server applies them in order
+   *  and always ends on the newest draft. On failure the inline error
+   *  shows and the next change/exit retries. */
+  async function flushTranscribeSave() {
+    if (transcribeSaveTimer.current) {
+      clearTimeout(transcribeSaveTimer.current);
+      transcribeSaveTimer.current = null;
+    }
+    const tid = transcribeIdRef.current;
+    if (tid == null) return;
+    const draft = transcribeDraftRef.current;
+    if (transcribeSavingRef.current) {
+      // A commit is in flight — one more run once it finishes, so newer
+      // keystrokes are never skipped.
+      transcribeNeedsAnotherRef.current = true;
+      return;
+    }
+    if (transcribeSavedRef.current === draft) return;
+    transcribeSavingRef.current = true;
     setTranscribeSaving(true);
-    setTError(null);
     try {
-      await api.commitEdit({ fid: transcriptId, new_text: transcribeDraft });
-      setTranscribeMode(false);
-      setTranscribeDraft("");
-      await loadTranscript();
-      await loadTranscriptCodings();
+      await api.commitEdit({ fid: tid, new_text: draft });
+      if (transcribeIdRef.current === tid) {
+        transcribeSavedRef.current = draft;
+        setTError(null);
+      }
+      void loadTranscriptCodings();
     } catch (e) {
       setTError(e instanceof Error ? e.message : t("coder.saveError"));
     } finally {
+      transcribeSavingRef.current = false;
       setTranscribeSaving(false);
+      if (transcribeNeedsAnotherRef.current) {
+        transcribeNeedsAnotherRef.current = false;
+        transcribeSaveTimer.current = setTimeout(() => void flushTranscribeSave(), 800);
+      }
     }
   }
+
+  // Latest helper so the unmount flush always commits the newest draft.
+  const flushTranscribeSaveRef = useRef(flushTranscribeSave);
+  flushTranscribeSaveRef.current = flushTranscribeSave;
+
+  // Persist anything still unsaved when the view unmounts mid-typing.
+  useEffect(() => {
+    return () => {
+      if (transcribeSaveTimer.current) {
+        clearTimeout(transcribeSaveTimer.current);
+        transcribeSaveTimer.current = null;
+      }
+      void flushTranscribeSaveRef.current();
+    };
+  }, []);
 
   // The transcript companion may switch (re-transcription) — never keep a
   // draft that belongs to another source's text. Exception: the companion
@@ -874,6 +966,15 @@ export function AvCoder({ source }: { source: Source }) {
       createdTranscriptRef.current = null;
       return;
     }
+    // The draft belongs to the OLD companion — cancel pending saves instead
+    // of committing it to the new one.
+    if (transcribeSaveTimer.current) {
+      clearTimeout(transcribeSaveTimer.current);
+      transcribeSaveTimer.current = null;
+    }
+    transcribeNeedsAnotherRef.current = false;
+    transcribeDraftRef.current = "";
+    transcribeSavedRef.current = "";
     setTranscribeMode(false);
     setTranscribeDraft("");
     setTSel(null);
@@ -1240,23 +1341,6 @@ export function AvCoder({ source }: { source: Source }) {
                   >
                     <Clock size={14} aria-hidden />
                   </IconButton>
-                  <Button
-                    variant="primary"
-                    className="h-6 px-1.5"
-                    icon={<Save size={12} aria-hidden />}
-                    onClick={() => void saveTranscribe()}
-                    disabled={transcribeSaving}
-                  >
-                    {t("avCoder.transcribeSave")}
-                  </Button>
-                  <Button
-                    variant="secondary"
-                    className="h-6 px-1.5"
-                    onClick={toggleTranscribeMode}
-                    disabled={transcribeSaving}
-                  >
-                    {t("common.cancel")}
-                  </Button>
                 </>
               ) : (
                 transcriptId != null && (
@@ -1296,7 +1380,12 @@ export function AvCoder({ source }: { source: Source }) {
               <textarea
                 ref={transcribeAreaRef}
                 value={transcribeDraft}
-                onChange={(e) => setTranscribeDraft(e.target.value)}
+                onChange={(e) => {
+                  const v = e.target.value;
+                  setTranscribeDraft(v);
+                  transcribeDraftRef.current = v;
+                  scheduleTranscribeSave();
+                }}
                 onKeyDown={(e) => {
                   if (e.key === "Tab") {
                     // New segment: a line break + current timestamp even
@@ -1312,7 +1401,7 @@ export function AvCoder({ source }: { source: Source }) {
                   }
                   if ((e.ctrlKey || e.metaKey) && e.key === "s") {
                     e.preventDefault();
-                    void saveTranscribe();
+                    void flushTranscribeSave();
                   }
                 }}
                 spellCheck={false}

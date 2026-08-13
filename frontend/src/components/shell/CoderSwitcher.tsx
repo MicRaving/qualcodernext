@@ -17,9 +17,7 @@ import {
   EyeOff,
   HelpCircle,
   LoaderCircle,
-  Pause,
   Pencil,
-  Play,
   RefreshCw,
   Trash2,
   User,
@@ -71,12 +69,6 @@ export function CoderSwitcher() {
   const setSyncStatus = useProjectStore((s) => s.setSyncStatus);
   const setSyncEnabled = useProjectStore((s) => s.setSyncEnabled);
   const runSyncNow = useProjectStore((s) => s.runSyncNow);
-  const tasks = useProjectStore((s) => s.tasks);
-  const tasksPaused = useProjectStore((s) => s.tasksPaused);
-  const setTasksPaused = useProjectStore((s) => s.setTasksPaused);
-  const startAllTasks = useProjectStore((s) => s.startAllTasks);
-  const clearFinishedTasks = useProjectStore((s) => s.clearFinishedTasks);
-  const clearAllTasks = useProjectStore((s) => s.clearAllTasks);
   const [open, setOpen] = useState(false);
   const [adding, setAdding] = useState(false);
   const [newName, setNewName] = useState("");
@@ -96,13 +88,6 @@ export function CoderSwitcher() {
   const syncEnabled = syncStatus?.ok === true && syncStatus.enabled === true;
   const syncError = Boolean(syncStatus?.last_error);
   const refreshHelpAnchor = helpOpen === "refresh" ? refreshHelpAnchorEl : null;
-
-  const taskCounts = {
-    queued: tasks.filter((j) => j.state === "queued").length,
-    running: tasks.filter((j) => j.state === "running").length,
-    done: tasks.filter((j) => j.state === "done").length,
-    error: tasks.filter((j) => j.state === "error").length,
-  };
 
   /* Recompute the flyout position whenever the window is resized. */
   useEffect(() => {
@@ -560,25 +545,28 @@ export function CoderSwitcher() {
                   title={
                     syncError ? (syncStatus?.last_error ?? t("sync.error")) : t("sync.now")
                   }
-                  className={`group flex items-center gap-0.5 whitespace-nowrap rounded-sm px-1 py-0.5 text-xs leading-none hover:bg-surface-higher disabled:opacity-50 ${
-                    syncError ? "text-danger" : "text-text-secondary"
-                  }`}
+                  // Solid warning/yellow button: the app's warning color
+                  // (--qc-warning) with the solid-button text convention
+                  // (--qc-bg, as in cls.primary) so it reads as an obvious
+                  // action in both themes and in high-contrast mode.
+                  className="flex shrink-0 items-center gap-1 whitespace-nowrap rounded-sm bg-warning px-2 py-0.5 text-xs font-medium leading-none text-[var(--qc-bg)] hover:bg-warning/90 disabled:opacity-50"
                 >
                   <RefreshCw
                     size={9}
-                    className={`shrink-0 opacity-0 transition-opacity group-hover:opacity-100 ${
-                      syncBusy ? "animate-spin opacity-100" : undefined
-                    }`}
+                    className={`shrink-0 ${syncBusy ? "animate-spin" : ""}`}
                     aria-hidden
                   />
-                  {t("sync.lastSyncShort", {
-                    when: formatSince(syncStatus?.last_sync ?? 0),
-                  })}
+                  {t("sync.now")}
                 </button>
               </div>
             </div>
             {syncEnabled && (
               <div className="mt-1.5 space-y-1 text-[11px] leading-snug text-text-secondary">
+                <p>
+                  {t("sync.lastSyncShort", {
+                    when: formatSince(syncStatus?.last_sync ?? 0),
+                  })}
+                </p>
                 {syncStatus && (syncStatus.pending_export > 0 || syncStatus.pending_import > 0) && (
                   <p className="text-warning">
                     {t("sync.pending", {
@@ -599,71 +587,6 @@ export function CoderSwitcher() {
                 )}
               </div>
             )}
-          </div>
-
-          {/* Background tasks */}
-          <div className="my-1 h-px bg-border" aria-hidden />
-          <div className="px-2 py-1.5">
-            <div className="flex items-center justify-between gap-2">
-              <span className="text-xs font-medium text-text-primary">{t("coder.tasks")}</span>
-              {tasksPaused && (
-                <span className="shrink-0 text-[10px] font-medium text-warning">
-                  {t("coder.tasksPaused")}
-                </span>
-              )}
-            </div>
-            {tasks.length === 0 ? (
-              <p className="mt-1.5 text-[11px] leading-snug text-text-secondary">
-                {t("coder.tasksEmpty")}
-              </p>
-            ) : (
-              <p className="mt-1.5 text-[11px] leading-snug text-text-secondary" aria-live="polite">
-                {t("coder.tasksCounts", {
-                  queued: String(taskCounts.queued),
-                  running: String(taskCounts.running),
-                  done: String(taskCounts.done),
-                  error: String(taskCounts.error),
-                })}
-              </p>
-            )}
-            <div className="mt-1.5 flex flex-wrap items-center gap-1">
-              <button
-                type="button"
-                onClick={() => startAllTasks()}
-                disabled={!tasksPaused || taskCounts.queued === 0}
-                className={cls.primaryCompact}
-              >
-                <Play size={10} aria-hidden />
-                {t("coder.tasksStart")}
-              </button>
-              <button
-                type="button"
-                onClick={() => setTasksPaused(true)}
-                disabled={tasksPaused || tasks.length === 0}
-                className={cls.secondary}
-              >
-                <Pause size={11} aria-hidden />
-                {t("coder.tasksPause")}
-              </button>
-              <button
-                type="button"
-                onClick={() => clearFinishedTasks()}
-                disabled={taskCounts.done === 0 && taskCounts.error === 0}
-                className={cls.secondary}
-              >
-                <Trash2 size={11} aria-hidden />
-                {t("coder.tasksClear")}
-              </button>
-              <button
-                type="button"
-                onClick={() => clearAllTasks()}
-                disabled={tasks.length === 0}
-                className={cls.secondary}
-              >
-                <X size={11} aria-hidden />
-                {t("coder.tasksClearAll")}
-              </button>
-            </div>
           </div>
         </Menu>
       )}

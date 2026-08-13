@@ -18,16 +18,17 @@ from charset_normalizer import from_bytes
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from qualcoder_api.core.enums import MediaType
+from qualcoder_api.core.enums import (
+    AUDIO_EXTENSIONS,
+    DOCUMENT_EXTENSIONS,
+    IMAGE_EXTENSIONS,
+    VIDEO_EXTENSIONS,
+    MediaType,
+)
 from qualcoder_api.core.models import Source
 from qualcoder_api.persistence import tables
 
 logger = logging.getLogger(__name__)
-
-DOCUMENT_EXTENSIONS = (".txt", ".odt", ".rtf", ".docx", ".htm", ".html", ".epub", ".md", ".pdf", ".tex")
-IMAGE_EXTENSIONS = (".jpg", ".jpeg", ".png")
-AUDIO_EXTENSIONS = (".wav", ".mp3", ".m4a")
-VIDEO_EXTENSIONS = (".mkv", ".mov", ".mp4", ".ogg", ".wmv", ".webm")
 
 
 def detect_media_type(filename: str) -> MediaType:

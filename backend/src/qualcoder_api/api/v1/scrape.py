@@ -1,8 +1,9 @@
-"""URL import API — Reddit threads, YouTube videos, articles, raw HTML.
+"""URL import API — Reddit threads, YouTube videos, articles, raw HTML, PDF.
 
-``POST /scrape/import`` fetches a URL, reduces it to text (or raw HTML)
-and persists it through the same file-import pipeline as an upload, so
-duplicate detection, attribute placeholders and audit behave identically.
+``POST /scrape/import`` fetches a URL, reduces it to text (or raw HTML,
+or a rendered PDF document) and persists it through the same file-import
+pipeline as an upload, so duplicate detection, attribute placeholders and
+audit behave identically.
 """
 
 from __future__ import annotations
@@ -19,7 +20,7 @@ from qualcoder_api.services.user_settings import get_codername, resolve_owner
 
 router = APIRouter(prefix="/scrape", tags=["scrape"])
 
-VALID_MODES = ("auto", "reddit", "youtube", "article", "html")
+VALID_MODES = ("auto", "reddit", "youtube", "article", "html", "pdf")
 
 
 class ScrapeImportRequest(BaseModel):

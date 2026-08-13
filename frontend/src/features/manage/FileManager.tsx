@@ -108,6 +108,15 @@ function SortableTh({
   );
 }
 
+// The left bar's Import button asks this view to open its file picker via
+// the store's requestImport() tick. The tick only ever increments (it is
+// never reset), so an effect watching it re-runs on every mount and would
+// re-open the picker — and re-trigger the import — each time the user
+// returns to this view. Remember which tick the picker was already opened
+// for at module scope (survives this view unmounting) so that each request
+// is consumed exactly once.
+let pickerOpenedForTick = 0;
+
 export function FileManager() {
   const { t } = useI18n();
   const toast = useToast();
@@ -169,9 +178,12 @@ export function FileManager() {
   }, [load, loadFilters]);
 
   // The left bar's Import button requests the file picker via the store.
+  // Each tick opens the picker at most once: mount-time re-runs of this
+  // effect (the view remounting) must not open it again.
   const importTick = useProjectStore((s) => s.importTick);
   useEffect(() => {
-    if (importTick === 0) return;
+    if (importTick === 0 || importTick === pickerOpenedForTick) return;
+    pickerOpenedForTick = importTick;
     fileInputRef.current?.click();
   }, [importTick]);
 

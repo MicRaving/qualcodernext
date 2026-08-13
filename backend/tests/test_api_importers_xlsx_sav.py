@@ -255,3 +255,45 @@ async def test_import_sav_garbage_rejected(project_client):
         files={"file": ("bad.sav", b"definitely not spss data", "application/octet-stream")},
     )
     assert res.status_code == 422
+
+
+# ----------------------------------------------------------------------
+# Preview (sniff + sample, read-only)
+# ----------------------------------------------------------------------
+
+async def test_preview_xlsx_survey_sheet(tmp_path):
+    """The preview picks the first survey-looking sheet and its string columns."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as c:
+        xlsx_path = tmp_path / "surveywb.xlsx"
+        build_xlsx(xlsx_path)
+        res = await c.post(
+            "/api/v1/interchange/import/preview",
+            files={"file": ("surveywb.xlsx", xlsx_path.read_bytes(), "application/octet-stream")},
+        )
+        assert res.status_code == 200, res.text
+        body = res.json()
+        assert body["format"] == "xlsx"
+        assert body["columns"] == ["Name", "Age", "Comment"]
+        assert body["rows_sample"][0] == ["Alice", "34", "hello world"]
+        # "Age" is numeric; "Comment" is free text; the case-name column is excluded.
+        assert body["qual_columns"] == ["Comment"]
+
+
+async def test_preview_sav_variables(tmp_path):
+    """The preview lists .sav variables and detects the string ones."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as c:
+        sav_path = tmp_path / "sample.sav"
+        build_sav(sav_path)
+        res = await c.post(
+            "/api/v1/interchange/import/preview",
+            files={"file": ("sample.sav", sav_path.read_bytes(), "application/octet-stream")},
+        )
+        assert res.status_code == 200, res.text
+        body = res.json()
+        assert body["format"] == "sav"
+        assert body["columns"] == ["id", "age", "city", "comment"]
+        assert len(body["rows_sample"]) == 3
+        # The case-name variable "id" is excluded; numeric "age" stays out.
+        assert body["qual_columns"] == ["city", "comment"]

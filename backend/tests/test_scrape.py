@@ -8,6 +8,7 @@ import sqlite3
 from unittest.mock import patch
 
 import pytest
+import yt_dlp
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 
@@ -179,6 +180,7 @@ def test_detect_mode_reddit_youtube_article():
     assert scrape_service.detect_mode("https://www.youtube.com/watch?v=abc") == "youtube"
     assert scrape_service.detect_mode("https://example.org/story") == "article"
     assert scrape_service.detect_mode("https://example.org/story", mode="html") == "html"
+    assert scrape_service.detect_mode("https://example.org/story", mode="pdf") == "pdf"
 
 
 def test_validate_url_rejects_non_http():
@@ -227,6 +229,67 @@ def test_reddit_json_suffix_appended_and_query_kept():
     assert seen == ["https://www.reddit.com/r/Test/comments/abc123/title.json?sort=new"]
 
 
+@pytest.mark.parametrize(
+    ("url", "expected"),
+    [
+        (
+            "https://old.reddit.com/r/Test/comments/abc123/some-slug/",
+            "https://www.reddit.com/r/Test/comments/abc123/some-slug.json",
+        ),
+        (
+            "https://np.reddit.com/r/Test/comments/abc123/some-slug",
+            "https://www.reddit.com/r/Test/comments/abc123/some-slug.json",
+        ),
+        (
+            "https://m.reddit.com/r/Test/comments/abc123/",
+            "https://www.reddit.com/r/Test/comments/abc123.json",
+        ),
+        (
+            "https://new.reddit.com/r/Test/comments/abc123/",
+            "https://www.reddit.com/r/Test/comments/abc123.json",
+        ),
+        (
+            "https://reddit.com/r/Test/comments/abc123/",
+            "https://www.reddit.com/r/Test/comments/abc123.json",
+        ),
+        (
+            "https://www.reddit.com/r/Test/comments/abc123/",
+            "https://www.reddit.com/r/Test/comments/abc123.json",
+        ),
+    ],
+)
+def test_reddit_host_variants_normalize_to_www(url, expected):
+    """old/np/m/new/bare reddit hosts all fetch through www.reddit.com."""
+    seen: list[str] = []
+
+    def fake_fetch(fetched: str, timeout: int = 45) -> bytes:
+        seen.append(fetched)
+        return reddit_payload()
+
+    with patch("qualcoder_api.services.scrape_service.fetch_url", side_effect=fake_fetch):
+        content = scrape_service.scrape_reddit(url)
+
+    assert seen == [expected]
+    assert content.mode == "reddit"
+
+
+def test_reddit_slug_form_keeps_sort_param():
+    seen: list[str] = []
+
+    def fake_fetch(fetched: str, timeout: int = 45) -> bytes:
+        seen.append(fetched)
+        return reddit_payload()
+
+    with patch("qualcoder_api.services.scrape_service.fetch_url", side_effect=fake_fetch):
+        scrape_service.scrape_reddit(
+            "https://old.reddit.com/r/Test/comments/abc123/title_with_underscores/?sort=confidence&t=all"
+        )
+
+    assert seen == [
+        "https://www.reddit.com/r/Test/comments/abc123/title_with_underscores.json?sort=confidence&t=all"
+    ]
+
+
 def test_reddit_json_url_used_as_is():
     assert scrape_service._reddit_json_url("https://www.reddit.com/r/x/comments/a/b.json") == (
         "https://www.reddit.com/r/x/comments/a/b.json"
@@ -241,6 +304,32 @@ def test_reddit_rejects_non_json_response():
         scrape_service.scrape_reddit("https://www.reddit.com/r/x/comments/a/")
 
 
+@pytest.mark.parametrize(
+    ("body", "message"),
+    [
+        (b'{"reason": "banned", "error": 403}', "as banned"),
+        (b'{"reason": "quarantined", "error": 403}', "as quarantined"),
+        (b'{"reason": "private", "error": 403}', "as private"),
+    ],
+)
+def test_reddit_banned_and_quarantined_bodies_raise_clear_error(body, message):
+    """Banned/quarantined subreddits answer 200 + a reason body — surface a
+    clear error instead of the generic shape failure."""
+    with (
+        patch("qualcoder_api.services.scrape_service.fetch_url", return_value=body),
+        pytest.raises(ScrapeError, match=message),
+    ):
+        scrape_service.scrape_reddit("https://www.reddit.com/r/Test/comments/abc123/")
+
+
+def test_reddit_anonymous_403_error_body_raises_clear_error():
+    with (
+        patch("qualcoder_api.services.scrape_service.fetch_url", return_value=b'{"error": 403}'),
+        pytest.raises(ScrapeError, match="private or blocked"),
+    ):
+        scrape_service.scrape_reddit("https://www.reddit.com/r/Test/comments/abc123/")
+
+
 def test_reddit_accepts_single_listing_object():
     post_listing = {"kind": "Listing", "data": {"children": [REDDIT_POST["data"]["children"][0]]}}
     payload = json.dumps(post_listing).encode("utf-8")
@@ -253,12 +342,20 @@ def test_reddit_accepts_single_listing_object():
     assert "Comments" not in text
 
 
-@pytest.mark.parametrize("code", [403, 429])
-def test_reddit_http_block_maps_to_rate_limit_message(code):
-    err = ScrapeError(f"server returned HTTP {code} for https://www.reddit.com/...", code=code)
+def test_reddit_429_maps_to_rate_limit_message():
+    err = ScrapeError("server returned HTTP 429 for https://www.reddit.com/...", code=429)
     with (
         patch("qualcoder_api.services.scrape_service.fetch_url", side_effect=err),
         pytest.raises(ScrapeError, match="rate-limited"),
+    ):
+        scrape_service.scrape_reddit("https://www.reddit.com/r/Test/comments/abc123/")
+
+
+def test_reddit_403_maps_to_private_or_blocked_message():
+    err = ScrapeError("server returned HTTP 403 for https://www.reddit.com/...", code=403)
+    with (
+        patch("qualcoder_api.services.scrape_service.fetch_url", side_effect=err),
+        pytest.raises(ScrapeError, match="private or blocked"),
     ):
         scrape_service.scrape_reddit("https://www.reddit.com/r/Test/comments/abc123/")
 
@@ -425,6 +522,95 @@ def test_youtube_caption_fetch_failure_keeps_header():
     assert "Captions" not in text
 
 
+def test_youtube_abort_signal_maps_to_friendly_error():
+    """yt-dlp's internal abort (KeyboardInterrupt out of extract_info) must
+    surface as the friendly ValueError — not as the raw signal."""
+
+    class AbortingYoutubeDL(FakeYoutubeDL):
+        def extract_info(self, url, download=False):
+            raise KeyboardInterrupt("signal aborted without reason")
+
+    with (
+        patch(
+            "qualcoder_api.services.scrape_service.yt_dlp.YoutubeDL",
+            return_value=AbortingYoutubeDL(info=make_youtube_info()),
+        ),
+        pytest.raises(ValueError, match="was interrupted"),
+    ):
+        scrape_service.scrape_youtube("https://www.youtube.com/watch?v=abc")
+
+
+def test_youtube_abort_string_in_download_error_maps_to_friendly_error():
+    """Some platforms report the abort as a DownloadError naming the signal
+    instead of a KeyboardInterrupt."""
+
+    class AbortingYoutubeDL(FakeYoutubeDL):
+        def extract_info(self, url, download=False):
+            raise yt_dlp.utils.DownloadError("signal aborted without reason")
+
+    with (
+        patch(
+            "qualcoder_api.services.scrape_service.yt_dlp.YoutubeDL",
+            return_value=AbortingYoutubeDL(info=make_youtube_info()),
+        ),
+        pytest.raises(ScrapeError, match="was interrupted"),
+    ):
+        scrape_service.scrape_youtube("https://www.youtube.com/watch?v=abc")
+
+
+def test_youtube_abort_during_comments_retries_without_getcomments():
+    """An abort on the comment-extracting call is retried once with metadata
+    only; the import then falls back to captions instead of failing."""
+    created: list[FakeYoutubeDL] = []
+
+    def factory(options=None):
+        if options and options.get("getcomments"):
+            class AbortOnce(FakeYoutubeDL):
+                def extract_info(self, url, download=False):
+                    raise KeyboardInterrupt("signal aborted without reason")
+
+            ydl: FakeYoutubeDL = AbortOnce(options=options, info=make_youtube_info())
+        else:
+            ydl = FakeYoutubeDL(options=options, info=make_youtube_info(comments=[]))
+        created.append(ydl)
+        return ydl
+
+    with (
+        patch("qualcoder_api.services.scrape_service.yt_dlp.YoutubeDL", side_effect=factory),
+        patch("qualcoder_api.services.scrape_service.fetch_url", return_value=VTT_CAPTIONS),
+    ):
+        content = scrape_service.scrape_youtube("https://www.youtube.com/watch?v=abc")
+
+    assert len(created) == 2
+    assert created[0].options.get("getcomments") is True
+    assert created[1].options.get("getcomments") is False
+    text = content.data.decode("utf-8")
+    assert "Demo Video" in text
+    assert "[00:01] Hello caption text" in text
+    assert "Comments" not in text
+
+
+def test_youtube_hang_times_out_with_friendly_error():
+    """A hanging extractor must be cut off by the wait_for guard (not block
+    the import forever) and surface a friendly timeout error."""
+    import time
+
+    class SlowYoutubeDL(FakeYoutubeDL):
+        def extract_info(self, url, download=False):
+            time.sleep(2)
+            return self.info
+
+    with (
+        patch.object(scrape_service, "_YT_TIMEOUT_SECONDS", 0.2),
+        patch(
+            "qualcoder_api.services.scrape_service.yt_dlp.YoutubeDL",
+            return_value=SlowYoutubeDL(info=make_youtube_info()),
+        ),
+        pytest.raises(ScrapeError, match="timed out"),
+    ):
+        scrape_service.scrape_youtube("https://www.youtube.com/watch?v=abc")
+
+
 # ----------------------------------------------------------------------
 # Raw HTML capture
 # ----------------------------------------------------------------------
@@ -436,6 +622,62 @@ def test_html_mode_keeps_raw_bytes():
     assert content.mode == "html"
     assert content.filename == "Testing Article.html"
     assert content.data == ARTICLE_HTML
+
+
+# ----------------------------------------------------------------------
+# PDF capture
+# ----------------------------------------------------------------------
+
+def test_pdf_mode_renders_page_to_pdf():
+    import fitz
+
+    with patch("qualcoder_api.services.scrape_service.fetch_url", return_value=ARTICLE_HTML):
+        content = scrape_service.scrape_pdf("https://example.org/page")
+
+    assert content.mode == "pdf"
+    assert content.filename == "Testing Article.pdf"
+    assert content.data.startswith(b"%PDF")
+    with fitz.open(stream=content.data, filetype="pdf") as doc:
+        assert doc.page_count >= 1
+        text = "".join(page.get_text() for page in doc)
+        # MuPDF extracts ligatures (\ufb01 = "fi"), so avoid "fi" substrings.
+        assert "article body with real content" in text
+
+
+def test_pdf_mode_falls_back_to_text_pdf_when_render_fails(monkeypatch):
+    """A failing Story layout render must not break the import — the plain
+    text of the page is rendered into a minimal text-only PDF instead."""
+    import fitz
+
+    real_render = scrape_service._story_render
+
+    def layout_boom(html: str, css: str | None) -> bytes:
+        if css is not None:
+            raise RuntimeError("css boom")
+        return real_render(html, css)
+
+    monkeypatch.setattr(scrape_service, "_story_render", layout_boom)
+    with patch("qualcoder_api.services.scrape_service.fetch_url", return_value=ARTICLE_HTML):
+        content = scrape_service.scrape_pdf("https://example.org/page")
+
+    assert content.mode == "pdf"
+    assert content.filename == "Testing Article.pdf"
+    assert content.data.startswith(b"%PDF")
+    with fitz.open(stream=content.data, filetype="pdf") as doc:
+        text = "".join(page.get_text() for page in doc)
+        assert "article body with real content" in text
+
+
+def test_pdf_mode_raises_when_render_fails_and_page_has_no_text(monkeypatch):
+    def boom(*_args, **_kwargs):
+        raise RuntimeError("css boom")
+
+    monkeypatch.setattr(scrape_service, "_story_render", boom)
+    with (
+        patch("qualcoder_api.services.scrape_service.fetch_url", return_value=b"<html></html>"),
+        pytest.raises(ScrapeError, match="render"),
+    ):
+        scrape_service.scrape_pdf("https://example.org/empty")
 
 
 # ----------------------------------------------------------------------
@@ -522,3 +764,43 @@ def test_scrape_url_auto_dispatch_returns_content():
         content = scrape_service.scrape_url("https://example.org/testing", mode="auto")
     assert isinstance(content, ScrapedContent)
     assert content.filename.endswith(".txt")
+
+
+def test_scrape_url_pdf_dispatch_returns_pdf_content():
+    with patch("qualcoder_api.services.scrape_service.fetch_url", return_value=ARTICLE_HTML):
+        content = scrape_service.scrape_url("https://example.org/page", mode="pdf")
+    assert content.mode == "pdf"
+    assert content.filename == "Testing Article.pdf"
+    assert content.data.startswith(b"%PDF")
+
+
+async def test_scrape_import_pdf_mode_creates_pdf_source(scrape_client):
+    """mode=pdf persists through the file-import pipeline as a .pdf source
+    with extracted fulltext (the PdfCoder path)."""
+    client, target = scrape_client
+    with patch("qualcoder_api.services.scrape_service.fetch_url", return_value=ARTICLE_HTML):
+        res = await client.post(
+            "/api/v1/scrape/import", json={"url": "https://example.org/page", "mode": "pdf"}
+        )
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert body["mode"] == "pdf"
+    assert body["name"] == "Testing Article.pdf"
+    assert body["text_length"] > 0
+
+    stored = target / "documents" / "Testing Article.pdf"
+    assert stored.exists()
+
+    import fitz
+
+    with fitz.open(stream=stored.read_bytes(), filetype="pdf") as doc:
+        assert doc.page_count >= 1
+        text = "".join(page.get_text() for page in doc)
+        assert "article body with real content" in text
+
+    got = await client.get(f"/api/v1/sources/{body['source_id']}")
+    assert got.status_code == 200
+    # PDF sources live under /docs/ as TEXT with a .pdf name — exactly the
+    # shape the frontend's usesPdfCoder() routes to the PdfCoder.
+    assert got.json()["media_type"] == "text"
+    assert got.json()["name"] == "Testing Article.pdf"

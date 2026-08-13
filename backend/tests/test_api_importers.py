@@ -540,6 +540,117 @@ async def test_import_transana_garbage_rejected(project_client):
     assert res.status_code == 422
 
 
+# ----------------------------------------------------------------------
+# Preview (sniff + sample, read-only)
+# ----------------------------------------------------------------------
+
+async def test_preview_survey(tmp_path):
+    """The preview endpoint sniffs a CSV and samples header + rows + the
+    detected qualitative columns — without a project being open."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as c:
+        csv_data = "Name,Age,Comment\nalice,42,hello world\nbob,33,second row\n"
+        res = await c.post(
+            "/api/v1/interchange/import/preview",
+            files={"file": ("survey.csv", csv_data.encode(), "text/csv")},
+        )
+        assert res.status_code == 200, res.text
+        body = res.json()
+        assert body["format"] == "survey"
+        assert body["columns"] == ["Name", "Age", "Comment"]
+        assert len(body["rows_sample"]) == 2
+        assert body["rows_sample"][0] == ["alice", "42", "hello world"]
+        # The case-name column is excluded; numeric columns are not qualitative.
+        assert body["qual_columns"] == ["Comment"]
+        assert body["lines"] is None
+
+
+async def test_preview_codebook_lines(tmp_path):
+    """Codebooks preview as their first lines."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as c:
+        codebook = "Theme>>Subtheme>>code1\nTheme>>code2\n"
+        res = await c.post(
+            "/api/v1/interchange/import/preview",
+            files={"file": ("codebook.txt", codebook.encode(), "text/plain")},
+        )
+        assert res.status_code == 200, res.text
+        body = res.json()
+        assert body["format"] == "codebook"
+        assert body["lines"] == ["Theme>>Subtheme>>code1", "Theme>>code2"]
+        assert body["columns"] is None
+        assert body["qual_columns"] is None
+
+
+async def test_preview_unknown_format_rejected(tmp_path):
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as c:
+        res = await c.post(
+            "/api/v1/interchange/import/preview",
+            files={"file": ("garbage.bin", b"\x00\x01\x02 not a format", "application/octet-stream")},
+        )
+        assert res.status_code == 422
+
+
+async def test_preview_force_kind_override(tmp_path):
+    """A forced format re-interprets the file (CSV → codebook lines)."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as c:
+        csv_data = "Name,Age\nalice,42\n"
+        res = await c.post(
+            "/api/v1/interchange/import/preview",
+            files={"file": ("survey.csv", csv_data.encode(), "text/csv")},
+            data={"force_kind": "codebook"},
+        )
+        assert res.status_code == 200, res.text
+        body = res.json()
+        assert body["format"] == "codebook"
+        assert body["lines"] == ["Name,Age", "alice,42"]
+
+        res = await c.post(
+            "/api/v1/interchange/import/preview",
+            files={"file": ("survey.csv", csv_data.encode(), "text/csv")},
+            data={"force_kind": "nope"},
+        )
+        assert res.status_code == 422
+
+
+# ----------------------------------------------------------------------
+# Forced-format import (import/auto with force_kind)
+# ----------------------------------------------------------------------
+
+async def test_import_auto_force_kind(project_client):
+    """force_kind routes the upload to the named importer, bypassing sniffing."""
+    client, _ = project_client
+    codebook = "Theme>>Subtheme>>code1\nTheme>>code2\n"
+    res = await client.post(
+        "/api/v1/interchange/import/auto",
+        files={"file": ("cb.txt", codebook.encode(), "text/plain")},
+        data={"force_kind": "codebook"},
+    )
+    assert res.status_code == 200, res.text
+    assert res.json()["codes"] == 2
+
+    # A forced survey CSV keeps the qualitative_headers option.
+    csv_data = "Name,Age,Comment\nalice,42,hello world\nbob,33,second row\n"
+    res = await client.post(
+        "/api/v1/interchange/import/auto",
+        files={"file": ("survey.csv", csv_data.encode(), "text/csv")},
+        data={"force_kind": "survey", "qualitative_headers": "Comment"},
+    )
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert body["cases"] == 2
+    assert body["qualitative_files"] == 2
+
+    res = await client.post(
+        "/api/v1/interchange/import/auto",
+        files={"file": ("cb.txt", codebook.encode(), "text/plain")},
+        data={"force_kind": "zotero"},
+    )
+    assert res.status_code == 422
+
+
 async def test_import_requires_open_project(tmp_path):
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as c:

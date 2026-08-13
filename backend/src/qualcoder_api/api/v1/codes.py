@@ -336,20 +336,20 @@ async def move_code(cid: int, req: CodeMove, db: DbDep) -> Code:
         raise HTTPException(status_code=404, detail="code not found")
     fields = req.model_fields_set
     if req.after_cid is not None and req.before_cid is not None:
-        raise HTTPException(status_code=422, detail="after_cid and before_cid are mutually exclusive")
+        raise HTTPException(status_code=422, detail="Cannot move a code relative to two siblings at once — choose either before or after.")
     if "parent_catid" in fields and "supercid" in fields:
-        raise HTTPException(status_code=422, detail="parent_catid and supercid are mutually exclusive")
+        raise HTTPException(status_code=422, detail="Cannot move a code into a category and under a parent code at the same time.")
     if not fields:
-        raise HTTPException(status_code=422, detail="move requires a target")
+        raise HTTPException(status_code=422, detail="A drop target is required to move this code.")
 
     catid: int | None = None
     supercid: int | None = None
     if "after_cid" in fields or "before_cid" in fields:
         anchor_cid = req.after_cid if "after_cid" in fields else req.before_cid
         if anchor_cid is None:
-            raise HTTPException(status_code=422, detail="a sibling id is required")
+            raise HTTPException(status_code=422, detail="A sibling is required to move a code relative to it.")
         if anchor_cid == cid:
-            raise HTTPException(status_code=422, detail="cannot move a code relative to itself")
+            raise HTTPException(status_code=422, detail="A code cannot be moved relative to itself.")
         anchor = await repo.get_code(anchor_cid)
         if anchor is None:
             raise HTTPException(status_code=404, detail="target code not found")
@@ -431,7 +431,7 @@ async def promote_code(cid: int, db: DbDep) -> Code:
             cid, catid=new_catid, supercid=None, position=position
         )
     else:
-        raise HTTPException(status_code=422, detail="code is already at the top level")
+        raise HTTPException(status_code=422, detail="This code is already at the top level and cannot be promoted further.")
     if code is None:
         raise HTTPException(status_code=404, detail="code not found")
     await audit.record(
@@ -454,7 +454,7 @@ async def demote_code(cid: int, db: DbDep) -> Code:
         cid, catid=code.catid, supercid=code.supercid
     )
     if sibling is None:
-        raise HTTPException(status_code=422, detail="no previous sibling to demote under")
+        raise HTTPException(status_code=422, detail="This code cannot be demoted — there is no sibling below it to move under.")
     code = await repo.move_code(
         cid, catid=None, supercid=sibling
     )
@@ -555,17 +555,17 @@ async def move_category(catid: int, req: CategoryMove, db: DbDep) -> Category:
         raise HTTPException(status_code=404, detail="category not found")
     fields = req.model_fields_set
     if req.after_catid is not None and req.before_catid is not None:
-        raise HTTPException(status_code=422, detail="after_catid and before_catid are mutually exclusive")
+        raise HTTPException(status_code=422, detail="Cannot move a category relative to two siblings at once — choose either before or after.")
     if not fields:
-        raise HTTPException(status_code=422, detail="move requires a target")
+        raise HTTPException(status_code=422, detail="A drop target is required to move this category.")
 
     supercatid: int | None = None
     if "after_catid" in fields or "before_catid" in fields:
         anchor_catid = req.after_catid if "after_catid" in fields else req.before_catid
         if anchor_catid is None:
-            raise HTTPException(status_code=422, detail="a sibling id is required")
+            raise HTTPException(status_code=422, detail="A sibling is required to move a category relative to it.")
         if anchor_catid == catid:
-            raise HTTPException(status_code=422, detail="cannot move a category relative to itself")
+            raise HTTPException(status_code=422, detail="A category cannot be moved relative to itself.")
         anchor = await repo.get_category(anchor_catid)
         if anchor is None:
             raise HTTPException(status_code=404, detail="target category not found")
@@ -603,7 +603,7 @@ async def promote_category(catid: int, db: DbDep) -> Category:
     if category is None:
         raise HTTPException(status_code=404, detail="category not found")
     if not category.supercatid:
-        raise HTTPException(status_code=422, detail="category is already at the top level")
+        raise HTTPException(status_code=422, detail="This category is already at the top level and cannot be promoted further.")
     parent = await repo.get_category(category.supercatid)
     new_supercatid = parent.supercatid if parent is not None else None
     position = None
@@ -640,7 +640,7 @@ async def demote_category(catid: int, db: DbDep) -> Category:
         catid, supercatid=category.supercatid
     )
     if sibling is None:
-        raise HTTPException(status_code=422, detail="no previous sibling to demote under")
+        raise HTTPException(status_code=422, detail="This category cannot be demoted — there is no sibling below it to move under.")
     try:
         category = await repo.move_category(catid, sibling)
     except ValueError as err:
