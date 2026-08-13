@@ -1,10 +1,11 @@
-"""Interchange importers: RQDA, Taguette, RIS, Survey CSV.
+"""Interchange importers: RQDA, Taguette, RIS, Survey CSV, Excel XLSX, SPSS.
 
 Pure async module: no FastAPI imports. ``session_factory`` is an
 ``async_sessionmaker`` bound to the open project's engine. The source files
-(RQDA/Taguette SQLite databases, RIS text, Survey CSV) are read directly
-with aiosqlite / the stdlib csv module; every write goes through the
-repositories in ``qualcoder_api.persistence.repositories``.
+(RQDA/Taguette SQLite databases, RIS text, Survey CSV, XLSX workbooks, SPSS
+``.sav`` files) are read directly with aiosqlite / the stdlib csv module /
+openpyxl / pyreadstat; every write goes through the repositories in
+``qualcoder_api.persistence.repositories``.
 
 Importers deduplicate by name against the target project (existing rows are
 skipped) and return a result dict. Unreadable or malformed files raise
@@ -13,9 +14,12 @@ skipped) and return a result dict. Unreadable or malformed files raise
 
 from __future__ import annotations
 
+import asyncio
 import csv
+import datetime
 import html
 import io
+import math
 import re
 import sqlite3
 from pathlib import Path
@@ -40,8 +44,8 @@ def detect_import_kind(path: str) -> str:
     """Sniff an interchange upload and return the import kind.
 
     Returns one of ``"refi"``, ``"rqda"``, ``"taguette"``, ``"ris"``,
-    ``"survey"``, ``"codebook"``, ``"merge"``. Raises ``ValueError`` when
-    the file is not a supported interchange format.
+    ``"survey"``, ``"codebook"``, ``"xlsx"``, ``"sav"``, ``"merge"``.
+    Raises ``ValueError`` when the file is not a supported interchange format.
     """
     import zipfile
 
@@ -49,15 +53,26 @@ def detect_import_kind(path: str) -> str:
     with open(path, "rb") as fh:
         head = fh.read(4096)
 
-    # Zip archive → a zipped .qda project (merge).
+    # Zip archive → an xlsx workbook or a zipped .qda project (merge).
     if head.startswith(b"PK\x03\x04"):
         try:
             with zipfile.ZipFile(path) as archive:
-                if any(entry.split("/")[-1] == "data.qda" for entry in archive.namelist()):
+                names = archive.namelist()
+                if any(entry.startswith("xl/") for entry in names):
+                    return "xlsx"
+                if any(entry.split("/")[-1] == "data.qda" for entry in names):
                     return "merge"
         except zipfile.BadZipFile as err:
             raise ValueError("not a valid zip archive") from err
-        raise ValueError("zip archive without a data.qda — expected a zipped .qda project")
+        raise ValueError(
+            "zip archive without xl/ entries or data.qda — expected an xlsx "
+            "workbook or a zipped .qda project"
+        )
+
+    # SPSS .sav (``$FL2``/``$FL3``/``$FL32`` at offset 0, ``$FL`` at offset 4
+    # in the old compressed variants).
+    if head.startswith(b"$FL") or head[4:7] == b"$FL":
+        return "sav"
 
     # SQLite database → RQDA (QualCoder v3) or Taguette.
     if head.startswith(b"SQLite format 3\x00"):
@@ -98,8 +113,8 @@ def detect_import_kind(path: str) -> str:
 
     raise ValueError(
         "unrecognized file type — supported: .qdp/.qdc (REFI-QDA), .rqda, "
-        "Taguette (.sqlite3), .ris, survey .csv, codebook .txt/.csv, "
-        "zipped .qda projects and Zotero"
+        "Taguette (.sqlite3), .ris, survey .csv, Excel .xlsx, SPSS .sav, "
+        "codebook .txt/.csv, zipped .qda projects and Zotero"
     )
 
 
@@ -696,47 +711,33 @@ async def import_ris(session_factory: async_sessionmaker, ris_path: str, coderna
 
 
 # ----------------------------------------------------------------------
-# Survey CSV
+# Survey-style tabular data (CSV, XLSX sheets, SPSS .sav rows)
 # ----------------------------------------------------------------------
 
-async def import_survey(
+async def _import_survey_rows(
     session_factory: async_sessionmaker,
-    csv_path: str,
+    headers: list[str],
+    data: list[list[str]],
     codername: str,
-    qualitative_headers: list[str] | None = None,
+    qualitative_headers: list[str] | None,
+    pseudonyms_dir: str,
+    value_types: dict[str, str] | None = None,
 ) -> dict:
-    """Import a survey CSV: one row = one case, columns = case attributes.
+    """Shared core of the survey-family importers.
 
-    ``qualitative_headers`` names the columns whose free text becomes one
-    text file per row (``<case name>_<field>``), linked to the case and
-    coded with a code named after the field (upstream survey importer).
-    The CSV is read as UTF-8 (BOM tolerated) and a ``;`` delimiter is
-    accepted when ``,`` yields single-column rows.
+    Consumes an already-parsed table: ``headers`` names the columns (the
+    first one holds the case name) and ``data`` holds the string-formatted
+    rows. Columns listed in ``qualitative_headers`` become one text source
+    per row (``<case name>_<column>``) linked to the case and coded with a
+    code named after the column; every other column becomes a case
+    attribute. ``value_types`` optionally maps column names to the
+    ``attribute_type.valuetype`` of newly created types (default "text").
     """
-    raw = Path(csv_path).read_bytes()
-    try:
-        text = raw.decode("utf-8-sig")
-    except UnicodeDecodeError:
-        text = raw.decode("utf-8")
-
-    try:
-        rows = [
-            row for row in csv.reader(io.StringIO(text)) if any(cell.strip() for cell in row)
-        ]
-        if rows and all(len(row) == 1 for row in rows):
-            rows = [
-                row
-                for row in csv.reader(io.StringIO(text), delimiter=";")
-                if any(cell.strip() for cell in row)
-            ]
-    except csv.Error as err:
-        raise ValueError(f"Invalid survey CSV: {err}") from err
-
-    if not rows:
-        return {"ok": True, "message": "Survey CSV is empty", "cases": 0, "attributes": 0,
-                "qualitative_files": 0, "qualitative_codings": 0}
-    headers = [h.strip() for h in rows[0]]
-    data = rows[1:]
+    if not data:
+        return {
+            "ok": True, "message": "No data rows", "cases": 0, "attributes": 0,
+            "qualitative_files": 0, "qualitative_codings": 0,
+        }
     qualitative = {h for h in (qualitative_headers or []) if h in headers}
 
     from qualcoder_api.services import pseudonyms
@@ -756,7 +757,8 @@ async def import_survey(
         for header in headers[1:]:
             if header and header not in qualitative and header not in existing_types:
                 await attr_repo.add_type(
-                    name=header, owner=codername, case_or_file="case", value_type="text"
+                    name=header, owner=codername, case_or_file="case",
+                    value_type=(value_types or {}).get(header, "text"),
                 )
                 existing_types.add(header)
 
@@ -810,7 +812,7 @@ async def import_survey(
                             select(tables.source.c.id).where(tables.source.c.name == qual_name)
                         )
                     ).first()
-                    fulltext = pseudonyms.apply_pseudonyms(value, str(Path(csv_path).parent))
+                    fulltext = pseudonyms.apply_pseudonyms(value, pseudonyms_dir)
                     if existing_file is not None:
                         fid = existing_file[0]
                     else:
@@ -842,15 +844,245 @@ async def import_survey(
                     )
                     attributes += 1
 
-    message = (
-        f"Survey import complete: {cases} cases, {attributes} attribute values, "
-        f"{qualitative_files} qualitative files, {qualitative_codings} qualitative codings"
-    )
     return {
         "ok": True,
-        "message": message,
         "cases": cases,
         "attributes": attributes,
         "qualitative_files": qualitative_files,
         "qualitative_codings": qualitative_codings,
     }
+
+
+async def import_survey(
+    session_factory: async_sessionmaker,
+    csv_path: str,
+    codername: str,
+    qualitative_headers: list[str] | None = None,
+) -> dict:
+    """Import a survey CSV: one row = one case, columns = case attributes.
+
+    ``qualitative_headers`` names the columns whose free text becomes one
+    text file per row (``<case name>_<field>``), linked to the case and
+    coded with a code named after the field (upstream survey importer).
+    The CSV is read as UTF-8 (BOM tolerated) and a ``;`` delimiter is
+    accepted when ``,`` yields single-column rows.
+    """
+    raw = Path(csv_path).read_bytes()
+    try:
+        text = raw.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        text = raw.decode("utf-8")
+
+    try:
+        rows = [
+            row for row in csv.reader(io.StringIO(text)) if any(cell.strip() for cell in row)
+        ]
+        if rows and all(len(row) == 1 for row in rows):
+            rows = [
+                row
+                for row in csv.reader(io.StringIO(text), delimiter=";")
+                if any(cell.strip() for cell in row)
+            ]
+    except csv.Error as err:
+        raise ValueError(f"Invalid survey CSV: {err}") from err
+
+    if not rows:
+        return {"ok": True, "message": "Survey CSV is empty", "cases": 0, "attributes": 0,
+                "qualitative_files": 0, "qualitative_codings": 0}
+    headers = [h.strip() for h in rows[0]]
+    result = await _import_survey_rows(
+        session_factory, headers, rows[1:], codername, qualitative_headers,
+        str(Path(csv_path).parent),
+    )
+    message = (
+        f"Survey import complete: {result['cases']} cases, {result['attributes']} "
+        f"attribute values, {result['qualitative_files']} qualitative files, "
+        f"{result['qualitative_codings']} qualitative codings"
+    )
+    return {**result, "message": message}
+
+
+# ----------------------------------------------------------------------
+# Excel XLSX
+# ----------------------------------------------------------------------
+
+def _read_xlsx_sheets(xlsx_path: str) -> dict[str, list[list[str]]]:
+    """Parse an XLSX workbook into ``{sheet title: rows}`` (string cells).
+
+    Runs inside ``asyncio.to_thread`` — openpyxl is CPU/IO bound. Rows that
+    are entirely empty are dropped; every cell is stripped to text.
+    """
+    import openpyxl
+
+    wb = openpyxl.load_workbook(xlsx_path, read_only=True, data_only=True)
+    try:
+        sheets: dict[str, list[list[str]]] = {}
+        for ws in wb.worksheets:
+            rows = []
+            for row in ws.iter_rows(values_only=True):
+                cells = ["" if value is None else str(value).strip() for value in row]
+                if any(cells):
+                    rows.append(cells)
+            sheets[ws.title] = rows
+        return sheets
+    finally:
+        wb.close()
+
+
+def _sheet_looks_like_survey(rows: list[list[str]]) -> bool:
+    """A sheet holds survey data when it has a header row plus data rows
+    and the header spans at least two columns (single-column sheets are
+    treated as free text)."""
+    return len(rows) >= 2 and sum(1 for cell in rows[0] if cell) >= 2
+
+
+async def import_xlsx(
+    session_factory: async_sessionmaker,
+    xlsx_path: str,
+    codername: str,
+    qualitative_headers: list[str] | None = None,
+) -> dict:
+    """Import an Excel ``.xlsx`` workbook.
+
+    Every sheet whose first row reads as a multi-column header is imported
+    with the shared survey logic (first column = case name, the rest case
+    attributes, ``qualitative_headers`` columns become one text file per
+    row). Any other sheet becomes a single text source per sheet
+    (``<workbook>-<sheet>.txt``) with its rows rendered tab-separated.
+    """
+    try:
+        sheets = await asyncio.to_thread(_read_xlsx_sheets, xlsx_path)
+    except Exception as err:  # openpyxl raises InvalidFileException/BadZipFile/... on bad files
+        raise ValueError(f"Invalid XLSX file: {err}") from err
+
+    if not sheets:
+        return {
+            "ok": True, "message": "XLSX workbook is empty",
+            "cases": 0, "attributes": 0, "qualitative_files": 0,
+            "qualitative_codings": 0, "sources": 0,
+        }
+
+    counts: dict[str, int] = {
+        "cases": 0, "attributes": 0, "qualitative_files": 0,
+        "qualitative_codings": 0, "sources": 0,
+    }
+    # The API layer uploads under a ``_import_``/``_merge_`` temp name —
+    # strip that prefix so the source name reflects the original file.
+    stem = Path(xlsx_path).stem
+    for prefix in ("_import_", "_merge_"):
+        if stem.startswith(prefix):
+            stem = stem[len(prefix):]
+            break
+    async with session_factory() as session:
+        source_repo = SourceRepository(session)
+        existing = await _existing_names(session, tables.source, "name")
+        for sheet_name, rows in sheets.items():
+            if _sheet_looks_like_survey(rows):
+                partial = await _import_survey_rows(
+                    session_factory, rows[0], rows[1:], codername,
+                    qualitative_headers, str(Path(xlsx_path).parent),
+                )
+                for key in counts:
+                    counts[key] += partial.get(key, 0)
+            else:
+                name = f"{stem}-{sheet_name}.txt"
+                if name in existing:
+                    continue
+                fulltext = "\n".join("\t".join(row) for row in rows)
+                await source_repo.add_source(
+                    name=name, mediapath=None, fulltext=fulltext,
+                    memo="", owner=codername,
+                )
+                existing.add(name)
+                counts["sources"] += 1
+
+    message = (
+        f"XLSX import complete: {counts['cases']} cases, {counts['attributes']} "
+        f"attribute values, {counts['qualitative_files']} qualitative files, "
+        f"{counts['qualitative_codings']} qualitative codings, {counts['sources']} text sources"
+    )
+    return {"ok": True, "message": message, **counts}
+
+
+# ----------------------------------------------------------------------
+# SPSS .sav
+# ----------------------------------------------------------------------
+
+def _sav_cell(value) -> str:
+    """Format one SPSS cell value for storage as a string attribute.
+
+    Missing values (``nan``/``None``) become empty strings, whole floats
+    drop the trailing ``.0`` and dates are rendered ISO-style.
+    """
+    if value is None:
+        return ""
+    if isinstance(value, float):
+        if math.isnan(value) or math.isinf(value):
+            return ""
+        return str(int(value)) if value.is_integer() else str(value)
+    if isinstance(value, datetime.datetime):
+        return value.isoformat(sep=" ")
+    if isinstance(value, datetime.date):
+        return value.isoformat()
+    return str(value)
+
+
+async def import_sav(
+    session_factory: async_sessionmaker,
+    sav_path: str,
+    codername: str,
+    qualitative_headers: list[str] | None = None,
+) -> dict:
+    """Import an SPSS ``.sav`` data file.
+
+    Every row becomes a case named after the first variable's value (or
+    ``Case <n>`` when empty); the remaining variables become case attribute
+    types (created on first use, numeric variables as ``number``). String
+    variables listed in ``qualitative_headers`` are imported as one text
+    file per row exactly like the survey CSV importer.
+    """
+    try:
+        import pyreadstat
+
+        df, meta = await asyncio.to_thread(pyreadstat.read_sav, sav_path)
+    except Exception as err:  # pyreadstat raises ReadstatError on unreadable files
+        raise ValueError(f"Invalid SPSS .sav file: {err}") from err
+
+    columns = list(meta.column_names)
+    if not columns:
+        return {
+            "ok": True, "message": "SPSS .sav file has no variables",
+            "cases": 0, "attributes": 0, "qualitative_files": 0,
+            "qualitative_codings": 0,
+        }
+
+    var_types = getattr(meta, "readstat_variable_types", {}) or {}
+    value_types = {
+        col: "number" if var_types.get(col) in ("double", "integer") else "text"
+        for col in columns
+    }
+    rows: list[list[str]] = []
+    for index in range(len(df)):
+        record = df.iloc[index]
+        name = _sav_cell(record[columns[0]])
+        if not name:
+            name = f"Case {index + 1}"
+        rows.append([name] + [_sav_cell(record[col]) for col in columns[1:]])
+
+    if not rows:
+        return {
+            "ok": True, "message": "SPSS .sav file has no rows",
+            "cases": 0, "attributes": 0, "qualitative_files": 0,
+            "qualitative_codings": 0,
+        }
+
+    result = await _import_survey_rows(
+        session_factory, columns, rows, codername, qualitative_headers,
+        str(Path(sav_path).parent), value_types=value_types,
+    )
+    message = (
+        f"SPSS .sav import complete: {result['cases']} cases, {result['attributes']} "
+        f"attribute values, {result['qualitative_files']} qualitative files, "
+        f"{result['qualitative_codings']} qualitative codings"
+    )
+    return {**result, "message": message}

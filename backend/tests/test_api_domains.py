@@ -410,6 +410,61 @@ async def test_attribute_types_and_values(project_client):
     assert all(v["name"] != "Age" for v in values)
 
 
+async def test_attribute_type_value_labels_roundtrip(project_client):
+    client, _ = project_client
+    labels = {"m": "Male", "f": "Female", "d": "Diverse"}
+    created = await client.post(
+        "/api/v1/attributes/types",
+        json={
+            "name": "Gender", "owner": "tester", "case_or_file": "case",
+            "value_type": "text", "value_labels": labels,
+        },
+    )
+    assert created.status_code == 201, created.text
+    assert created.json()["value_labels"] == labels
+
+    listed = (await client.get("/api/v1/attributes/types")).json()
+    row = next(t for t in listed if t["name"] == "Gender")
+    assert row["value_labels"] == labels
+
+    # Types created without labels default to {}.
+    plain = await client.post(
+        "/api/v1/attributes/types",
+        json={"name": "Age", "owner": "tester", "case_or_file": "case"},
+    )
+    assert plain.status_code == 201
+    assert plain.json()["value_labels"] == {}
+
+
+async def test_attribute_values_unaffected_by_value_labels(project_client):
+    """Raw values stay as stored; labels are presentation-only."""
+    client, _ = project_client
+    created = await client.post(
+        "/api/v1/attributes/types",
+        json={
+            "name": "Gender", "owner": "tester", "case_or_file": "case",
+            "value_type": "text", "value_labels": {"m": "Male", "f": "Female"},
+        },
+    )
+    assert created.status_code == 201, created.text
+
+    case = (await client.post("/api/v1/cases", json={"name": "P1"})).json()
+    setv = await client.put(
+        f"/api/v1/attributes/values/Gender?attr_type=case&entity_id={case['caseid']}",
+        json={"value": "m", "owner": "tester"},
+    )
+    assert setv.status_code == 200, setv.text
+    assert setv.json()["value"] == "m"
+
+    # A free-text value not in the list is stored raw too.
+    setv = await client.put(
+        f"/api/v1/attributes/values/Gender?attr_type=case&entity_id={case['caseid']}",
+        json={"value": "prefer not to say", "owner": "tester"},
+    )
+    assert setv.status_code == 200, setv.text
+    assert setv.json()["value"] == "prefer not to say"
+
+
 async def test_journal_crud(project_client):
     client, _ = project_client
     created = await client.post(

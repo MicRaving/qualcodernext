@@ -248,6 +248,7 @@ export interface AttributeType {
   memo: string;
   case_or_file: string;
   value_type: string;
+  value_labels?: Record<string, string>;
 }
 
 export interface AttributeValue {

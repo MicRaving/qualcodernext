@@ -34,7 +34,7 @@ LEGACY_TABLES = [
     "CREATE TABLE journal (jid integer primary key, name text, jentry text, date text, owner text)",
 ]
 
-ALL_VERSIONS = [f"v{v}" for v in range(2, 21)]
+ALL_VERSIONS = [f"v{v}" for v in range(2, 24)]
 
 
 @pytest.fixture
@@ -98,7 +98,7 @@ async def test_full_chain_sets_final_version(v2_db):
     cur = await v2_db.cursor()
     await cur.execute("SELECT databaseversion, about FROM project")
     row = await cur.fetchone()
-    assert row[0] == "v19"
+    assert row[0] == "v23"
     assert row[1] == "4.0-test"
 
 
@@ -149,7 +149,7 @@ async def test_all_migration_tables_exist(v2_db):
         "gr_free_line_item", "gr_pix_item", "gr_av_item", "gr_memo_item",
         "ris", "manage_files_display", "files_filter", "coder_names",
         "code_image_visible", "code_text_visible", "code_av_visible",
-        "annotation_visible",
+        "annotation_visible", "link",
     ):
         assert table in objects, f"missing {table}"
 
@@ -164,6 +164,43 @@ async def test_subcode_and_av_bookmark_columns(v2_db):
     assert {"avbookmarkfile", "avbookmarkmsec", "avbookmarktextpos"} <= cols
     cols = await _columns(v2_db, "gr_cdct_line_item")
     assert {"label", "arrow_mode"} <= cols
+
+
+async def test_v22_adds_value_labels_column(v2_db):
+    """v22 adds attribute_type.value_labels without touching existing rows."""
+    cur = await v2_db.cursor()
+    await cur.execute(
+        "INSERT INTO attribute_type (name, date, owner, memo, caseOrFile, valuetype) "
+        "VALUES ('Age', '2020-01-01', 'alice', '', 'case', 'number')"
+    )
+    await v2_db.commit()
+
+    chain = MigrationChain(v2_db)
+    applied = await chain.run_all("4.0-test", "tester")
+    assert "v22" in applied
+
+    cols = await _columns(v2_db, "attribute_type")
+    assert "value_labels" in cols
+    # Pre-existing rows are unaffected (column stays NULL → API default {}).
+    await cur.execute("SELECT name, value_labels FROM attribute_type WHERE name = 'Age'")
+    assert await cur.fetchone() == ("Age", None)
+
+
+async def test_v23_adds_dictionary_tables(v2_db):
+    """v23 adds the word-dictionary tables and they stay queryable."""
+    chain = MigrationChain(v2_db)
+    applied = await chain.run_all("4.0-test", "tester")
+    assert "v23" in applied
+
+    objects = await _objects(v2_db)
+    assert {"dictionary", "dictionary_entry"} <= objects
+    cur = await v2_db.cursor()
+    await cur.execute("PRAGMA table_info(dictionary)")
+    cols = {row[1] for row in await cur.fetchall()}
+    assert {"id", "name", "owner", "created"} <= cols
+    await cur.execute("PRAGMA table_info(dictionary_entry)")
+    entry_cols = {row[1] for row in await cur.fetchall()}
+    assert {"id", "dict_id", "code_name", "term"} <= entry_cols
 
 
 async def test_chain_is_idempotent(v2_db):

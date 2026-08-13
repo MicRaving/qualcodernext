@@ -6,6 +6,8 @@ const IMPORT_LABELS: Record<string, string> = {
   taguette: "Taguette",
   ris: "RIS",
   survey: "Survey",
+  xlsx: "Excel (.xlsx)",
+  sav: "SPSS (.sav)",
   codebook: "Codebook",
   merge: "Merge project",
   zotero: "Zotero",

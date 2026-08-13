@@ -25,8 +25,9 @@ class AiSettingsRequest(BaseModel):
 class ChatRequest(BaseModel):
     message: str
     context: str = ""
-    mode: str = "general"  # general | help | topic_exploration | code_analysis | text_analysis
+    mode: str = "general"  # general | help | topic_exploration | code_analysis | text_analysis | memo_analysis
     prompt_id: str | None = None
+    memo_ids: list[int] | None = None
 
 
 class SearchRequest(BaseModel):
@@ -216,7 +217,8 @@ async def ai_chat(req: ChatRequest, svc: ServiceDep, session: DbDep) -> dict:
     ai = user_settings.get_ai_settings()
     try:
         return await AiService(svc.session_factory).chat(
-            ai, req.message, req.context, mode=req.mode, prompt_id=req.prompt_id
+            ai, req.message, req.context, mode=req.mode, prompt_id=req.prompt_id,
+            memo_ids=req.memo_ids,
         )
     except AiUnavailable as err:
         raise HTTPException(status_code=503, detail=str(err)) from err

@@ -1,4 +1,4 @@
-"""Interchange import API — RQDA, Taguette, RIS and Survey CSV uploads."""
+"""Interchange import API — RQDA, Taguette, RIS, Survey CSV, XLSX, SPSS uploads."""
 
 from __future__ import annotations
 
@@ -109,9 +109,10 @@ async def import_auto(
     """Import an interchange file with automatic format detection.
 
     Detects REFI-QDA (.qdp/.qdc XML), RQDA and Taguette databases,
-    RIS bibliographies, survey CSVs, plain-text codebooks and zipped
-    .qda projects from the file content. ``qualitative_headers`` only
-    applies to survey CSVs.
+    RIS bibliographies, survey CSVs, Excel .xlsx workbooks, SPSS .sav
+    data files, plain-text codebooks and zipped .qda projects from the
+    file content. ``qualitative_headers`` only applies to survey-style
+    imports (CSV/XLSX/SAV).
     """
     if svc.project_path == "" or svc.session_factory is None:
         raise HTTPException(status_code=409, detail="no project is open")
@@ -136,15 +137,20 @@ async def import_auto(
             result = await import_refi_qdp(svc.session_factory, data, resolve_owner(codername))
         else:
             _importer: Any
-            if kind == "survey":
+            if kind in ("survey", "xlsx", "sav"):
                 headers = [
                     h.strip()
                     for h in (qualitative_headers or "").split(",")
                     if h.strip()
                 ]
+                importer_fn = {
+                    "survey": importers.import_survey,
+                    "xlsx": importers.import_xlsx,
+                    "sav": importers.import_sav,
+                }[kind]
 
                 async def _importer(session_factory, path: str, codername: str) -> dict:
-                    return await importers.import_survey(
+                    return await importer_fn(
                         session_factory, path, codername, qualitative_headers=headers
                     )
 
@@ -229,6 +235,66 @@ async def import_survey(
         )
 
     return await _run_import(svc, file, codername, _import, "survey")
+
+
+@router.post("/xlsx")
+async def import_xlsx(
+    svc: ServiceDep,
+    db: DbDep,
+    file: Annotated[UploadFile, File()],
+    codername: str | None = Form(None),
+    qualitative_headers: str | None = Form(None),
+) -> dict:
+    """Import an Excel .xlsx workbook.
+
+    Sheets with a multi-column header row are imported like survey CSVs
+    (one row = one case, columns = case attributes); any other sheet
+    becomes one text source per sheet (``<workbook>-<sheet>.txt``).
+    ``qualitative_headers`` is a comma-separated list of column names whose
+    free text is imported as one text file per row.
+    """
+    headers = [
+        h.strip()
+        for h in (qualitative_headers or "").split(",")
+        if h.strip()
+    ]
+
+    async def _import(session_factory, path: str, codername: str) -> dict:
+        return await importers.import_xlsx(
+            session_factory, path, codername, qualitative_headers=headers
+        )
+
+    return await _run_import(svc, file, codername, _import, "xlsx")
+
+
+@router.post("/sav")
+async def import_sav(
+    svc: ServiceDep,
+    db: DbDep,
+    file: Annotated[UploadFile, File()],
+    codername: str | None = Form(None),
+    qualitative_headers: str | None = Form(None),
+) -> dict:
+    """Import an SPSS .sav data file.
+
+    Every row becomes a case named after the first variable (or
+    ``Case <n>``); the remaining variables become case attribute types.
+    ``qualitative_headers`` is a comma-separated list of string variable
+    names whose free text is imported as one text file per row (linked to
+    the case and coded with a code named after the variable).
+    """
+    headers = [
+        h.strip()
+        for h in (qualitative_headers or "").split(",")
+        if h.strip()
+    ]
+
+    async def _import(session_factory, path: str, codername: str) -> dict:
+        return await importers.import_sav(
+            session_factory, path, codername, qualitative_headers=headers
+        )
+
+    return await _run_import(svc, file, codername, _import, "sav")
 
 
 @router.post("/codebook")

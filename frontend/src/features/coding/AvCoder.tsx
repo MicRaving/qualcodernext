@@ -10,6 +10,7 @@ import {
   Captions,
   Check,
   Code,
+  Link as LinkIcon,
   Mic,
   Music,
   Pause,
@@ -27,6 +28,12 @@ import { TranscribeDialog } from "@/features/coding/TranscribeDialog";
 import { formatTime, parseTranscript, segmentLeft, secondsToMs, segmentWidth, buildCrAt, rawToRendered, renderedToRaw, stripCr, normalizeCodingPositions } from "@/features/coding/media";
 import { getSelectionOffsets } from "@/features/coding/selection";
 import { codeTint } from "@/features/coding/tint";
+import {
+  copyLinkPayload,
+  createLink,
+  readLinkPayload,
+  type LinkSpanTarget,
+} from "@/features/coding/links";
 import { canTranscribeSource } from "@/lib/media";
 import { cn } from "@/lib/utils";
 import { useI18n } from "@/lib/i18n";
@@ -216,6 +223,61 @@ export function AvCoder({ source }: { source: Source }) {
    *  selection or a timeline range mark. Only the LAST intent may react to
    *  a sidebar code click, so one click never creates two codings. */
   const codingIntentRef = useRef<"text" | "range" | null>(null);
+
+  // Segment-link clipboard for the transcript (text spans in stored/raw
+  // space, matching the positions TextCoder uses for the transcript file).
+  const [clipboardLink, setClipboardLink] = useState<LinkSpanTarget | null>(null);
+  const [linkCopied, setLinkCopied] = useState(false);
+  const linkCopiedTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    void readLinkPayload().then((target) => {
+      if (!cancelled) setClipboardLink(target);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [tSel]);
+
+  async function copyTranscriptLink() {
+    const sel = tSelRef.current;
+    if (!sel || transcriptId == null) return;
+    try {
+      const pos0 = renderedToRaw(transcriptRaw, crAt, sel.start);
+      const pos1 = renderedToRaw(transcriptRaw, crAt, sel.end);
+      await copyLinkPayload(transcriptId, pos0, pos1);
+      setClipboardLink({ fid: transcriptId, pos0, pos1 });
+      setLinkCopied(true);
+      if (linkCopiedTimer.current) clearTimeout(linkCopiedTimer.current);
+      linkCopiedTimer.current = setTimeout(() => setLinkCopied(false), 1500);
+    } catch (e) {
+      setTError(e instanceof Error ? e.message : t("coder.linkCopyError"));
+    }
+  }
+
+  /** One link from the current transcript selection to the copied segment. */
+  async function pasteTranscriptLink() {
+    const sel = tSelRef.current;
+    const target = clipboardLink;
+    if (!sel || transcriptId == null || !target) return;
+    setTSel(null);
+    try {
+      const pos0 = renderedToRaw(transcriptRaw, crAt, sel.start);
+      const pos1 = renderedToRaw(transcriptRaw, crAt, sel.end);
+      await createLink({
+        from_fid: transcriptId,
+        from_pos0: pos0,
+        from_pos1: pos1,
+        to_fid: target.fid,
+        to_pos0: target.pos0,
+        to_pos1: target.pos1,
+      });
+      await useProjectStore.getState().refreshProject();
+    } catch (e) {
+      setTError(e instanceof Error ? e.message : t("coder.linkCreateError"));
+    }
+  }
 
   function onTranscriptMouseUp() {
     const container = transcriptTextRef.current;
@@ -930,6 +992,24 @@ export function AvCoder({ source }: { source: Source }) {
                 >
                   {t("coder.annotate")}
                 </Button>
+                <Button
+                  variant="secondary"
+                  icon={<LinkIcon size={12} aria-hidden />}
+                  onClick={() => void copyTranscriptLink()}
+                  title={t("coder.linkCopied")}
+                >
+                  {linkCopied ? t("coder.copyLinkDone") : t("coder.copyLink")}
+                </Button>
+                {clipboardLink && (
+                  <Button
+                    variant="secondary"
+                    icon={<LinkIcon size={12} aria-hidden />}
+                    onClick={() => void pasteTranscriptLink()}
+                    title={t("coder.linkCopied")}
+                  >
+                    {t("coder.pasteLinkHere")}
+                  </Button>
+                )}
               </div>
             )}
             {/* Annotate popover */}

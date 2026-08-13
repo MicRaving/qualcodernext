@@ -123,7 +123,10 @@ export type ReportId =
   | "codebook"
   | "references"
   | "sql"
-  | "graphs";
+  | "graphs"
+  | "dictionary"
+  | "stats"
+  | "summary-table";
 
 export type InspectorSelection = { kind: "code" | "file"; id: number } | null;
 

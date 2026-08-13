@@ -5,6 +5,7 @@ export const AI_MODES = [
   "topic_exploration",
   "code_analysis",
   "text_analysis",
+  "memo_analysis",
 ] as const;
 
 export type AiMode = (typeof AI_MODES)[number];
@@ -15,4 +16,5 @@ export const AI_MODE_LABELS: Record<AiMode, string> = {
   topic_exploration: "ai.modeTopic",
   code_analysis: "ai.modeCode",
   text_analysis: "ai.modeText",
+  memo_analysis: "ai.modeMemos",
 };

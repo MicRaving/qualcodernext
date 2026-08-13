@@ -6,7 +6,9 @@ project is open. Responses are plain dicts; no response models needed.
 
 from __future__ import annotations
 
-from fastapi import APIRouter
+from typing import Annotated
+
+from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
 from qualcoder_api.api.v1.deps import DbDep
@@ -139,3 +141,78 @@ async def charts(db: DbDep, kind: str = "bar-frequency") -> dict:
 async def codebook(db: DbDep, memos: bool = False) -> dict:
     """Plain-text codebook (round-trippable with the codebook import)."""
     return {"text": await report_service.codebook_plain(db, include_memos=memos)}
+
+
+# ----------------------------------------------------------------------
+# Statistical analysis suite
+# ----------------------------------------------------------------------
+
+
+@router.get("/crosstab")
+async def crosstab(
+    db: DbDep,
+    attr_name: str,
+    codes: Annotated[list[int] | None, Query()] = None,
+) -> dict:
+    """Code presence (rows) x attribute values (columns) over CASE units.
+
+    Cells count cases that carry the value and have the code present
+    (cases are coded through their linked files). Returns the matrix plus
+    chi-square (Yates-corrected for 2x2) and Cramér's V.
+    """
+    try:
+        return await report_service.crosstab(db, attr_name, codes, scope="case")
+    except ValueError as err:
+        raise HTTPException(status_code=422, detail=str(err)) from err
+
+
+@router.get("/crosstab-file")
+async def crosstab_file(
+    db: DbDep,
+    attr_name: str,
+    codes: Annotated[list[int] | None, Query()] = None,
+) -> dict:
+    """Code presence (rows) x attribute values (columns) over FILE units."""
+    try:
+        return await report_service.crosstab(db, attr_name, codes, scope="file")
+    except ValueError as err:
+        raise HTTPException(status_code=422, detail=str(err)) from err
+
+
+@router.get("/group-compare")
+async def group_compare(db: DbDep, attr_name: str, cid: int) -> dict:
+    """Numeric variable values split by presence of one code.
+
+    Mann-Whitney U (exact for small samples, normal approximation
+    otherwise) plus per-group descriptives.
+    """
+    try:
+        return await report_service.group_compare(db, attr_name, cid)
+    except ValueError as err:
+        raise HTTPException(status_code=422, detail=str(err)) from err
+
+
+@router.get("/code-by-variable")
+async def code_by_variable(db: DbDep, attr_name: str) -> dict:
+    """Mixed-methods matrix: coding counts per code and variable value.
+
+    Includes the data in the stacked-bars chart shape (``chart`` field).
+    """
+    try:
+        return await report_service.code_by_variable(db, attr_name)
+    except ValueError as err:
+        raise HTTPException(status_code=422, detail=str(err)) from err
+
+
+@router.get("/summary-table")
+async def summary_table(
+    db: DbDep,
+    scope: str = "file",
+    fids: Annotated[list[int] | None, Query()] = None,
+    cids: Annotated[list[int] | None, Query()] = None,
+) -> dict:
+    """Doc/case x code grid; cells hold the coding memos (memo_count too)."""
+    try:
+        return await report_service.summary_table(db, scope, fids, cids)
+    except ValueError as err:
+        raise HTTPException(status_code=422, detail=str(err)) from err

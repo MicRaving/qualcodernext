@@ -9,17 +9,23 @@
  * literally as a fallback.
  */
 import { useEffect, useRef, useState } from "react";
-import { CheckCircle2, LoaderCircle, Sparkles } from "lucide-react";
+import { BookOpenText, CheckCircle2, LoaderCircle, Sparkles } from "lucide-react";
 import { api, type AutocodeResponse, type CodeTreeItem } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 import {
   Button,
   Field,
   Modal,
+  Select,
   Textarea,
 } from "@/components/ui/orchestrator";
 import { errorDetail } from "@/features/ai/format";
 import { useProjectStore } from "@/stores/project";
+import {
+  dictionaryApi,
+  type DictionaryAutocodeResult,
+  type DictionarySummary,
+} from "@/lib/dictionaryApi";
 
 export interface AutocodeResult {
   count: number;
@@ -54,6 +60,11 @@ export function AutocodeDialog({
   const [result, setResult] = useState<AutocodeResult | null>(null);
   const [queued, setQueued] = useState(false);
 
+  const [dictionaries, setDictionaries] = useState<DictionarySummary[]>([]);
+  const [dictId, setDictId] = useState<number | "">("");
+  const [dictBusy, setDictBusy] = useState(false);
+  const [dictResult, setDictResult] = useState<DictionaryAutocodeResult | null>(null);
+
   useEffect(() => {
     if (open) {
       setPrompt("");
@@ -63,6 +74,14 @@ export function AutocodeDialog({
       setError(null);
       setResult(null);
       setQueued(false);
+      setDictResult(null);
+      dictionaryApi
+        .list()
+        .then((items) => {
+          setDictionaries(items);
+          setDictId((prev) => (items.some((d) => d.id === prev) ? prev : (items[0]?.id ?? "")));
+        })
+        .catch(() => setDictionaries([]));
     }
   }, [open]);
 
@@ -155,6 +174,23 @@ export function AutocodeDialog({
     }
   }
 
+  async function runDictionary() {
+    if (dictId === "") return;
+    setDictBusy(true);
+    setError(null);
+    try {
+      const sources = batchMode ? sourceIds : fid != null ? [fid] : null;
+      const res = await dictionaryApi.autocode(dictId, sources);
+      setDictResult(res);
+      onDone({ count: res.total, suggested: [] });
+      window.setTimeout(() => onClose(), 1200);
+    } catch (e) {
+      setError(errorDetail(e, t("dictionary.autocodeError")));
+    } finally {
+      setDictBusy(false);
+    }
+  }
+
   return (
     <Modal
       open={open}
@@ -234,6 +270,56 @@ export function AutocodeDialog({
           <Sparkles size={12} aria-hidden />
           {t("coder.autoSuggest")}
         </label>
+
+        <div className="mt-2 rounded-sm border border-border bg-surface p-2">
+          <span className="text-xs font-medium text-text-secondary">
+            {t("dictionary.autocode")}
+          </span>
+          <div className="mt-1 flex items-center gap-1.5">
+            <Select
+              value={dictId}
+              onChange={(e) => setDictId(e.target.value === "" ? "" : Number(e.target.value))}
+              aria-label={t("dictionary.pickDictionary")}
+              className="w-full"
+            >
+              {dictionaries.length === 0 && <option value="">{t("dictionary.noDictionaries")}</option>}
+              {dictionaries.map((d) => (
+                <option key={d.id} value={d.id}>
+                  {d.name} ({d.entries.length})
+                </option>
+              ))}
+            </Select>
+            <Button
+              variant="primary"
+              icon={
+                dictBusy ? (
+                  <LoaderCircle size={12} className="animate-spin" aria-hidden />
+                ) : (
+                  <BookOpenText size={12} aria-hidden />
+                )
+              }
+              onClick={() => void runDictionary()}
+              disabled={dictBusy || dictId === ""}
+              title={t("dictionary.autocodeHint")}
+            >
+              {dictBusy ? t("dictionary.autocoding") : t("dictionary.autocode")}
+            </Button>
+          </div>
+          {dictResult && (
+            <p className="mt-1 flex items-start gap-1.5 text-xs text-success">
+              <CheckCircle2 size={13} className="mt-0.5 shrink-0" aria-hidden />
+              <span>
+                {t("dictionary.autocoded", { total: dictResult.total })}
+                {dictResult.per_code.length > 0 &&
+                  ` · ${dictResult.per_code
+                    .map((c) =>
+                      t("dictionary.autocodedPerCode", { code: c.code_name, count: c.count }),
+                    )
+                    .join(", ")}`}
+              </span>
+            </p>
+          )}
+        </div>
 
         {error && <p className="mt-2 text-xs text-danger">{error}</p>}
 

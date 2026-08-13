@@ -42,13 +42,18 @@ MODE_SYSTEM_PROMPTS: dict[str, str] = {
         "text. Work inductively from the material; do not add context that is not "
         "present in the data."
     ),
+    "memo_analysis": (
+        "You are a qualitative research assistant analyzing the researcher's "
+        "memos. Ground every statement in the provided memos; identify recurring "
+        "patterns and themes without adding outside context."
+    ),
 }
 
 
 @dataclass(frozen=True)
 class Prompt:
     id: str
-    mode: str  # "help" | "topic_exploration" | "code_analysis" | "text_analysis" | "search"
+    mode: str  # "help" | "topic_exploration" | "code_analysis" | "text_analysis" | "memo_analysis" | "search"
     name: str
     description: str
     text: str
@@ -95,6 +100,8 @@ def _parse(path: str, text: str) -> Prompt:
         mode = "code_analysis"
     elif path.startswith("text-analysis"):
         mode = "text_analysis"
+    elif path.startswith("memo-analysis"):
+        mode = "memo_analysis"
     elif path.startswith("topic-exploration"):
         mode = "topic_exploration"
     elif path.startswith("_") or path.endswith("_agent.md"):

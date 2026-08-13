@@ -988,3 +988,484 @@ async def codebook_plain(session: AsyncSession, include_memos: bool = False) -> 
             full = f"{path}>>{code['name']}" if path else code["name"]
             lines.append(f"{full}{memo}")
     return "\n".join(lines)
+
+
+# ----------------------------------------------------------------------
+# Statistical analysis suite - code x attribute crosstabs, group
+# comparisons, mixed-methods matrix and summary tables. Data is pulled
+# here; all math lives in stats_service.py (stdlib only).
+# ----------------------------------------------------------------------
+
+
+async def _attr_definition(session: AsyncSession, attr_name: str) -> dict | None:
+    """Declared scope/value type of an attribute type, if it exists."""
+    row = (
+        await session.execute(
+            text(
+                "SELECT caseOrFile, COALESCE(valuetype, 'text') FROM attribute_type "
+                "WHERE name = :name"
+            ),
+            {"name": attr_name},
+        )
+    ).first()
+    if row is None:
+        return None
+    return {"scope": row[0] or "file", "value_type": row[1] or "text"}
+
+
+async def _attr_scope(session: AsyncSession, attr_name: str) -> str:
+    """Scope ('case' or 'file') of an attribute: declared type first, else
+    the scope its stored values use."""
+    definition = await _attr_definition(session, attr_name)
+    if definition is not None:
+        return definition["scope"]
+    row = (
+        await session.execute(
+            text("SELECT attr_type FROM attribute WHERE name = :name LIMIT 1"),
+            {"name": attr_name},
+        )
+    ).first()
+    return row[0] if row and row[0] in ("case", "file") else "file"
+
+
+async def _units_with_values(
+    session: AsyncSession, scope: str, attr_name: str
+) -> tuple[list[dict], dict[int, str]]:
+    """Units of the given scope plus their non-empty attribute values.
+
+    Returns ``(units, values)`` where units is every case/file (id + name,
+    sorted by name) and values maps unit id -> attribute value for the
+    units that actually carry one.
+    """
+    if scope == "case":
+        unit_rows = await session.execute(
+            text("SELECT caseid, name FROM cases ORDER BY name")
+        )
+        units = [{"id": caseid, "name": name} for caseid, name in unit_rows]
+    else:
+        unit_rows = await session.execute(
+            text("SELECT id, name FROM source ORDER BY name")
+        )
+        units = [{"id": fid, "name": name} for fid, name in unit_rows]
+    rows = await session.execute(
+        text(
+            "SELECT id, value FROM attribute "
+            "WHERE name = :name AND attr_type = :scope"
+        ),
+        {"name": attr_name, "scope": scope},
+    )
+    values: dict[int, str] = {}
+    for entity_id, value in rows:
+        if value and str(value).strip():
+            values[entity_id] = str(value)
+    return units, values
+
+
+async def _unit_coding_sets(
+    session: AsyncSession, scope: str
+) -> dict[int, set[int]]:
+    """Unit id -> set of code ids present in its codings (all media types).
+
+    Case scope joins through ``case_text`` (a case is coded via its linked
+    files); file scope counts the source's own codings.
+    """
+    sets: dict[int, set[int]] = defaultdict(set)
+    if scope == "case":
+        queries = (
+            "SELECT cst.caseid, ct.cid FROM code_text_visible ct "
+            "JOIN case_text cst ON cst.fid = ct.fid WHERE ct.cid IS NOT NULL",
+            "SELECT cst.caseid, ci.cid FROM code_image_visible ci "
+            "JOIN case_text cst ON cst.fid = ci.id WHERE ci.cid IS NOT NULL",
+            "SELECT cst.caseid, ca.cid FROM code_av_visible ca "
+            "JOIN case_text cst ON cst.fid = ca.id WHERE ca.cid IS NOT NULL",
+        )
+    else:
+        queries = (
+            "SELECT fid, cid FROM code_text_visible WHERE cid IS NOT NULL",
+            "SELECT id, cid FROM code_image_visible WHERE cid IS NOT NULL",
+            "SELECT id, cid FROM code_av_visible WHERE cid IS NOT NULL",
+        )
+    for sql in queries:
+        for unit_id, cid in await session.execute(text(sql)):
+            if unit_id is not None:
+                sets[unit_id].add(cid)
+    return sets
+
+
+async def _unit_coding_counts(
+    session: AsyncSession, scope: str
+) -> dict[tuple[int, int], int]:
+    """(unit id, cid) -> number of coding segments across all media types."""
+    counts: dict[tuple[int, int], int] = defaultdict(int)
+    if scope == "case":
+        queries = (
+            "SELECT cst.caseid, ct.cid, COUNT(*) FROM code_text_visible ct "
+            "JOIN case_text cst ON cst.fid = ct.fid WHERE ct.cid IS NOT NULL "
+            "GROUP BY cst.caseid, ct.cid",
+            "SELECT cst.caseid, ci.cid, COUNT(*) FROM code_image_visible ci "
+            "JOIN case_text cst ON cst.fid = ci.id WHERE ci.cid IS NOT NULL "
+            "GROUP BY cst.caseid, ci.cid",
+            "SELECT cst.caseid, ca.cid, COUNT(*) FROM code_av_visible ca "
+            "JOIN case_text cst ON cst.fid = ca.id WHERE ca.cid IS NOT NULL "
+            "GROUP BY cst.caseid, ca.cid",
+        )
+    else:
+        queries = (
+            "SELECT fid, cid, COUNT(*) FROM code_text_visible "
+            "WHERE cid IS NOT NULL GROUP BY fid, cid",
+            "SELECT id, cid, COUNT(*) FROM code_image_visible "
+            "WHERE cid IS NOT NULL GROUP BY id, cid",
+            "SELECT id, cid, COUNT(*) FROM code_av_visible "
+            "WHERE cid IS NOT NULL GROUP BY id, cid",
+        )
+    for sql in queries:
+        for unit_id, cid, n in await session.execute(text(sql)):
+            if unit_id is not None:
+                counts[(unit_id, cid)] += n
+    return counts
+
+
+def _sorted_values(values: set[str]) -> list[str]:
+    """Distinct attribute values sorted; numeric-aware when all parse."""
+    items = sorted(values, key=str.lower)
+    try:
+        parsed = sorted((float(v), v) for v in items)
+        return [v for _, v in parsed]
+    except (TypeError, ValueError):
+        return items
+
+
+def _crosstab_stats(
+    matrix: list[list[int]], columns: list[str]
+) -> dict:
+    """chi-square + Cramér's V over a code-presence x value-count matrix.
+
+    Zero rows/columns are dropped before computing (they make the expected
+    counts degenerate); the result stays None when the table cannot support
+    the test.
+    """
+    empty: dict[str, object] = {
+        "chi2": None, "df": None, "p": None, "cramers_v": None,
+        "yates": False, "expected": [], "n": None,
+        "note": "need at least two codes and two attribute values",
+    }
+    if len(matrix) < 2 or len(columns) < 2:
+        return empty
+    n_cols = len(columns)
+    zero_cols = {
+        c for c in range(n_cols)
+        if sum(row[c] for row in matrix) == 0
+    }
+    table = [
+        [row[c] for c in range(n_cols) if c not in zero_cols]
+        for row in matrix
+        if sum(row) > 0
+    ]
+    if len(table) < 2 or (table and len(table[0]) < 2):
+        return empty
+    try:
+        from qualcoder_api.services import stats_service
+
+        result = stats_service.chi_square(table)
+    except ValueError as err:
+        return {
+            "chi2": None, "df": None, "p": None, "cramers_v": None,
+            "yates": False, "expected": [], "n": None, "note": str(err),
+        }
+    return {
+        "chi2": result["chi2"],
+        "df": result["df"],
+        "p": result["p"],
+        "yates": result["yates"],
+        "expected": result["expected"],
+        "cramers_v": stats_service.cramers_v(table, result["chi2"]),
+        "n": result["n"],
+        "note": None,
+    }
+
+
+async def crosstab(
+    session: AsyncSession,
+    attr_name: str,
+    codes: list[int] | None,
+    scope: str,
+) -> dict:
+    """Contingency of code presence (rows) x attribute values (columns).
+
+    Rows are the selected codes (default: every code present in the scope);
+    columns are the distinct attribute values. Each cell counts the units
+    (cases or files) that carry the value AND have the code present. Returns
+    the matrix plus chi-square / Cramér's V.
+    """
+    definition = await _attr_definition(session, attr_name)
+    if definition is not None and definition["scope"] != scope:
+        raise ValueError(
+            f"attribute '{attr_name}' is a {definition['scope']}-scope attribute"
+        )
+    units, values = await _units_with_values(session, scope, attr_name)
+    presence = await _unit_coding_sets(session, scope)
+
+    code_rows = await session.execute(
+        text("SELECT cid, name, COALESCE(color, '') FROM code_name ORDER BY name")
+    )
+    all_codes = [
+        {"cid": cid, "name": name, "color": color}
+        for cid, name, color in code_rows
+    ]
+    selected = [c for c in all_codes if codes is None or c["cid"] in codes]
+    if codes is None:
+        present_cids = {cid for cids in presence.values() for cid in cids}
+        selected = [c for c in selected if c["cid"] in present_cids]
+
+    columns = _sorted_values(set(values.values()))
+    code_ids = [c["cid"] for c in selected]
+    matrix = [
+        [
+            sum(
+                1
+                for unit in units
+                if values.get(unit["id"]) == column
+                and code_ids[ri] in presence.get(unit["id"], set())
+            )
+            for column in columns
+        ]
+        for ri in range(len(selected))
+    ]
+    stats = _crosstab_stats(matrix, columns)
+    return {
+        "attr_name": attr_name,
+        "scope": scope,
+        "units_total": len(units),
+        "units_with_value": len(values),
+        "codes": selected,
+        "values": columns,
+        "counts": matrix,
+        "row_totals": [sum(row) for row in matrix],
+        "col_totals": [sum(row[c] for row in matrix) for c in range(len(columns))],
+        "stats": stats,
+    }
+
+
+async def group_compare(
+    session: AsyncSession, attr_name: str, cid: int
+) -> dict:
+    """Numeric variable values split by presence of one code.
+
+    Mann-Whitney U compares the two groups; each group gets its
+    descriptives (count, mean, median, sd, min, max). Non-numeric values
+    are skipped and reported.
+    """
+    scope = await _attr_scope(session, attr_name)
+    _units, values = await _units_with_values(session, scope, attr_name)
+    presence = await _unit_coding_sets(session, scope)
+
+    numeric: dict[int, float] = {}
+    skipped = 0
+    for unit_id, value in values.items():
+        try:
+            numeric[unit_id] = float(value)
+        except (TypeError, ValueError):
+            skipped += 1
+
+    code_row = (
+        await session.execute(
+            text(
+                "SELECT name, COALESCE(color, '') FROM code_name WHERE cid = :cid"
+            ),
+            {"cid": cid},
+        )
+    ).first()
+    code_name, code_color = code_row if code_row else ("", "")
+
+    present = [
+        numeric[unit_id] for unit_id in numeric
+        if cid in presence.get(unit_id, set())
+    ]
+    absent = [
+        numeric[unit_id] for unit_id in numeric
+        if cid not in presence.get(unit_id, set())
+    ]
+
+    from qualcoder_api.services import stats_service
+
+    u = (
+        stats_service.mann_whitney_u(present, absent)
+        if present and absent else None
+    )
+    return {
+        "attr_name": attr_name,
+        "scope": scope,
+        "cid": cid,
+        "code_name": code_name,
+        "code_color": code_color,
+        "n_values": len(numeric),
+        "skipped_non_numeric": skipped,
+        "present": stats_service.group_descriptives(present),
+        "absent": stats_service.group_descriptives(absent),
+        "u": u,
+    }
+
+
+async def code_by_variable(session: AsyncSession, attr_name: str) -> dict:
+    """Mixed-methods matrix: coding counts per code and variable value.
+
+    One column per distinct attribute value; each cell holds the total
+    number of coding segments of that code in the units (cases or files)
+    carrying that value. Also returns the data in the stacked-bars chart
+    shape so the existing chart viewers can consume it.
+    """
+    scope = await _attr_scope(session, attr_name)
+    units, values = await _units_with_values(session, scope, attr_name)
+    counts = await _unit_coding_counts(session, scope)
+
+    code_rows = await session.execute(
+        text("SELECT cid, name, COALESCE(color, '') FROM code_name ORDER BY name")
+    )
+    codes = [
+        {"cid": cid, "name": name, "color": color}
+        for cid, name, color in code_rows
+    ]
+    columns = _sorted_values(set(values.values()))
+
+    # Only codes that occur in a unit carrying the variable keep a row.
+    in_scope = {cid for (_, cid) in counts}
+    codes = [c for c in codes if c["cid"] in in_scope]
+
+    matrix = []
+    for column in columns:
+        unit_ids = [u["id"] for u in units if values.get(u["id"]) == column]
+        matrix.append(
+            [
+                sum(counts.get((uid, code["cid"]), 0) for uid in unit_ids)
+                for code in codes
+            ]
+        )
+    return {
+        "attr_name": attr_name,
+        "scope": scope,
+        "values": columns,
+        "codes": codes,
+        "counts": matrix,
+        "col_totals": [sum(row[ci] for row in matrix) for ci in range(len(codes))],
+        "chart": {
+            "kind": "stacked-values",
+            "labels": [{"value": value} for value in columns],
+            "codes": codes,
+            "series": [
+                [
+                    {"cid": code["cid"], "count": matrix[vi][ci]}
+                    for ci, code in enumerate(codes)
+                ]
+                for vi in range(len(columns))
+            ],
+        },
+    }
+
+
+async def summary_table(
+    session: AsyncSession,
+    scope: str,
+    fids: list[int] | None = None,
+    cids: list[int] | None = None,
+) -> dict:
+    """Doc/case x code grid whose cells hold the coding memos.
+
+    Rows are the sources (``scope='file'``) or cases (``scope='case'``);
+    columns are codes. A cell concatenates the memos of that code's codings
+    in that unit (first memo of each coding, joined with ' — ') and carries
+    a ``memo_count`` plus the individual items (kind + id + memo) so the
+    frontend can edit a memo through the regular coding PATCH endpoints.
+    """
+    if scope not in ("file", "case"):
+        raise ValueError("scope must be 'file' or 'case'")
+    fids_set = set(fids) if fids else None
+    cids_set = set(cids) if cids else None
+
+    if scope == "case":
+        unit_rows = await session.execute(
+            text("SELECT caseid, name FROM cases ORDER BY name")
+        )
+        units = [{"id": caseid, "name": name} for caseid, name in unit_rows]
+    else:
+        unit_rows = await session.execute(
+            text("SELECT id, name FROM source ORDER BY name")
+        )
+        units = [
+            {"id": fid, "name": name}
+            for fid, name in unit_rows
+            if fids_set is None or fid in fids_set
+        ]
+
+    code_rows = await session.execute(
+        text("SELECT cid, name, COALESCE(color, '') FROM code_name ORDER BY name")
+    )
+    codes = [
+        {"cid": cid, "name": name, "color": color}
+        for cid, name, color in code_rows
+        if cids_set is None or cid in cids_set
+    ]
+
+    if scope == "case":
+        queries = (
+            "SELECT ct.ctid AS coding_id, cst.caseid AS unit_id, ct.cid, "
+            "COALESCE(ct.memo, '') AS memo FROM code_text_visible ct "
+            "JOIN case_text cst ON cst.fid = ct.fid",
+            "SELECT ci.imid AS coding_id, cst.caseid AS unit_id, ci.cid, "
+            "COALESCE(ci.memo, '') AS memo FROM code_image_visible ci "
+            "JOIN case_text cst ON cst.fid = ci.id",
+            "SELECT ca.avid AS coding_id, cst.caseid AS unit_id, ca.cid, "
+            "COALESCE(ca.memo, '') AS memo FROM code_av_visible ca "
+            "JOIN case_text cst ON cst.fid = ca.id",
+        )
+    else:
+        queries = (
+            "SELECT ct.ctid AS coding_id, ct.fid AS unit_id, ct.cid, "
+            "COALESCE(ct.memo, '') AS memo FROM code_text_visible ct",
+            "SELECT ci.imid AS coding_id, ci.id AS unit_id, ci.cid, "
+            "COALESCE(ci.memo, '') AS memo FROM code_image_visible ci",
+            "SELECT ca.avid AS coding_id, ca.id AS unit_id, ca.cid, "
+            "COALESCE(ca.memo, '') AS memo FROM code_av_visible ca",
+        )
+    kinds = ("text", "image", "av")
+
+    cells: dict[tuple[int, int], list[dict]] = defaultdict(list)
+    for sql, kind in zip(queries, kinds, strict=False):
+        where = []
+        params: dict[str, object] = {}
+        if cids_set is not None:
+            placeholders = [f":cid_{i}" for i in range(len(cids_set))]
+            where.append(f"cid IN ({', '.join(placeholders)})")
+            params.update({f"cid_{i}": c for i, c in enumerate(sorted(cids_set))})
+        if scope == "case" and fids_set is not None:
+            placeholders = [f":fid_{i}" for i in range(len(fids_set))]
+            where.append(f"cst.fid IN ({', '.join(placeholders)})")
+            params.update({f"fid_{i}": f for i, f in enumerate(sorted(fids_set))})
+        if where:
+            sql = f"{sql} WHERE {' AND '.join(where)}"
+        for coding_id, unit_id, cid, memo in await session.execute(text(sql), params):
+            if unit_id is None or cid is None:
+                continue
+            if scope == "file" and fids_set is not None and unit_id not in fids_set:
+                continue
+            cells[(unit_id, cid)].append(
+                {"kind": kind, "id": coding_id, "memo": memo or ""}
+            )
+
+    rows = []
+    for unit in units:
+        unit_cells = []
+        for code in codes:
+            items = sorted(
+                cells[(unit["id"], code["cid"])], key=lambda item: item["id"]
+            )
+            memos = [item["memo"] for item in items if item["memo"]]
+            unit_cells.append(
+                {
+                    "memo": " — ".join(memos),
+                    "memo_count": len(memos),
+                    "items": items,
+                }
+            )
+        rows.append({"id": unit["id"], "name": unit["name"], "cells": unit_cells})
+
+    return {"scope": scope, "codes": codes, "rows": rows}

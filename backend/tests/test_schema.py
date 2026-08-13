@@ -14,6 +14,7 @@ EXPECTED_TABLES = {
     "code_image",
     "code_av",
     "annotation",
+    "link",
     "attribute_type",
     "attribute",
     "case_text",
@@ -39,6 +40,8 @@ EXPECTED_TABLES = {
     "coder_names",
     "sync_log",
     "audit_log",
+    "dictionary",
+    "dictionary_entry",
 }
 
 EXPECTED_VIEWS = {
@@ -85,7 +88,7 @@ async def test_initial_project_row(new_db):
     )
     row = await cur.fetchone()
     assert row is not None
-    assert row[0] == "v19"
+    assert row[0] == "v23"
     assert row[1] == ""
     assert row[2] == "4.0-test"
     assert row[3] == 0

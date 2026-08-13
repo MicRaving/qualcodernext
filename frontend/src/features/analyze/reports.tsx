@@ -6,6 +6,7 @@ import {
 } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { useI18n } from "@/lib/i18n";
+import { useEffect, useState } from "react";
 import { fileTypeLabel, formatCount } from "@/features/analyze/reportHelpers";
 import { EmptyState } from "@/components/ui/orchestrator";
 import {
@@ -133,6 +134,31 @@ export function FileSummaryReport() {
 export function AttributesReport() {
   const { t } = useI18n();
   const { data, loading, error, retry } = useReport(api.reports.attributes);
+  const [labels, setLabels] = useState<Record<string, Record<string, string>>>({});
+  useEffect(() => {
+    let alive = true;
+    api
+      .attributeTypes()
+      .then((types) => {
+        if (!alive) return;
+        const map: Record<string, Record<string, string>> = {};
+        for (const type of types) {
+          if (type.value_labels && Object.keys(type.value_labels).length > 0) {
+            map[type.name] = type.value_labels;
+          }
+        }
+        setLabels(map);
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, []);
+  const labelFor = (row: AttributeReportRow): string | null => {
+    const valueLabels = labels[row.name];
+    if (!valueLabels) return null;
+    return valueLabels[row.value] ?? null;
+  };
   if (loading || error) {
     return <ReportStatus loading={loading} error={error} onRetry={retry} />;
   }
@@ -146,7 +172,7 @@ export function AttributesReport() {
         headers={[t("analyze.colAttribute"), t("analyze.colValue"), t("analyze.colScope"), t("analyze.colEntity")]}
         rows={rows.map((row: AttributeReportRow) => [
           row.name,
-          row.value,
+          labelFor(row) ?? row.value,
           row.entity_kind === "case" ? "Case" : "File",
           row.entity_name,
         ])}
@@ -170,7 +196,10 @@ export function AttributesReport() {
               </td>
               <td className={cn(tdCls, "max-w-md")}>
                 <span className="block truncate" title={row.value}>
-                  {row.value}
+                  {labelFor(row) ?? row.value}
+                  {labelFor(row) && (
+                    <span className="ml-1.5 text-xs text-text-secondary">({row.value})</span>
+                  )}
                 </span>
               </td>
               <td className={cn(tdCls, "whitespace-nowrap")}>

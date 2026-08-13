@@ -73,6 +73,12 @@ def _chunk_text(source, fulltext: str, max_chars: int = CHUNK_MAX_CHARS) -> list
     ]
 
 
+def _truncate_memo(memo: str, max_chars: int = CHUNK_MAX_CHARS) -> str:
+    """Truncate a memo to the same char budget text chunks use."""
+    memo = memo.strip()
+    return memo if len(memo) <= max_chars else memo[:max_chars]
+
+
 class AiService:
     """Async client for OpenAI-compatible chat and embeddings endpoints."""
 
@@ -114,10 +120,15 @@ class AiService:
         context: str = "",
         mode: str = "general",
         prompt_id: str | None = None,
+        memo_ids: list[int] | None = None,
     ) -> dict:
         ok, _ = self.is_configured(ai)
         if not ok:
             raise AiUnavailable("AI is not configured")
+        if memo_ids or mode == "memo_analysis":
+            memo_context = await self._memo_context(memo_ids)
+            if memo_context:
+                context = f"{memo_context}\n\n{context}" if context else memo_context
         from qualcoder_api.services.ai_prompts import prompt_for, system_prompt_for
 
         system_prompt = system_prompt_for(mode)
@@ -152,6 +163,39 @@ class AiService:
         if choices:
             content = (choices[0].get("message") or {}).get("content") or ""
         return {"reply": content, "model": ai["model"]}
+
+    async def _memo_context(self, memo_ids: list[int] | None = None) -> str:
+        """Assemble labelled memo excerpts (file + code memos) for chat.
+
+        Reuses the GET /memos queries (``source.memo`` and ``code_name.memo``).
+        Each memo is truncated to the text-chunk budget; ``memo_ids`` filters
+        to the requested memos, ``None`` includes every memo in the project.
+        """
+        if self.session_factory is None:
+            return ""
+        from sqlalchemy import select
+
+        from qualcoder_api.persistence import tables
+
+        blocks: list[str] = []
+        async with self.session_factory() as session:
+            file_query = select(
+                tables.source.c.id, tables.source.c.name, tables.source.c.memo
+            ).where(tables.source.c.memo.is_not(None))
+            if memo_ids:
+                file_query = file_query.where(tables.source.c.id.in_(memo_ids))
+            for sid, name, memo in await session.execute(file_query):
+                if memo and str(memo).strip():
+                    blocks.append(f"# {name or sid} (file memo):\n{_truncate_memo(str(memo))}")
+            code_query = select(
+                tables.code_name.c.cid, tables.code_name.c.name, tables.code_name.c.memo
+            ).where(tables.code_name.c.memo.is_not(None))
+            if memo_ids:
+                code_query = code_query.where(tables.code_name.c.cid.in_(memo_ids))
+            for cid, name, memo in await session.execute(code_query):
+                if memo and str(memo).strip():
+                    blocks.append(f"# {name or cid} (code memo):\n{_truncate_memo(str(memo))}")
+        return "\n\n".join(blocks)
 
     async def semantic_search(self, ai: dict, query: str, limit: int = 10) -> dict:
         ok, _ = self.is_configured(ai)

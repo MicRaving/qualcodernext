@@ -1,13 +1,30 @@
 /**
  * AiChatPanel — chat with the project AI assistant. The chat mode and
  * prompt-library selection live in the pane's top bar (AiView).
+ *
+ * Memo mode ("memo_analysis") shows a memo picker (file + code memos from
+ * GET /memos) and sends the selection with the chat request. The "Paraphrase"
+ * and "Sentiment" chips send the current input text with the matching
+ * prompt-library id.
  */
-import { useEffect, useRef, useState, type KeyboardEvent } from "react";
-import { Eraser, LoaderCircle, Send } from "lucide-react";
-import { api, type AiStatus } from "@/lib/api";
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
+import { Eraser, LoaderCircle, Search, Send } from "lucide-react";
+import {
+  ApiError,
+  api,
+  fetchWithTimeout,
+  initApiBase,
+  type AiStatus,
+} from "@/lib/api";
 import { errorDetail, welcomeMessage } from "@/features/ai/format";
 import { useI18n } from "@/lib/i18n";
-import { ErrorBanner, IconButton, Textarea } from "@/components/ui/orchestrator";
+import {
+  ErrorBanner,
+  IconButton,
+  Input,
+  SectionLabel,
+  Textarea,
+} from "@/components/ui/orchestrator";
 import type { AiMode } from "@/features/ai/aiModes";
 
 type ChatRole = "user" | "assistant" | "error";
@@ -15,6 +32,151 @@ type ChatRole = "user" | "assistant" | "error";
 interface ChatMessage {
   role: ChatRole;
   text: string;
+}
+
+interface MemoEntry {
+  kind: "file" | "code";
+  id: number;
+  name: string;
+  memo: string;
+  date: string;
+  owner: string;
+}
+
+const QUICK_ACTIONS = [
+  { promptId: "paraphrase", labelKey: "ai.quickParaphrase" },
+  { promptId: "sentiment", labelKey: "ai.quickSentiment" },
+] as const;
+
+async function fetchMemos(): Promise<MemoEntry[]> {
+  const base = await initApiBase();
+  const res = await fetchWithTimeout(`${base}/memos`);
+  if (!res.ok) throw new ApiError(res.status, `API error ${res.status} on /memos`);
+  const body = (await res.json()) as { memos: MemoEntry[] };
+  return body.memos;
+}
+
+async function chatWithMemos(opts: {
+  message: string;
+  mode: AiMode;
+  promptId?: string;
+  memoIds: number[];
+}): Promise<{ reply: string }> {
+  const base = await initApiBase();
+  const res = await fetchWithTimeout(`${base}/ai/chat`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      message: opts.message,
+      context: "",
+      mode: opts.mode,
+      prompt_id: opts.promptId,
+      memo_ids: opts.memoIds,
+    }),
+  });
+  if (!res.ok) {
+    let detail: unknown;
+    try {
+      detail = (await res.json()).detail;
+    } catch {
+      /* non-JSON error body */
+    }
+    throw new ApiError(res.status, `API error ${res.status} on /ai/chat`, detail);
+  }
+  return (await res.json()) as { reply: string };
+}
+
+function MemoPicker({
+  memos,
+  query,
+  onQuery,
+  selected,
+  onToggle,
+}: {
+  memos: MemoEntry[];
+  query: string;
+  onQuery: (q: string) => void;
+  selected: Set<string>;
+  onToggle: (key: string) => void;
+}) {
+  const { t } = useI18n();
+  const q = query.trim().toLowerCase();
+  const groups = useMemo(
+    () => [
+      {
+        kind: "file",
+        label: t("ai.memosFile"),
+        items: memos.filter(
+          (m) =>
+            m.kind === "file" &&
+            (!q || m.name.toLowerCase().includes(q) || m.memo.toLowerCase().includes(q)),
+        ),
+      },
+      {
+        kind: "code",
+        label: t("ai.memosCode"),
+        items: memos.filter(
+          (m) =>
+            m.kind === "code" &&
+            (!q || m.name.toLowerCase().includes(q) || m.memo.toLowerCase().includes(q)),
+        ),
+      },
+    ],
+    [memos, q, t],
+  );
+
+  return (
+    <div className="shrink-0 border-t border-border bg-surface px-3 py-2">
+      <div className="mx-auto flex max-w-2xl flex-col gap-1.5">
+        <div className="flex items-center gap-1.5">
+          <Search size={12} className="shrink-0 text-text-secondary" aria-hidden />
+          <Input
+            value={query}
+            onChange={(e) => onQuery(e.target.value)}
+            placeholder={t("ai.memosSearch")}
+            aria-label={t("ai.memosSearch")}
+            className="h-7 min-w-0 flex-1 px-2 py-1 text-xs"
+          />
+          <span className="shrink-0 text-[10px] text-text-secondary">
+            {t("ai.memosSelected", { count: selected.size })}
+          </span>
+        </div>
+        <div className="qc-scroll max-h-40 overflow-y-auto rounded-sm border border-border bg-bg p-1">
+          {memos.length === 0 ? (
+            <p className="px-2 py-3 text-center text-xs text-text-secondary">
+              {t("ai.memosEmpty")}
+            </p>
+          ) : (
+            groups.map((group) =>
+              group.items.length === 0 ? null : (
+                <div key={group.kind}>
+                  <SectionLabel>{group.label}</SectionLabel>
+                  {group.items.map((m) => {
+                    const key = `${m.kind}:${m.id}`;
+                    return (
+                      <label
+                        key={key}
+                        className="flex cursor-pointer items-center gap-1.5 rounded-sm px-1.5 py-0.5 text-xs hover:bg-surface-higher"
+                        title={m.memo}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={selected.has(key)}
+                          onChange={() => onToggle(key)}
+                          className="accent-accent"
+                        />
+                        <span className="truncate">{m.name}</span>
+                      </label>
+                    );
+                  })}
+                </div>
+              ),
+            )
+          )}
+        </div>
+      </div>
+    </div>
+  );
 }
 
 export function AiChatPanel({
@@ -29,6 +191,9 @@ export function AiChatPanel({
   const [input, setInput] = useState("");
   const [waiting, setWaiting] = useState(false);
   const [status, setStatus] = useState<AiStatus | null>(null);
+  const [memos, setMemos] = useState<MemoEntry[] | null>(null);
+  const [memoQuery, setMemoQuery] = useState("");
+  const [selectedKeys, setSelectedKeys] = useState<Set<string>>(new Set());
   const scrollRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
@@ -49,19 +214,69 @@ export function AiChatPanel({
   }, []);
 
   useEffect(() => {
+    if (mode !== "memo_analysis") return;
+    let cancelled = false;
+    setMemos(null);
+    fetchMemos()
+      .then((items) => {
+        if (!cancelled) setMemos(items);
+      })
+      .catch(() => {
+        if (!cancelled) setMemos([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [mode]);
+
+  useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
   }, [messages, waiting]);
 
   const disabled = !status?.enabled;
 
-  async function send() {
+  const memoById = useMemo(
+    () => new Map<string, MemoEntry>((memos ?? []).map((m) => [`${m.kind}:${m.id}`, m])),
+    [memos],
+  );
+  const selectedMemoIds = useMemo(
+    () =>
+      Array.from(
+        new Set(
+          [...selectedKeys]
+            .map((key) => memoById.get(key)?.id)
+            .filter((id): id is number => id != null),
+        ),
+      ),
+    [selectedKeys, memoById],
+  );
+
+  function toggleMemo(key: string) {
+    setSelectedKeys((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  }
+
+  async function sendWith(promptOverride?: string) {
     const text = input.trim();
     if (!text || waiting || disabled) return;
-    setInput("");
+    if (!promptOverride) setInput("");
     setMessages((m) => [...m, { role: "user", text }]);
     setWaiting(true);
     try {
-      const res = await api.aiChat(text, "", mode, promptId || undefined);
+      const effectivePromptId = promptOverride ?? (promptId || undefined);
+      const res =
+        mode === "memo_analysis"
+          ? await chatWithMemos({
+              message: text,
+              mode,
+              promptId: effectivePromptId,
+              memoIds: selectedMemoIds,
+            })
+          : await api.aiChat(text, "", mode, effectivePromptId);
       setMessages((m) => [...m, { role: "assistant", text: res.reply }]);
     } catch (e) {
       setMessages((m) => [...m, { role: "error", text: errorDetail(e) }]);
@@ -73,9 +288,11 @@ export function AiChatPanel({
   function handleKeyDown(e: KeyboardEvent<HTMLTextAreaElement>) {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
-      void send();
+      void sendWith();
     }
   }
+
+  const chipsDisabled = disabled || waiting || input.trim() === "";
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-bg">
@@ -124,37 +341,68 @@ export function AiChatPanel({
         </div>
       </div>
 
+      {/* Memo picker (memo_analysis mode) */}
+      {mode === "memo_analysis" && memos !== null && (
+        <MemoPicker
+          memos={memos}
+          query={memoQuery}
+          onQuery={setMemoQuery}
+          selected={selectedKeys}
+          onToggle={toggleMemo}
+        />
+      )}
+      {mode === "memo_analysis" && memos === null && (
+        <p className="shrink-0 border-t border-border bg-surface px-3 py-1.5 text-center text-xs text-text-secondary">
+          {t("ai.memosLoading")}
+        </p>
+      )}
+
       {/* Input row */}
       <div className="shrink-0 border-t border-border bg-surface p-3">
-        <div className="mx-auto flex max-w-2xl items-end gap-2">
-          <Textarea
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={handleKeyDown}
-            rows={2}
-            placeholder={t("ai.chatPlaceholder")}
-            aria-label={t("ai.messageAria")}
-            disabled={disabled}
-            className="min-h-0 flex-1 resize-none px-2 py-1.5"
-          />
-          <button
-            type="button"
-            onClick={() => void send()}
-            disabled={disabled || waiting || input.trim() === ""}
-            aria-label={t("ai.sendAria")}
-            title={t("ai.sendTitle")}
-            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-sm bg-accent text-[var(--qc-bg)] hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            <Send size={14} aria-hidden />
-          </button>
-          <IconButton
-            label={t("ai.clearAria")}
-            title={t("ai.clearTitle")}
-            className="h-8 w-8 border border-border bg-bg"
-            onClick={() => setMessages(status?.enabled ? [{ role: "assistant", text: welcomeMessage(true) }] : [])}
-          >
-            <Eraser size={14} aria-hidden />
-          </IconButton>
+        <div className="mx-auto flex max-w-2xl flex-col gap-1.5">
+          <div className="flex flex-wrap gap-1">
+            {QUICK_ACTIONS.map((action) => (
+              <button
+                key={action.promptId}
+                type="button"
+                onClick={() => void sendWith(action.promptId)}
+                disabled={chipsDisabled}
+                className="rounded-full border border-border bg-bg px-2 py-0.5 text-[11px] text-text-secondary hover:border-accent hover:text-accent disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {t(action.labelKey)}
+              </button>
+            ))}
+          </div>
+          <div className="flex items-end gap-2">
+            <Textarea
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={handleKeyDown}
+              rows={2}
+              placeholder={t("ai.chatPlaceholder")}
+              aria-label={t("ai.messageAria")}
+              disabled={disabled}
+              className="min-h-0 flex-1 resize-none px-2 py-1.5"
+            />
+            <button
+              type="button"
+              onClick={() => void sendWith()}
+              disabled={disabled || waiting || input.trim() === ""}
+              aria-label={t("ai.sendAria")}
+              title={t("ai.sendTitle")}
+              className="flex h-8 w-8 shrink-0 items-center justify-center rounded-sm bg-accent text-[var(--qc-bg)] hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              <Send size={14} aria-hidden />
+            </button>
+            <IconButton
+              label={t("ai.clearAria")}
+              title={t("ai.clearTitle")}
+              className="h-8 w-8 border border-border bg-bg"
+              onClick={() => setMessages(status?.enabled ? [{ role: "assistant", text: welcomeMessage(true) }] : [])}
+            >
+              <Eraser size={14} aria-hidden />
+            </IconButton>
+          </div>
         </div>
       </div>
     </div>

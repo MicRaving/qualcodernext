@@ -22,6 +22,8 @@ const FORMAT_HELP: [string, string][] = [
   ["taguette", "Taguette (.tag / .json) — codes and coded excerpts from a Taguette export."],
   ["ris", "RIS (.ris) — bibliographic references imported as journal references."],
   ["survey", "Survey (.csv) — spreadsheet columns imported as cases with attributes; qualitative columns become text files per row."],
+  ["xlsx", "Excel (.xlsx) — multi-column sheets imported like a survey CSV; other sheets become one text file per sheet."],
+  ["sav", "SPSS (.sav) — variable columns imported as case attributes; qualitative string variables become text files per row."],
   ["codebook", "Codebook (.txt/.csv) — plain-text codebook with category>>subcategory>>code lines."],
   ["merge", "Project (.zip) — merge another .qda project (zipped) into the open project."],
   ["zotero", "Zotero — import references from the local Zotero API (localhost:23119, Zotero 7+)."],
@@ -40,6 +42,8 @@ function detectFormat(name: string): string {
   if (ext === "tag" || ext === "json") return "taguette";
   if (ext === "ris") return "ris";
   if (ext === "csv") return "survey";
+  if (ext === "xlsx" || ext === "xls") return "xlsx";
+  if (ext === "sav") return "sav";
   if (ext === "zip") return "merge";
   if (ext === "txt") return "codebook";
   return "refi";

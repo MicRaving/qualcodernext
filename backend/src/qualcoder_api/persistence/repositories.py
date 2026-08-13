@@ -9,6 +9,7 @@ supercatid cleanup) are preserved deliberately.
 from __future__ import annotations
 
 import datetime
+import json
 import logging
 import random
 from typing import Any, cast
@@ -1453,7 +1454,9 @@ class AttributeRepository:
         return [AttributeType.model_validate(r._mapping) for r in rows]
 
     async def add_type(self, *, name: str, owner: str, case_or_file: str = "case",
-                       value_type: str = "text", memo: str = "") -> AttributeType:
+                       value_type: str = "text", memo: str = "",
+                       value_labels: dict[str, str] | None = None) -> AttributeType:
+        labels = value_labels or {}
         await self.session.execute(
             insert(tables.attribute_type).values(
                 name=name,
@@ -1462,6 +1465,7 @@ class AttributeRepository:
                 memo=memo,
                 caseOrFile=case_or_file,
                 valuetype=value_type,
+                value_labels=json.dumps(labels),
             )
         )
         await self.session.commit()
@@ -1477,7 +1481,7 @@ class AttributeRepository:
             await self.session.commit()
         return AttributeType(
             name=name, date=_now(), owner=owner, memo=memo,
-            case_or_file=case_or_file, value_type=value_type,
+            case_or_file=case_or_file, value_type=value_type, value_labels=labels,
         )
 
     async def delete_type(self, name: str) -> None:

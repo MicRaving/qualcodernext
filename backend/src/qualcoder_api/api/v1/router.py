@@ -13,6 +13,7 @@ from qualcoder_api.api.v1.audit import router as audit_router
 from qualcoder_api.api.v1.coders import router as coders_router
 from qualcoder_api.api.v1.codes import router as codes_router
 from qualcoder_api.api.v1.codings import router as codings_router
+from qualcoder_api.api.v1.dictionaries import router as dictionaries_router
 from qualcoder_api.api.v1.entities import (
     annotation_router,
     attr_router,
@@ -22,6 +23,7 @@ from qualcoder_api.api.v1.entities import (
 from qualcoder_api.api.v1.graphs import router as graphs_router
 from qualcoder_api.api.v1.importers import router as importers_router
 from qualcoder_api.api.v1.interchange import router as interchange_router
+from qualcoder_api.api.v1.links import router as links_router
 from qualcoder_api.api.v1.reports import router as reports_router
 from qualcoder_api.api.v1.sources import router as sources_router
 from qualcoder_api.api.v1.sql_reports import router as sql_router
@@ -52,6 +54,8 @@ router.include_router(audit_router)
 router.include_router(transcribe_router)
 router.include_router(graphs_router)
 router.include_router(sync_router)
+router.include_router(dictionaries_router)
+router.include_router(links_router)
 
 
 def get_service() -> ProjectService:

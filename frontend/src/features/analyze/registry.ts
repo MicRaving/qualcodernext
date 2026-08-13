@@ -30,6 +30,9 @@ import {
 } from "@/features/analyze/merged";
 import { CodebookReport, ReferencesReport } from "@/features/analyze/upstreamReports";
 import { SqlReport } from "@/features/analyze/SqlReport";
+import { DictionaryReport } from "@/features/analyze/DictionaryReport";
+import { StatsReportView } from "@/features/analyze/StatsReport";
+import { SummaryTableReportView } from "@/features/analyze/SummaryTableReport";
 import type { ReportId } from "@/stores/project";
 
 export interface NavEntry {
@@ -77,6 +80,24 @@ export const ANALYSIS: NavEntry[] = [
     descriptionKey: "analyze.descTextCorpus",
     icon: CloudSun,
   },
+  {
+    id: "dictionary",
+    titleKey: "analyze.titleDictionary",
+    descriptionKey: "analyze.descDictionary",
+    icon: BookOpen,
+  },
+  {
+    id: "stats",
+    titleKey: "analyze.titleStats",
+    descriptionKey: "analyze.descStats",
+    icon: BarChart3,
+  },
+  {
+    id: "summary-table",
+    titleKey: "analyze.titleSummaryTable",
+    descriptionKey: "analyze.descSummaryTable",
+    icon: Table,
+  },
 ];
 
 /** Non-analytical tools, grouped under their own section in the left bar. */
@@ -112,4 +133,7 @@ export const REPORT_COMPONENTS: Record<ReportId, ComponentType> = {
   references: ReferencesReport,
   sql: SqlReport,
   graphs: () => null,
+  dictionary: DictionaryReport,
+  stats: StatsReportView,
+  "summary-table": SummaryTableReportView,
 };

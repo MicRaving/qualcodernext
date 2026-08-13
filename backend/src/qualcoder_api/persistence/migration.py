@@ -279,7 +279,74 @@ class MigrationChain:
         applied += await self.migrate_v16_to_v18(app_version)
         applied += await self.migrate_v19(app_version)
         applied += await self.migrate_v20()
+        applied += await self.migrate_v21(app_version)
+        applied += await self.migrate_v22(app_version)
+        applied += await self.migrate_v23(app_version)
         return applied
+
+    async def migrate_v21(self, app_version: str) -> list[str]:
+        """v21: the ``link`` table — segment hyperlinks between source spans."""
+        if self.conn is None:
+            return []
+        cur = await self.conn.cursor()
+        if not await self._has_table(cur, "link"):
+            await cur.execute(
+                "CREATE TABLE link (id integer primary key autoincrement, from_fid integer, "
+                "from_pos0 integer, from_pos1 integer, to_fid integer, to_pos0 integer, "
+                "to_pos1 integer, memo text, owner text, date text)"
+            )
+            await cur.execute(
+                "CREATE INDEX IF NOT EXISTS idx_link_from_fid ON link(from_fid)"
+            )
+            await cur.execute(
+                "CREATE INDEX IF NOT EXISTS idx_link_to_fid ON link(to_fid)"
+            )
+            await cur.execute('update project set databaseversion="v21", about=?', [app_version])
+            await self.conn.commit()
+            return ["v21"]
+        return []
+
+    async def migrate_v22(self, app_version: str) -> list[str]:
+        """v22: value_labels — the JSON map of raw value → display label on
+        attribute types (MAXQDA-style value lists)."""
+        if self.conn is None:
+            return []
+        cur = await self.conn.cursor()
+        if await self._has_table(cur, "attribute_type") and not await self._has_column(
+            cur, "attribute_type", "value_labels"
+        ):
+            await cur.execute("ALTER TABLE attribute_type ADD value_labels text")
+            await cur.execute('update project set databaseversion="v22", about=?', [app_version])
+            await self.conn.commit()
+            return ["v22"]
+        return []
+
+    async def migrate_v23(self, app_version: str) -> list[str]:
+        """v23: word dictionaries (MAXDictio-style) — ``dictionary`` and
+        ``dictionary_entry`` tables."""
+        if self.conn is None:
+            return []
+        cur = await self.conn.cursor()
+        changed = False
+        if not await self._has_table(cur, "dictionary"):
+            await cur.execute(
+                "CREATE TABLE dictionary (id integer primary key autoincrement, name text, "
+                "owner text, created text, unique(name))"
+            )
+            await self.conn.commit()
+            changed = True
+        if not await self._has_table(cur, "dictionary_entry"):
+            await cur.execute(
+                "CREATE TABLE dictionary_entry (id integer primary key autoincrement, dict_id integer, "
+                "code_name text, term text, unique(dict_id, term))"
+            )
+            await self.conn.commit()
+            changed = True
+        if changed:
+            await cur.execute('update project set databaseversion="v23", about=?', [app_version])
+            await self.conn.commit()
+            return ["v23"]
+        return []
 
     async def migrate_v20(self) -> list[str]:
         """v20: hot-path indexes (only reports work when something was
@@ -291,9 +358,15 @@ class MigrationChain:
 
         created = 0
         for sql in _INDEX_SQL:
-            # "CREATE INDEX IF NOT EXISTS <name> ON ..." — probe sqlite_master
-            # (rowcount is unreliable for DDL). The name is token 5.
+            # "CREATE INDEX IF NOT EXISTS <name> ON <table>(...)" — probe
+            # sqlite_master (rowcount is unreliable for DDL). The index name
+            # is token 5; the table token 7. Tables created later in the
+            # chain (e.g. ``link`` by v21) must not break the index step —
+            # their indexes are created by their own migration.
             index_name = sql.split()[5]
+            table_name = sql.split()[7].split("(")[0]
+            if table_name and not await self._has_table(cur, table_name):
+                continue
             await cur.execute(
                 "SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = ?", (index_name,)
             )

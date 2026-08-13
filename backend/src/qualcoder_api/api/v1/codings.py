@@ -300,6 +300,39 @@ class AutocodeBatchRequest(BaseModel):
     owner: str | None = None
 
 
+class DictionaryAutocodeRequest(BaseModel):
+    dictionary_id: int
+    sources: list[int] | None = None
+    owner: str | None = None
+
+
+@router.post("/dictionary-autocode", status_code=201)
+async def dictionary_autocode_endpoint(req: DictionaryAutocodeRequest, db: DbDep) -> dict:
+    """Autocode with a MAXDictio-style word dictionary: every entry's term is
+    matched case-insensitively as a whole word across the project (or the
+    given ``sources``) and coded with the entry's code. Returns the created
+    coding count per code."""
+    from qualcoder_api.services.dictionary_service import dictionary_autocode
+
+    owner = resolve_owner(req.owner)
+    result = await dictionary_autocode(
+        db, dictionary_id=req.dictionary_id, owner=owner, source_ids=req.sources
+    )
+    if result is None:
+        raise HTTPException(status_code=404, detail="dictionary not found")
+    await audit.record(
+        db, user=owner, action="coding.autocode", entity="dictionary",
+        entity_id=req.dictionary_id,
+        detail={
+            "dictionary_id": req.dictionary_id,
+            "count": result["total"],
+            "per_code": result["per_code"],
+            "unmatched_codes": result["unmatched_codes"],
+        },
+    )
+    return result
+
+
 @router.post("/autocode/batch", status_code=202)
 async def autocode_batch_endpoint(req: AutocodeBatchRequest, svc: ServiceDep, db: DbDep) -> dict:
     """Queue one background autocode job per source file (prompt-based only).

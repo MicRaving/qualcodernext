@@ -78,7 +78,7 @@ async def test_migrated_legacy_can_be_stamped(tmp_path):
     conn = await aiosqlite.connect(db)
     cur = await conn.cursor()
     await cur.execute("SELECT databaseversion FROM project")
-    assert (await cur.fetchone())[0] == "v19"
+    assert (await cur.fetchone())[0] == "v23"
     await cur.execute("SELECT version_num FROM alembic_version")
     assert (await cur.fetchone())[0] == "0001_baseline_v14"
     await conn.close()

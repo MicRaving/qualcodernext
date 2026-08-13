@@ -19,6 +19,7 @@ import {
   CircleAlert,
   Code,
   FilePen,
+  Link as LinkIcon,
   LoaderCircle,
   Pencil,
   Rows3,
@@ -56,6 +57,17 @@ import {
 } from "@/features/coding/segments";
 import { getSelectionOffsets, type SelectionOffsets } from "@/features/coding/selection";
 import { codeTint } from "@/features/coding/tint";
+import {
+  consumePendingJump,
+  copyLinkPayload,
+  createLink,
+  fetchOutgoingLinks,
+  jumpToSpan,
+  readLinkPayload,
+  type LinkSpanTarget,
+  type PendingJump,
+  type SegmentLink,
+} from "@/features/coding/links";
 import { usesPdfCoder } from "@/lib/media";
 import { cn } from "@/lib/utils";
 import { cls } from "@/components/ui/tokens";
@@ -69,6 +81,27 @@ const FALLBACK_CODE_COLOR = "var(--qc-accent)";
 /** Soft highlight for coded segments: the code color, transparently. */
 function softBackground(color: string): string {
   return codeTint(color);
+}
+
+/** The (nearest .qc-seg-wrapped) element covering character `pos`, or null
+ *  when the position falls in plain (uncoded) text. Offsets assume the
+ *  container's text nodes mirror the document text exactly. */
+function elementAtTextPos(container: HTMLElement, pos: number): HTMLElement | null {
+  const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT);
+  let offset = 0;
+  let node: Node | null;
+  while ((node = walker.nextNode())) {
+    const len = (node.textContent ?? "").length;
+    if (pos < offset + len) {
+      let el: HTMLElement | null = node.parentElement;
+      while (el && el !== container && !el.classList.contains("qc-seg")) {
+        el = el.parentElement;
+      }
+      return el && el !== container ? el : null;
+    }
+    offset += len;
+  }
+  return null;
 }
 
 /** Apply shifted positions back onto coding rows, dropping any the backend marked for deletion. */
@@ -170,6 +203,15 @@ export function TextCoder({
   const [selectedAnnSeg, setSelectedAnnSeg] = useState<AnnotationSegment | null>(null);
   const [editingAnnMemo, setEditingAnnMemo] = useState<{ anid: number; memo: string } | null>(null);
 
+  /* Segment links: outgoing links of this file (markers), the clipboard
+     link payload (paste), and a transient "copied" feedback. */
+  const [links, setLinks] = useState<SegmentLink[]>([]);
+  const [clipboardLink, setClipboardLink] = useState<LinkSpanTarget | null>(null);
+  const [linkCopied, setLinkCopied] = useState(false);
+  const linkCopiedTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /** A jump target for ANOTHER file opened via the qc:jump-span event. */
+  const [pendingFlash, setPendingFlash] = useState<PendingJump | null>(null);
+
   const [undoStack, setUndoStack] = useState<Coding[]>([]);
 
   const [editMode, setEditMode] = useState(false);
@@ -220,9 +262,61 @@ export function TextCoder({
   useEffect(
     () => () => {
       if (flashTimer.current) clearTimeout(flashTimer.current);
+      if (linkCopiedTimer.current) clearTimeout(linkCopiedTimer.current);
     },
     [],
   );
+
+  /** Scroll the span [pos0, pos1) into view and flash it (link jumps). */
+  function flashSpanAt(pos0: number, pos1: number) {
+    const container = textRef.current;
+    const scrollEl = scrollRef.current;
+    if (!container) return;
+    const el = elementAtTextPos(container, pos0);
+    if (el) {
+      el.scrollIntoView({ block: "center", behavior: "smooth" });
+      el.classList.add("qc-seg-flash");
+      if (flashTimer.current) clearTimeout(flashTimer.current);
+      flashTimer.current = setTimeout(() => el.classList.remove("qc-seg-flash"), 2000);
+      return;
+    }
+    // The span lies in plain (uncoded) text — scroll the document there.
+    const len = source?.fulltext?.length ?? 0;
+    if (scrollEl && scrollEl.scrollHeight > 0 && len > 0) {
+      const ratio = Math.max(0, Math.min(1, (pos0 + pos1) / 2 / len));
+      scrollEl.scrollTop = ratio * (scrollEl.scrollHeight - scrollEl.clientHeight);
+    }
+  }
+
+  // Link jumps: react to qc:jump-span events. For another file the coder
+  // view switches and its freshly mounted TextCoder claims the pending jump.
+  useEffect(() => {
+    const handleJump = (e: Event) => {
+      const detail = (e as CustomEvent<{ fid: number; pos0: number; pos1: number }>).detail;
+      if (!detail) return;
+      if (detail.fid !== sourceId) {
+        useProjectStore.getState().setView({ kind: "coding", sourceId: detail.fid });
+        return;
+      }
+      setPendingFlash({ fid: detail.fid, pos0: detail.pos0, pos1: detail.pos1 });
+    };
+    window.addEventListener("qc:jump-span", handleJump);
+    const pending = consumePendingJump(sourceId);
+    if (pending) setPendingFlash(pending);
+    return () => window.removeEventListener("qc:jump-span", handleJump);
+  }, [sourceId]);
+
+  // Flash once the target text is actually rendered (mounting a file loads
+  // its text asynchronously, so the effect re-runs when `text` arrives).
+  useEffect(() => {
+    if (!pendingFlash || !source?.fulltext) return;
+    const timer = setTimeout(() => {
+      flashSpanAt(pendingFlash.pos0, pendingFlash.pos1);
+      setPendingFlash(null);
+    }, 0);
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingFlash, source?.fulltext]);
 
   const text = source?.fulltext ?? "";
   const unsaved = editMode && editText !== text;
@@ -300,6 +394,37 @@ export function TextCoder({
     if (controlled) onCodesChange?.(next);
     else setLocalCodes(next);
   }, [controlled, onCodesChange]);
+
+  const refreshLinks = useCallback(async () => {
+    setLinks(await fetchOutgoingLinks(sourceId));
+  }, [sourceId]);
+
+  // Outgoing links of this file — markers + jump targets.
+  useEffect(() => {
+    let cancelled = false;
+    void fetchOutgoingLinks(sourceId)
+      .then((ls) => {
+        if (!cancelled) setLinks(ls);
+      })
+      .catch(() => {
+        if (!cancelled) setLinks([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [sourceId, reloadTick]);
+
+  // Track whether a qcnext-link payload is on the clipboard so the
+  // selection toolbar can offer "Paste link here".
+  useEffect(() => {
+    let cancelled = false;
+    void readLinkPayload().then((target) => {
+      if (!cancelled) setClipboardLink(target);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [selection]);
 
   /* ------------------------------------------------------------- bookmark */
 
@@ -608,6 +733,48 @@ export function TextCoder({
     })();
   }
 
+  /* ------------------------------------------------------------- links */
+
+  function copySegmentLink() {
+    const sel = selection;
+    if (!sel) return;
+    void (async () => {
+      try {
+        await copyLinkPayload(sourceId, sel.start, sel.end);
+        setClipboardLink({ fid: sourceId, pos0: sel.start, pos1: sel.end });
+        setLinkCopied(true);
+        if (linkCopiedTimer.current) clearTimeout(linkCopiedTimer.current);
+        linkCopiedTimer.current = setTimeout(() => setLinkCopied(false), 1500);
+      } catch (e) {
+        setErrMsg(e instanceof Error ? e.message : t("coder.linkCopyError"));
+      }
+    })();
+  }
+
+  /** Create one link from the current selection to the copied segment. */
+  function pasteSegmentLink() {
+    const sel = selection;
+    const target = clipboardLink;
+    if (!sel || !target) return;
+    void (async () => {
+      try {
+        await createLink({
+          from_fid: sourceId,
+          from_pos0: sel.start,
+          from_pos1: sel.end,
+          to_fid: target.fid,
+          to_pos0: target.pos0,
+          to_pos1: target.pos1,
+        });
+        await refreshLinks();
+      } catch (e) {
+        setErrMsg(e instanceof Error ? e.message : t("coder.linkCreateError"));
+      } finally {
+        clearSelection();
+      }
+    })();
+  }
+
   /* --------------------------------------------------------------- edit mode */
 
   function startEditMode() {
@@ -751,12 +918,20 @@ export function TextCoder({
         })
         .join(" | ");
       const hidden = rows.some((r) => hiddenCodes.includes(r.cid));
+      // Links anchored inside this atomic segment: wavy underline + a
+      // clickable marker after the segment text (zero-text inline node, so
+      // selection offsets stay aligned with the document text).
+      const segLinks = links.filter((l) => l.from_pos0 >= seg.start && l.from_pos0 < seg.end);
       out.push(
         <span
           key={`seg-${i}-${seg.start}`}
           data-ctid={seg.ctids[0]}
           className={`cursor-pointer rounded-sm qc-seg ${hidden ? "qc-seg-hidden" : ""} ${
             flashCtid != null && seg.ctids.includes(flashCtid) ? "qc-seg-flash" : ""
+          } ${
+            segLinks.length > 0
+              ? "underline decoration-wavy decoration-accent/60 underline-offset-2"
+              : ""
           }`}
           title={title}
           onClick={() => {
@@ -767,6 +942,24 @@ export function TextCoder({
           {wrapColors(seg, text.slice(seg.start, seg.end))}
         </span>,
       );
+      for (const link of segLinks) {
+        out.push(
+          <button
+            key={`link-marker-${link.id}`}
+            type="button"
+            data-link-id={link.id}
+            title={t("coder.linkJumpTo", { file: link.to_name })}
+            aria-label={t("coder.linkAria", { file: link.to_name })}
+            onClick={(e) => {
+              e.stopPropagation();
+              jumpToSpan(link.to_fid, link.to_pos0, link.to_pos1);
+            }}
+            className="ml-0.5 inline-flex h-3.5 w-3.5 shrink-0 translate-y-[-1px] items-center justify-center rounded-sm border border-border bg-surface align-middle text-accent hover:bg-accent/10"
+          >
+            <LinkIcon size={9} aria-hidden />
+          </button>,
+        );
+      }
       pos = seg.end;
     });
     if (pos < text.length) out.push(text.slice(pos));
@@ -1208,6 +1401,24 @@ export function TextCoder({
               <Button variant="secondary" icon={<StickyNote size={12} aria-hidden />} onClick={openAnnotate}>
                 {t("coder.annotate")}
               </Button>
+              <Button
+                variant="secondary"
+                icon={<LinkIcon size={12} aria-hidden />}
+                onClick={copySegmentLink}
+                title={t("coder.linkCopied")}
+              >
+                {linkCopied ? t("coder.copyLinkDone") : t("coder.copyLink")}
+              </Button>
+              {clipboardLink && (
+                <Button
+                  variant="secondary"
+                  icon={<LinkIcon size={12} aria-hidden />}
+                  onClick={pasteSegmentLink}
+                  title={t("coder.linkCopied")}
+                >
+                  {t("coder.pasteLinkHere")}
+                </Button>
+              )}
             </div>
           ) : null}
         </div>

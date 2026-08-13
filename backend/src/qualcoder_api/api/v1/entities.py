@@ -156,6 +156,7 @@ class AttrTypeCreate(BaseModel):
     case_or_file: str = "case"
     value_type: str = "text"
     memo: str = ""
+    value_labels: dict[str, str] = {}
 
 
 class AttrValueSet(BaseModel):
@@ -172,11 +173,11 @@ async def list_attribute_types(db: DbDep) -> list[AttributeType]:
 async def create_attribute_type(req: AttrTypeCreate, db: DbDep) -> AttributeType:
     attr = await AttributeRepository(db).add_type(
         name=req.name, owner=resolve_owner(req.owner), case_or_file=req.case_or_file,
-        value_type=req.value_type, memo=req.memo,
+        value_type=req.value_type, memo=req.memo, value_labels=req.value_labels,
     )
     await audit.record(
         db, user=resolve_owner(req.owner), action="attribute.create", entity="attribute_type",
-        detail={"name": req.name},
+        detail={"name": req.name, "value_labels": req.value_labels},
     )
     return attr
 

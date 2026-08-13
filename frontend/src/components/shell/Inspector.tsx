@@ -2,8 +2,25 @@
  * Inspector — right-side details panel for the selected code or file.
  */
 import { useCallback, useEffect, useState, type ReactNode } from "react";
-import { ChevronDown, ChevronRight, FileText, Hash, LoaderCircle, Plus, Trash2, X } from "lucide-react";
+import {
+  ChevronDown,
+  ChevronRight,
+  FileText,
+  Hash,
+  Link as LinkIcon,
+  LoaderCircle,
+  Plus,
+  Trash2,
+  X,
+} from "lucide-react";
 import { api, type Annotation, type CodeDetails, type SourceDetails } from "@/lib/api";
+import {
+  deleteLink,
+  fetchIncomingLinks,
+  fetchOutgoingLinks,
+  jumpToSpan,
+  type SegmentLink,
+} from "@/features/coding/links";
 
 import {
   BarHeader,
@@ -350,6 +367,40 @@ function FileDetailsPanel({ details }: { details: SourceDetails }) {
     }
   }
 
+  // Segment links: outgoing (anchor side) and incoming (target side) of
+  // this file. Outgoing rows jump to the target, incoming rows delete.
+  const [outgoingLinks, setOutgoingLinks] = useState<SegmentLink[]>([]);
+  const [incomingLinks, setIncomingLinks] = useState<SegmentLink[]>([]);
+  const [linksError, setLinksError] = useState<string | null>(null);
+
+  const loadLinks = useCallback(async () => {
+    try {
+      const [outgoing, incoming] = await Promise.all([
+        fetchOutgoingLinks(src.id),
+        fetchIncomingLinks(src.id),
+      ]);
+      setOutgoingLinks(outgoing);
+      setIncomingLinks(incoming);
+      setLinksError(null);
+    } catch (e) {
+      setLinksError(e instanceof Error ? e.message : t("inspector.linksLoadError"));
+    }
+  }, [src.id, t]);
+
+  useEffect(() => {
+    void loadLinks();
+  }, [loadLinks]);
+
+  async function removeLink(linkId: number) {
+    if (!window.confirm(t("inspector.deleteLinkConfirm"))) return;
+    try {
+      await deleteLink(linkId);
+      await loadLinks();
+    } catch (e) {
+      setLinksError(e instanceof Error ? e.message : t("inspector.linksLoadError"));
+    }
+  }
+
   async function saveMemo(value: string) {
     await api.patchSource(src.id, { memo: value });
     await selectFile(src.id);
@@ -614,6 +665,71 @@ function FileDetailsPanel({ details }: { details: SourceDetails }) {
               );
             })}
           </ul>
+        )}
+      </div>
+
+      {/* Segment links on this file — outgoing jumps to the target segment,
+          incoming shows who points here (with delete). */}
+      <div className="px-3 py-2">
+        <SectionLabel>{t("inspector.links")}</SectionLabel>
+        {linksError && <p className="mb-1 text-xs text-danger">{linksError}</p>}
+        {outgoingLinks.length === 0 && incomingLinks.length === 0 ? (
+          <p className="text-sm text-text-secondary">{t("inspector.noLinks")}</p>
+        ) : (
+          <div className="flex flex-col gap-1.5">
+            {outgoingLinks.length > 0 && (
+              <>
+                <p className="flex items-center gap-1 text-[10px] font-medium uppercase tracking-wide text-text-secondary">
+                  <LinkIcon size={10} aria-hidden />
+                  {t("inspector.outgoingLinks")}
+                </p>
+                {outgoingLinks.map((link) => (
+                  <button
+                    key={`out-${link.id}`}
+                    type="button"
+                    onClick={() => jumpToSpan(link.to_fid, link.to_pos0, link.to_pos1)}
+                    title={t("inspector.gotoLink", { file: link.to_name })}
+                    className="block w-full rounded-sm bg-surface-higher px-2 py-1.5 text-left hover:bg-border"
+                  >
+                    <span className="block truncate text-xs text-text-secondary">{link.to_name}</span>
+                    <span className="line-clamp-2 block text-sm text-text-primary">
+                      {link.to_text || t("common.noMemo")}
+                    </span>
+                  </button>
+                ))}
+              </>
+            )}
+            {incomingLinks.length > 0 && (
+              <>
+                <p className="flex items-center gap-1 text-[10px] font-medium uppercase tracking-wide text-text-secondary">
+                  <LinkIcon size={10} aria-hidden />
+                  {t("inspector.incomingLinks")}
+                </p>
+                {incomingLinks.map((link) => (
+                  <div
+                    key={`in-${link.id}`}
+                    className="flex items-center gap-1.5 rounded-sm bg-surface-higher px-2 py-1"
+                  >
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate text-xs text-text-secondary">{link.from_name}</span>
+                      <span className="block truncate text-sm text-text-primary">
+                        {link.from_text || t("common.noMemo")}
+                      </span>
+                    </span>
+                    <IconButton
+                      label={t("inspector.deleteLink")}
+                      title={t("inspector.deleteLink")}
+                      size="sm"
+                      className="shrink-0 hover:text-danger"
+                      onClick={() => void removeLink(link.id)}
+                    >
+                      <Trash2 size={12} aria-hidden />
+                    </IconButton>
+                  </div>
+                ))}
+              </>
+            )}
+          </div>
         )}
       </div>
 

@@ -440,6 +440,171 @@ async def test_chat_backend_error(project_client, monkeypatch):
 
 
 # ----------------------------------------------------------------------
+# Memo chat (memo_analysis) & prompt ids
+# ----------------------------------------------------------------------
+
+async def add_source_with_memo(client, name: str, memo: str) -> int:
+    await import_text(client, name=name, text=f"Body of {name}.")
+    sources = (await client.get("/api/v1/sources")).json()
+    sid = next(s["id"] for s in sources if s["name"] == name)
+    res = await client.patch(f"/api/v1/sources/{sid}", json={"memo": memo})
+    assert res.status_code == 200, res.text
+    return sid
+
+
+async def add_code_with_memo(client, name: str, memo: str) -> int:
+    res = await client.post("/api/v1/codes", json={"name": name, "memo": memo})
+    assert res.status_code == 201, res.text
+    return res.json()["cid"]
+
+
+async def test_chat_injects_selected_memos(project_client, monkeypatch):
+    client, _ = project_client
+    sid = await add_source_with_memo(client, "alpha.txt", "Source memo text alpha.")
+    cid = await add_code_with_memo(client, "Happiness", "Code memo text beta.")
+    fake = patch_client(
+        monkeypatch,
+        {"/chat/completions": {"choices": [{"message": {"content": "ok"}}]}},
+    )
+    res = await client.post(
+        "/api/v1/ai/chat",
+        json={"message": "what do the memos say?", "mode": "memo_analysis", "memo_ids": [sid, cid]},
+    )
+    assert res.status_code == 200, res.text
+    user_message = fake.calls[0]["json"]["messages"][1]
+    content = user_message["content"]
+    assert "# alpha.txt (file memo):\nSource memo text alpha." in content
+    assert "# Happiness (code memo):\nCode memo text beta." in content
+    assert content.endswith("\n\nwhat do the memos say?")
+    assert fake.calls[0]["json"]["messages"][0]["role"] == "system"
+
+
+async def test_chat_memo_analysis_mode_fetches_all_memos(project_client, monkeypatch):
+    client, _ = project_client
+    await add_source_with_memo(client, "gamma.txt", "File memo.")
+    await add_code_with_memo(client, "Sadness", "Code memo.")
+    fake = patch_client(
+        monkeypatch,
+        {"/chat/completions": {"choices": [{"message": {"content": "ok"}}]}},
+    )
+    res = await client.post(
+        "/api/v1/ai/chat", json={"message": "analyze", "mode": "memo_analysis"}
+    )
+    assert res.status_code == 200, res.text
+    content = fake.calls[0]["json"]["messages"][1]["content"]
+    assert "# gamma.txt (file memo):\nFile memo." in content
+    assert "# Sadness (code memo):\nCode memo." in content
+
+
+async def test_chat_memo_ids_filter_out_other_memos(project_client, monkeypatch):
+    client, _ = project_client
+    sid = await add_source_with_memo(client, "keep.txt", "Keep memo.")
+    await add_source_with_memo(client, "drop.txt", "Drop memo.")
+    fake = patch_client(
+        monkeypatch,
+        {"/chat/completions": {"choices": [{"message": {"content": "ok"}}]}},
+    )
+    res = await client.post(
+        "/api/v1/ai/chat", json={"message": "hi", "mode": "memo_analysis", "memo_ids": [sid]}
+    )
+    assert res.status_code == 200, res.text
+    content = fake.calls[0]["json"]["messages"][1]["content"]
+    assert "# keep.txt (file memo):\nKeep memo." in content
+    assert "drop.txt" not in content
+
+
+async def test_chat_memo_truncated_to_text_budget(project_client, monkeypatch):
+    client, _ = project_client
+    long_memo = " ".join(f"word{i}" for i in range(800))  # ~4900 chars, budget is 2000
+    await add_code_with_memo(client, "Long", long_memo)
+    fake = patch_client(
+        monkeypatch,
+        {"/chat/completions": {"choices": [{"message": {"content": "ok"}}]}},
+    )
+    res = await client.post(
+        "/api/v1/ai/chat", json={"message": "hi", "mode": "memo_analysis"}
+    )
+    assert res.status_code == 200, res.text
+    content = fake.calls[0]["json"]["messages"][1]["content"]
+    assert long_memo[:100] in content
+    assert long_memo[2500:] not in content
+    # The injected block stays within the chunk budget plus its label.
+    block = content.split("# Long (code memo):\n", 1)[1].split("\n\n", 1)[0]
+    assert len(block) <= 2000
+
+
+async def test_chat_empty_memo_ids_in_memo_mode_fetches_all_memos(project_client, monkeypatch):
+    client, _ = project_client
+    await add_source_with_memo(client, "only.txt", "Only memo.")
+    fake = patch_client(
+        monkeypatch,
+        {"/chat/completions": {"choices": [{"message": {"content": "ok"}}]}},
+    )
+    res = await client.post(
+        "/api/v1/ai/chat", json={"message": "hello", "mode": "memo_analysis", "memo_ids": []}
+    )
+    assert res.status_code == 200, res.text
+    content = fake.calls[0]["json"]["messages"][1]["content"]
+    assert "# only.txt (file memo):\nOnly memo." in content
+
+
+async def test_chat_empty_memo_ids_in_general_mode_sends_no_memo_context(
+    project_client, monkeypatch
+):
+    client, _ = project_client
+    await add_source_with_memo(client, "only.txt", "Only memo.")
+    fake = patch_client(
+        monkeypatch,
+        {"/chat/completions": {"choices": [{"message": {"content": "ok"}}]}},
+    )
+    res = await client.post(
+        "/api/v1/ai/chat", json={"message": "hello", "mode": "general", "memo_ids": []}
+    )
+    assert res.status_code == 200, res.text
+    assert fake.calls[0]["json"]["messages"][1]["content"] == "hello"
+
+
+async def test_chat_prompt_id_resolves_from_catalog(project_client, monkeypatch):
+    client, _ = project_client
+    fake = patch_client(
+        monkeypatch,
+        {"/chat/completions": {"choices": [{"message": {"content": "rewritten"}}]}},
+    )
+    res = await client.post(
+        "/api/v1/ai/chat", json={"message": "The cat sat.", "prompt_id": "paraphrase"}
+    )
+    assert res.status_code == 200, res.text
+    content = fake.calls[0]["json"]["messages"][1]["content"]
+    assert content.startswith("Instructions:\n")
+    assert "Rewrite the given passage" in content
+    assert content.endswith("\n\nThe cat sat.")
+
+    res = await client.post(
+        "/api/v1/ai/chat", json={"message": "Great!", "prompt_id": "sentiment"}
+    )
+    assert res.status_code == 200, res.text
+    content = fake.calls[1]["json"]["messages"][1]["content"]
+    assert "Classify the sentiment" in content
+
+
+async def test_chat_memo_analysis_mode_resolves_root_prompt(project_client, monkeypatch):
+    client, _ = project_client
+    fake = patch_client(
+        monkeypatch,
+        {"/chat/completions": {"choices": [{"message": {"content": "ok"}}]}},
+    )
+    res = await client.post(
+        "/api/v1/ai/chat", json={"message": "analyze", "mode": "memo_analysis"}
+    )
+    assert res.status_code == 200, res.text
+    content = fake.calls[0]["json"]["messages"][1]["content"]
+    assert "Instructions:\n" in content
+    assert "Summarize the given research memos" in content
+    system = fake.calls[0]["json"]["messages"][0]["content"]
+    assert "memos" in system.lower()
+
+
+# ----------------------------------------------------------------------
 # Semantic search
 # ----------------------------------------------------------------------
 

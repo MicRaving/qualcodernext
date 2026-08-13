@@ -96,6 +96,21 @@ annotation = Table(
     UniqueConstraint("fid", "pos0", "pos1", "owner", name="u_annotation"),
 )
 
+link = Table(
+    "link",
+    metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("from_fid", Integer),
+    Column("from_pos0", Integer),
+    Column("from_pos1", Integer),
+    Column("to_fid", Integer),
+    Column("to_pos0", Integer),
+    Column("to_pos1", Integer),
+    Column("memo", Text),
+    Column("owner", String),
+    Column("date", String),
+)
+
 attribute_type = Table(
     "attribute_type",
     metadata,
@@ -105,6 +120,7 @@ attribute_type = Table(
     Column("memo", Text),
     Column("caseOrFile", String),
     Column("valuetype", String),
+    Column("value_labels", Text),
 )
 
 attribute = Table(
@@ -433,6 +449,26 @@ audit_log = Table(
     Column("detail", Text),
 )
 
+dictionary = Table(
+    "dictionary",
+    metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("name", String, nullable=False),
+    Column("owner", String),
+    Column("created", String),
+    UniqueConstraint("name", name="u_dictionary_name"),
+)
+
+dictionary_entry = Table(
+    "dictionary_entry",
+    metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("dict_id", Integer, nullable=False),
+    Column("code_name", String, nullable=False),
+    Column("term", String, nullable=False),
+    UniqueConstraint("dict_id", "term", name="u_dictionary_entry_term"),
+)
+
 # Tables whose `owner` column feeds the coder_names table.
 OWNER_TABLES = [
     "code_image",
@@ -446,6 +482,7 @@ OWNER_TABLES = [
     "attribute_type",
     "source",
     "annotation",
+    "link",
     "journal",
     "manage_files_display",
     "files_filter",

@@ -6,6 +6,8 @@ they can be shared across API layers and caches without accidental mutation.
 
 from __future__ import annotations
 
+import json
+
 from pydantic import BaseModel, ConfigDict, computed_field, field_validator
 
 from qualcoder_api.core.enums import MediaType
@@ -186,6 +188,7 @@ class AttributeType(BaseModel):
     memo: str = ""
     case_or_file: str = "case"
     value_type: str = "text"
+    value_labels: dict[str, str] = {}
 
     @field_validator("case_or_file")
     @classmethod
@@ -199,6 +202,19 @@ class AttributeType(BaseModel):
     def _value_type(cls, v: str) -> str:
         if v not in ("text", "number", "date", "boolean"):
             raise ValueError("value_type must be text/number/date/boolean")
+        return v
+
+    @field_validator("value_labels", mode="before")
+    @classmethod
+    def _value_labels(cls, v: object) -> object:
+        """Accept a JSON-encoded string (persisted column) or a dict."""
+        if v is None or v == "":
+            return {}
+        if isinstance(v, str):
+            try:
+                return json.loads(v)
+            except ValueError:
+                return {}
         return v
 
 
