@@ -103,24 +103,29 @@ Here is a non-exhaustive list of planned features
 
 ### Roadmap
 
-Items shipped in the current `alpha-0.2.0` branch are listed in the changelog
+Items shipped in the current `development` branch (0.2.0) are listed in the changelog
 above; the remaining planned work:
 
-* Import of NVivo, ATLAS.ti → **Maybe** — depends on format research (see the open-source mapping projects below)
+* ATLAS.ti native bundles → **Maybe** — use the REFI-QDA export path today (see
+  [docs/atlasti-import-assessment.md](docs/atlasti-import-assessment.md))
 * Cloud collaboration (shared projects, web access, comments) → **not planned** for the desktop app; comments via the existing folder-sync are assessed and deferred
 * Chat with memos
 * AI paraphrase
 
 ### Open-source format research — NVivo / ATLAS.ti
 
-NVivo (`.nvpx`/`.nvp`, a ZIP of XML files) and ATLAS.ti (`.atlproj24`, ZIP of XML) are proprietary formats. Import is only feasible by reusing the mapping work of open-source projects instead of reverse-engineering from scratch:
+NVivo (`.nvpx`/`.nvp`, a ZIP of XML files) is **shipped in 0.2.0** (best-effort importer).
+ATLAS.ti `.atlproj`/`.atlasti` bundles are proprietary and undocumented — no open-source
+parser exists, so ATLAS.ti import is covered via its REFI-QDA / XML exports. Relevant
+open-source mapping work:
 
 * [REFI-QDA standard](https://www.qdasoftware.org/) — the open exchange format for QDA projects (`.qdp`/`.qdc`); implemented by NVivo, ATLAS.ti, MAXQDA and others as export/import fallback
 * [openqda/refi-tools](https://github.com/openqda/refi-tools) (AGPL-3.0) — utilities, XSD schemas and the spec PDFs for implementing the REFI standard
 * [cbrincoveanu/pyrefiqda](https://github.com/cbrincoveanu/pyrefiqda) (MIT) — Python/Pydantic models mapping REFI-QDA `.qdpx` files
 * [vmnacar/refio](https://github.com/vmnacar/refio) (MIT) — read, write and convert REFI-QDA `.qdpx`/`.qde`/`.qdc` files in Python
+* [borisbachmann/atlas-qdpx](https://github.com/borisbachmann/atlas-qdpx) (MIT) — extracts annotations from ATLAS.ti REFI-QDA exports
 * [BarraQDA/nvivotools](https://github.com/BarraQDA/nvivotools) (GPL-3.0) — Python tooling around NVivo, incl. its XML export
 * [SecurityEssentials/Teams2NVivo](https://github.com/SecurityEssentials/Teams2NVivo) (MIT) — writes NVivo XML project files (documents the format)
-* [borisbachmann/atlas-qdpx](https://github.com/borisbachmann/atlas-qdpx) (MIT) — extracts annotations from ATLAS.ti REFI-QDA exports
 * Transana — the old GPL code lives on [SourceForge](https://sourceforge.net/projects/transana/) (current versions are commercial); single-user `.tprd` projects are SQLite — **shipped in 0.2.0** (defensive schema probe, media + transcript + keyword mapping)
+* Full assessment: [docs/atlasti-import-assessment.md](docs/atlasti-import-assessment.md)
 

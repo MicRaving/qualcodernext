@@ -29,6 +29,11 @@ ribbon entry; the pane is part of the Settings right bar.
   - Taguette (`.tag` / `.json`) — codes and coded excerpts.
   - Transana (`.tprd`) — SQLite database with media transcripts, keyword
     codes and time-based codings.
+  - NVivo (`.nvpx`) — best-effort import: documents, codes, codings when
+    positions are available.
+  - ATLAS.ti — no direct `.atlproj`/`.atlasti` support; export the project as
+    REFI-QDA (`.qdp`) in ATLAS.ti and import it with the REFI-QDA entry above.
+    See `docs/atlasti-import-assessment.md` for the full feasibility assessment.
   - RIS (`.ris`) — bibliographic references imported as journal references.
   - Survey (`.csv`) — spreadsheet columns imported as cases with
     attributes; qualitative columns become text files per row.

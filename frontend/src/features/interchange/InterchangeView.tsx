@@ -22,6 +22,7 @@ const FORMAT_HELP: [string, string][] = [
   ["taguette", "Taguette (.tag / .json) — codes and coded excerpts from a Taguette export."],
   ["transana", "Transana (.tprd) — an SQLite database with media transcripts, keyword codes and time-based codings."],
   ["nvivo", "NVivo (.nvpx) — best-effort import: documents, codes, codings when positions are available."],
+  ["atlasti", "ATLAS.ti — export your project as REFI-QDA (.qdp) in ATLAS.ti and import it with the REFI-QDA entry above. Direct .atlproj/.atlasti bundles are not supported (see docs/atlasti-import-assessment.md)."],
   ["ris", "RIS (.ris) — bibliographic references imported as journal references."],
   ["survey", "Survey (.csv) — spreadsheet columns imported as cases with attributes; qualitative columns become text files per row."],
   ["xlsx", "Excel (.xlsx) — multi-column sheets imported like a survey CSV; other sheets become one text file per sheet."],
