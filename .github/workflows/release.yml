@@ -1,15 +1,20 @@
 name: Release
 
-# Builds the release for Windows, Linux and macOS (Tauri cannot cross-compile —
-# every platform builds on its own runner), signs the updater artifacts with
-# the repo's TAURI_SIGNING_PRIVATE_KEY secret, publishes the installers to a
-# GitHub release and assembles the static update manifest the app's updater
-# endpoint points at
+# Builds the release for Windows, Linux (flatpak only) and macOS (Tauri cannot
+# cross-compile — every platform builds on its own runner), signs the updater
+# artifacts with the repo's TAURI_SIGNING_PRIVATE_KEY secret, publishes the
+# installers to a GitHub release and assembles the static update manifest the
+# app's updater endpoint points at
 # (https://github.com/MicRaving/QCnext/releases/latest/download/qualcoder-latest.json).
 #
 # Required repository secret: TAURI_SIGNING_PRIVATE_KEY — the content of
 # updater.key (the app's built-in pubkey lives in tauri.conf.json and must
-# belong to this key, see `npx tauri signer generate`).
+# belong to this key, see `npx tauri signer generate`). When the secret is
+# ABSENT the build degrades gracefully to UNSIGNED installers (updater
+# artifacts disabled, no update manifest) so the pipeline never fails at the
+# signing step — the "A public key has been found, but no private key" error.
+#
+# Only the NSIS setup .exe is uploaded for Windows (NOT the MSI).
 #
 # Note: macOS builds are unsigned (no Apple code-signing secrets); Gatekeeper
 # will warn on first launch until a certificate + notarization are configured.
@@ -32,15 +37,15 @@ jobs:
         include:
           - os: windows-latest
             target: windows-x86_64
+            bundles: nsis
             release_files: |
-              frontend/src-tauri/target/release/bundle/nsis/*
-              frontend/src-tauri/target/release/bundle/msi/*
+              frontend/src-tauri/target/release/bundle/nsis/*setup.exe
+              frontend/src-tauri/target/release/bundle/nsis/*setup.exe.sig
           - os: ubuntu-22.04
             target: linux-x86_64
+            bundles: flatpak
             release_files: |
-              frontend/src-tauri/target/release/bundle/appimage/*
-              frontend/src-tauri/target/release/bundle/deb/*
-              frontend/src-tauri/target/release/bundle/rpm/*
+              frontend/src-tauri/target/release/bundle/flatpak/*
           - os: macos-13
             target: darwin-x86_64
             release_files: |
@@ -66,11 +71,12 @@ jobs:
           cache-dependency-path: frontend/package-lock.json
       - uses: dtolnay/rust-toolchain@stable
 
-      - name: Linux system dependencies (webkit2gtk, tray, svg)
+      - name: Linux system dependencies (webkit2gtk, tray, svg, flatpak)
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev patchelf
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev patchelf flatpak flatpak-builder
+          flatpak remote-add --if-not-exists --user flathub https://flathub.org/repo/flathub.flatpakrepo
 
       - name: Backend deps (incl. PyInstaller for the onedir)
         working-directory: backend
@@ -81,15 +87,24 @@ jobs:
       - name: Frontend deps
         run: npm ci
 
-      - name: Restore the signing key
+      - name: Restore the signing key (or degrade to unsigned builds)
         shell: pwsh
         run: |
-          if (-not "${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}") {
-            throw "TAURI_SIGNING_PRIVATE_KEY secret is missing - add the content of updater.key."
+          if ("${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}") {
+            Set-Content -Path "$env:RUNNER_TEMP\updater.key" -Value "${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}" -NoNewline
+            "TAURI_SIGNING_PRIVATE_KEY_PATH=$env:RUNNER_TEMP\updater.key" | Out-File -FilePath $env:GITHUB_ENV -Append
+            "TAURI_SIGNING_PRIVATE_KEY_PASSWORD=" | Out-File -FilePath $env:GITHUB_ENV -Append
+            Write-Host "Signing key restored - updater artifacts will be created."
+          } else {
+            # No private key: tauri would fail with "A public key has been
+            # found, but no private key". Disable updater artifacts so the
+            # build completes with unsigned installers.
+            $conf = Get-Content "src-tauri/tauri.conf.json" -Raw
+            $patched = $conf -replace '"createUpdaterArtifacts"\s*:\s*true', '"createUpdaterArtifacts": false'
+            Set-Content "src-tauri/tauri.conf.json" $patched -Encoding utf8 -NoNewline
+            "UNSIGNED_BUILD=true" | Out-File -FilePath $env:GITHUB_ENV -Append
+            Write-Host "TAURI_SIGNING_PRIVATE_KEY secret missing - building UNSIGNED (updater artifacts disabled)."
           }
-          Set-Content -Path "$env:RUNNER_TEMP\updater.key" -Value "${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}" -NoNewline
-          "TAURI_SIGNING_PRIVATE_KEY_PATH=$env:RUNNER_TEMP\updater.key" | Out-File -FilePath $env:GITHUB_ENV -Append
-          "TAURI_SIGNING_PRIVATE_KEY_PASSWORD=" | Out-File -FilePath $env:GITHUB_ENV -Append
 
       - name: Build backend onedir (PyInstaller)
         working-directory: backend
@@ -103,9 +118,9 @@ jobs:
           New-Item -ItemType Directory -Path $target -Force | Out-Null
           Copy-Item "../backend/dist/qualcoder-backend/*" $target -Recurse -Force
 
-      - name: Build the Tauri app + signed updater artifacts
+      - name: Build the Tauri app (signed or unsigned, flatpak on Linux)
         working-directory: frontend/src-tauri
-        run: npx --yes @tauri-apps/cli@2 build
+        run: npx --yes @tauri-apps/cli@2 build --bundles ${{ matrix.bundles }}
 
       - name: Rename macOS updater bundles (unique asset names per arch)
         if: runner.os == 'macOS'
@@ -115,19 +130,20 @@ jobs:
           $suffix = "${{ matrix.target }}".Replace("darwin-", "")
           $base = Get-ChildItem -Filter "*.app.tar.gz" | Select-Object -First 1
           if (-not $base) { throw "No .app.tar.gz updater bundle found" }
-          $renamed = "QualCoder_darwin_$suffix.app.tar.gz"
+          $renamed = "QCnext_darwin_$suffix.app.tar.gz"
           Move-Item $base.Name $renamed
           Move-Item "$($base.Name).sig" "$renamed.sig"
 
       - name: Build the update-manifest fragment
+        if: env.UNSIGNED_BUILD != 'true'
         shell: pwsh
         working-directory: frontend/src-tauri/target/release/bundle
         run: |
           switch ("${{ matrix.target }}") {
             "windows-x86_64" { $dir = "nsis";   $glob = "*setup.exe" }
-            "linux-x86_64"   { $dir = "appimage"; $glob = "*.AppImage" }
-            "darwin-x86_64"  { $dir = "macos";  $glob = "QualCoder_darwin_x86_64.app.tar.gz" }
-            "darwin-aarch64" { $dir = "macos";  $glob = "QualCoder_darwin_aarch64.app.tar.gz" }
+            "linux-x86_64"   { $dir = "flatpak"; $glob = "*.flatpak" }
+            "darwin-x86_64"  { $dir = "macos";  $glob = "QCnext_darwin_x86_64.app.tar.gz" }
+            "darwin-aarch64" { $dir = "macos";  $glob = "QCnext_darwin_aarch64.app.tar.gz" }
           }
           $file = Get-ChildItem $dir -Filter $glob | Select-Object -First 1
           if (-not $file) { throw "No updater bundle matched $glob in $dir" }
@@ -141,6 +157,7 @@ jobs:
           $fragment | ConvertTo-Json | Set-Content "$env:RUNNER_TEMP/fragment-${{ matrix.target }}.json"
 
       - name: Upload manifest fragment
+        if: env.UNSIGNED_BUILD != 'true'
         uses: actions/upload-artifact@v4
         with:
           name: fragment-${{ matrix.target }}
@@ -169,9 +186,14 @@ jobs:
       - name: Assemble the static update manifest
         shell: pwsh
         run: |
+          $fragments = Get-ChildItem "fragments/fragment-*.json" -ErrorAction SilentlyContinue
+          if (-not $fragments) {
+            Write-Host "No signed updater fragments (unsigned build) - skipping the update manifest."
+            exit 0
+          }
           $version = (Get-Content "frontend/src-tauri/tauri.conf.json" -Raw | ConvertFrom-Json).version
           $platforms = @{}
-          foreach ($f in Get-ChildItem "fragments/fragment-*.json") {
+          foreach ($f in $fragments) {
             $frag = Get-Content $f.FullName -Raw | ConvertFrom-Json
             $platforms[$frag.target] = @{
               signature = $frag.signature
@@ -187,6 +209,7 @@ jobs:
           $manifest | ConvertTo-Json -Depth 6 | Set-Content "qualcoder-latest.json" -Encoding utf8
 
       - name: Upload the update manifest
+        if: hashFiles('qualcoder-latest.json') != ''
         uses: softprops/action-gh-release@v2
         with:
           files: qualcoder-latest.json

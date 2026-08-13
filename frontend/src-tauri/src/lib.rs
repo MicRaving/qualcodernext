@@ -238,9 +238,9 @@ fn kill_backend() {
         Err(poisoned) => poisoned.into_inner(),
     };
     if let Some(child) = guard.take() {
-        let pid = child.id();
         #[cfg(windows)]
         {
+            let pid = child.id();
             let _ = Command::new("taskkill")
                 .args(["/T", "/F", "/PID", &pid.to_string()])
                 .stdout(std::process::Stdio::null())

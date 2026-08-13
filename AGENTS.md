@@ -38,6 +38,12 @@ they never build their own bars.
   request of the repo owner — backend onedir + release exe as regular git files,
   MSI/NSIS installers via git-lfs (`git lfs track "*.msi" "*-setup.exe"`, then
   `git add -f`). Keep artifacts off all other branches.
+- RELEASE NOTE (repo owner): upload ONLY the NSIS setup .exe to GitHub releases —
+  never the .msi. GitHub CI builds MUST NOT require the signing key: the release
+  workflow degrades to unsigned builds when `TAURI_SIGNING_PRIVATE_KEY` is absent
+  (tauri fails with "A public key has been found, but no private key" otherwise).
+- LINUX: build only the flatpak bundle for now (`tauri build --bundles flatpak`);
+  no deb/rpm/appimage.
 - Never edit user data under `~/.qualcoder/` except to restore the settings
   file after test runs (e2e wipes it; restore recent project + sync off).
 - The user's real project for manual verification:
