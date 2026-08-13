@@ -1,23 +1,76 @@
 /**
  * Coding-flow regression suite: graph create/delete, PDF text marking
  * (shared codings with the plain-text mode), and the multi-code autocode
- * dialog. Each test uses its own throwaway project.
+ * dialog. All tests share ONE project per run (created by the first test,
+ * re-opened from the recent-projects list by the later ones) — the backend
+ * process persists across tests, so creating a fresh project per test would
+ * only cost time without isolating anything.
  */
-import { expect, test } from "@playwright/test";
+import { expect, test, type Page } from "./helpers";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { execSync } from "node:child_process";
 
-const E2E_ROOT = path.join(os.tmpdir(), "qc-tabtest");
-const unique = (name: string) =>
-  path.join(E2E_ROOT, `${name}_${Date.now() % 100000}_${Math.floor(Math.random() * 999)}.qda`);
+test.describe.configure({ mode: "serial" });
 
-async function createProject(page: import("@playwright/test").Page, projectPath: string) {
+const E2E_ROOT = path.join(os.tmpdir(), "qc-tabtest");
+const PROJECT_PATH = path.join(E2E_ROOT, "CodingFlows.qda");
+
+test.beforeAll(() => {
+  fs.rmSync(PROJECT_PATH, { recursive: true, force: true });
+});
+
+/**
+ * The backend's migration chain rewrites the project row's `about` field on
+ * EVERY open, and `open_project` rejects a database whose `about` lacks
+ * "QualCoder" — so a project can only be opened once per backend session.
+ * Restore the marker directly (same quirk as features.spec.ts).
+ */
+async function repairProjectMeta(): Promise<void> {
+  try {
+    const { DatabaseSync } = await import("node:sqlite");
+    const db = new DatabaseSync(path.join(PROJECT_PATH, "data.qda"));
+    try {
+      db.exec("UPDATE project SET about='QualCoder 4.0' WHERE about NOT LIKE 'QualCoder%'");
+    } finally {
+      db.close();
+    }
+  } catch {
+    /* the open below will surface any real problem */
+  }
+}
+
+/**
+ * Make sure the shared project is open. Fresh pages land on the welcome
+ * screen, so re-open from the recent-projects list; clear the backend's
+ * stale lock file and repair the `about` marker first.
+ */
+async function ensureProjectOpen(page: Page) {
+  const closeBtn = page.getByRole("button", { name: "Cases" });
+  for (let attempt = 0; attempt < 3; attempt++) {
+    await page.goto("/");
+    fs.rmSync(path.join(PROJECT_PATH, "project_in_use.lock"), { force: true });
+    await repairProjectMeta();
+    const recent = page.getByRole("button", { name: PROJECT_PATH, exact: true });
+    try {
+      await expect(recent).toBeVisible({ timeout: 5_000 });
+      await recent.click();
+      await expect(closeBtn).toBeEnabled({ timeout: 30_000 });
+      return;
+    } catch {
+      /* reload and retry once more */
+    }
+  }
+  throw new Error(`Could not open ${PROJECT_PATH} after 3 attempts`);
+}
+
+/** Create the shared project (first test only). */
+async function createProject(page: Page) {
   await page.goto("/");
   await page.getByRole("button", { name: "New project" }).click();
   const dialog = page.getByRole("dialog", { name: "New project" });
-  await dialog.locator("#create-path").fill(projectPath);
+  await dialog.locator("#create-path").fill(PROJECT_PATH);
   await dialog.getByRole("button", { name: "Create project" }).click();
   await expect(page.getByRole("button", { name: "Cases" })).toBeVisible({ timeout: 30_000 });
 }
@@ -25,7 +78,7 @@ async function createProject(page: import("@playwright/test").Page, projectPath:
 /* ------------------------------------------------------------------ graphs */
 
 test("graph create updates list, delete works", async ({ page }) => {
-  await createProject(page, unique("Gr"));
+  await createProject(page);
 
   await page.getByRole("button", { name: "Reports" }).click();
   await page.getByRole("button", { name: "Graphs", exact: true }).click();
@@ -59,8 +112,8 @@ test("graph create updates list, delete works", async ({ page }) => {
 /* ----------------------------------------------------------------- pdf text */
 
 test("pdf text marking codes into the plain-text layer", async ({ page }) => {
-  const projectPath = unique("Pdf");
-  const pdfPath = path.join(E2E_ROOT, `doc_${Date.now() % 100000}.pdf`);
+  await ensureProjectOpen(page);
+  const pdfPath = path.join(E2E_ROOT, `pdf_${Date.now() % 100000}.pdf`);
   const script = `
 import fitz
 doc = fitz.open()
@@ -73,19 +126,21 @@ doc.save(r"${pdfPath}")
   fs.writeFileSync(scriptPath, script, "utf-8");
   execSync(`"D:\\Downloads\\qualcoder-rework\\backend\\.venv\\Scripts\\python.exe" "${scriptPath}"`);
 
-  await createProject(page, projectPath);
-
   await page.getByRole("button", { name: "Coding", exact: true }).click();
   await page.setInputFiles("input[type=file]", [pdfPath]);
-  await expect(page.getByRole("row").filter({ hasText: "doc_" })).toBeVisible({
+  await expect(page.getByRole("row").filter({ hasText: "pdf_" })).toBeVisible({
     timeout: 20_000,
   });
-  await page.getByRole("row").filter({ hasText: "doc_" }).click();
+  await page.getByRole("row").filter({ hasText: "pdf_" }).click();
 
   await expect(page.locator("canvas").first()).toBeVisible({ timeout: 30_000 });
-  await page.waitForTimeout(2500);
 
+  // pdf.js sizes the canvas once it reports the page geometry — wait for a
+  // rendered box instead of a fixed sleep.
   const canvas = page.locator("canvas").first();
+  await expect
+    .poll(async () => (await canvas.boundingBox())?.width ?? 0, { timeout: 20_000 })
+    .toBeGreaterThan(100);
   const box = await canvas.boundingBox();
   expect(box).not.toBeNull();
   await page.mouse.move(box!.x + box!.width * 0.16, box!.y + box!.height * 0.112);
@@ -114,8 +169,10 @@ doc.save(r"${pdfPath}")
   // Switch back to the rendered PDF — canvases re-render and text marking works.
   await page.getByRole("button", { name: "Plain text" }).click();
   await expect(page.locator("canvas").first()).toBeVisible({ timeout: 20_000 });
-  await page.waitForTimeout(1500);
   const canvas2 = page.locator("canvas").first();
+  await expect
+    .poll(async () => (await canvas2.boundingBox())?.width ?? 0, { timeout: 20_000 })
+    .toBeGreaterThan(100);
   const box2 = await canvas2.boundingBox();
   expect(box2).not.toBeNull();
   await page.mouse.move(box2!.x + box2!.width * 0.16, box2!.y + box2!.height * 0.19);
@@ -132,18 +189,16 @@ doc.save(r"${pdfPath}")
 /* ---------------------------------------------------------------- autocode */
 
 test("autocode dialog codes multiple selected codes", async ({ page }) => {
-  const projectPath = unique("Ac");
-  const txtPath = path.join(E2E_ROOT, `doc_${Date.now() % 100000}.txt`);
+  await ensureProjectOpen(page);
+  const txtPath = path.join(E2E_ROOT, `ac_${Date.now() % 100000}.txt`);
   fs.writeFileSync(txtPath, "cat dog cat bird\nsecond line here\n", "utf-8");
-
-  await createProject(page, projectPath);
 
   await page.getByRole("button", { name: "Coding", exact: true }).click();
   await page.setInputFiles("input[type=file]", [txtPath]);
-  await expect(page.getByRole("row").filter({ hasText: "doc_" })).toBeVisible({
+  await expect(page.getByRole("row").filter({ hasText: "ac_" })).toBeVisible({
     timeout: 20_000,
   });
-  await page.getByRole("row").filter({ hasText: "doc_" }).click();
+  await page.getByRole("row").filter({ hasText: "ac_" }).click();
   await expect(page.getByRole("button", { name: "Code", exact: true })).toBeVisible({
     timeout: 20_000,
   });

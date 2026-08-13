@@ -47,6 +47,31 @@ async function waitForUrl(url: string, timeoutMs: number, isReady: (status: numb
   throw lastErr;
 }
 
+/**
+ * Pre-warm vite's dev transform cache: the very first page load of the run
+ * pays the cold transform of the entire app module graph (~30 s measured),
+ * which dominates the first test. Vite's serve middleware transforms imports
+ * recursively, so fetching the entry module once warms the whole static
+ * graph. Lazy chunks (pdf.js worker, PdfCoder) stay cold — they are only
+ * fetched on first use — but the shared app shell is the big cost.
+ */
+async function prewarmVite(): Promise<void> {
+  const started = Date.now();
+  try {
+    const res = await fetch(`${FRONTEND_URL}/src/main.tsx`);
+    if (!res.ok) {
+      console.warn(`[e2e setup] vite prewarm got HTTP ${res.status} — continuing anyway`);
+      return;
+    }
+    await res.arrayBuffer(); // force the body (vite transforms on read)
+    console.warn(`[e2e setup] vite prewarm done in ${Date.now() - started} ms`);
+  } catch (err) {
+    console.warn(
+      `[e2e setup] vite prewarm failed (${err instanceof Error ? err.message : err}) — continuing anyway`,
+    );
+  }
+}
+
 function logTail(file: string, maxLines = 40): string {
   try {
     const lines = fs
@@ -136,6 +161,7 @@ export default async function globalSetup(): Promise<void> {
   try {
     await waitForUrl(BACKEND_HEALTH_URL, BACKEND_WAIT_MS, (s) => s >= 200 && s < 300);
     await waitForUrl(FRONTEND_URL, FRONTEND_WAIT_MS, (s) => s >= 200 && s < 400);
+    await prewarmVite();
   } catch (err) {
     const msg = [
       `E2E server startup failed: ${err instanceof Error ? err.message : err}`,

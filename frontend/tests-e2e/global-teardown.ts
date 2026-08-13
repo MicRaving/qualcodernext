@@ -11,7 +11,11 @@ import path from "node:path";
 const FRONTEND_DIR = process.cwd();
 const SERVERS_FILE = path.join(FRONTEND_DIR, "tests-e2e", ".servers.json");
 const SETTINGS_FILE = path.join(os.homedir(), ".qualcoder", "settings.json");
-const TEST_PROJECT_DIR = path.join(os.tmpdir(), "qc-e2e", "Study.qda");
+// All temp project dirs the specs create (qc-e2e is the classic one; the
+// per-file shared projects live in their own dirs).
+const E2E_TMP_DIRS = ["qc-e2e", "qc-tabtest", "qc-roadmap", "qc-tasks", "qc-gaps"].map((d) =>
+  path.join(os.tmpdir(), d),
+);
 
 function killTree(pid: number) {
   if (!pid) return;
@@ -42,10 +46,12 @@ export default async function globalTeardown(): Promise<void> {
     /* ignore */
   }
 
-  try {
-    fs.rmSync(TEST_PROJECT_DIR, { recursive: true, force: true });
-  } catch {
-    /* ignore */
+  for (const dir of E2E_TMP_DIRS) {
+    try {
+      fs.rmSync(dir, { recursive: true, force: true });
+    } catch {
+      /* ignore */
+    }
   }
 
   try {

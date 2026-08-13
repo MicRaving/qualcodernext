@@ -8,23 +8,74 @@
  *  - value labels: an attribute type with a label map renders a select in
  *    the case properties editor
  *
- * Each test uses its own throwaway project (same pattern as
- * coding-flows.spec.ts); nothing here needs AI or whisper.
+ * All tests share ONE project per run (created by the first test, re-opened
+ * from the recent-projects list by the later ones). Nothing here needs AI
+ * or whisper.
  */
-import { expect, test } from "@playwright/test";
+import { expect, test, type Page } from "./helpers";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-const E2E_ROOT = path.join(os.tmpdir(), "qc-roadmap");
-const unique = (name: string) =>
-  path.join(E2E_ROOT, `${name}_${Date.now() % 100000}_${Math.floor(Math.random() * 999)}.qda`);
+test.describe.configure({ mode: "serial" });
 
-async function createProject(page: import("@playwright/test").Page, projectPath: string) {
+const E2E_ROOT = path.join(os.tmpdir(), "qc-roadmap");
+const PROJECT_PATH = path.join(E2E_ROOT, "Roadmap.qda");
+
+test.beforeAll(() => {
+  fs.rmSync(PROJECT_PATH, { recursive: true, force: true });
+});
+
+/**
+ * The backend's migration chain rewrites the project row's `about` field on
+ * EVERY open, and `open_project` rejects a database whose `about` lacks
+ * "QualCoder" — so a project can only be opened once per backend session.
+ * Restore the marker directly (same quirk as features.spec.ts).
+ */
+async function repairProjectMeta(): Promise<void> {
+  try {
+    const { DatabaseSync } = await import("node:sqlite");
+    const db = new DatabaseSync(path.join(PROJECT_PATH, "data.qda"));
+    try {
+      db.exec("UPDATE project SET about='QualCoder 4.0' WHERE about NOT LIKE 'QualCoder%'");
+    } finally {
+      db.close();
+    }
+  } catch {
+    /* the open below will surface any real problem */
+  }
+}
+
+/**
+ * Make sure the shared project is open. Fresh pages land on the welcome
+ * screen, so re-open from the recent-projects list; clear the backend's
+ * stale lock file and repair the `about` marker first.
+ */
+async function ensureProjectOpen(page: Page) {
+  const closeBtn = page.getByRole("button", { name: "Cases" });
+  for (let attempt = 0; attempt < 3; attempt++) {
+    await page.goto("/");
+    fs.rmSync(path.join(PROJECT_PATH, "project_in_use.lock"), { force: true });
+    await repairProjectMeta();
+    const recent = page.getByRole("button", { name: PROJECT_PATH, exact: true });
+    try {
+      await expect(recent).toBeVisible({ timeout: 5_000 });
+      await recent.click();
+      await expect(closeBtn).toBeEnabled({ timeout: 30_000 });
+      return;
+    } catch {
+      /* reload and retry once more */
+    }
+  }
+  throw new Error(`Could not open ${PROJECT_PATH} after 3 attempts`);
+}
+
+/** Create the shared project (first test only). */
+async function createProject(page: Page) {
   await page.goto("/");
   await page.getByRole("button", { name: "New project" }).click();
   const dialog = page.getByRole("dialog", { name: "New project" });
-  await dialog.locator("#create-path").fill(projectPath);
+  await dialog.locator("#create-path").fill(PROJECT_PATH);
   await dialog.getByRole("button", { name: "Create project" }).click();
   await expect(page.getByRole("button", { name: "Cases" })).toBeVisible({ timeout: 30_000 });
 }
@@ -54,7 +105,7 @@ test("promote/demote moves codes in the hierarchy via the context menu", async (
   const txtPath = path.join(E2E_ROOT, `prom_${Date.now() % 100000}.txt`);
   fs.writeFileSync(txtPath, "some content for the coder\n", "utf-8");
 
-  await createProject(page, unique("Pr"));
+  await createProject(page);
   await page.getByRole("button", { name: "Coding", exact: true }).click();
   await page.setInputFiles("input[type=file]", [txtPath]);
   await expect(page.getByRole("row").filter({ hasText: "prom_" })).toBeVisible({
@@ -110,7 +161,7 @@ test("promote/demote moves codes in the hierarchy via the context menu", async (
 /* ------------------------------------------------------------ report list */
 
 test("reports registry lists the roadmap reports and navigates to them", async ({ page }) => {
-  await createProject(page, unique("Rg"));
+  await ensureProjectOpen(page);
 
   await page.getByRole("button", { name: "Reports" }).click();
   await expect(page.getByRole("heading", { name: "Analysis" }).first()).toBeVisible();
@@ -142,7 +193,7 @@ test("reports registry lists the roadmap reports and navigates to them", async (
 /* -------------------------------------------------------------------- qtt */
 
 test("QTT ribbon nav, worksheet creation and note entry", async ({ page }) => {
-  await createProject(page, unique("Qt"));
+  await ensureProjectOpen(page);
 
   await page.getByRole("button", { name: "QTT", exact: true }).click();
   await expect(page.getByText("No worksheets yet. Add one to collect insights.")).toBeVisible({
@@ -178,7 +229,7 @@ test("QTT ribbon nav, worksheet creation and note entry", async ({ page }) => {
 /* ---------------------------------------------------------------- creative */
 
 test("creative panel opens from the ribbon and adds a note", async ({ page }) => {
-  await createProject(page, unique("Cr"));
+  await ensureProjectOpen(page);
 
   await page.getByRole("button", { name: "Creative" }).click();
   await expect(page.getByRole("heading", { name: "Creative" }).first()).toBeVisible({
@@ -196,7 +247,7 @@ test("creative panel opens from the ribbon and adds a note", async ({ page }) =>
 test("attribute type with value labels renders a select in the case properties", async ({
   page,
 }) => {
-  await createProject(page, unique("Vl"));
+  await ensureProjectOpen(page);
 
   // Create a case via the Cases view.
   await page.getByRole("button", { name: "Cases" }).click();

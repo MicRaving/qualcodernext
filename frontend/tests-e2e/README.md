@@ -2,7 +2,8 @@
 
 End-to-end tests that drive the REAL application — the FastAPI backend and
 the Vite frontend — through the core workflows, using the UI only (no direct
-API calls).
+API calls). `COVERAGE.md` maps every documented user operation (`docs/*.md`)
+to the spec that covers it.
 
 ## Run
 
@@ -10,13 +11,21 @@ API calls).
 # one-time setup: install the browser binary (~170 MB)
 npx playwright install chromium
 
-# run the suite (starts both servers automatically)
+# run the suite (starts both servers automatically) — from frontend/
 npm run test:e2e
 ```
 
+NOTE: the Playwright config lives in `frontend/playwright.config.ts`, and
+Playwright only loads a config from the current working directory — running
+`npx playwright test` inside `tests-e2e/` silently runs with DEFAULT settings
+(no global setup, no base URL, many workers) and every test fails. Always run
+from `frontend/`.
+
 The Playwright config (`playwright.config.ts`) uses a `globalSetup` that
-spawns both servers and waits for them to respond, and a `globalTeardown`
-that kills the process trees and cleans up test artifacts:
+spawns both servers and waits for them to respond, then **pre-warms vite's
+transform cache** (fetches `/src/main.tsx`, halving the first test's cold-app
+cost), and a `globalTeardown` that kills the process trees and cleans up test
+artifacts:
 
 - backend: `backend\.venv\Scripts\python.exe -m uvicorn qualcoder_api.main:app --port 8765`
 - frontend: `npm run dev -- --port 5173 --strictPort`
@@ -42,37 +51,75 @@ The specs run alphabetically in one serial worker (see "Why serial" below):
    AI sections.
 3. **Coding flows** (`coding-flows.spec.ts`) — graph create/delete, PDF text
    marking with the plain-text/PDF toggles, and the multi-code autocode dialog.
-4. **Features** (`features.spec.ts`) — image region coding, sidebar-code
+   Shares ONE project across its three tests.
+4. **Coverage gaps** (`coverage-gaps.spec.ts`) — segment link copy/paste +
+   jump, bookmarks, dictionary autocode, send-to-QTT from the coder, and the
+   Publish dialog with a real .docx export.
+5. **Features** (`features.spec.ts`) — image region coding, sidebar-code
    clicking, history view + filter, autocode + SQL report, cases + attributes,
    REFI-QDA interchange export/import, a11y smoke (accessible names).
-5. **Inspector** (`inspector-annotation.spec.ts`) — file-inspector annotation.
-6. **Media** (`media.spec.ts`) — AV coding on a generated WAV: timeline
+6. **Inspector** (`inspector-annotation.spec.ts`) — file-inspector annotation.
+7. **Media** (`media.spec.ts`) — AV coding on a generated WAV: timeline
    segments, delete, play/pause, the manual-transcription mode toggle, and a
    whisper transcription run (skipped when no spoken fixture exists).
-7. **Roadmap** (`roadmap.spec.ts`) — v0.2.0 features: code promote/demote via
+8. **Roadmap** (`roadmap.spec.ts`) — v0.2.0 features: code promote/demote via
    the sidebar context menu, the reports registry (dictionary / statistics /
    summary table / sentiment / document comparison), QTT worksheet creation +
    note entry, the creative scratchpad, and value-labels selects in the
-   attribute editor.
-8. **Smoke** (`smoke-features.spec.ts`) — reports menu bar, graphs under
+   attribute editor. Shares ONE project across its five tests.
+9. **Smoke** (`smoke-features.spec.ts`) — reports menu bar, graphs under
    reports, journal ribbon.
-9. **Tasks + a11y** (`tasks-a11y.spec.ts`) — batch autocode with eligible
-   counts on the batch buttons, the background-tasks queue flyout (pause/
-   resume/delete/clear), the coder flyout (viewport bounds, per-coder
-   trashcan, background-tasks section), sidebar drag-hide, display-mode a11y
-   classes, and the PDF coder's plain-text pane (PDF + text side by side).
+10. **Tasks + a11y** (`tasks-a11y.spec.ts`) — batch autocode with eligible
+    counts on the batch buttons, the background-tasks queue flyout (pause/
+    resume/delete/clear), the coder flyout (viewport bounds, per-coder
+    trashcan incl. the reassignment prompt, background-tasks section), sidebar
+    drag-hide, display-mode a11y classes, and the PDF coder's plain-text pane
+    (PDF + text side by side). Shares ONE project across its first four tests.
 
 Flaky media-dependent flows (whisper transcription without a spoken fixture,
 headless autoplay) carry explicit skip/fallback annotations instead of
 weakening the assertions.
 
-Tests run serially (single worker) because the backend keeps one project
-open at a time and shares `~/.qualcoder/settings.json` (which the setup and
-teardown delete so runs start clean).
+## Why serial (one worker)
+
+`workers: 1` is intentional and must stay:
+
+- The backend keeps ONE project open at a time (server-side singleton state)
+  and specs rely on a defined file order (e.g. `app.spec.ts` wipes
+  `%TEMP%\qc-e2e` in its `beforeAll`, which would delete another worker's
+  project mid-run).
+- The `about`-marker quirk (`features.spec.ts`) lets a project be opened only
+  once per backend session, so parallel workers would collide on the same
+  project files and lock files.
+- `~/.qualcoder/settings.json` (recent projects, coders) is shared and wiped
+  by setup/teardown.
+
+## Speedups applied (2026-08)
+
+Before: **37 tests, 1.9 m wall** (104 s of test time; the first test paid a
+32.3 s cold-vite transform). After: **42 tests, 1.9 m wall** (93 s of test
+time — 5 more tests, ~11 s faster summed).
+
+- **Vite prewarm in `global-setup.ts`** — fetches `/src/main.tsx` once the
+  dev server is up; vite transforms the whole static module graph
+  recursively. First test: 32.3 s → 16.1 s.
+- **Shared project per spec file** (`coding-flows`, `roadmap`, `tasks-a11y`,
+  `coverage-gaps`) — the first test creates the project, the rest re-open it
+  from the recent list with the lock-file + `about`-marker repair, instead of
+  creating a fresh project per test.
+- **No fixed waits left** — all `waitForTimeout` calls replaced with
+  `expect.poll(...)` on the canvas bounding box / element state.
+- **Animations disabled** — `tests-e2e/helpers.ts` injects
+  `*{animation:none!important;transition:none!important}` via
+  `addInitScript` on every page (same effect as the app's reduced-motion
+  a11y mode); Playwright's actionability waits no longer stall on
+  transitioning elements.
+- `contextOptions.reducedMotion: "reduce"` in the config as a second layer.
 
 ## Notes
 
-- Test projects are created under `%TEMP%\qc-e2e` and removed by the
-  global teardown.
+- Test projects are created under `%TEMP%\qc-e2e` (plus `qc-tabtest`,
+  `qc-roadmap`, `qc-tasks`, `qc-gaps` for the per-file projects) and removed
+  by the global teardown / the next run's `beforeAll`.
 - The suite intentionally leaves `npm test` / `npm run build` untouched —
   the E2E files live in `tests-e2e/` outside the app `tsconfig` include.

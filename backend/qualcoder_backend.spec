@@ -74,6 +74,16 @@ datas += collect_data_files("tokenizers")
 # silero_vad_v6.onnx lives in faster_whisper/assets — REQUIRED for VAD.
 datas += collect_data_files("faster_whisper")
 
+# --- Roadmap importers/AI (lazy function-local imports) -------------------------
+hiddenimports += ["openpyxl", "pyreadstat", "pandas", "vaderSentiment"]
+hiddenimports += collect_submodules("yt_dlp")
+hiddenimports += collect_submodules("trafilatura")
+hiddenimports += ["docx", "pptx"]
+# Lexicons and document templates ship as package data.
+datas += collect_data_files("vaderSentiment")
+datas += collect_data_files("docx")
+datas += collect_data_files("pptx")
+
 a = Analysis(
     ["run_packaged.py"],
     pathex=[os.path.join(HERE, "src")],

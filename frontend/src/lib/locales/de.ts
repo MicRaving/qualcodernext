@@ -6,7 +6,7 @@
 export const de: Record<string, string> = {
   // app chrome
   "app.name": "QCnext",
-  "app.version": "0.1.0",
+  "app.version": "0.2.0",
 
   // backend status pill
   "backend.ok": "Backend {status}",

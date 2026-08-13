@@ -6,7 +6,7 @@
  * (single worker) because the backend holds one open project at a time and
  * writes shared user settings.
  */
-import { expect, test } from "@playwright/test";
+import { expect, test } from "./helpers";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";

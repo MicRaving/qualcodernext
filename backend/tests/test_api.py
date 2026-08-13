@@ -20,7 +20,7 @@ async def test_health(client):
     assert res.status_code == 200
     body = res.json()
     assert body["status"] == "ok"
-    assert body["version"] == "0.1.0"
+    assert body["version"] == "0.2.0"
 
 
 async def test_create_then_summary(client, tmp_path, app_version):

@@ -9,7 +9,7 @@
  * later tests; each of them re-opens it from the recent-projects list (fresh
  * pages always land on the welcome screen — the app has no session resume).
  */
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Page } from "./helpers";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";

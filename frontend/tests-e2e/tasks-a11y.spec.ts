@@ -6,27 +6,80 @@
  *   via the edge arrow.
  * - The display-mode drop-down (dashboard + settings) applies a11y classes.
  * - PDF coder: side-by-side PDF + plain-text split view.
+ *
+ * The first four tests share ONE project per run (created by test 1,
+ * re-opened from the recent-projects list by the later ones); the last test
+ * runs on the project-less dashboard.
  */
-import { expect, test } from "@playwright/test";
+import { expect, test, type Page } from "./helpers";
 import { execSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
+test.describe.configure({ mode: "serial" });
+
 const E2E_ROOT = path.join(os.tmpdir(), "qc-tasks");
-const unique = (name: string) =>
-  path.join(E2E_ROOT, `${name}_${Date.now() % 100000}_${Math.floor(Math.random() * 999)}.qda`);
+const PROJECT_PATH = path.join(E2E_ROOT, "Tasks.qda");
+
+test.beforeAll(() => {
+  fs.rmSync(PROJECT_PATH, { recursive: true, force: true });
+});
 
 const BACKEND_PYTHON = (() => {
   const venv = path.resolve(process.cwd(), "..", "backend", ".venv", "Scripts", "python.exe");
   return fs.existsSync(venv) ? venv : "python";
 })();
 
-async function createProject(page: import("@playwright/test").Page, projectPath: string) {
+/**
+ * The backend's migration chain rewrites the project row's `about` field on
+ * EVERY open, and `open_project` rejects a database whose `about` lacks
+ * "QualCoder" — so a project can only be opened once per backend session.
+ * Restore the marker directly (same quirk as features.spec.ts).
+ */
+async function repairProjectMeta(): Promise<void> {
+  try {
+    const { DatabaseSync } = await import("node:sqlite");
+    const db = new DatabaseSync(path.join(PROJECT_PATH, "data.qda"));
+    try {
+      db.exec("UPDATE project SET about='QualCoder 4.0' WHERE about NOT LIKE 'QualCoder%'");
+    } finally {
+      db.close();
+    }
+  } catch {
+    /* the open below will surface any real problem */
+  }
+}
+
+/**
+ * Make sure the shared project is open. Fresh pages land on the welcome
+ * screen, so re-open from the recent-projects list; clear the backend's
+ * stale lock file and repair the `about` marker first.
+ */
+async function ensureProjectOpen(page: Page) {
+  const closeBtn = page.getByRole("button", { name: "Cases" });
+  for (let attempt = 0; attempt < 3; attempt++) {
+    await page.goto("/");
+    fs.rmSync(path.join(PROJECT_PATH, "project_in_use.lock"), { force: true });
+    await repairProjectMeta();
+    const recent = page.getByRole("button", { name: PROJECT_PATH, exact: true });
+    try {
+      await expect(recent).toBeVisible({ timeout: 5_000 });
+      await recent.click();
+      await expect(closeBtn).toBeEnabled({ timeout: 30_000 });
+      return;
+    } catch {
+      /* reload and retry once more */
+    }
+  }
+  throw new Error(`Could not open ${PROJECT_PATH} after 3 attempts`);
+}
+
+async function createProject(page: Page) {
   await page.goto("/");
   await page.getByRole("button", { name: "New project" }).click();
   const dialog = page.getByRole("dialog", { name: "New project" });
-  await dialog.locator("#create-path").fill(projectPath);
+  await dialog.locator("#create-path").fill(PROJECT_PATH);
   await dialog.getByRole("button", { name: "Create project" }).click();
   await expect(page.getByRole("button", { name: "Cases" })).toBeVisible({ timeout: 30_000 });
   // The dialog may linger while the backend warms up — wait until it is gone
@@ -35,14 +88,13 @@ async function createProject(page: import("@playwright/test").Page, projectPath:
 }
 
 test("files-view batch autocode queues background tasks with queue controls", async ({ page }) => {
-  const projectPath = unique("Tk");
+  await createProject(page);
   const aPath = path.join(E2E_ROOT, `a_${Date.now() % 100000}.txt`);
   const bPath = path.join(E2E_ROOT, `b_${Date.now() % 100000}.txt`);
   fs.mkdirSync(E2E_ROOT, { recursive: true });
   fs.writeFileSync(aPath, "cat dog cat bird\n", "utf-8");
   fs.writeFileSync(bPath, "mouse cat dog\n", "utf-8");
 
-  await createProject(page, projectPath);
   await page.getByRole("button", { name: "Coding", exact: true }).click();
 
   // Import both text files.
@@ -124,9 +176,7 @@ test("files-view batch autocode queues background tasks with queue controls", as
 test("coder flyout stays in the viewport and hosts per-row delete + background tasks", async ({
   page,
 }) => {
-  const projectPath = unique("Fl");
-  fs.mkdirSync(E2E_ROOT, { recursive: true });
-  await createProject(page, projectPath);
+  await ensureProjectOpen(page);
 
   // The flyout opens from the coder-switcher button in the ribbon.
   const coderBtn = page.getByRole("button", { name: /click to switch/ });
@@ -161,9 +211,13 @@ test("coder flyout stays in the viewport and hosts per-row delete + background t
   await expect(secondRow).toBeVisible({ timeout: 10_000 });
   await expect(secondRow.getByRole("button", { name: "Delete", exact: true })).toBeVisible();
 
-  // Deleting the now non-current coder removes its row entirely.
+  // Deleting the now non-current coder removes its row entirely. In the
+  // shared project "default" owns codings (test 1 autocoded with it), so the
+  // backend answers 409 and the flyout prompts for a reassignment target —
+  // hand it "Second".
   const defaultRow = flyout.getByRole("option").filter({ hasText: "default" });
   await expect(defaultRow.getByRole("button", { name: "Delete", exact: true })).toBeEnabled();
+  page.on("dialog", (d) => void d.accept("Second"));
   await defaultRow.getByRole("button", { name: "Delete", exact: true }).click();
   await expect(defaultRow).toHaveCount(0, { timeout: 10_000 });
 
@@ -176,9 +230,7 @@ test("coder flyout stays in the viewport and hosts per-row delete + background t
 });
 
 test("sidebars hide when dragged past the minimum and recall via edge arrow", async ({ page }) => {
-  const projectPath = unique("Sb");
-  fs.mkdirSync(E2E_ROOT, { recursive: true });
-  await createProject(page, projectPath);
+  await ensureProjectOpen(page);
 
   const separator = page.getByRole("separator", { name: "Resize left sidebar" });
   await expect(separator).toBeVisible();
@@ -223,7 +275,7 @@ test("display-mode drop-down applies a11y classes (dashboard + settings)", async
 });
 
 test("pdf coder plain-text pane shows PDF and text side by side", async ({ page }) => {
-  const projectPath = unique("Ps");
+  await ensureProjectOpen(page);
   const pdfPath = path.join(E2E_ROOT, `sb_${Date.now() % 100000}.pdf`);
   const script = `
 import fitz
@@ -237,14 +289,18 @@ doc.save(r"${pdfPath}")
   fs.writeFileSync(scriptPath, script, "utf-8");
   execSync(`"${BACKEND_PYTHON}" "${scriptPath}"`);
 
-  fs.mkdirSync(E2E_ROOT, { recursive: true });
-  await createProject(page, projectPath);
   await page.getByRole("button", { name: "Coding", exact: true }).click();
   await page.setInputFiles("input[type=file]", [pdfPath]);
   await expect(page.getByRole("row").filter({ hasText: "sb_" })).toBeVisible({ timeout: 20_000 });
   await page.getByRole("row").filter({ hasText: "sb_" }).click();
   await expect(page.locator("canvas").first()).toBeVisible({ timeout: 30_000 });
-  await page.waitForTimeout(1500);
+
+  // pdf.js sizes the canvas once the page geometry is known — poll instead
+  // of sleeping on a fixed delay.
+  const canvas = page.locator("canvas").first();
+  await expect
+    .poll(async () => (await canvas.boundingBox())?.width ?? 0, { timeout: 20_000 })
+    .toBeGreaterThan(100);
 
   // The "Plain text" toggle is a pane switch (PDF stays on): pressing it
   // once shows the extracted text next to the canvas.

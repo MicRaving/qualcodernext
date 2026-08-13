@@ -1,5 +1,5 @@
 /* Standalone repro: Inspector (files rightbar) — add annotation via the + button. */
-import { expect, test } from "@playwright/test";
+import { expect, test } from "./helpers";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";

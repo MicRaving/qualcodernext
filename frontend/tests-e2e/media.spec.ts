@@ -9,7 +9,7 @@
  * from the recent-projects list using the same backend quirks documented in
  * features.spec.ts (lock file + `about` marker).
  */
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Page } from "./helpers";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
