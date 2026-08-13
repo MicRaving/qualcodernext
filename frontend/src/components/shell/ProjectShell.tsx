@@ -12,6 +12,7 @@ import {
   Files,
   History,
   LayoutDashboard,
+  Lightbulb,
   NotebookPen,
   Pause,
   Play,
@@ -34,6 +35,7 @@ import { AnalyzeView } from "@/features/analyze/AnalyzeView";
 import { ReportsList } from "@/features/analyze/ReportsList";
 import { GraphsInspector, GraphsView } from "@/features/graphs/GraphsView";
 import { HistoryView } from "@/features/history/HistoryView";
+import { CreativePanel } from "@/features/creative/CreativePanel";
 import { SettingsView } from "@/features/settings/SettingsView";
 import { AiView } from "@/features/ai/AiView";
 import { api } from "@/lib/api";
@@ -156,9 +158,10 @@ const NAV_BUTTONS: { kind: WorkspaceView["kind"]; labelKey: string; icon: typeof
   { kind: "analyze", labelKey: "nav.analyze", icon: BarChart3 },
 ];
 
-const RIGHT_ICON_BUTTONS: { pane: "history" | "ai"; labelKey: string; icon: typeof Files }[] = [
+const RIGHT_ICON_BUTTONS: { pane: "history" | "ai" | "creative"; labelKey: string; icon: typeof Files }[] = [
   { pane: "history", labelKey: "nav.history", icon: History },
   { pane: "ai", labelKey: "nav.ai", icon: Sparkles },
+  { pane: "creative", labelKey: "nav.creative", icon: Lightbulb },
 ];
 
 export function ProjectShell() {
@@ -557,6 +560,8 @@ export function ProjectShell() {
           <SettingsView />
         ) : rightPane === "history" ? (
           <HistoryView />
+        ) : rightPane === "creative" ? (
+          <CreativePanel />
         ) : view.kind === "analyze" && analyzeUi.selectedId === "graphs" ? (
           // The graph details inspector opens automatically; closing the
           // AI/Settings/History panes returns here.

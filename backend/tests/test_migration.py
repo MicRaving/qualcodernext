@@ -34,7 +34,7 @@ LEGACY_TABLES = [
     "CREATE TABLE journal (jid integer primary key, name text, jentry text, date text, owner text)",
 ]
 
-ALL_VERSIONS = [f"v{v}" for v in range(2, 24)]
+ALL_VERSIONS = [f"v{v}" for v in range(2, 25)]
 
 
 @pytest.fixture
@@ -98,7 +98,7 @@ async def test_full_chain_sets_final_version(v2_db):
     cur = await v2_db.cursor()
     await cur.execute("SELECT databaseversion, about FROM project")
     row = await cur.fetchone()
-    assert row[0] == "v23"
+    assert row[0] == "v24"
     assert row[1] == "4.0-test"
 
 
@@ -201,6 +201,33 @@ async def test_v23_adds_dictionary_tables(v2_db):
     await cur.execute("PRAGMA table_info(dictionary_entry)")
     entry_cols = {row[1] for row in await cur.fetchall()}
     assert {"id", "dict_id", "code_name", "term"} <= entry_cols
+
+
+async def test_v24_adds_creative_item_table(v2_db):
+    """v24 adds the creative-coding scratchpad table and its index."""
+    chain = MigrationChain(v2_db)
+    applied = await chain.run_all("4.0-test", "tester")
+    assert "v24" in applied
+
+    objects = await _objects(v2_db)
+    assert "creative_item" in objects
+    cur = await v2_db.cursor()
+    await cur.execute("PRAGMA table_info(creative_item)")
+    cols = {row[1] for row in await cur.fetchall()}
+    assert {"id", "text", "source_fid", "pos0", "pos1", "note", "owner", "date"} <= cols
+    # Unsourced items are allowed (positions nullable).
+    await cur.execute(
+        "INSERT INTO creative_item (text, note, owner, date) "
+        "VALUES ('an idea', 'keep', 'alice', '2026-01-01')"
+    )
+    await v2_db.commit()
+    await cur.execute("SELECT text, source_fid, pos0, pos1 FROM creative_item")
+    assert await cur.fetchone() == ("an idea", None, None, None)
+    # The source_fid hot-path index exists.
+    await cur.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='index' AND name='idx_creative_item_source_fid'"
+    )
+    assert await cur.fetchone() is not None
 
 
 async def test_chain_is_idempotent(v2_db):

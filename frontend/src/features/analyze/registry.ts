@@ -33,6 +33,8 @@ import { SqlReport } from "@/features/analyze/SqlReport";
 import { DictionaryReport } from "@/features/analyze/DictionaryReport";
 import { StatsReportView } from "@/features/analyze/StatsReport";
 import { SummaryTableReportView } from "@/features/analyze/SummaryTableReport";
+import { SentimentReportView } from "@/features/analyze/SentimentReport";
+import { DocumentCompareView } from "@/features/analyze/DocumentCompareReport";
 import type { ReportId } from "@/stores/project";
 
 export interface NavEntry {
@@ -98,6 +100,18 @@ export const ANALYSIS: NavEntry[] = [
     descriptionKey: "analyze.descSummaryTable",
     icon: Table,
   },
+  {
+    id: "sentiment",
+    titleKey: "analyze.titleSentiment",
+    descriptionKey: "analyze.descSentiment",
+    icon: CloudSun,
+  },
+  {
+    id: "doc-compare",
+    titleKey: "analyze.titleDocCompare",
+    descriptionKey: "analyze.descDocCompare",
+    icon: GitCompareArrows,
+  },
 ];
 
 /** Non-analytical tools, grouped under their own section in the left bar. */
@@ -136,4 +150,6 @@ export const REPORT_COMPONENTS: Record<ReportId, ComponentType> = {
   dictionary: DictionaryReport,
   stats: StatsReportView,
   "summary-table": SummaryTableReportView,
+  sentiment: SentimentReportView,
+  "doc-compare": DocumentCompareView,
 };

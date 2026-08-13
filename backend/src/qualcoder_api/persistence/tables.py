@@ -111,6 +111,19 @@ link = Table(
     Column("date", String),
 )
 
+creative_item = Table(
+    "creative_item",
+    metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("text", Text),
+    Column("source_fid", Integer),
+    Column("pos0", Integer),
+    Column("pos1", Integer),
+    Column("note", Text),
+    Column("owner", String),
+    Column("date", String),
+)
+
 attribute_type = Table(
     "attribute_type",
     metadata,
@@ -483,6 +496,7 @@ OWNER_TABLES = [
     "source",
     "annotation",
     "link",
+    "creative_item",
     "journal",
     "manage_files_display",
     "files_filter",

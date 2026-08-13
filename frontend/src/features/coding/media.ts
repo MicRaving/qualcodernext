@@ -57,6 +57,25 @@ export function parseTranscript(fulltext: string): SubtitleSegment[] {
   return segments;
 }
 
+/**
+ * Insert a transcript timestamp (`[mm:ss] ` / `[hh:mm:ss] `) at the caret
+ * of a manual-transcription draft. A newline is prefixed unless the caret
+ * already sits at the start of a line, so every timestamped entry stays on
+ * its own line — the exact format `parseTranscript` expects. Returns the
+ * new text and the caret position directly after the inserted timestamp.
+ */
+export function insertTimestampAtCaret(
+  text: string,
+  start: number,
+  end: number,
+  timestamp: string,
+): { text: string; caret: number } {
+  const before = text.slice(0, start);
+  const after = text.slice(end);
+  const insertion = before === "" || before.endsWith("\n") ? `${timestamp} ` : `\n${timestamp} `;
+  return { text: `${before}${insertion}${after}`, caret: start + insertion.length };
+}
+
 export function formatTime(ms: number): string {
   if (!Number.isFinite(ms) || ms < 0) return "0:00";
   const totalSeconds = Math.round(ms / 1000);

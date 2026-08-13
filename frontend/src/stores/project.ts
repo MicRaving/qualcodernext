@@ -108,9 +108,9 @@ export type WorkspaceView =
   | { kind: "settings" }
   | { kind: "ai" };
 
-/** Which panel the right bar shows. Inspector is the default; AI, Settings
- *  and History are toggleable panes driven from the top bar. */
-export type RightPane = "inspector" | "ai" | "settings" | "history";
+/** Which panel the right bar shows. Inspector is the default; AI, Settings,
+ *  History and Creative are toggleable panes driven from the top bar. */
+export type RightPane = "inspector" | "ai" | "settings" | "history" | "creative";
 
 /** The report screens of the Analysis area (see analyze/registry.ts). */
 export type ReportId =
@@ -126,7 +126,9 @@ export type ReportId =
   | "graphs"
   | "dictionary"
   | "stats"
-  | "summary-table";
+  | "summary-table"
+  | "sentiment"
+  | "doc-compare";
 
 export type InspectorSelection = { kind: "code" | "file"; id: number } | null;
 

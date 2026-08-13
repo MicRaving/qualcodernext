@@ -26,6 +26,8 @@ _SCHEMA_SQL: list[str] = [
     "owner text, date text, unique(fid,pos0,pos1,owner))",
     "CREATE TABLE link (id integer primary key autoincrement, from_fid integer, from_pos0 integer, "
     "from_pos1 integer, to_fid integer, to_pos0 integer, to_pos1 integer, memo text, owner text, date text)",
+    "CREATE TABLE creative_item (id integer primary key autoincrement, text text, "
+    "source_fid integer, pos0 integer, pos1 integer, note text, owner text, date text)",
     "CREATE TABLE attribute_type (name text primary key, date text, owner text, memo text, caseOrFile text, "
     "valuetype text, value_labels text)",
     "CREATE TABLE attribute (attrid integer primary key, name text, attr_type text, value text, id integer, "
@@ -97,6 +99,7 @@ _INDEX_SQL: list[str] = [
     "CREATE INDEX IF NOT EXISTS idx_annotation_fid ON annotation(fid)",
     "CREATE INDEX IF NOT EXISTS idx_link_from_fid ON link(from_fid)",
     "CREATE INDEX IF NOT EXISTS idx_link_to_fid ON link(to_fid)",
+    "CREATE INDEX IF NOT EXISTS idx_creative_item_source_fid ON creative_item(source_fid)",
     "CREATE INDEX IF NOT EXISTS idx_case_text_caseid ON case_text(caseid)",
     "CREATE INDEX IF NOT EXISTS idx_case_text_fid ON case_text(fid)",
     "CREATE INDEX IF NOT EXISTS idx_audit_log_action ON audit_log(action)",
@@ -148,7 +151,7 @@ async def create_new_project_schema(
     await cur.execute(
         "INSERT INTO project VALUES(?,?,?,?,?,?,?,?,?,?,?)",
         (
-            "v23",
+            "v24",
             datetime.datetime.now().astimezone().strftime("%Y-%m-%d %H:%M:%S"),
             "",
             app_version,

@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { formatTime, secondsToMs, segmentLeft, segmentWidth } from "@/features/coding/media";
+import {
+  formatTime,
+  insertTimestampAtCaret,
+  secondsToMs,
+  segmentLeft,
+  segmentWidth,
+} from "@/features/coding/media";
 
 describe("formatTime", () => {
   it("formats zero and negative", () => {
@@ -43,5 +49,42 @@ describe("timeline percent helpers", () => {
   it("handles zero/unknown duration", () => {
     expect(segmentLeft(100, 0)).toBe(0);
     expect(segmentWidth(100, 500, 0)).toBe(0);
+  });
+});
+
+describe("insertTimestampAtCaret", () => {
+  it("inserts into empty text", () => {
+    expect(insertTimestampAtCaret("", 0, 0, "[00:05]")).toEqual({
+      text: "[00:05] ",
+      caret: 8,
+    });
+  });
+
+  it("starts a new line when the caret is mid-line", () => {
+    expect(insertTimestampAtCaret("hello", 5, 5, "[00:05]")).toEqual({
+      text: "hello\n[00:05] ",
+      caret: 14,
+    });
+  });
+
+  it("does not double the newline at a line start", () => {
+    expect(insertTimestampAtCaret("a\nb", 2, 2, "[00:05]")).toEqual({
+      text: "a\n[00:05] b",
+      caret: 10,
+    });
+  });
+
+  it("replaces the current selection", () => {
+    expect(insertTimestampAtCaret("hello world", 5, 11, "[00:05]")).toEqual({
+      text: "hello\n[00:05] ",
+      caret: 14,
+    });
+  });
+
+  it("places the caret directly after the timestamp", () => {
+    expect(insertTimestampAtCaret("a [00:01] b", 10, 10, "[02:00]")).toEqual({
+      text: "a [00:01] \n[02:00] b",
+      caret: 19,
+    });
   });
 });

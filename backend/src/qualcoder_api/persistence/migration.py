@@ -282,6 +282,7 @@ class MigrationChain:
         applied += await self.migrate_v21(app_version)
         applied += await self.migrate_v22(app_version)
         applied += await self.migrate_v23(app_version)
+        applied += await self.migrate_v24(app_version)
         return applied
 
     async def migrate_v21(self, app_version: str) -> list[str]:
@@ -346,6 +347,28 @@ class MigrationChain:
             await cur.execute('update project set databaseversion="v23", about=?', [app_version])
             await self.conn.commit()
             return ["v23"]
+        return []
+
+    async def migrate_v24(self, app_version: str) -> list[str]:
+        """v24: ``creative_item`` — the creative-coding scratchpad
+        (MAXQDA-style): free-text ideas and quotes with an optional source
+        span reference (``source_fid``/``pos0``/``pos1`` all nullable —
+        unsourced items have no span)."""
+        if self.conn is None:
+            return []
+        cur = await self.conn.cursor()
+        if not await self._has_table(cur, "creative_item"):
+            await cur.execute(
+                "CREATE TABLE creative_item (id integer primary key autoincrement, text text, "
+                "source_fid integer, pos0 integer, pos1 integer, note text, owner text, date text)"
+            )
+            await cur.execute(
+                "CREATE INDEX IF NOT EXISTS idx_creative_item_source_fid "
+                "ON creative_item(source_fid)"
+            )
+            await cur.execute('update project set databaseversion="v24", about=?', [app_version])
+            await self.conn.commit()
+            return ["v24"]
         return []
 
     async def migrate_v20(self) -> list[str]:

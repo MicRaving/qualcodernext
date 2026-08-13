@@ -13,6 +13,8 @@ from qualcoder_api.api.v1.audit import router as audit_router
 from qualcoder_api.api.v1.coders import router as coders_router
 from qualcoder_api.api.v1.codes import router as codes_router
 from qualcoder_api.api.v1.codings import router as codings_router
+from qualcoder_api.api.v1.compare import router as compare_router
+from qualcoder_api.api.v1.creative import router as creative_router
 from qualcoder_api.api.v1.dictionaries import router as dictionaries_router
 from qualcoder_api.api.v1.entities import (
     annotation_router,
@@ -25,6 +27,8 @@ from qualcoder_api.api.v1.importers import router as importers_router
 from qualcoder_api.api.v1.interchange import router as interchange_router
 from qualcoder_api.api.v1.links import router as links_router
 from qualcoder_api.api.v1.reports import router as reports_router
+from qualcoder_api.api.v1.scrape import router as scrape_router
+from qualcoder_api.api.v1.sentiment import router as sentiment_router
 from qualcoder_api.api.v1.sources import router as sources_router
 from qualcoder_api.api.v1.sql_reports import router as sql_router
 from qualcoder_api.api.v1.sync_api import router as sync_router
@@ -56,6 +60,10 @@ router.include_router(graphs_router)
 router.include_router(sync_router)
 router.include_router(dictionaries_router)
 router.include_router(links_router)
+router.include_router(sentiment_router)
+router.include_router(compare_router)
+router.include_router(scrape_router)
+router.include_router(creative_router)
 
 
 def get_service() -> ProjectService:

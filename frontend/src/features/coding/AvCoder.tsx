@@ -9,12 +9,16 @@ import {
   BookmarkCheck,
   Captions,
   Check,
+  Clock,
   Code,
+  FilePen,
   Link as LinkIcon,
+  LoaderCircle,
   Mic,
   Music,
   Pause,
   Play,
+  Save,
   Sparkles,
   StickyNote,
   Trash2,
@@ -25,7 +29,7 @@ import { api, sourceFileUrl, type AVCoding, type CodeTreeItem, type Coding, type
 import { CodePicker, type PickedCode } from "@/features/coding/CodePicker";
 import { AutocodeDialog } from "@/features/coding/AutocodeDialog";
 import { TranscribeDialog } from "@/features/coding/TranscribeDialog";
-import { formatTime, parseTranscript, segmentLeft, secondsToMs, segmentWidth, buildCrAt, rawToRendered, renderedToRaw, stripCr, normalizeCodingPositions } from "@/features/coding/media";
+import { formatTime, insertTimestampAtCaret, parseTranscript, segmentLeft, secondsToMs, segmentWidth, buildCrAt, rawToRendered, renderedToRaw, stripCr, normalizeCodingPositions } from "@/features/coding/media";
 import { getSelectionOffsets } from "@/features/coding/selection";
 import { codeTint } from "@/features/coding/tint";
 import {
@@ -123,6 +127,13 @@ export function AvCoder({ source }: { source: Source }) {
   // Lower-half panel: the transcript with text-coder functions
   const [transcriptVisible, setTranscriptVisible] = useState(true);
   const [tError, setTError] = useState<string | null>(null);
+
+  // Manual transcription mode: the transcript becomes an editable draft the
+  // user types while controlling playback with Space/F9/media keys.
+  const [transcribeMode, setTranscribeMode] = useState(false);
+  const [transcribeDraft, setTranscribeDraft] = useState("");
+  const [transcribeSaving, setTranscribeSaving] = useState(false);
+  const transcribeAreaRef = useRef<HTMLTextAreaElement | null>(null);
 
   // Bookmark
   const [avBookmarkMs, setAvBookmarkMs] = useState<number | null>(null);
@@ -601,6 +612,147 @@ export function AvCoder({ source }: { source: Source }) {
     setCurrentMs(Math.round(clamped));
   }
 
+  // --- transport keys + manual transcription ---------------------------
+
+  // Latest handlers, so window listeners registered once never go stale.
+  const togglePlayRef = useRef(togglePlay);
+  togglePlayRef.current = togglePlay;
+  const seekByRef = useRef((delta: number) => seekToMs(currentMsRef.current + delta));
+  seekByRef.current = (delta: number) => seekToMs(currentMsRef.current + delta);
+
+  // Space toggles play/pause while the coder is focused (skips inputs and
+  // buttons — in the textarea Space types). F9 and Ctrl+Space work even
+  // inside the textarea, so transcription never needs a pedal.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.code === "F9" || e.key === "F9") {
+        e.preventDefault();
+        if (!e.repeat) togglePlayRef.current();
+        return;
+      }
+      if ((e.ctrlKey || e.metaKey) && e.code === "Space") {
+        e.preventDefault();
+        if (!e.repeat) togglePlayRef.current();
+        return;
+      }
+      if (e.code !== "Space" || e.ctrlKey || e.metaKey || e.altKey || e.repeat) return;
+      const target = e.target instanceof HTMLElement ? e.target : null;
+      const tag = target?.tagName ?? "";
+      const inEditable =
+        tag === "TEXTAREA" || tag === "INPUT" || tag === "SELECT" || (target?.isContentEditable ?? false);
+      const inControl = tag === "BUTTON" || tag === "A" || tag === "LABEL";
+      if (inEditable || inControl) return;
+      e.preventDefault();
+      togglePlayRef.current();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  });
+
+  // OS media keys (WebView2/Chromium): Play/Pause drive the same transport,
+  // Previous/Next track jump 10s back/forward. The API may be unavailable
+  // (or reject individual actions) — guard everything; F9/Space still work.
+  useEffect(() => {
+    const ms = (navigator as Navigator & { mediaSession?: MediaSession }).mediaSession;
+    if (!ms) return;
+    try {
+      if (typeof MediaMetadata !== "undefined") {
+        ms.metadata = new MediaMetadata({
+          title: source.name,
+          artist: "QualCoder",
+          album: "QualCoder",
+        });
+      }
+    } catch {
+      /* metadata is optional */
+    }
+    const setHandler = (action: MediaSessionAction, handler: MediaSessionActionHandler | null) => {
+      try {
+        ms.setActionHandler(action, handler);
+      } catch {
+        /* action unsupported — keep the rest wired */
+      }
+    };
+    setHandler("play", () => togglePlayRef.current());
+    setHandler("pause", () => togglePlayRef.current());
+    setHandler("previoustrack", () => seekByRef.current(-10000));
+    setHandler("nexttrack", () => seekByRef.current(10000));
+    return () => {
+      setHandler("play", null);
+      setHandler("pause", null);
+      setHandler("previoustrack", null);
+      setHandler("nexttrack", null);
+    };
+  }, [source.name, source.id]);
+
+  // Mirror the transport state to the OS (media keys + shell indicators).
+  useEffect(() => {
+    const ms = (navigator as Navigator & { mediaSession?: MediaSession }).mediaSession;
+    if (ms) ms.playbackState = playing ? "playing" : "paused";
+  }, [playing]);
+
+  // --- manual transcription mode ----------------------------------------
+
+  function toggleTranscribeMode() {
+    setTSel(null);
+    if (transcribeMode) {
+      if (transcribeDraft !== transcriptText && !window.confirm(t("coder.discardConfirm"))) return;
+      setTranscribeMode(false);
+      setTranscribeDraft("");
+    } else {
+      setTranscribeDraft(transcriptText);
+      setTranscribeMode(true);
+      requestAnimationFrame(() => transcribeAreaRef.current?.focus());
+    }
+  }
+
+  /** Insert "[mm:ss] " for the current playback position at the caret. */
+  function insertTranscriptTimestamp() {
+    const el = transcribeAreaRef.current;
+    if (!el) return;
+    const { text, caret } = insertTimestampAtCaret(
+      el.value,
+      el.selectionStart,
+      el.selectionEnd,
+      transcriptTimestamp(currentMsRef.current),
+    );
+    setTranscribeDraft(text);
+    // Re-apply the caret once React has committed the new value.
+    requestAnimationFrame(() => {
+      el.focus();
+      el.setSelectionRange(caret, caret);
+    });
+  }
+
+  /** Persist the manual transcript through the commit-edit path, which
+   *  re-anchors (and reports deletions of) existing text codings, case text
+   *  and annotations; timeline codings live on the media file and are never
+   *  affected. */
+  async function saveTranscribe() {
+    if (transcriptId == null) return;
+    setTranscribeSaving(true);
+    setTError(null);
+    try {
+      await api.commitEdit({ fid: transcriptId, new_text: transcribeDraft });
+      setTranscribeMode(false);
+      setTranscribeDraft("");
+      await loadTranscript();
+      await loadTranscriptCodings();
+    } catch (e) {
+      setTError(e instanceof Error ? e.message : t("coder.saveError"));
+    } finally {
+      setTranscribeSaving(false);
+    }
+  }
+
+  // The transcript companion may switch (re-transcription) — never keep a
+  // draft that belongs to another source's text.
+  useEffect(() => {
+    setTranscribeMode(false);
+    setTranscribeDraft("");
+    setTSel(null);
+  }, [transcriptId]);
+
   function handleTimelineClick(e: React.MouseEvent) {
     const el = timelineRef.current;
     if (!el || !durationMs) return;
@@ -748,6 +900,20 @@ export function AvCoder({ source }: { source: Source }) {
             >
               {t("avCoder.transcript")}
             </Button>
+            <Button
+              variant="secondary"
+              onClick={toggleTranscribeMode}
+              aria-pressed={transcribeMode}
+              disabled={transcriptId == null}
+              title={t("avCoder.transcribeHint")}
+              className={cn(
+                "shrink-0",
+                transcribeMode ? "border-accent text-accent" : "bg-bg text-text-secondary",
+              )}
+              icon={<FilePen size={12} aria-hidden />}
+            >
+              {t("avCoder.transcribeMode")}
+            </Button>
             {source.media_type === "video" && (
               <Button
                 variant="secondary"
@@ -882,21 +1048,62 @@ export function AvCoder({ source }: { source: Source }) {
               <Captions size={12} className="text-text-secondary" aria-hidden />
               <span className="text-xs font-medium text-text-primary">{t("avCoder.transcript")}</span>
               <span className="ml-2 truncate text-xs text-text-secondary">{transcript?.name}</span>
-              {transcriptId != null && (
+              {transcriptId != null && !transcribeMode && (
                 <span className="ml-1 truncate text-[10px] text-text-secondary">
                   {t("avCoder.transcriptSelectHint")}
                 </span>
               )}
+              {transcribeMode && (
+                <span className="ml-1 truncate text-[10px] text-accent">
+                  {t("avCoder.transcribeHint")}
+                </span>
+              )}
               <div className="flex-1" />
-              {transcriptId != null && (
-                <Button
-                  variant="secondary"
-                  className="h-6 px-1.5"
-                  onClick={() => setAutoOpen((o) => !o)}
-                  icon={<Sparkles size={12} aria-hidden />}
-                >
-                  {t("coder.autocode")}
-                </Button>
+              {transcribeMode ? (
+                <>
+                  {transcribeSaving && (
+                    <span className="flex items-center gap-1 text-xs text-text-secondary" role="status">
+                      <LoaderCircle size={12} className="animate-spin" aria-hidden />
+                      {t("coder.saving")}
+                    </span>
+                  )}
+                  <IconButton
+                    label={t("avCoder.transcribeInsert")}
+                    title={t("avCoder.transcribeInsert")}
+                    size="sm"
+                    onClick={insertTranscriptTimestamp}
+                  >
+                    <Clock size={14} aria-hidden />
+                  </IconButton>
+                  <Button
+                    variant="primary"
+                    className="h-6 px-1.5"
+                    icon={<Save size={12} aria-hidden />}
+                    onClick={() => void saveTranscribe()}
+                    disabled={transcribeSaving}
+                  >
+                    {t("avCoder.transcribeSave")}
+                  </Button>
+                  <Button
+                    variant="secondary"
+                    className="h-6 px-1.5"
+                    onClick={toggleTranscribeMode}
+                    disabled={transcribeSaving}
+                  >
+                    {t("common.cancel")}
+                  </Button>
+                </>
+              ) : (
+                transcriptId != null && (
+                  <Button
+                    variant="secondary"
+                    className="h-6 px-1.5"
+                    onClick={() => setAutoOpen((o) => !o)}
+                    icon={<Sparkles size={12} aria-hidden />}
+                  >
+                    {t("coder.autocode")}
+                  </Button>
+                )
               )}
               {tError && <span className="text-xs text-danger">{tError}</span>}
               <IconButton
@@ -908,6 +1115,26 @@ export function AvCoder({ source }: { source: Source }) {
                 <X size={14} aria-hidden />
               </IconButton>
             </div>
+            {transcribeMode ? (
+              <textarea
+                ref={transcribeAreaRef}
+                value={transcribeDraft}
+                onChange={(e) => setTranscribeDraft(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey) {
+                    e.preventDefault();
+                    insertTranscriptTimestamp();
+                  }
+                  if ((e.ctrlKey || e.metaKey) && e.key === "s") {
+                    e.preventDefault();
+                    void saveTranscribe();
+                  }
+                }}
+                spellCheck={false}
+                aria-label={t("avCoder.transcribeMode")}
+                className="qc-scroll min-h-0 w-full flex-1 resize-none bg-transparent px-4 py-3 font-mono text-sm leading-6 text-text-primary outline-none"
+              />
+            ) : (
             <div
               ref={transcriptTextRef}
               onMouseUp={onTranscriptMouseUp}
@@ -962,6 +1189,7 @@ export function AvCoder({ source }: { source: Source }) {
                 })()
               )}
             </div>
+            )}
             {/* Floating selection toolbar (code / annotate) */}
             {tSel && !tAnnotateOpen && (
               <div

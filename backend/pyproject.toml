@@ -24,6 +24,8 @@ dependencies = [
     "pyreadstat>=1.3",
     "pandas>=2.0",  # pyreadstat's DataFrame API (read_sav/write_sav)
     "vaderSentiment>=3.3",
+    "yt-dlp>=2025.4",
+    "trafilatura>=1.8",
 ]
 
 [project.optional-dependencies]
