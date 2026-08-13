@@ -26,6 +26,8 @@ from qualcoder_api.api.v1.graphs import router as graphs_router
 from qualcoder_api.api.v1.importers import router as importers_router
 from qualcoder_api.api.v1.interchange import router as interchange_router
 from qualcoder_api.api.v1.links import router as links_router
+from qualcoder_api.api.v1.publish import router as publish_router
+from qualcoder_api.api.v1.qtt import router as qtt_router
 from qualcoder_api.api.v1.reports import router as reports_router
 from qualcoder_api.api.v1.scrape import router as scrape_router
 from qualcoder_api.api.v1.sentiment import router as sentiment_router
@@ -64,6 +66,8 @@ router.include_router(sentiment_router)
 router.include_router(compare_router)
 router.include_router(scrape_router)
 router.include_router(creative_router)
+router.include_router(publish_router)
+router.include_router(qtt_router)
 
 
 def get_service() -> ProjectService:

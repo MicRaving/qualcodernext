@@ -88,6 +88,75 @@ async def build_taguette_db(path) -> None:
         await db.commit()
 
 
+async def build_transana_db(path, media_path) -> None:
+    """Minimal Transana-3-style database (media, transcripts, keywords).
+
+    Positions are stored as media timecodes (ms) — the same storage Transana
+    uses for real projects.
+    """
+    async with aiosqlite.connect(path) as db:
+        await db.executescript(
+            """
+            CREATE TABLE MediaFiles (
+                MediaID INTEGER PRIMARY KEY, MediaFileName TEXT, MediaFilePath TEXT
+            );
+            CREATE TABLE Episodes (
+                EpisodeID INTEGER PRIMARY KEY, EpisodeName TEXT,
+                EpisodeFileName TEXT, EpisodeFilePath TEXT
+            );
+            CREATE TABLE Transcripts (
+                TranscriptID INTEGER PRIMARY KEY, TranscriptName TEXT,
+                TranscriptText TEXT, TranscriptNotes TEXT, EpisodeID INTEGER
+            );
+            CREATE TABLE Keywords (
+                KeywordID INTEGER PRIMARY KEY, KeywordName TEXT,
+                KeywordTypeID INTEGER, KeywordNotes TEXT
+            );
+            CREATE TABLE KeywordTypes (KeywordTypeID INTEGER PRIMARY KEY, KeywordTypeName TEXT);
+            CREATE TABLE TranscriptKeywordAssignments (
+                TranscriptKeywordAssignmentID INTEGER PRIMARY KEY,
+                TranscriptID INTEGER, KeywordID INTEGER, StartTime INTEGER, EndTime INTEGER
+            );
+            CREATE TABLE EpisodeKeywordAssignments (
+                EpisodeKeywordAssignmentID INTEGER PRIMARY KEY,
+                EpisodeID INTEGER, KeywordID INTEGER, StartTime INTEGER, EndTime INTEGER
+            );
+            """
+        )
+        await db.execute(
+            "INSERT INTO KeywordTypes (KeywordTypeID, KeywordTypeName) VALUES (1, 'Theme')"
+        )
+        await db.execute(
+            "INSERT INTO Keywords (KeywordID, KeywordName, KeywordTypeID) "
+            "VALUES (1, 'Positive', 1)"
+        )
+        await db.execute(
+            "INSERT INTO MediaFiles (MediaID, MediaFileName, MediaFilePath) "
+            "VALUES (1, 'sample.mp4', ?)",
+            (media_path,),
+        )
+        await db.execute(
+            "INSERT INTO Episodes (EpisodeID, EpisodeName, EpisodeFileName, EpisodeFilePath) "
+            "VALUES (1, 'EpOne', 'sample.mp4', ?)",
+            (media_path,),
+        )
+        await db.execute(
+            "INSERT INTO Transcripts (TranscriptID, TranscriptName, TranscriptText, EpisodeID) "
+            "VALUES (1, 'transcript1', 'Hello transana world', 1)"
+        )
+        await db.execute(
+            "INSERT INTO TranscriptKeywordAssignments "
+            "(TranscriptKeywordAssignmentID, TranscriptID, KeywordID, StartTime, EndTime) "
+            "VALUES (1, 1, 1, 0, 500)"
+        )
+        await db.execute(
+            "INSERT INTO EpisodeKeywordAssignments "
+            "(EpisodeKeywordAssignmentID, EpisodeID, KeywordID, StartTime, EndTime) "
+            "VALUES (1, 1, 1, 1000, 2000)"
+        )
+        await db.commit()
+
+
 # ----------------------------------------------------------------------
 # RQDA
 # ----------------------------------------------------------------------
@@ -306,6 +375,137 @@ async def test_import_survey_semicolon_delimiter(project_client):
 
 
 # ----------------------------------------------------------------------
+# Transana
+# ----------------------------------------------------------------------
+
+async def test_import_transana(project_client):
+    client, tmp_path = project_client
+    media_dir = tmp_path / "media"
+    media_dir.mkdir()
+    media_file = media_dir / "sample.mp4"
+    media_file.write_bytes(b"fake mp4 bytes")
+    tprd_path = tmp_path / "sample.tprd"
+    await build_transana_db(tprd_path, str(media_file))
+    res = await client.post(
+        "/api/v1/interchange/import/transana",
+        files={"file": ("sample.tprd", tprd_path.read_bytes(), "application/octet-stream")},
+        data={"codername": "tester"},
+    )
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert body["ok"] is True
+    assert body["sources"] == 2  # transcript text source + media file source
+    assert body["categories"] == 1
+    assert body["codes"] == 1
+    assert body["codings"] == 2  # 1 text coding + 1 AV coding
+    assert body["skipped"] == 0
+
+    sources = (await client.get("/api/v1/sources")).json()
+    by_name = {s["name"]: s for s in sources}
+    assert "transcript1" in by_name
+    assert "sample.mp4" in by_name
+    transcript_id = by_name["transcript1"]["id"]
+    detail = (await client.get(f"/api/v1/sources/{transcript_id}")).json()
+    assert detail["fulltext"] == "Hello transana world"
+
+    # Timecode range 0-500ms projected onto the 20-char transcript.
+    codings = (await client.get(f"/api/v1/codings/text/{transcript_id}")).json()
+    assert len(codings) == 1
+    assert codings[0]["pos0"] == 0
+    assert codings[0]["pos1"] == 20
+    assert codings[0]["seltext"] == "Hello transana world"
+
+    # Episode assignment keeps its millisecond positions as an AV coding.
+    av = (await client.get(f"/api/v1/codings/av/{by_name['sample.mp4']['id']}")).json()
+    assert len(av) == 1
+    assert av[0]["pos0"] == 1000
+    assert av[0]["pos1"] == 2000
+
+
+async def test_import_auto_detects_transana(project_client):
+    """The auto-detect endpoint routes a .tprd database to the Transana importer."""
+    client, tmp_path = project_client
+    media_dir = tmp_path / "media"
+    media_dir.mkdir()
+    media_file = media_dir / "sample.mp4"
+    media_file.write_bytes(b"fake mp4 bytes")
+    tprd_path = tmp_path / "sample.tprd"
+    await build_transana_db(tprd_path, str(media_file))
+    res = await client.post(
+        "/api/v1/interchange/import/auto",
+        files={"file": ("sample.tprd", tprd_path.read_bytes(), "application/octet-stream")},
+        data={"codername": "tester"},
+    )
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert body["sources"] == 2
+    assert body["codes"] == 1
+    assert body["codings"] == 2
+
+
+async def test_import_transana_partial_schema(project_client):
+    """Only some Transana tables exist — the importer maps what is there.
+
+    This variant has no media files and stores character offsets instead of
+    timecodes, so positions are taken verbatim.
+    """
+    client, tmp_path = project_client
+    path = tmp_path / "partial.tprd"
+    async with aiosqlite.connect(path) as db:
+        await db.executescript(
+            """
+            CREATE TABLE Transcripts (
+                TranscriptID INTEGER PRIMARY KEY, TranscriptName TEXT, TranscriptText TEXT
+            );
+            CREATE TABLE Keywords (KeywordID INTEGER PRIMARY KEY, KeywordName TEXT);
+            CREATE TABLE KeywordAssignments (
+                AssignmentID INTEGER PRIMARY KEY,
+                TranscriptID INTEGER, KeywordID INTEGER, StartChar INTEGER, EndChar INTEGER
+            );
+            """
+        )
+        await db.execute(
+            "INSERT INTO Transcripts VALUES (1, 'doc.txt', 'The quick brown fox')"
+        )
+        await db.execute("INSERT INTO Keywords VALUES (1, 'Fox')")
+        await db.execute("INSERT INTO KeywordAssignments VALUES (1, 1, 1, 4, 9)")
+        await db.commit()
+    res = await client.post(
+        "/api/v1/interchange/import/transana",
+        files={"file": ("partial.tprd", path.read_bytes(), "application/octet-stream")},
+    )
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert body["ok"] is True
+    assert body["sources"] == 1
+    assert body["codes"] == 1
+    assert body["codings"] == 1
+    assert body["categories"] == 0
+
+    sources = (await client.get("/api/v1/sources")).json()
+    fid = sources[0]["id"]
+    codings = (await client.get(f"/api/v1/codings/text/{fid}")).json()
+    assert codings[0]["pos0"] == 4
+    assert codings[0]["pos1"] == 9
+    assert codings[0]["seltext"] == "quick"
+
+
+async def test_import_transana_missing_tables_rejected(project_client):
+    """A SQLite database without Transana tables is rejected with 422 —
+    on the explicit endpoint and in auto-detection."""
+    client, tmp_path = project_client
+    path = tmp_path / "notransana.sqlite3"
+    async with aiosqlite.connect(path) as db:
+        await db.execute("CREATE TABLE foo (id INTEGER PRIMARY KEY, bar TEXT)")
+        await db.commit()
+    payload = {"file": ("x.sqlite3", path.read_bytes(), "application/octet-stream")}
+    res = await client.post("/api/v1/interchange/import/transana", files=payload)
+    assert res.status_code == 422
+    res = await client.post("/api/v1/interchange/import/auto", files=payload)
+    assert res.status_code == 422
+
+
+# ----------------------------------------------------------------------
 # Error handling
 # ----------------------------------------------------------------------
 
@@ -324,6 +524,17 @@ async def test_import_taguette_garbage_rejected(project_client):
         "/api/v1/interchange/import/taguette",
         files={
             "file": ("bad.taguette.sqlite3", b"also not a sqlite database", "application/octet-stream")
+        },
+    )
+    assert res.status_code == 422
+
+
+async def test_import_transana_garbage_rejected(project_client):
+    client, _ = project_client
+    res = await client.post(
+        "/api/v1/interchange/import/transana",
+        files={
+            "file": ("bad.tprd", b"not a sqlite database at all", "application/octet-stream")
         },
     )
     assert res.status_code == 422

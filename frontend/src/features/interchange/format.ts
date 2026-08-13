@@ -4,6 +4,7 @@ const IMPORT_LABELS: Record<string, string> = {
   refi: "REFI-QDA",
   rqda: "RQDA",
   taguette: "Taguette",
+  transana: "Transana (.tprd)",
   ris: "RIS",
   survey: "Survey",
   xlsx: "Excel (.xlsx)",

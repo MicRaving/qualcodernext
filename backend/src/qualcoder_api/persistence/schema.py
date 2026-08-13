@@ -84,6 +84,10 @@ _SCHEMA_SQL: list[str] = [
     "unique(name));",
     "CREATE TABLE dictionary_entry (id integer primary key autoincrement, dict_id integer, code_name text, "
     "term text, unique(dict_id, term));",
+    "CREATE TABLE qtt_sheet (id integer primary key autoincrement, name text, kind text, sections_json text, "
+    "research_question text, purpose text, framework text, owner text, date text);",
+    "CREATE TABLE qtt_item (id integer primary key autoincrement, sheet_id integer, section text, kind text, "
+    "payload_json text, owner text, date text);",
 ]
 
 # Hot-path indexes (created for new projects; the migration chain adds the
@@ -100,6 +104,7 @@ _INDEX_SQL: list[str] = [
     "CREATE INDEX IF NOT EXISTS idx_link_from_fid ON link(from_fid)",
     "CREATE INDEX IF NOT EXISTS idx_link_to_fid ON link(to_fid)",
     "CREATE INDEX IF NOT EXISTS idx_creative_item_source_fid ON creative_item(source_fid)",
+    "CREATE INDEX IF NOT EXISTS idx_qtt_item_sheet_id ON qtt_item(sheet_id)",
     "CREATE INDEX IF NOT EXISTS idx_case_text_caseid ON case_text(caseid)",
     "CREATE INDEX IF NOT EXISTS idx_case_text_fid ON case_text(fid)",
     "CREATE INDEX IF NOT EXISTS idx_audit_log_action ON audit_log(action)",
@@ -151,7 +156,7 @@ async def create_new_project_schema(
     await cur.execute(
         "INSERT INTO project VALUES(?,?,?,?,?,?,?,?,?,?,?)",
         (
-            "v24",
+            "v25",
             datetime.datetime.now().astimezone().strftime("%Y-%m-%d %H:%M:%S"),
             "",
             app_version,

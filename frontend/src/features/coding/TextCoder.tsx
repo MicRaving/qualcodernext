@@ -24,6 +24,7 @@ import {
   Pencil,
   Rows3,
   Save,
+  ScrollText,
   Sparkles,
   Star,
   StickyNote,
@@ -71,6 +72,8 @@ import {
 import { usesPdfCoder } from "@/lib/media";
 import { cn } from "@/lib/utils";
 import { cls } from "@/components/ui/tokens";
+import { Menu, MenuItem } from "@/components/ui/orchestrator";
+import { listQttSheets, sendSegmentToQtt, type QttSheet } from "@/lib/qttApi";
 import { useI18n } from "@/lib/i18n";
 import { useProjectStore } from "@/stores/project";
 
@@ -209,6 +212,15 @@ export function TextCoder({
   const [clipboardLink, setClipboardLink] = useState<LinkSpanTarget | null>(null);
   const [linkCopied, setLinkCopied] = useState(false);
   const linkCopiedTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  /* "Send to QTT": pick a worksheet in a small inline menu and store the
+     selected span as a segment item (transient "sent" feedback). */
+  const [qttOpen, setQttOpen] = useState(false);
+  const [qttSheets, setQttSheets] = useState<QttSheet[]>([]);
+  const [qttLoading, setQttLoading] = useState(false);
+  const [qttSending, setQttSending] = useState<number | null>(null);
+  const [qttSent, setQttSent] = useState(false);
+  const qttSentTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   /** A jump target for ANOTHER file opened via the qc:jump-span event. */
   const [pendingFlash, setPendingFlash] = useState<PendingJump | null>(null);
 
@@ -263,6 +275,7 @@ export function TextCoder({
     () => () => {
       if (flashTimer.current) clearTimeout(flashTimer.current);
       if (linkCopiedTimer.current) clearTimeout(linkCopiedTimer.current);
+      if (qttSentTimer.current) clearTimeout(qttSentTimer.current);
     },
     [],
   );
@@ -595,6 +608,10 @@ export function TextCoder({
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "Escape") return;
+      if (qttOpen) {
+        setQttOpen(false);
+        return;
+      }
       if (pickerOpen) {
         setPickerOpen(false);
         return;
@@ -771,6 +788,49 @@ export function TextCoder({
         setErrMsg(e instanceof Error ? e.message : t("coder.linkCreateError"));
       } finally {
         clearSelection();
+      }
+    })();
+  }
+
+  /* ------------------------------------------------------------- QTT */
+
+  /** Open the worksheet picker for the current selection. */
+  function openQttPicker() {
+    setQttOpen(true);
+    setQttLoading(true);
+    void listQttSheets()
+      .then((sheets) => setQttSheets(sheets))
+      .catch((e) => {
+        setErrMsg(e instanceof Error ? e.message : t("qtt.sendError"));
+        setQttOpen(false);
+      })
+      .finally(() => setQttLoading(false));
+  }
+
+  /** Store the selected span as a segment item on the given worksheet. */
+  function sendSelectionToSheet(sheet: QttSheet) {
+    const sel = selection;
+    if (!sel || qttSending != null) return;
+    setQttSending(sheet.id);
+    void (async () => {
+      try {
+        await sendSegmentToQtt(sheet.id, {
+          fid: sourceId,
+          pos0: sel.start,
+          pos1: sel.end,
+        });
+        setQttOpen(false);
+        setQttSent(true);
+        if (qttSentTimer.current) clearTimeout(qttSentTimer.current);
+        qttSentTimer.current = setTimeout(() => setQttSent(false), 1500);
+        // An open QTT workspace refreshes its sheets/items.
+        const { qttUi, setQttUi } = useProjectStore.getState();
+        setQttUi({ tick: qttUi.tick + 1 });
+        clearSelection();
+      } catch (e) {
+        setErrMsg(e instanceof Error ? e.message : t("qtt.sendError"));
+      } finally {
+        setQttSending(null);
       }
     })();
   }
@@ -1370,6 +1430,40 @@ export function TextCoder({
                 </Button>
               </div>
             </div>
+          ) : qttOpen ? (
+            <Menu role="menu" className="w-64" aria-label={t("qtt.sendTitle")}>
+              <div className="border-b border-border px-2 py-1 text-[11px] font-medium uppercase tracking-wide text-text-secondary">
+                {t("qtt.sendTitle")}
+              </div>
+              {qttLoading ? (
+                <div className="flex items-center gap-1.5 px-2 py-2 text-xs text-text-secondary">
+                  <LoaderCircle size={12} className="animate-spin" aria-hidden />
+                  {t("qtt.loading")}
+                </div>
+              ) : qttSheets.length === 0 ? (
+                <div className="px-2 py-2 text-xs text-text-secondary">{t("qtt.sendEmpty")}</div>
+              ) : (
+                qttSheets.map((sheet) => (
+                  <MenuItem
+                    key={sheet.id}
+                    role="menuitem"
+                    disabled={qttSending != null}
+                    onClick={() => sendSelectionToSheet(sheet)}
+                    className={qttSending === sheet.id ? "opacity-60" : ""}
+                  >
+                    {qttSending === sheet.id ? (
+                      <LoaderCircle size={12} className="animate-spin" aria-hidden />
+                    ) : (
+                      <ScrollText size={12} aria-hidden />
+                    )}
+                    <span className="min-w-0 flex-1 truncate">{sheet.name}</span>
+                    <span className="shrink-0 rounded-sm bg-surface-higher px-1 py-px text-[10px] font-medium uppercase text-text-secondary">
+                      {sheet.kind === "mixed" ? t("qtt.kindMixed") : t("qtt.kindQual")}
+                    </span>
+                  </MenuItem>
+                ))
+              )}
+            </Menu>
           ) : !editMode ? (
             <div
               className={`flex items-center gap-1 p-1 ${cls.popup}`}
@@ -1419,6 +1513,16 @@ export function TextCoder({
                   {t("coder.pasteLinkHere")}
                 </Button>
               )}
+              <Button
+                variant="secondary"
+                icon={
+                  qttSent ? <Check size={12} aria-hidden /> : <ScrollText size={12} aria-hidden />
+                }
+                onClick={openQttPicker}
+                title={t("qtt.sendTitle")}
+              >
+                {qttSent ? t("qtt.sendDone") : t("qtt.send")}
+              </Button>
             </div>
           ) : null}
         </div>

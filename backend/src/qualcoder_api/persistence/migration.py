@@ -283,6 +283,7 @@ class MigrationChain:
         applied += await self.migrate_v22(app_version)
         applied += await self.migrate_v23(app_version)
         applied += await self.migrate_v24(app_version)
+        applied += await self.migrate_v25(app_version)
         return applied
 
     async def migrate_v21(self, app_version: str) -> list[str]:
@@ -369,6 +370,40 @@ class MigrationChain:
             await cur.execute('update project set databaseversion="v24", about=?', [app_version])
             await self.conn.commit()
             return ["v24"]
+        return []
+
+    async def migrate_v25(self, app_version: str) -> list[str]:
+        """v25: the QTT workspace (MAXQDA-style Questions-Themes-Theories
+        worksheets): ``qtt_sheet`` holds the worksheet (name, kind, the
+        section list as JSON, research question / purpose / framework) and
+        ``qtt_item`` holds per-section items (segments, notes, charts,
+        links) with their payload as JSON."""
+        if self.conn is None:
+            return []
+        cur = await self.conn.cursor()
+        changed = False
+        if not await self._has_table(cur, "qtt_sheet"):
+            await cur.execute(
+                "CREATE TABLE qtt_sheet (id integer primary key autoincrement, name text, "
+                "kind text, sections_json text, research_question text, purpose text, "
+                "framework text, owner text, date text)"
+            )
+            await self.conn.commit()
+            changed = True
+        if not await self._has_table(cur, "qtt_item"):
+            await cur.execute(
+                "CREATE TABLE qtt_item (id integer primary key autoincrement, sheet_id integer, "
+                "section text, kind text, payload_json text, owner text, date text)"
+            )
+            await cur.execute(
+                "CREATE INDEX IF NOT EXISTS idx_qtt_item_sheet_id ON qtt_item(sheet_id)"
+            )
+            await self.conn.commit()
+            changed = True
+        if changed:
+            await cur.execute('update project set databaseversion="v25", about=?', [app_version])
+            await self.conn.commit()
+            return ["v25"]
         return []
 
     async def migrate_v20(self) -> list[str]:

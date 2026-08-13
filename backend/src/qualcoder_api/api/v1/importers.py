@@ -1,4 +1,4 @@
-"""Interchange import API — RQDA, Taguette, RIS, Survey CSV, XLSX, SPSS uploads."""
+"""Interchange import API — RQDA, Taguette, Transana, RIS, Survey CSV, XLSX, SPSS uploads."""
 
 from __future__ import annotations
 
@@ -108,11 +108,11 @@ async def import_auto(
 ) -> dict:
     """Import an interchange file with automatic format detection.
 
-    Detects REFI-QDA (.qdp/.qdc XML), RQDA and Taguette databases,
-    RIS bibliographies, survey CSVs, Excel .xlsx workbooks, SPSS .sav
-    data files, plain-text codebooks and zipped .qda projects from the
-    file content. ``qualitative_headers`` only applies to survey-style
-    imports (CSV/XLSX/SAV).
+    Detects REFI-QDA (.qdp/.qdc XML), RQDA, Taguette and Transana
+    databases, RIS bibliographies, survey CSVs, Excel .xlsx workbooks,
+    SPSS .sav data files, plain-text codebooks and zipped .qda projects
+    from the file content. ``qualitative_headers`` only applies to
+    survey-style imports (CSV/XLSX/SAV).
     """
     if svc.project_path == "" or svc.session_factory is None:
         raise HTTPException(status_code=409, detail="no project is open")
@@ -160,6 +160,7 @@ async def import_auto(
                 _importer = {
                     "rqda": importers.import_rqda,
                     "taguette": importers.import_taguette,
+                    "transana": importers.import_transana,
                     "ris": importers.import_ris,
                 }[kind]
             result = await _importer(svc.session_factory, tmp, resolve_owner(codername))
@@ -196,6 +197,22 @@ async def import_taguette(
 ) -> dict:
     """Import a Taguette ``.taguette.sqlite3`` database."""
     return await _run_import(svc, file, codername, importers.import_taguette, "taguette")
+
+
+@router.post("/transana")
+async def import_transana(
+    svc: ServiceDep,
+    db: DbDep,
+    file: Annotated[UploadFile, File()],
+    codername: str | None = Form(None),
+) -> dict:
+    """Import a Transana ``.tprd`` SQLite database.
+
+    Transcripts become text sources, media/episode files become audio/video
+    sources (registered when the file exists next to the database),
+    keywords become codes and keyword assignments become text/AV codings.
+    """
+    return await _run_import(svc, file, codername, importers.import_transana, "transana")
 
 
 @router.post("/ris")

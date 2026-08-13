@@ -26,6 +26,8 @@ dependencies = [
     "vaderSentiment>=3.3",
     "yt-dlp>=2025.4",
     "trafilatura>=1.8",
+    "python-docx>=1.1",
+    "python-pptx>=1.0",
 ]
 
 [project.optional-dependencies]

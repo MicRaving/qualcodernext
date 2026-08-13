@@ -482,6 +482,38 @@ dictionary_entry = Table(
     UniqueConstraint("dict_id", "term", name="u_dictionary_entry_term"),
 )
 
+qtt_sheet = Table(
+    "qtt_sheet",
+    metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("name", String, nullable=False),
+    # "qual" | "mixed" — mixed worksheets seed the Creswell 14-step sections.
+    Column("kind", String, nullable=False),
+    # JSON array of section names (authoritative order).
+    Column("sections_json", Text, nullable=False),
+    Column("research_question", Text),
+    Column("purpose", Text),
+    Column("framework", Text),
+    Column("owner", String),
+    Column("date", String),
+)
+
+qtt_item = Table(
+    "qtt_item",
+    metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("sheet_id", Integer, nullable=False),
+    # Section NAME the item lives in (must be one of the sheet's sections).
+    Column("section", String, nullable=False),
+    # "segment" | "note" | "chart" | "link"
+    Column("kind", String, nullable=False),
+    # JSON payload: {fid,pos0,pos1,text} segments, {text} notes,
+    # {report,params} charts, {url} links.
+    Column("payload_json", Text, nullable=False),
+    Column("owner", String),
+    Column("date", String),
+)
+
 # Tables whose `owner` column feeds the coder_names table.
 OWNER_TABLES = [
     "code_image",
@@ -497,6 +529,8 @@ OWNER_TABLES = [
     "annotation",
     "link",
     "creative_item",
+    "qtt_sheet",
+    "qtt_item",
     "journal",
     "manage_files_display",
     "files_filter",

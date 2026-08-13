@@ -102,6 +102,7 @@ export type WorkspaceView =
   | { kind: "coding"; sourceId: number }
   | { kind: "cases" }
   | { kind: "notes" }
+  | { kind: "qtt" }
   | { kind: "analyze" }
   | { kind: "graphs" }
   | { kind: "history" }
@@ -256,6 +257,9 @@ interface ProjectState {
   /** Per-view workspace UI state (left bar / center coordination). */
   casesUi: { selectedId: number | null; query: string; tick: number };
   setCasesUi: (patch: Partial<{ selectedId: number | null; query: string; tick: number }>) => void;
+  /** QTT workspace state: the selected worksheet + reload tick. */
+  qttUi: { selectedId: number | null; tick: number };
+  setQttUi: (patch: Partial<{ selectedId: number | null; tick: number }>) => void;
   notesUi: {
     tab: "journal" | "annotations" | "memos";
     query: string;
@@ -629,6 +633,8 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
 
   casesUi: { selectedId: null, query: "", tick: 0 },
   setCasesUi: (patch) => set((s) => ({ casesUi: { ...s.casesUi, ...patch } })),
+  qttUi: { selectedId: null, tick: 0 },
+  setQttUi: (patch) => set((s) => ({ qttUi: { ...s.qttUi, ...patch } })),
   notesUi: { tab: "journal", query: "", selectedId: null, selectedKind: null, newAnnotation: false, tick: 0 },
   setNotesUi: (patch) => set((s) => ({ notesUi: { ...s.notesUi, ...patch } })),
   analyzeUi: { selectedId: "code-frequencies" },

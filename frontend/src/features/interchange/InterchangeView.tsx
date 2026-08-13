@@ -20,6 +20,7 @@ const FORMAT_HELP: [string, string][] = [
   ["refi", "REFI-QDA (.qdp / .qdc) — codebook, sources, codings and cases from other REFI-compliant tools."],
   ["rqda", "RQDA (.rqda) — a QualCoder v3 project file with codes, sources, codings and cases."],
   ["taguette", "Taguette (.tag / .json) — codes and coded excerpts from a Taguette export."],
+  ["transana", "Transana (.tprd) — an SQLite database with media transcripts, keyword codes and time-based codings."],
   ["ris", "RIS (.ris) — bibliographic references imported as journal references."],
   ["survey", "Survey (.csv) — spreadsheet columns imported as cases with attributes; qualitative columns become text files per row."],
   ["xlsx", "Excel (.xlsx) — multi-column sheets imported like a survey CSV; other sheets become one text file per sheet."],
@@ -40,6 +41,7 @@ function detectFormat(name: string): string {
   if (ext === "qdp" || ext === "qdc") return "refi";
   if (ext === "rqda") return "rqda";
   if (ext === "tag" || ext === "json") return "taguette";
+  if (ext === "tprd") return "transana";
   if (ext === "ris") return "ris";
   if (ext === "csv") return "survey";
   if (ext === "xlsx" || ext === "xls") return "xlsx";

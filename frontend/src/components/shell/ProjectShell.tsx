@@ -16,6 +16,7 @@ import {
   NotebookPen,
   Pause,
   Play,
+  ScrollText,
   Settings,
   Sparkles,
   Trash2,
@@ -31,6 +32,7 @@ import { CodingWorkspace } from "@/features/coding/CodingWorkspace";
 import { FileManager } from "@/features/manage/FileManager";
 import { CaseDetails, CasesList } from "@/features/cases/CasesView";
 import { NotesEditor, NotesList } from "@/features/notes/NotesView";
+import { QttList, QttView } from "@/features/qtt/QttView";
 import { AnalyzeView } from "@/features/analyze/AnalyzeView";
 import { ReportsList } from "@/features/analyze/ReportsList";
 import { GraphsInspector, GraphsView } from "@/features/graphs/GraphsView";
@@ -155,6 +157,7 @@ const NAV_BUTTONS: { kind: WorkspaceView["kind"]; labelKey: string; icon: typeof
   { kind: "files", labelKey: "nav.files", icon: Files },
   { kind: "cases", labelKey: "nav.cases", icon: Users },
   { kind: "notes", labelKey: "nav.notes", icon: NotebookPen },
+  { kind: "qtt", labelKey: "nav.qtt", icon: ScrollText },
   { kind: "analyze", labelKey: "nav.analyze", icon: BarChart3 },
 ];
 
@@ -545,6 +548,8 @@ export function ProjectShell() {
           <CasesList />
         ) : view.kind === "notes" ? (
           <NotesList />
+        ) : view.kind === "qtt" ? (
+          <QttList />
         ) : view.kind === "analyze" ? (
           // The reports list replaces the standard file-groups sidebar
           // while the Analysis area is active (graphs live under it too).
@@ -581,6 +586,8 @@ export function ProjectShell() {
           <CaseDetails />
         ) : view.kind === "notes" ? (
           <NotesEditor />
+        ) : view.kind === "qtt" ? (
+          <QttView />
         ) :         view.kind === "analyze" ? (
           analyzeUi.selectedId === "graphs" ? (
             <GraphsView />

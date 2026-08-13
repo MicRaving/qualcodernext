@@ -43,6 +43,8 @@ EXPECTED_TABLES = {
     "dictionary",
     "dictionary_entry",
     "creative_item",
+    "qtt_sheet",
+    "qtt_item",
 }
 
 EXPECTED_VIEWS = {
@@ -89,7 +91,7 @@ async def test_initial_project_row(new_db):
     )
     row = await cur.fetchone()
     assert row is not None
-    assert row[0] == "v24"
+    assert row[0] == "v25"
     assert row[1] == ""
     assert row[2] == "4.0-test"
     assert row[3] == 0

@@ -34,7 +34,7 @@ LEGACY_TABLES = [
     "CREATE TABLE journal (jid integer primary key, name text, jentry text, date text, owner text)",
 ]
 
-ALL_VERSIONS = [f"v{v}" for v in range(2, 25)]
+ALL_VERSIONS = [f"v{v}" for v in range(2, 26)]
 
 
 @pytest.fixture
@@ -98,7 +98,7 @@ async def test_full_chain_sets_final_version(v2_db):
     cur = await v2_db.cursor()
     await cur.execute("SELECT databaseversion, about FROM project")
     row = await cur.fetchone()
-    assert row[0] == "v24"
+    assert row[0] == "v25"
     assert row[1] == "4.0-test"
 
 
@@ -226,6 +226,40 @@ async def test_v24_adds_creative_item_table(v2_db):
     # The source_fid hot-path index exists.
     await cur.execute(
         "SELECT 1 FROM sqlite_master WHERE type='index' AND name='idx_creative_item_source_fid'"
+    )
+    assert await cur.fetchone() is not None
+
+
+async def test_v25_adds_qtt_tables(v2_db):
+    """v25 adds the QTT worksheet tables and the sheet_id index."""
+    chain = MigrationChain(v2_db)
+    applied = await chain.run_all("4.0-test", "tester")
+    assert "v25" in applied
+
+    objects = await _objects(v2_db)
+    assert {"qtt_sheet", "qtt_item"} <= objects
+    cur = await v2_db.cursor()
+    await cur.execute("PRAGMA table_info(qtt_sheet)")
+    sheet_cols = {row[1] for row in await cur.fetchall()}
+    assert {"id", "name", "kind", "sections_json", "research_question", "purpose", "framework", "owner", "date"} <= sheet_cols
+    await cur.execute("PRAGMA table_info(qtt_item)")
+    item_cols = {row[1] for row in await cur.fetchall()}
+    assert {"id", "sheet_id", "section", "kind", "payload_json", "owner", "date"} <= item_cols
+    # Rows round-trip (JSON payloads).
+    await cur.execute(
+        "INSERT INTO qtt_sheet (name, kind, sections_json, owner, date) "
+        "VALUES ('Board', 'qual', '[\"Insights\"]', 'alice', '2026-01-01')"
+    )
+    await cur.execute(
+        "INSERT INTO qtt_item (sheet_id, section, kind, payload_json, owner, date) "
+        "VALUES (1, 'Insights', 'note', '{\"text\":\"hi\"}', 'alice', '2026-01-01')"
+    )
+    await v2_db.commit()
+    await cur.execute("SELECT name, kind, sections_json FROM qtt_sheet")
+    assert await cur.fetchone() == ("Board", "qual", '["Insights"]')
+    # The sheet_id hot-path index exists.
+    await cur.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='index' AND name='idx_qtt_item_sheet_id'"
     )
     assert await cur.fetchone() is not None
 

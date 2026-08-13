@@ -8,6 +8,7 @@
  */
 import { useState, type ReactNode } from "react";
 import { ANALYSIS, TOOLS, REPORT_COMPONENTS } from "@/features/analyze/registry";
+import { PublishButton } from "@/features/analyze/PublishDialog";
 import { useI18n } from "@/lib/i18n";
 import { useProjectStore } from "@/stores/project";
 import { ViewHeader } from "@/components/ui/orchestrator";
@@ -28,7 +29,12 @@ export function AnalyzeView() {
         back={false}
         title={t("analyze.title")}
         meta={meta ? <span>· {t(meta.titleKey)}</span> : undefined}
-        actions={menuActions ?? undefined}
+        actions={
+          <>
+            <PublishButton />
+            {menuActions}
+          </>
+        }
       />
       <div className="qc-scroll min-h-0 flex-1 overflow-y-auto p-4">
         <ReportMenuBarProvider actions={menuActions} setActions={setMenuActions}>
