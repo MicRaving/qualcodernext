@@ -111,6 +111,11 @@ class ProjectResponse(BaseModel):
     migrations_applied: list[str] = Field(default_factory=list)
     error: str = ""
     lock_user: str = ""
+    #: Shared-folder detection result (open only): the frontend enables the
+    #: collaboration sync cycle when this is true (respects the per-project
+    #: override).
+    sync_auto_enabled: bool = False
+    sync_auto_reason: str = ""
 
 
 class SummaryResponse(BaseModel):
@@ -137,6 +142,25 @@ class MemosResponse(BaseModel):
 class UpdatesSettingsRequest(BaseModel):
     check_interval: str = "daily"
     auto_update: bool = False
+
+
+class AppSettingsRequest(BaseModel):
+    auto_open_project: bool = True
+
+
+@router.get("/app/settings", response_model=AppSettingsRequest)
+async def get_app_settings() -> AppSettingsRequest:
+    """App-level preferences (auto-load project on start)."""
+    from qualcoder_api.services.user_settings import get_auto_open_project
+
+    return AppSettingsRequest(auto_open_project=get_auto_open_project())
+
+
+@router.put("/app/settings", response_model=AppSettingsRequest)
+async def put_app_settings(req: AppSettingsRequest) -> AppSettingsRequest:
+    from qualcoder_api.services.user_settings import save_auto_open_project
+
+    return AppSettingsRequest(auto_open_project=save_auto_open_project(req.auto_open_project))
 
 
 @router.get("/updates/settings", response_model=UpdatesSettingsRequest)
@@ -243,11 +267,20 @@ async def open_project(req: OpenProjectRequest, svc: ServiceDep) -> ProjectRespo
                 project_path=svc.project_path,
                 session_factory=svc.session_factory,
             )
+    # Shared-folder detection: tells the frontend whether the collaboration
+    # sync cycle should be switched on (per-project override wins).
+    from qualcoder_api.services import sync as sync_service
+
+    decision = sync_service.auto_enable_decision(
+        result.project_path, user=resolve_owner(req.codername)
+    )
     return ProjectResponse(
         ok=True,
         project_path=result.project_path,
         project_name=result.project_name,
         migrations_applied=result.migrations_applied,
+        sync_auto_enabled=decision["sync_auto_enabled"],
+        sync_auto_reason=decision["reason"],
     )
 
 

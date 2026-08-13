@@ -60,6 +60,21 @@ def _provider_requires_key(provider: str) -> bool:
     return provider in ("gemini", "gpt", "claude")
 
 
+def _sanitize_error(detail: str) -> str:
+    """Trim an exception message and redact anything key-like.
+
+    httpx exceptions carry the request URL, and the Gemini ``?key=``
+    fallback puts the API key in the query string — never echo it back.
+    """
+    import re
+
+    detail = detail.strip()
+    detail = re.sub(r"([?&]key=)[^&\s\"']*", r"\1***", detail)
+    detail = re.sub(r"\bAIza[0-9A-Za-z_-]+", "AIza***", detail)
+    detail = re.sub(r"\bsk-[0-9A-Za-z_-]+", "sk-***", detail)
+    return detail[:300]
+
+
 def _models_urls(
     provider: str, api_base: str, api_key: str = ""
 ) -> list[tuple[str, dict[str, str]]]:
@@ -112,8 +127,9 @@ async def ai_models(
 ) -> dict:
     """List the models the configured provider advertises (per-provider
     ``/models`` endpoints). Local providers (ollama/lmstudio/opencode-go)
-    answer quickly; cloud providers need an API key, so failures return
-    empty.
+    answer quickly; cloud providers need an API key, so failures return an
+    empty list plus a sanitized ``error`` detail (the last exception,
+    key-redacted).
 
     Query params (``provider``/``api_base``/``api_key``), when provided,
     override the saved settings for this fetch only — they are never saved.
@@ -136,6 +152,7 @@ async def ai_models(
     if _provider_requires_key(provider) and not api_key.strip():
         return {"models": []}
     data: dict | None = None
+    last_error = ""
     for url, req_headers in _models_urls(provider, api_base, api_key):
         try:
             async with httpx.AsyncClient(timeout=3.0) as client:
@@ -143,10 +160,13 @@ async def ai_models(
                 resp.raise_for_status()
                 data = resp.json()
             break
-        except Exception:
-            continue
+        except Exception as err:
+            last_error = str(err)
     if data is None:
-        return {"models": []}
+        return {
+            "models": [],
+            "error": _sanitize_error(last_error) or "all model endpoints failed",
+        }
     if provider == "gemini":
         # Native REST shape: {"models": [{"name": "models/gemini-2.5-flash", ...}]}
         ids = sorted(
@@ -211,7 +231,7 @@ async def _probe_provider(ai: dict) -> tuple[bool | None, str]:
                 resp.raise_for_status()
             return True, ""
         except Exception as err:
-            last_error = str(err)
+            last_error = _sanitize_error(str(err))
     return False, last_error
 
 
@@ -266,7 +286,9 @@ async def ai_prompts() -> dict:
                 "id": prompt.id,
                 "mode": prompt.mode,
                 "name": prompt.name,
+                "label": prompt.label,
                 "description": prompt.description,
+                "hidden": prompt.hidden,
             }
             for prompt in CATALOG.prompts
         ]

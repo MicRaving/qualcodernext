@@ -4,9 +4,15 @@
  * pane's top bar.
  */
 import { useEffect, useState } from "react";
-import { MessageSquare, Search } from "lucide-react";
+import { HelpCircle, MessageSquare, Search } from "lucide-react";
 import { api, type AiPromptInfo } from "@/lib/api";
-import { BarHeader, LeftBar, Select } from "@/components/ui/orchestrator";
+import {
+  BarHeader,
+  HelpFlyout,
+  IconButton,
+  LeftBar,
+  Select,
+} from "@/components/ui/orchestrator";
 import { useI18n } from "@/lib/i18n";
 import { AI_MODES, AI_MODE_LABELS, type AiMode } from "@/features/ai/aiModes";
 import { AiChatPanel } from "@/features/ai/AiChatPanel";
@@ -19,12 +25,42 @@ const TABS: { kind: AiTab; label: string; icon: typeof MessageSquare }[] = [
   { kind: "search", label: "Search", icon: Search },
 ];
 
+/**
+ * Prompt catalog entries the backend may extend with ``label`` + ``hidden`` —
+ * keep the old shape (name only) working until the new fields ship.
+ */
+type CatalogPrompt = AiPromptInfo & {
+  /** Display name added by newer backends; falls back to ``name``. */
+  label?: string;
+  /** Backend mark for internal entries (e.g. ``_init``); never shown. */
+  hidden?: boolean;
+};
+
+/**
+ * Root prompts (``_init``, ``_bootstrap``, …) are resolved automatically by
+ * the backend for each mode — they are scaffolding, not user-pickable
+ * templates, so the dropdown skips them (newer backends also flag them via
+ * ``hidden``).
+ */
+function isUsablePrompt(p: AiPromptInfo): boolean {
+  const ext = p as CatalogPrompt;
+  if (ext.hidden) return false;
+  if (p.id === "_init" || p.id.endsWith("/_init")) return false;
+  if (p.name.startsWith("_")) return false;
+  return true;
+}
+
+function promptLabel(p: AiPromptInfo): string {
+  return (p as CatalogPrompt).label ?? p.name;
+}
+
 export function AiView() {
   const { t } = useI18n();
   const [tab, setTab] = useState<AiTab>("chat");
   const [mode, setMode] = useState<AiMode>("general");
   const [prompts, setPrompts] = useState<AiPromptInfo[]>([]);
   const [promptId, setPromptId] = useState<string>("");
+  const [helpAnchor, setHelpAnchor] = useState<HTMLElement | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -39,12 +75,13 @@ export function AiView() {
     };
   }, []);
 
-  const modePrompts = prompts.filter((p) => p.mode === mode);
+  const modePrompts = prompts.filter((p) => p.mode === mode && isUsablePrompt(p));
 
   return (
     <LeftBar
       borderSide="l"
       scroll={false}
+      className="h-full min-h-0"
       header={
         <BarHeader
           title="AI"
@@ -68,7 +105,7 @@ export function AiView() {
                       </option>
                     ))}
                   </Select>
-                  {modePrompts.length > 0 && (
+                  {modePrompts.length > 0 ? (
                     <Select
                       value={promptId}
                       onChange={(e) => setPromptId(e.target.value)}
@@ -79,10 +116,30 @@ export function AiView() {
                       <option value="">{t("ai.promptNone")}</option>
                       {modePrompts.map((p) => (
                         <option key={p.id} value={p.id} title={p.description}>
-                          {p.name}
+                          {promptLabel(p)}
                         </option>
                       ))}
                     </Select>
+                  ) : (
+                    <span title={t("ai.promptHelp")} className="text-[10px] text-text-secondary">
+                      {t("ai.promptsEmptyHint")}
+                    </span>
+                  )}
+                  <IconButton
+                    label={t("ai.promptHelp")}
+                    title={t("ai.promptHelp")}
+                    size="sm"
+                    aria-expanded={helpAnchor !== null}
+                    onClick={(e) => setHelpAnchor(helpAnchor ? null : e.currentTarget)}
+                  >
+                    <HelpCircle size={12} aria-hidden />
+                  </IconButton>
+                  {helpAnchor && (
+                    <HelpFlyout anchor={helpAnchor} onClose={() => setHelpAnchor(null)}>
+                      <p className="text-xs leading-relaxed text-text-secondary">
+                        {t("ai.promptHelp")}
+                      </p>
+                    </HelpFlyout>
                   )}
                 </>
               )}

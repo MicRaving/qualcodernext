@@ -15,6 +15,7 @@ import {
   Button,
   ErrorBanner,
   IconButton,
+  Input,
   LoadingState,
   ViewHeader,
 } from "@/components/ui/orchestrator";
@@ -35,6 +36,21 @@ interface RectState {
   height: number;
 }
 
+/** String draft of a region's geometry while the inline editor is open. */
+interface RectDraft {
+  x1: string;
+  y1: string;
+  width: string;
+  height: string;
+}
+
+/** Parse a geometry draft; null when any field is missing/negative. */
+function parseDraftRect(draft: RectDraft): RectState | null {
+  const vals = [draft.x1, draft.y1, draft.width, draft.height].map((v) => Number(v));
+  if (vals.some((n) => !Number.isFinite(n) || n < 0)) return null;
+  return { x1: vals[0], y1: vals[1], width: vals[2], height: vals[3] };
+}
+
 export function ImageCoder({ source }: { source: Source }) {
   const { t } = useI18n();
   const activeCodeId = useProjectStore((s) => s.activeCodeId);
@@ -50,6 +66,7 @@ export function ImageCoder({ source }: { source: Source }) {
   const [pickerOpen, setPickerOpen] = useState(false);
   const [pendingRect, setPendingRect] = useState<RectState | null>(null);
   const [selected, setSelected] = useState<ImageCoding | null>(null);
+  const [editDraft, setEditDraft] = useState<RectDraft | null>(null);
   const [saving, setSaving] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
   const imageWrapRef = useRef<HTMLDivElement | null>(null);
@@ -72,15 +89,17 @@ export function ImageCoder({ source }: { source: Source }) {
     return map;
   }, [codes]);
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (): Promise<ImageCoding[]> => {
     setLoading(true);
     setError(null);
     try {
       const [cs, flat] = await Promise.all([api.imageCodings(source.id), api.codesFlat()]);
       setCodings(cs);
       setCodes(flat);
+      return cs;
     } catch (e) {
       setError(e instanceof Error ? e.message : t("coder.loadCodingsError"));
+      return [];
     } finally {
       setLoading(false);
     }
@@ -222,32 +241,40 @@ export function ImageCoder({ source }: { source: Source }) {
     try {
       await api.deleteImageCoding(coding.imid);
       setSelected(null);
+      setEditDraft(null);
       await load();
     } catch (e) {
       setError(e instanceof Error ? e.message : t("coder.deleteError"));
     }
   }
 
-  async function handleEditGeometry(coding: ImageCoding) {
-    const current = `${Math.round(coding.x1)},${Math.round(coding.y1)},${Math.round(coding.width)},${Math.round(coding.height)}`;
-    const raw = window.prompt(t("imageCoder.regionGeometry"), current);
-    if (raw === null) return;
-    const parts = raw.split(",").map((p) => Number(p.trim()));
-    if (parts.length !== 4 || parts.some((n) => !Number.isFinite(n) || n < 0)) {
+  function startEditGeometry(coding: ImageCoding) {
+    setEditDraft({
+      x1: String(Math.round(coding.x1)),
+      y1: String(Math.round(coding.y1)),
+      width: String(Math.round(coding.width)),
+      height: String(Math.round(coding.height)),
+    });
+  }
+
+  async function applyEditGeometry() {
+    if (!editDraft || !selected) return;
+    const rect = parseDraftRect(editDraft);
+    if (!rect) {
       setError(t("imageCoder.regionSaveError"));
       return;
     }
+    setSaving(true);
+    setError(null);
     try {
-      await api.patchImageCoding(coding.imid, {
-        x1: parts[0],
-        y1: parts[1],
-        width: parts[2],
-        height: parts[3],
-      });
-      setSelected(null);
-      await load();
+      await api.patchImageCoding(selected.imid, rect);
+      const fresh = await load();
+      setEditDraft(null);
+      setSelected(fresh.find((c) => c.imid === selected.imid) ?? null);
     } catch (e) {
       setError(e instanceof Error ? e.message : t("imageCoder.regionSaveError"));
+    } finally {
+      setSaving(false);
     }
   }
 
@@ -331,6 +358,7 @@ export function ImageCoder({ source }: { source: Source }) {
               key={coding.imid}
               onClick={(e) => {
                 e.stopPropagation();
+                setEditDraft(null);
                 setSelected(coding);
               }}
               title={`${nameByCid.get(coding.cid) ?? t("coder.plainCode")}${coding.memo ? ` — ${coding.memo}` : ""}`}
@@ -351,6 +379,18 @@ export function ImageCoder({ source }: { source: Source }) {
           ))}
           </div>
 
+          {/* Live overlay of the geometry being edited */}
+          {editDraft && (() => {
+            const rect = parseDraftRect(editDraft);
+            if (!rect) return null;
+            return (
+              <div
+                className="pointer-events-none absolute border-2 border-accent bg-accent/20"
+                style={{ left: rect.x1, top: rect.y1, width: rect.width, height: rect.height }}
+              />
+            );
+          })()}
+
           {/* Selection preview */}
           {dragRect && (
             <div
@@ -363,36 +403,80 @@ export function ImageCoder({ source }: { source: Source }) {
 
       {/* Details panel */}
       {selected && (
-        <div className="flex shrink-0 items-center gap-3 border-t border-border bg-surface px-3 py-2">
-          <span
-            className="h-3 w-3 shrink-0 rounded-sm border border-border"
-            style={{ backgroundColor: codeColor(selected) }}
-            aria-hidden
-          />
-          <span className="truncate text-sm font-medium text-text-primary">
-            {nameByCid.get(selected.cid) ?? t("coder.fallbackCodePlain", { id: selected.cid })}
-          </span>
-          <span className="truncate text-xs text-text-secondary">
-            {selected.memo || t("common.noMemo")} · {Math.round(selected.width)}×{Math.round(selected.height)}px
-          </span>
-          <div className="flex-1" />
-          <Button
-            variant="secondary"
-            icon={<Pencil size={12} aria-hidden />}
-            onClick={() => void handleEditGeometry(selected)}
-          >
-            {t("imageCoder.editRegion")}
-          </Button>
-          <Button
-            variant="danger"
-            icon={<Trash2 size={12} aria-hidden />}
-            onClick={() => void handleDelete(selected)}
-          >
-            {t("common.delete")}
-          </Button>
-          <Button variant="secondary" onClick={() => setSelected(null)}>
-            {t("common.close")}
-          </Button>
+        <div className="shrink-0 border-t border-border bg-surface px-3 py-2">
+          <div className="flex items-center gap-3">
+            <span
+              className="h-3 w-3 shrink-0 rounded-sm border border-border"
+              style={{ backgroundColor: codeColor(selected) }}
+              aria-hidden
+            />
+            <span className="truncate text-sm font-medium text-text-primary">
+              {nameByCid.get(selected.cid) ?? t("coder.fallbackCodePlain", { id: selected.cid })}
+            </span>
+            <span className="truncate text-xs text-text-secondary">
+              {selected.memo || t("common.noMemo")} · {Math.round(selected.x1)},{Math.round(selected.y1)} ·{" "}
+              {Math.round(selected.width)}×{Math.round(selected.height)}px
+            </span>
+            <div className="flex-1" />
+            {!editDraft && (
+              <>
+                <Button
+                  variant="secondary"
+                  icon={<Pencil size={12} aria-hidden />}
+                  onClick={() => startEditGeometry(selected)}
+                >
+                  {t("imageCoder.editRegion")}
+                </Button>
+                <Button
+                  variant="danger"
+                  icon={<Trash2 size={12} aria-hidden />}
+                  onClick={() => void handleDelete(selected)}
+                >
+                  {t("common.delete")}
+                </Button>
+                <Button
+                  variant="secondary"
+                  onClick={() => {
+                    setSelected(null);
+                    setEditDraft(null);
+                  }}
+                >
+                  {t("common.close")}
+                </Button>
+              </>
+            )}
+          </div>
+          {editDraft && (
+            <div className="mt-2 flex flex-wrap items-end gap-2">
+              <CoordField
+                label={t("imageCoder.x")}
+                value={editDraft.x1}
+                onChange={(v) => setEditDraft((d) => (d ? { ...d, x1: v } : d))}
+              />
+              <CoordField
+                label={t("imageCoder.y")}
+                value={editDraft.y1}
+                onChange={(v) => setEditDraft((d) => (d ? { ...d, y1: v } : d))}
+              />
+              <CoordField
+                label={t("imageCoder.w")}
+                value={editDraft.width}
+                onChange={(v) => setEditDraft((d) => (d ? { ...d, width: v } : d))}
+              />
+              <CoordField
+                label={t("imageCoder.h")}
+                value={editDraft.height}
+                onChange={(v) => setEditDraft((d) => (d ? { ...d, height: v } : d))}
+              />
+              <div className="flex-1" />
+              <Button variant="secondary" onClick={() => setEditDraft(null)}>
+                {t("common.cancel")}
+              </Button>
+              <Button variant="primaryCompact" onClick={() => void applyEditGeometry()}>
+                {t("common.apply")}
+              </Button>
+            </div>
+          )}
         </div>
       )}
 
@@ -411,5 +495,33 @@ export function ImageCoder({ source }: { source: Source }) {
         </div>
       )}
     </div>
+  );
+}
+
+/** Small labeled number input for one region-coordinate field. */
+function CoordField({
+  label,
+  value,
+  onChange,
+  className = "",
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  className?: string;
+}) {
+  return (
+    <label className={`flex flex-col gap-0.5 ${className}`}>
+      <span className="text-[10px] font-medium uppercase tracking-wide text-text-secondary">{label}</span>
+      <Input
+        type="number"
+        min={0}
+        step={1}
+        value={value}
+        aria-label={label}
+        onChange={(e) => onChange(e.target.value)}
+        className="w-16"
+      />
+    </label>
   );
 }

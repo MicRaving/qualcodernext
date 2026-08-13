@@ -15,6 +15,7 @@ import {
   ChevronDown,
   Eye,
   EyeOff,
+  HelpCircle,
   LoaderCircle,
   Pause,
   Pencil,
@@ -29,7 +30,7 @@ import { api, ApiError } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 import { useProjectStore } from "@/stores/project";
 import { useToast } from "@/lib/toast";
-import { Menu, MenuItem, Modal } from "@/components/ui/orchestrator";
+import { HelpFlyout, IconButton, Menu, MenuItem, Modal } from "@/components/ui/orchestrator";
 import { cls } from "@/components/ui/tokens";
 
 const SYNC_POLL_MS = 30_000;
@@ -83,6 +84,9 @@ export function CoderSwitcher() {
   const [syncBusy, setSyncBusy] = useState(false);
   const [visibility, setVisibility] = useState<Record<string, number>>({});
   const [menu, setMenu] = useState<{ name: string; x: number; y: number } | null>(null);
+  // Help popovers (anchored for the shared HelpFlyout)
+  const [helpOpen, setHelpOpen] = useState<null | "refresh">(null);
+  const [refreshHelpAnchorEl, setRefreshHelpAnchorEl] = useState<HTMLElement | null>(null);
   const [stats, setStats] = useState<CoderStats | null>(null);
   const [statsLoading, setStatsLoading] = useState(false);
   const [viewportTick, setViewportTick] = useState(0);
@@ -91,6 +95,7 @@ export function CoderSwitcher() {
 
   const syncEnabled = syncStatus?.ok === true && syncStatus.enabled === true;
   const syncError = Boolean(syncStatus?.last_error);
+  const refreshHelpAnchor = helpOpen === "refresh" ? refreshHelpAnchorEl : null;
 
   const taskCounts = {
     queued: tasks.filter((j) => j.state === "queued").length,
@@ -140,6 +145,8 @@ export function CoderSwitcher() {
         setOpen(false);
         setAdding(false);
         setMenu(null);
+        setHelpOpen(null);
+        setRefreshHelpAnchorEl(null);
       }
     };
     const onKey = (e: KeyboardEvent) => {
@@ -147,6 +154,8 @@ export function CoderSwitcher() {
         setOpen(false);
         setAdding(false);
         setMenu(null);
+        setHelpOpen(null);
+        setRefreshHelpAnchorEl(null);
       }
     };
     document.addEventListener("mousedown", onDown);
@@ -280,6 +289,8 @@ export function CoderSwitcher() {
   function closeAll() {
     setOpen(false);
     setAdding(false);
+    setHelpOpen(null);
+    setRefreshHelpAnchorEl(null);
   }
 
   /**
@@ -478,56 +489,103 @@ export function CoderSwitcher() {
             </button>
           )}
 
-          {/* Collaboration sync */}
+          {/* Refresh project data */}
           <div className="my-1 h-px bg-border" aria-hidden />
-          <button
-            type="button"
-            onClick={() => {
-              void useProjectStore.getState().refreshProject();
-              closeAll();
-            }}
-            className="flex w-full items-center gap-2 px-2 py-1.5 text-left text-sm hover:bg-surface-higher"
-          >
-            <RefreshCw size={13} aria-hidden />
-            {t("common.refresh")}
-          </button>
-          <div className="px-2 py-1.5">
-            <div className="flex items-center justify-between">
-              <span className="text-xs font-medium text-text-primary">{t("sync.title")}</span>
-              <button
-                type="button"
-                role="switch"
-                aria-checked={syncEnabled}
-                onClick={() => void toggleSync()}
-                disabled={syncBusy}
-                className={`relative h-4 w-8 rounded-full transition-colors ${
-                  syncEnabled ? "bg-accent" : "bg-border"
-                } disabled:opacity-50`}
-                aria-label={t("sync.toggle")}
+          <div className="flex items-center justify-between px-2 py-1.5">
+            <span className="flex min-w-0 items-center gap-1 text-sm text-text-primary">
+              <span className="truncate">{t("coder.refreshProject")}</span>
+              <IconButton
+                label={t("coder.refreshProjectHint")}
+                title={t("coder.refreshProjectHint")}
+                size="sm"
+                aria-expanded={helpOpen === "refresh"}
+                onClick={(e) => {
+                  setRefreshHelpAnchorEl(e.currentTarget);
+                  setHelpOpen(helpOpen === "refresh" ? null : "refresh");
+                }}
               >
-                <span
-                  className={`absolute top-0.5 h-3 w-3 rounded-full bg-white transition-all ${
-                    syncEnabled ? "left-4.5" : "left-0.5"
+                <HelpCircle size={12} aria-hidden />
+              </IconButton>
+              {helpOpen === "refresh" && refreshHelpAnchor && (
+                <HelpFlyout anchor={refreshHelpAnchor} onClose={() => setHelpOpen(null)}>
+                  <p className="text-xs leading-relaxed text-text-secondary">
+                    {t("coder.refreshProjectHint")}
+                  </p>
+                </HelpFlyout>
+              )}
+            </span>
+            <button
+              type="button"
+              onClick={() => {
+                void useProjectStore.getState().refreshProject();
+                closeAll();
+              }}
+              aria-label={t("coder.refreshProject")}
+              title={t("coder.refreshProject")}
+              className="shrink-0 rounded-sm p-1 text-text-secondary hover:bg-surface-higher hover:text-text-primary"
+            >
+              <RefreshCw size={13} aria-hidden />
+            </button>
+          </div>
+
+          {/* Enable collaboration */}
+          <div className="px-2 py-1.5">
+            <div className="flex items-center justify-between gap-2">
+              <span className="min-w-0 truncate text-sm text-text-primary">
+                {t("coder.enableCollaboration")}
+              </span>
+              <div className="flex shrink-0 items-center gap-1.5">
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={syncEnabled}
+                  onClick={() => void toggleSync()}
+                  disabled={syncBusy}
+                  className={`relative h-4 w-8 rounded-full transition-colors ${
+                    syncEnabled ? "bg-accent" : "bg-border"
+                  } disabled:opacity-50`}
+                  aria-label={t("sync.toggle")}
+                >
+                  <span
+                    className={`absolute top-0.5 h-3 w-3 rounded-full bg-white transition-all ${
+                      syncEnabled ? "left-4.5" : "left-0.5"
+                    }`}
+                    style={{ left: syncEnabled ? 18 : 2 }}
+                  />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void syncNow()}
+                  disabled={syncBusy}
+                  title={
+                    syncError ? (syncStatus?.last_error ?? t("sync.error")) : t("sync.now")
+                  }
+                  className={`group flex items-center gap-0.5 whitespace-nowrap rounded-sm px-1 py-0.5 text-xs leading-none hover:bg-surface-higher disabled:opacity-50 ${
+                    syncError ? "text-danger" : "text-text-secondary"
                   }`}
-                  style={{ left: syncEnabled ? 18 : 2 }}
-                />
-              </button>
-            </div>
-            {syncEnabled && (
-              <div className="mt-1.5 space-y-1 text-[11px] leading-snug text-text-secondary">
-                <p>
+                >
+                  <RefreshCw
+                    size={9}
+                    className={`shrink-0 opacity-0 transition-opacity group-hover:opacity-100 ${
+                      syncBusy ? "animate-spin opacity-100" : undefined
+                    }`}
+                    aria-hidden
+                  />
                   {t("sync.lastSyncShort", {
                     when: formatSince(syncStatus?.last_sync ?? 0),
                   })}
-                  {syncStatus && (syncStatus.pending_export > 0 || syncStatus.pending_import > 0) && (
-                    <span className="text-warning">
-                      {" · "}
-                      {t("sync.pending", {
-                        n: String(syncStatus.pending_export + syncStatus.pending_import),
-                      })}
-                    </span>
-                  )}
-                </p>
+                </button>
+              </div>
+            </div>
+            {syncEnabled && (
+              <div className="mt-1.5 space-y-1 text-[11px] leading-snug text-text-secondary">
+                {syncStatus && (syncStatus.pending_export > 0 || syncStatus.pending_import > 0) && (
+                  <p className="text-warning">
+                    {t("sync.pending", {
+                      n: String(syncStatus.pending_export + syncStatus.pending_import),
+                    })}
+                  </p>
+                )}
                 {syncStatus?.collaborators.map((c) => (
                   <p key={c.user} className="truncate">
                     {c.user} · {t("sync.lastSyncShort", { when: formatSince(c.last_sync) })}
@@ -539,15 +597,6 @@ export function CoderSwitcher() {
                 {syncError && (
                   <p className="text-danger">{syncStatus?.last_error ?? t("sync.error")}</p>
                 )}
-                <button
-                  type="button"
-                  onClick={() => void syncNow()}
-                  disabled={syncBusy}
-                  className={`mt-1 ${cls.primaryCompact}`}
-                >
-                  <RefreshCw size={10} className={syncBusy ? "animate-spin" : undefined} aria-hidden />
-                  {t("sync.now")}
-                </button>
               </div>
             )}
           </div>

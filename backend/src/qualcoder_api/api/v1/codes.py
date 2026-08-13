@@ -49,6 +49,19 @@ class MergeCategoryRequest(BaseModel):
     target_catid: int
 
 
+class CodeMove(BaseModel):
+    parent_catid: int | None = None
+    supercid: int | None = None
+    after_cid: int | None = None
+    before_cid: int | None = None
+
+
+class CategoryMove(BaseModel):
+    supercatid: int | None = None
+    after_catid: int | None = None
+    before_catid: int | None = None
+
+
 class CodeTreeItem(BaseModel):
     """One node of the codebook tree: category or code."""
 
@@ -60,6 +73,7 @@ class CodeTreeItem(BaseModel):
     memo: str = ""
     memo_type: str = ""
     subcode: bool = False
+    position: int = 0
 
 
 class RecentExample(BaseModel):
@@ -97,7 +111,7 @@ async def code_tree(db: DbDep) -> list[CodeTreeItem]:
     items = [
         CodeTreeItem(
             kind="category", id=cat.catid, name=cat.name,
-            parent_id=cat.supercatid, memo=cat.memo,
+            parent_id=cat.supercatid, memo=cat.memo, position=cat.position,
         )
         for cat in categories
     ]
@@ -106,10 +120,14 @@ async def code_tree(db: DbDep) -> list[CodeTreeItem]:
             kind="code", id=code.cid, name=code.name,
             color=code.color, parent_id=code.supercid or code.catid, memo=code.memo,
             memo_type=code.memo_type,
-            subcode=code.supercid is not None,
+            subcode=code.supercid is not None, position=code.position,
         )
         for code in codes
     )
+    # Siblings are ordered by (position, id). Sorting the flat list globally
+    # keeps every group's internal order while interleaving the two tables at
+    # the root (categories and codes share the root sibling list).
+    items.sort(key=lambda item: (item.position, item.id))
     # Guard against parent cycles (self-references or loops from legacy /
     # imported projects): detach any item whose parent chain circles back
     # on itself so the tree always stays renderable. Categories and codes
@@ -302,27 +320,116 @@ async def merge_code(cid: int, req: MergeRequest, db: DbDep) -> Code:
     return code
 
 
+@router.post("/{cid}/move", response_model=Code)
+async def move_code(cid: int, req: CodeMove, db: DbDep) -> Code:
+    """Move a code within the tree (drag & drop).
+
+    The destination is the category ``parent_catid`` (None = root), the
+    parent code ``supercid`` (sub-code), or the sibling group of
+    ``after_cid``/``before_cid``. The destination group is renumbered and
+    the code's old group closes its gap. Cycle-free: ``supercid`` must not
+    be a descendant of the moved code.
+    """
+    repo = CodeRepository(db)
+    code = await repo.get_code(cid)
+    if code is None:
+        raise HTTPException(status_code=404, detail="code not found")
+    fields = req.model_fields_set
+    if req.after_cid is not None and req.before_cid is not None:
+        raise HTTPException(status_code=422, detail="after_cid and before_cid are mutually exclusive")
+    if "parent_catid" in fields and "supercid" in fields:
+        raise HTTPException(status_code=422, detail="parent_catid and supercid are mutually exclusive")
+    if not fields:
+        raise HTTPException(status_code=422, detail="move requires a target")
+
+    catid: int | None = None
+    supercid: int | None = None
+    if "after_cid" in fields or "before_cid" in fields:
+        anchor_cid = req.after_cid if "after_cid" in fields else req.before_cid
+        if anchor_cid is None:
+            raise HTTPException(status_code=422, detail="a sibling id is required")
+        if anchor_cid == cid:
+            raise HTTPException(status_code=422, detail="cannot move a code relative to itself")
+        anchor = await repo.get_code(anchor_cid)
+        if anchor is None:
+            raise HTTPException(status_code=404, detail="target code not found")
+        if anchor.supercid is not None:
+            supercid = anchor.supercid
+        else:
+            catid = anchor.catid
+    if "parent_catid" in fields:
+        catid = req.parent_catid
+    if "supercid" in fields:
+        supercid = req.supercid
+        if "parent_catid" not in fields:
+            catid = code.catid
+    try:
+        moved = await repo.move_code(
+            cid, catid=catid, supercid=supercid,
+            after_cid=req.after_cid, before_cid=req.before_cid,
+        )
+    except ValueError as err:
+        raise HTTPException(status_code=422, detail=str(err)) from err
+    if moved is None:
+        raise HTTPException(status_code=404, detail="code not found")
+    await audit.record(
+        db, user=get_codername(), action="code.move", entity="code",
+        entity_id=cid,
+        detail=req.model_dump(exclude_none=True) | {"catid": catid, "supercid": supercid},
+    )
+    return moved
+
+
 @router.post("/{cid}/promote", response_model=Code)
 async def promote_code(cid: int, db: DbDep) -> Code:
     """Move a code one level UP the hierarchy (Word-list style).
 
     Sub-codes lose their parent (``supercid`` cleared, staying at category
     level); category members move into the parent category of their
-    category (or to the root when the category is top-level). Codes that
-    are already at the top level are rejected with 422.
+    category (or to the root when the category is top-level). The promoted
+    code lands at the position its parent occupied in the grandparent's
+    child list (position conservation). Codes that are already at the top
+    level are rejected with 422.
     """
     repo = CodeRepository(db)
     code = await repo.get_code(cid)
     if code is None:
         raise HTTPException(status_code=404, detail="code not found")
     if code.supercid is not None:
-        code = await repo.set_supercid(cid, None)
+        parent = await repo.get_code(code.supercid)
+        position: int | None = None
+        if parent is not None:
+            if parent.supercid is not None:
+                position = await repo.code_sibling_index(
+                    parent.cid, catid=None, supercid=parent.supercid
+                )
+            elif parent.catid is None:
+                position = await repo.root_rank_of("code", parent.cid)
+            else:
+                position = await repo.code_sibling_index(
+                    parent.cid, catid=parent.catid, supercid=None
+                )
+        try:
+            code = await repo.move_code(
+                cid, catid=code.catid, supercid=None, position=position
+            )
+        except ValueError as err:
+            raise HTTPException(status_code=422, detail=str(err)) from err
     elif code.catid is not None:
         category = await repo.get_category(code.catid)
         new_catid = None
-        if category is not None and category.supercatid:
+        position = None
+        if category is not None:
             new_catid = category.supercatid
-        code = await repo.set_code_catid(cid, new_catid)
+            if new_catid is None:
+                position = await repo.root_rank_of("cat", category.catid)
+            else:
+                position = await repo.category_sibling_index(
+                    category.catid, supercatid=category.supercatid
+                )
+        code = await repo.move_code(
+            cid, catid=new_catid, supercid=None, position=position
+        )
     else:
         raise HTTPException(status_code=422, detail="code is already at the top level")
     if code is None:
@@ -348,8 +455,9 @@ async def demote_code(cid: int, db: DbDep) -> Code:
     )
     if sibling is None:
         raise HTTPException(status_code=422, detail="no previous sibling to demote under")
-    assert sibling != cid  # the query only ever returns smaller cids
-    code = await repo.set_supercid(cid, sibling)
+    code = await repo.move_code(
+        cid, catid=None, supercid=sibling
+    )
     if code is None:
         raise HTTPException(status_code=404, detail="code not found")
     await audit.record(
@@ -433,12 +541,62 @@ async def merge_category(catid: int, req: MergeCategoryRequest, db: DbDep) -> No
     )
 
 
+@router.post("/categories/{catid}/move", response_model=Category)
+async def move_category(catid: int, req: CategoryMove, db: DbDep) -> Category:
+    """Move a category within the tree (drag & drop).
+
+    Destination is the parent category ``supercatid`` (None = root) or the
+    sibling group of ``after_catid``/``before_catid``. Cycle-free: the new
+    parent must not be the category itself or one of its descendants.
+    """
+    repo = CodeRepository(db)
+    category = await repo.get_category(catid)
+    if category is None:
+        raise HTTPException(status_code=404, detail="category not found")
+    fields = req.model_fields_set
+    if req.after_catid is not None and req.before_catid is not None:
+        raise HTTPException(status_code=422, detail="after_catid and before_catid are mutually exclusive")
+    if not fields:
+        raise HTTPException(status_code=422, detail="move requires a target")
+
+    supercatid: int | None = None
+    if "after_catid" in fields or "before_catid" in fields:
+        anchor_catid = req.after_catid if "after_catid" in fields else req.before_catid
+        if anchor_catid is None:
+            raise HTTPException(status_code=422, detail="a sibling id is required")
+        if anchor_catid == catid:
+            raise HTTPException(status_code=422, detail="cannot move a category relative to itself")
+        anchor = await repo.get_category(anchor_catid)
+        if anchor is None:
+            raise HTTPException(status_code=404, detail="target category not found")
+        supercatid = anchor.supercatid
+    elif "supercatid" in fields:
+        supercatid = req.supercatid
+    try:
+        moved = await repo.move_category(
+            catid, supercatid,
+            after_catid=req.after_catid, before_catid=req.before_catid,
+        )
+    except ValueError as err:
+        raise HTTPException(status_code=422, detail=str(err)) from err
+    if moved is None:
+        raise HTTPException(status_code=404, detail="category not found")
+    await audit.record(
+        db, user=get_codername(), action="category.move", entity="code_cat",
+        entity_id=catid,
+        detail=req.model_dump(exclude_none=True) | {"supercatid": supercatid},
+    )
+    return moved
+
+
 @router.post("/categories/{catid}/promote", response_model=Category)
 async def promote_category(catid: int, db: DbDep) -> Category:
     """Move a category one level UP (Word-list style).
 
     Subcategories move into the parent category of their parent (root when
-    the parent is top-level); top-level categories are rejected with 422.
+    the parent is top-level), landing at the position the parent occupied
+    in the grandparent's child list (position conservation); top-level
+    categories are rejected with 422.
     """
     repo = CodeRepository(db)
     category = await repo.get_category(catid)
@@ -448,8 +606,16 @@ async def promote_category(catid: int, db: DbDep) -> Category:
         raise HTTPException(status_code=422, detail="category is already at the top level")
     parent = await repo.get_category(category.supercatid)
     new_supercatid = parent.supercatid if parent is not None else None
+    position = None
+    if parent is not None:
+        if parent.supercatid is None:
+            position = await repo.root_rank_of("cat", parent.catid)
+        else:
+            position = await repo.category_sibling_index(
+                parent.catid, supercatid=parent.supercatid
+            )
     try:
-        category = await repo.move_category(catid, new_supercatid)
+        category = await repo.move_category(catid, new_supercatid, position=position)
     except ValueError as err:
         raise HTTPException(status_code=422, detail=str(err)) from err
     if category is None:
@@ -475,7 +641,6 @@ async def demote_category(catid: int, db: DbDep) -> Category:
     )
     if sibling is None:
         raise HTTPException(status_code=422, detail="no previous sibling to demote under")
-    assert sibling != catid  # the query only ever returns smaller catids
     try:
         category = await repo.move_category(catid, sibling)
     except ValueError as err:

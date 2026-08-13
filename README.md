@@ -97,20 +97,17 @@ Here is a non-exhaustive list of planned features
 
 * Fully implement client-server architecture
 * Implement more use cases for LLMs
-* Implementation with R/Python
 * Further refine the UI
 * Bugs: You tell me
+
+## What will (likely) not be implemented
+* ATLAS.ti: Closed format, other migration paths exist, not worth the effort.
+
 
 ### Roadmap
 
 Items shipped in the current `development` branch (0.2.0) are listed in the changelog
 above; the remaining planned work:
-
-* ATLAS.ti native bundles → **Maybe** — use the REFI-QDA export path today (see
-  [docs/atlasti-import-assessment.md](docs/atlasti-import-assessment.md))
-* Cloud collaboration (shared projects, web access, comments) → **not planned** for the desktop app; comments via the existing folder-sync are assessed and deferred
-* Chat with memos
-* AI paraphrase
 
 ### Open-source format research — NVivo / ATLAS.ti
 

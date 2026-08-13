@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 from typing import Annotated
 
@@ -17,6 +18,8 @@ from qualcoder_api.persistence.repositories import SourceRepository
 from qualcoder_api.services import audit
 from qualcoder_api.services.user_settings import get_codername, resolve_owner
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter(prefix="/sources", tags=["sources"])
 
 
@@ -30,6 +33,12 @@ class SourceUpdate(BaseModel):
 class LinkRequest(BaseModel):
     path: str
     owner: str | None = None
+
+
+class TranscriptCreateRequest(BaseModel):
+    """Optional companion name for the empty-transcript endpoint."""
+
+    name: str | None = None
 
 
 class CodesUsedItem(BaseModel):
@@ -211,6 +220,123 @@ async def source_file(source_id: int, db: DbDep, svc: ServiceDep) -> FileRespons
     if path is None or not os.path.exists(path):
         raise HTTPException(status_code=404, detail="file not found")
     return FileResponse(path, media_type=content_type_for(source.name), filename=source.name)
+
+
+# ----------------------------------------------------------------------
+# HTML -> PDF export
+# ----------------------------------------------------------------------
+
+#: Applied on top of PyMuPDF's default stylesheet (keeps captured pages
+#: readable without fighting their own styling).
+_PDF_USER_CSS = (
+    "body { font-family: sans-serif; font-size: 10pt; line-height: 1.5; "
+    "color: #1a1a1a; }"
+)
+
+
+def _is_html_name(name: str) -> bool:
+    """True for the raw-file names the capture modes store (``*.html``)."""
+    lower = (name or "").lower()
+    return lower.endswith((".html", ".htm"))
+
+
+def _story_render(html: str, css: str | None) -> bytes:
+    """Render an HTML string to PDF bytes through PyMuPDF's Story engine.
+
+    The pagination callback receives ``(page_number, filled)`` and returns
+    the ``(mediabox, content rect, transform)`` for the next page; the
+    DocumentWriter creates pages automatically as the content overflows.
+    MuPDF substitutes its embedded fallback fonts for characters the page's
+    own fonts cannot cover, so arbitrary unicode round-trips intact.
+    """
+    from io import BytesIO
+
+    import fitz
+
+    buf = BytesIO()
+    writer = fitz.DocumentWriter(buf)
+    rect = fitz.paper_rect("a4")
+    story = fitz.Story(html=html, user_css=css)
+    story.write(writer, lambda _number, _filled: (rect, rect, fitz.Identity))
+    writer.close()
+    return buf.getvalue()
+
+
+def _story_pdf(html: str) -> bytes:
+    """Primary export path: the captured HTML with its inline styles."""
+    return _story_render(html, _PDF_USER_CSS)
+
+
+def _text_pdf(text: str) -> bytes:
+    """Fallback export: the extracted plain text as a simple document.
+
+    The text is escaped and rendered through the same Story engine WITHOUT
+    any CSS, so it cannot fail on unsupported styles and keeps unicode via
+    MuPDF's fallback fonts — plain ``insert_text`` with a base-14 font would
+    corrupt non-WinAnsi characters, so it is avoided here.
+    """
+    import html as html_module
+
+    paragraphs: list[str] = []
+    for block in (text or "").split("\n\n"):
+        block = block.strip()
+        if not block:
+            continue
+        paragraphs.append(html_module.escape(block).replace("\n", "<br/>"))
+    body = "".join(f"<p>{p}</p>" for p in paragraphs)
+    return _story_render(f"<html><body>{body}</body></html>", None)
+
+
+def _render_source_pdf(path: str, fulltext: str | None) -> bytes:
+    """Read the stored ``.html`` file and render it to PDF bytes.
+
+    Falls back to a text-only PDF from the extracted fulltext when the
+    HTML layout render fails (unsupported CSS/markup), so the export always
+    produces a parseable document.
+    """
+    from qualcoder_api.services.import_service import (
+        decode_text_with_best_encoding,
+        html_to_text,
+    )
+
+    with open(path, "rb") as sourcefile:
+        raw = sourcefile.read()
+    html = decode_text_with_best_encoding(raw)
+    try:
+        return _story_pdf(html)
+    except Exception as err:  # any render failure -> text fallback
+        logger.warning("HTML -> PDF render failed for %s: %s", path, err)
+        return _text_pdf(fulltext or html_to_text(html))
+
+
+@router.get("/{source_id}/pdf")
+async def source_pdf(source_id: int, db: DbDep, svc: ServiceDep) -> Response:
+    """Export an HTML source as a PDF document.
+
+    The captured webpage (the stored ``.html`` file) is rendered through
+    PyMuPDF's Story layout engine, which applies the page's inline styles;
+    the text-fallback path kicks in when that fails. 422 for non-HTML
+    sources, 404 when the source has no file on disk.
+    """
+    import asyncio
+
+    from qualcoder_api.services.source_files import resolve_source_path
+
+    source = await SourceRepository(db).get_source(source_id)
+    if source is None:
+        raise HTTPException(status_code=404, detail="source not found")
+    if not _is_html_name(source.name):
+        raise HTTPException(status_code=422, detail="not an HTML source")
+    path = resolve_source_path(svc.project_path, source.mediapath, source.name)
+    if path is None or not os.path.exists(path):
+        raise HTTPException(status_code=404, detail="file not found")
+    pdf = await asyncio.to_thread(_render_source_pdf, path, source.fulltext)
+    stem = os.path.splitext(source.name)[0]
+    return Response(
+        content=pdf,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{stem}.pdf"'},
+    )
 
 
 @router.get("/{source_id}/thumbnail")
@@ -406,6 +532,88 @@ async def update_source(source_id: int, req: SourceUpdate, db: DbDep) -> Source:
         },
     )
     return source
+
+
+@router.post("/{source_id}/transcript", response_model=Source)
+async def create_transcript(
+    source_id: int,
+    db: DbDep,
+    req: TranscriptCreateRequest | None = None,
+) -> Source:
+    """Create an EMPTY transcript companion for an audio/video source and
+    link it through ``av_text_id`` — the target for manual transcription.
+
+    Idempotent: when a companion already exists it is returned unchanged
+    instead of creating a duplicate. The companion is registered like any
+    imported transcript (hidden from the file list by ``av_text_id``), so
+    manual transcription always has a save target even for projects that
+    predate the import-time companion.
+    """
+    from qualcoder_api.core.enums import MediaType
+
+    repo = SourceRepository(db)
+    source = await repo.get_source(source_id)
+    if source is None:
+        raise HTTPException(status_code=404, detail="source not found")
+    if source.media_type not in (MediaType.AUDIO, MediaType.VIDEO):
+        raise HTTPException(status_code=422, detail="only audio/video sources have transcripts")
+    if source.av_text_id is not None:
+        existing = await repo.get_source(source.av_text_id)
+        if existing is not None:
+            # Idempotent: the companion already exists — return the media
+            # source (the endpoint's contract) with the link intact.
+            reloaded = await repo.get_source(source_id)
+            if reloaded is None:  # pragma: no cover - row was just read
+                raise HTTPException(status_code=404, detail="source not found")
+            return reloaded
+    # Source names are unique — pick a free variant when the companion name
+    # is already taken (e.g. a leftover file with the same name).
+    base_name = (req.name if req and req.name else "").strip() or f"{source.name}.txt"
+    name = base_name
+    counter = 2
+    while (
+        await db.execute(
+            select(tables.source.c.id).where(tables.source.c.name == name)
+        )
+    ).first() is not None:
+        stem, sep, ext = base_name.rpartition(".")
+        name = f"{stem}-{counter}.{ext}" if sep else f"{base_name}-{counter}"
+        counter += 1
+
+    trans = await repo.add_source(
+        name=name, mediapath=None, fulltext="", owner=resolve_owner(None)
+    )
+    await repo.update_source(source_id, av_text_id=trans.id)
+    await audit.record(
+        db, user=get_codername(), action="transcript.create", entity="source",
+        entity_id=trans.id, source_id=source_id, detail={"name": name},
+    )
+    reloaded = await repo.get_source(source_id)
+    if reloaded is None:  # pragma: no cover - row was just updated
+        raise HTTPException(status_code=404, detail="source not found")
+    return reloaded
+
+
+@router.delete("/{source_id}/transcript", status_code=204)
+async def delete_transcript(source_id: int, db: DbDep) -> None:
+    """Delete the media source's transcript companion and clear the
+    ``av_text_id`` link. 404 when the source has no transcript."""
+    repo = SourceRepository(db)
+    source = await repo.get_source(source_id)
+    if source is None:
+        raise HTTPException(status_code=404, detail="source not found")
+    if source.av_text_id is None:
+        raise HTTPException(status_code=404, detail="source has no transcript")
+    companion = await repo.get_source(source.av_text_id)
+    companion_name = companion.name if companion is not None else None
+    trans_id = source.av_text_id
+    await repo.update_source(source_id, av_text_id=None)
+    await repo.delete_source(trans_id)
+    await audit.record(
+        db, user=get_codername(), action="transcript.delete", entity="source",
+        entity_id=trans_id, source_id=source_id,
+        detail={"name": companion_name, "media": source.name},
+    )
 
 
 @router.delete("/{source_id}", status_code=204)

@@ -124,6 +124,11 @@ export function sourceFileUrl(sourceId: number): string {
   return `${apiBaseSync()}/sources/${sourceId}/file`;
 }
 
+/** URL to the PDF export of an HTML source (GET returns PDF bytes). */
+export function sourcePdfUrl(sourceId: number): string {
+  return `${apiBaseSync()}/sources/${sourceId}/pdf`;
+}
+
 /** URL to a generated thumbnail (PNG) for image/PDF sources. */
 export function thumbnailUrl(sourceId: number, maxSize = 300): string {
   return `${apiBaseSync()}/sources/${sourceId}/thumbnail?max_size=${maxSize}`;
@@ -157,6 +162,15 @@ export interface OpenProjectResult {
   migrations_applied: string[];
   error: string;
   lock_user: string;
+  /** Shared-folder detection: true when the collaboration sync cycle should
+   *  be switched on for this project (respects the per-project override). */
+  sync_auto_enabled?: boolean;
+  sync_auto_reason?: string;
+}
+
+export interface AppSettings {
+  /** Packaged app: auto-open the most recent project on start (default on). */
+  auto_open_project: boolean;
 }
 
 export interface Source {
@@ -182,6 +196,8 @@ export interface CodeTreeItem {
   parent_id: number | null;
   memo: string;
   subcode?: boolean;
+  /** Sibling order within the parent group (backend sorts by it). */
+  position?: number;
 }
 
 export interface Code {
@@ -984,6 +1000,17 @@ export const api = {
       method: "PATCH",
       body: JSON.stringify(body),
     }),
+  /** Create an EMPTY transcript companion for an audio/video source and link
+   *  it via av_text_id (the manual-transcription target). Idempotent: when a
+   *  companion already exists the media source is returned unchanged. */
+  createTranscript: (sourceId: number, name?: string) =>
+    request<Source>(`/sources/${sourceId}/transcript`, {
+      method: "POST",
+      body: JSON.stringify(name ? { name } : {}),
+    }),
+  /** Delete the media source's transcript companion and clear av_text_id. */
+  deleteTranscript: (sourceId: number) =>
+    request<void>(`/sources/${sourceId}/transcript`, { method: "DELETE" }),
 
   codeTree: () => request<CodeTreeItem[]>("/codes"),
   codesFlat: () => request<CodeTreeItem[]>("/codes"),
@@ -1030,6 +1057,37 @@ export const api = {
     request<Category>(`/codes/categories/${catid}/promote`, { method: "POST" }),
   demoteCategory: (catid: number) =>
     request<Category>(`/codes/categories/${catid}/demote`, { method: "POST" }),
+  /** Move a code within the tree (drag & drop). The destination is the
+   *  category ``parent_catid`` (null = root), the parent code ``supercid``
+   *  (sub-code), or the sibling group of ``after_cid``/``before_cid``. */
+  moveCode: (
+    cid: number,
+    opts: {
+      parent_catid?: number | null;
+      supercid?: number | null;
+      after_cid?: number | null;
+      before_cid?: number | null;
+    } = {},
+  ) =>
+    request<Code>(`/codes/${cid}/move`, {
+      method: "POST",
+      body: JSON.stringify(opts),
+    }),
+  /** Move a category within the tree (drag & drop). The destination is the
+   *  parent category ``supercatid`` (null = root) or the sibling group of
+   *  ``after_catid``/``before_catid``. */
+  moveCategory: (
+    catid: number,
+    opts: {
+      supercatid?: number | null;
+      after_catid?: number | null;
+      before_catid?: number | null;
+    } = {},
+  ) =>
+    request<Category>(`/codes/categories/${catid}/move`, {
+      method: "POST",
+      body: JSON.stringify(opts),
+    }),
 
   sourceDetails: (id: number) => request<SourceDetails>(`/sources/${id}/details`),
 
@@ -1581,6 +1639,27 @@ export const api = {
     request<{ enabled: boolean }>("/sync/settings", {
       method: "PUT",
       body: JSON.stringify({ enabled }),
+    }),
+  /** Shared-folder detection for a project path (marker / UNC / sidecars). */
+  syncAutoDetect: (projectPath: string) =>
+    request<{ shared: boolean; reason: string }>(
+      `/sync/auto-detect?project_path=${encodeURIComponent(projectPath)}`,
+    ),
+  /** Remember a per-project sync decision: "on"/"off" win over the
+   *  auto-detection on the next open; "auto" re-detects. */
+  syncSetOverride: (projectPath: string, mode: "auto" | "on" | "off") =>
+    request<{ ok: boolean; mode: string }>("/sync/override", {
+      method: "PUT",
+      body: JSON.stringify({ project_path: projectPath, mode }),
+    }),
+
+  // --- App settings -----------------------------------------------------
+
+  appSettings: () => request<AppSettings>("/app/settings"),
+  saveAppSettings: (body: AppSettings) =>
+    request<AppSettings>("/app/settings", {
+      method: "PUT",
+      body: JSON.stringify(body),
     }),
 
   // --- App updates -----------------------------------------------------

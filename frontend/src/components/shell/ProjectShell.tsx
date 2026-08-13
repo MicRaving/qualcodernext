@@ -11,6 +11,7 @@ import {
   Download,
   Files,
   History,
+  Import,
   LayoutDashboard,
   Lightbulb,
   NotebookPen,
@@ -21,6 +22,7 @@ import {
   Sparkles,
   Terminal,
   Trash2,
+  Upload,
   Users,
 } from "lucide-react";
 import type { TaskInfo } from "@/stores/project";
@@ -40,6 +42,7 @@ import { GraphsInspector, GraphsView } from "@/features/graphs/GraphsView";
 import { HistoryView } from "@/features/history/HistoryView";
 import { CreativePanel } from "@/features/creative/CreativePanel";
 import { SettingsView } from "@/features/settings/SettingsView";
+import { InterchangeView } from "@/features/interchange/InterchangeView";
 import { AiView } from "@/features/ai/AiView";
 import { api } from "@/lib/api";
 import { useToast } from "@/lib/toast";
@@ -160,6 +163,7 @@ const NAV_BUTTONS: { kind: WorkspaceView["kind"]; labelKey: string; icon: typeof
   { kind: "notes", labelKey: "nav.notes", icon: NotebookPen },
   { kind: "qtt", labelKey: "nav.qtt", icon: ScrollText },
   { kind: "analyze", labelKey: "nav.analyze", icon: BarChart3 },
+  { kind: "interchange", labelKey: "nav.interchange", icon: Import },
 ];
 
 const RIGHT_ICON_BUTTONS: { pane: "history" | "ai" | "creative"; labelKey: string; icon: typeof Files }[] = [
@@ -179,11 +183,21 @@ export function ProjectShell() {
   const projectOpen = useProjectStore((s) => s.projectOpen);
   const tasks = useProjectStore((s) => s.tasks);
   const tasksPaused = useProjectStore((s) => s.tasksPaused);
-  const importState = useProjectStore((s) => s.importState);
+  const syncAutoNotice = useProjectStore((s) => s.syncAutoNotice);
   const [queueOpen, setQueueOpen] = useState(false);
   const [dragId, setDragId] = useState<string | null>(null);
   const announceRef = useRef<HTMLDivElement>(null);
   const a11yMode = useProjectStore((s) => s.a11yMode);
+
+  // Shared-folder notice: shown for 3s after the backend auto-enabled
+  // collaboration sync on project open (non-intrusive, self-clearing).
+  useEffect(() => {
+    if (!syncAutoNotice) return;
+    const timer = window.setTimeout(() => {
+      useProjectStore.getState().setSyncAutoNotice(false);
+    }, 3000);
+    return () => window.clearTimeout(timer);
+  }, [syncAutoNotice]);
 
   // Announce task completion for screen readers (aria-live region — only
   // mounted in screen-reader mode so the default DOM stays quiet).
@@ -303,15 +317,13 @@ export function ProjectShell() {
 
   const activeJobs = tasks.filter((j) => j.state === "running");
   const finishedJobs = tasks.filter((j) => j.state === "done" || j.state === "error");
-  const showIndicator = tasks.length > 0 || importState !== null;
-  // Overall progress for the fill circle: active jobs average, import %, or
-  // 100 once everything is done (stopped circle).
+  const showIndicator = tasks.length > 0;
+  // Overall progress for the fill circle: active jobs average, or 100 once
+  // everything is done (stopped circle).
   const taskProgress =
     activeJobs.length > 0
       ? Math.round(activeJobs.reduce((sum, j) => sum + j.progress, 0) / activeJobs.length)
-      : importState !== null
-        ? Math.round((importState.done / importState.total) * 100)
-        : 100;
+      : 100;
 
   return (
     <>
@@ -323,6 +335,18 @@ export function ProjectShell() {
           aria-live="polite"
           className="sr-only"
         />
+      )}
+      {syncAutoNotice && (
+        <div
+          role="status"
+          aria-live="polite"
+          className="pointer-events-none fixed left-1/2 top-12 z-40 -translate-x-1/2"
+        >
+          <div className="flex items-center gap-1.5 rounded-md border border-border bg-surface px-3 py-1.5 text-xs text-text-primary shadow-lg">
+            <Users size={13} className="shrink-0 text-accent" aria-hidden />
+            {t("sync.autoEnabled")}
+          </div>
+        </div>
       )}
       <WorkspaceLayout
       ribbon={
@@ -419,27 +443,7 @@ export function ProjectShell() {
                       {t("tasks.pausedHint")}
                     </div>
                   )}
-                  {importState !== null && (
-                    <div className="px-2 py-1.5">
-                      <div className="flex items-center gap-2 text-xs">
-                        <span className="min-w-0 flex-1 truncate text-text-primary">
-                          {t("files.importingShort")}
-                        </span>
-                        <span className="text-text-secondary">
-                          {importState.done}/{importState.total}
-                        </span>
-                      </div>
-                      <div className="mt-1 h-1 w-full overflow-hidden rounded-full bg-border">
-                        <div
-                          className="h-full rounded-full bg-accent transition-all"
-                          style={{
-                            width: `${Math.round((importState.done / importState.total) * 100)}%`,
-                          }}
-                        />
-                      </div>
-                    </div>
-                  )}
-                  {tasks.length === 0 && importState === null && (
+                  {tasks.length === 0 && (
                     <div className="px-2 py-3 text-center text-xs text-text-secondary">
                       {t("tasks.empty")}
                     </div>
@@ -473,23 +477,29 @@ export function ProjectShell() {
                               ? t("tasks.kindTranscribe")
                               : job.kind === "r"
                                 ? t("tasks.kindR")
-                                : t("tasks.kindAutocode")
+                                : job.kind === "import"
+                                  ? t("tasks.kindImport")
+                                  : t("tasks.kindAutocode")
                           }
                         >
                           {job.kind === "transcribe" ? (
                             <AudioLines size={12} aria-hidden />
                           ) : job.kind === "r" ? (
                             <Terminal size={12} aria-hidden />
+                          ) : job.kind === "import" ? (
+                            <Upload size={12} aria-hidden />
                           ) : (
                             <Sparkles size={12} aria-hidden />
                           )}
                           <span className="min-w-0 flex-1 truncate text-text-primary">
-                            {job.sourceName}
+                            {job.kind === "import" ? t("files.importingShort") : job.sourceName}
                           </span>
                         </span>
                         <span className="shrink-0 text-text-secondary">
                           {job.state === "running"
-                            ? `${Math.round(job.progress)}%`
+                            ? job.kind === "import"
+                              ? job.message // "done/total"
+                              : `${Math.round(job.progress)}%`
                             : job.state === "queued"
                               ? t("tasks.queued")
                               : job.state === "done"
@@ -620,6 +630,8 @@ export function ProjectShell() {
           <NotesEditor />
         ) : view.kind === "qtt" ? (
           <QttView />
+        ) : view.kind === "interchange" ? (
+          <InterchangeView />
         ) :         view.kind === "analyze" ? (
           analyzeUi.selectedId === "graphs" ? (
             <GraphsView />

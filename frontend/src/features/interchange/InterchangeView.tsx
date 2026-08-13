@@ -1,16 +1,27 @@
 /**
  * Interchange — export the project in REFI-QDA and import interchange files
- * with automatic format detection (REFI-QDA, RQDA, Taguette, RIS, Survey,
- * plain-text codebooks, zipped .qda projects or Zotero references).
+ * with automatic format detection (REFI-QDA, RQDA, Taguette, Transana,
+ * NVivo, RIS, Survey, Excel, SPSS, plain-text codebooks, zipped .qda
+ * projects or Zotero references).
  *
- * Picking a file shows an import menu (name + detected format + Import);
- * the embedded Settings variant is chrome-free (no cards, explanations live
- * behind ? icons).
+ * Picking a file opens a modal overlay: detected format + per-format help +
+ * format-specific customization (survey/xlsx/sav: qualitative columns),
+ * then Import / Cancel. After the import the result card stays visible.
+ *
+ * Standalone entry point: the "Import / Export" ribbon button (workspace
+ * view kind "interchange", rendered by ProjectShell).
  */
 import { useRef, useState, type ChangeEvent, type ReactNode } from "react";
-import { CircleAlert, CircleCheck, Download, HelpCircle, LoaderCircle } from "lucide-react";
+import {
+  CircleAlert,
+  CircleCheck,
+  Download,
+  FileText,
+  HelpCircle,
+  LoaderCircle,
+} from "lucide-react";
 import { api, ApiError, type InterchangeResult } from "@/lib/api";
-import { Button, HelpFlyout, IconButton, ViewHeader } from "@/components/ui/orchestrator";
+import { Button, Field, HelpFlyout, IconButton, Input, Modal, ViewHeader } from "@/components/ui/orchestrator";
 import { cls } from "@/components/ui/tokens";
 import { importLabel } from "@/features/interchange/format";
 import { useI18n } from "@/lib/i18n";
@@ -32,12 +43,15 @@ const FORMAT_HELP: [string, string][] = [
   ["zotero", "Zotero — import references from the local Zotero API (localhost:23119, Zotero 7+)."],
 ];
 
+/** Formats that take the qualitative-columns customization. */
+const QUALITATIVE_FORMATS = new Set(["survey", "xlsx", "sav"]);
+
 function errorDetail(e: unknown): string {
   if (e instanceof ApiError && typeof e.detail === "string") return e.detail;
   return e instanceof Error ? e.message : "Import failed";
 }
 
-/** Best-guess format key for a chosen file name (for the import menu). */
+/** Best-guess format key for a chosen file name (for the import overlay). */
 function detectFormat(name: string): string {
   const ext = name.split(".").pop()?.toLowerCase() ?? "";
   if (ext === "qdp" || ext === "qdc") return "refi";
@@ -54,11 +68,18 @@ function detectFormat(name: string): string {
   return "refi";
 }
 
-/** Display label for a format kind (NVivo is localized here — importLabel
- *  has no NVivo entry by design, its unknown-kind fallback stays raw). */
+/** Display label for a format kind (localized where a key exists). */
 function formatLabel(t: (key: string) => string, kind: string): string {
-  if (kind === "nvivo") return t("interchange.formatNvivo");
+  const key = `interchange.format${kind.charAt(0).toUpperCase()}${kind.slice(1)}`;
+  const localized = t(key);
+  if (localized !== key) return localized;
   return importLabel(kind);
+}
+
+/** Per-format help text for a kind (falls back to the list). */
+function formatHelp(kind: string): string {
+  const found = FORMAT_HELP.find(([key]) => key === kind);
+  return found ? found[1] : "";
 }
 
 function FormatHelpList() {
@@ -89,39 +110,52 @@ function resultCounts(res: InterchangeResult): [string, number][] {
   return out;
 }
 
-export function InterchangeView({ embedded = false }: { embedded?: boolean }) {
+export function InterchangeView() {
   const { t } = useI18n();
   const [helpOpen, setHelpOpen] = useState<null | "export" | "import">(null);
   const [helpAnchor, setHelpAnchor] = useState<HTMLElement | null>(null);
   const [busy, setBusy] = useState(false);
   const [pending, setPending] = useState<File | null>(null);
+  const [qualitativeHeaders, setQualitativeHeaders] = useState("");
   const [result, setResult] = useState<InterchangeResult | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  const kind = pending ? detectFormat(pending.name) : null;
 
   function toggleHelp(kind: "export" | "import", anchor: HTMLElement) {
     setHelpAnchor(anchor);
     setHelpOpen((cur) => (cur === kind ? null : kind));
   }
 
-  /** Picking a file shows the import menu (name + format + Import/Cancel). */
+  /** Picking a file opens the import overlay (format + customization). */
   function handleFileChange(e: ChangeEvent<HTMLInputElement>) {
     const picked = e.target.files?.[0] ?? null;
     e.target.value = "";
     if (!picked || busy) return;
     setPending(picked);
+    setQualitativeHeaders("");
     setResult(null);
     setError(null);
   }
 
   async function runImport() {
     if (!pending || busy) return;
+    const file = pending;
+    const fileKind = detectFormat(file.name);
+    const headers =
+      QUALITATIVE_FORMATS.has(fileKind) && qualitativeHeaders.trim()
+        ? qualitativeHeaders
+            .split(",")
+            .map((h) => h.trim())
+            .filter(Boolean)
+        : undefined;
     setBusy(true);
+    setPending(null);
     setError(null);
     setResult(null);
     try {
-      const res = await api.importAuto(pending);
+      const res = await api.importAuto(file, undefined, headers);
       setResult(res);
-      setPending(null);
       if (!res.ok) {
         setError(res.message ?? "Import failed");
       } else if (res.codes !== undefined || res.sources !== undefined || res.cases !== undefined) {
@@ -129,35 +163,68 @@ export function InterchangeView({ embedded = false }: { embedded?: boolean }) {
       }
     } catch (err) {
       setError(errorDetail(err));
-      setPending(null);
     } finally {
       setBusy(false);
     }
   }
 
-  const pendingCard: ReactNode =
-    pending && !busy ? (
-      <div className="mt-2 rounded-sm border border-border bg-bg p-2">
-        <p className="flex items-center gap-1.5 text-xs font-medium text-text-primary">
-          <Download size={11} className="rotate-180 text-text-secondary" aria-hidden />
-          <span className="min-w-0 flex-1 truncate">{pending.name}</span>
-        </p>
-        <p className="mt-0.5 text-[10px] text-text-secondary">
-          {formatLabel(t, detectFormat(pending.name))}
-        </p>
-        <div className="mt-2 flex items-center justify-end gap-2">
-          <Button variant="secondary" onClick={() => setPending(null)}>
-            {t("common.cancel")}
-          </Button>
-          <Button
-            variant="primary"
-            icon={<Download size={12} className="rotate-180" aria-hidden />}
-            onClick={() => void runImport()}
-          >
-            {t("interchange.import")}
-          </Button>
+  const importOverlay: ReactNode =
+    pending && kind ? (
+      <Modal
+        open={pending !== null}
+        onClose={() => setPending(null)}
+        title={t("interchange.importSection")}
+        icon={<Download size={14} className="rotate-180 text-text-secondary" aria-hidden />}
+        ariaLabel={t("interchange.importSection")}
+      >
+        <div className="p-3">
+          <p className="flex items-center gap-1.5 text-xs font-medium text-text-primary">
+            <FileText size={13} className="shrink-0 text-text-secondary" aria-hidden />
+            <span className="min-w-0 flex-1 truncate">{pending.name}</span>
+          </p>
+          <p className="mt-1 text-[10px] uppercase tracking-wide text-text-secondary">
+            {t("interchange.detectedFormat")}: {formatLabel(t, kind)}
+          </p>
+          {formatHelp(kind) && (
+            <p className="mt-2 text-xs leading-relaxed text-text-secondary">
+              {formatHelp(kind)}
+            </p>
+          )}
+          <div className="mt-3 rounded-sm border border-border bg-bg p-2">
+            {QUALITATIVE_FORMATS.has(kind) ? (
+              <>
+                <Field label={t("interchange.surveyQualitative")}>
+                  <Input
+                    type="text"
+                    value={qualitativeHeaders}
+                    onChange={(e) => setQualitativeHeaders(e.target.value)}
+                    placeholder="col_a, col_b"
+                    aria-label={t("interchange.surveyQualitative")}
+                    className="mt-1 w-full"
+                  />
+                </Field>
+                <p className="mt-1.5 text-[10px] leading-relaxed text-text-secondary">
+                  {t("interchange.surveyQualitativeHint")}
+                </p>
+              </>
+            ) : (
+              <p className="text-xs text-text-secondary">{t("interchange.customizationNone")}</p>
+            )}
+          </div>
+          <div className="mt-3 flex items-center justify-end gap-2">
+            <Button variant="secondary" onClick={() => setPending(null)}>
+              {t("common.cancel")}
+            </Button>
+            <Button
+              variant="primary"
+              icon={<Download size={12} className="rotate-180" aria-hidden />}
+              onClick={() => void runImport()}
+            >
+              {t("interchange.import")}
+            </Button>
+          </div>
         </div>
-      </div>
+      </Modal>
     ) : null;
 
   const statusCard: ReactNode =
@@ -218,13 +285,13 @@ export function InterchangeView({ embedded = false }: { embedded?: boolean }) {
   );
 
   return (
-    <div className={embedded ? "flex flex-col" : "flex h-full flex-col bg-bg"}>
-      {!embedded && <ViewHeader back={false} title={t("interchange.title")} />}
+    <div className="flex h-full flex-col bg-bg">
+      <ViewHeader back={false} title={t("interchange.title")} />
 
-      <div className={embedded ? "p-0" : "min-h-0 flex-1 overflow-y-auto p-4"}>
+      <div className="min-h-0 flex-1 overflow-y-auto p-4">
         <div className="grid max-w-3xl grid-cols-1 gap-4 lg:grid-cols-2">
           {/* Export */}
-          <div className={embedded ? undefined : undefined}>
+          <div>
             <div className="flex items-center gap-1.5">
               <h2 className="text-sm font-semibold text-text-primary">{t("interchange.exportSection")}</h2>
               <IconButton
@@ -273,11 +340,11 @@ export function InterchangeView({ embedded = false }: { embedded?: boolean }) {
               )}
             </div>
             {filePicker}
-            {pendingCard}
             {statusCard}
           </div>
         </div>
       </div>
+      {importOverlay}
     </div>
   );
 }

@@ -8,6 +8,7 @@ import {
   useRef,
   useState,
   type ChangeEvent,
+  type DragEvent,
   type MouseEvent,
 } from "react";
 import {
@@ -138,6 +139,7 @@ export function FileManager() {
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const [scrollTop, setScrollTop] = useState(0);
   const [viewportHeight, setViewportHeight] = useState(0);
+  const [dragActive, setDragActive] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -355,6 +357,28 @@ export function FileManager() {
     void importFiles(files);
   }
 
+  // Drop target on the center area: importing OS files goes through the
+  // exact same path as the Import button (importFiles → api.importSource).
+  function handleDragOver(e: DragEvent<HTMLDivElement>) {
+    if (e.dataTransfer.types.includes("Files")) {
+      e.preventDefault();
+      setDragActive(true);
+    }
+  }
+
+  function handleDragLeave(e: DragEvent<HTMLDivElement>) {
+    if (!e.currentTarget.contains(e.relatedTarget as Node | null)) {
+      setDragActive(false);
+    }
+  }
+
+  function handleDrop(e: DragEvent<HTMLDivElement>) {
+    e.preventDefault();
+    setDragActive(false);
+    const files = Array.from(e.dataTransfer.files);
+    if (files.length > 0) void importFiles(files);
+  }
+
   async function renameSource(row: Source) {
     const next = window.prompt(t("files.renamePrompt", { name: row.name }), row.name);
     if (next === null) return;
@@ -420,6 +444,10 @@ export function FileManager() {
   );
   const eligibleTranscribe = useMemo(
     () => selectedList.filter((s) => canTranscribeSource(s) && !hasRealTranscript(s)),
+    [selectedList],
+  );
+  const transcribedSelected = useMemo(
+    () => selectedList.filter((s) => canTranscribeSource(s) && hasRealTranscript(s)),
     [selectedList],
   );
   const eligibleAutocode = useMemo(
@@ -526,14 +554,19 @@ export function FileManager() {
               onClick={() => openBatchTranscribe()}
               disabled={eligibleTranscribe.length === 0}
               icon={<AudioLines size={13} aria-hidden />}
-              title={t("files.transcribeSelectedCount", {
-                eligible: String(eligibleTranscribe.length),
-                n: String(selected.size),
-              })}
+              title={
+                transcribedSelected.length > 0
+                  ? t("files.transcribeSkipped", {
+                      n: String(eligibleTranscribe.length),
+                      skipped: String(transcribedSelected.length),
+                    })
+                  : t("files.transcribeEligible", {
+                      n: String(eligibleTranscribe.length),
+                    })
+              }
             >
-              {t("files.transcribeSelectedCount", {
-                eligible: String(eligibleTranscribe.length),
-                n: String(selected.size),
+              {t("files.transcribeEligible", {
+                n: String(eligibleTranscribe.length),
               })}
             </Button>
             <Button
@@ -597,144 +630,161 @@ export function FileManager() {
       )}
       {actionError && <ErrorBanner onClose={() => setActionError(null)}>{actionError}</ErrorBanner>}
 
-      {/* Body */}
-      {loading && sources.length === 0 ? (
-        <LoadingState>{t("files.loading")}</LoadingState>
-      ) : loadError ? (
-        <div className="flex flex-1 items-center justify-center">
-          <div className="max-w-md text-center">
-            <p className="flex items-center justify-center gap-1.5 text-sm text-danger">
-              <CircleAlert size={16} aria-hidden />
-              {loadError}
-            </p>
-            <Button variant="secondary" className="mt-3" onClick={() => void load()}>
-              {t("common.retry")}
-            </Button>
-          </div>
-        </div>
-      ) : sources.length === 0 ? (
-        <EmptyState>
-          <p className="text-sm text-text-secondary">{t("files.empty")}</p>
-          <Button
-            variant="primary"
-            icon={<Upload size={14} aria-hidden />}
-            onClick={() => fileInputRef.current?.click()}
+      {/* Body — the whole center area is a drop target for OS files */}
+      <div
+        className="relative flex min-h-0 flex-1 flex-col"
+        onDragOver={handleDragOver}
+        onDragLeave={handleDragLeave}
+        onDrop={handleDrop}
+      >
+        {dragActive && (
+          <div
+            aria-hidden
+            className="pointer-events-none absolute inset-0 z-20 flex flex-col items-center justify-center gap-1.5 border-2 border-dashed border-accent bg-accent/10"
           >
-            {t("files.importFiles")}
-          </Button>
-        </EmptyState>
-      ) : rows.length === 0 ? (
-        <EmptyState>
-          {t("files.noMatch", { query: fileQuery })}
-        </EmptyState>
-      ) : (
-        <div
-          ref={scrollRef}
-          onScroll={(e) => setScrollTop(e.currentTarget.scrollTop)}
-          className="min-h-0 flex-1 overflow-auto"
-        >
-          <table className="w-full border-separate border-spacing-0">
-            <thead className="sticky top-0 z-10 bg-surface">
-              <tr>
-                <th className="w-8 border-b border-border px-1 text-center">
-                  <input
-                    type="checkbox"
-                    checked={rows.length > 0 && rows.every((r) => selected.has(r.id))}
-                    onChange={toggleSelectAll}
-                    className={"h-3.5 w-3.5 shrink-0 cursor-pointer rounded-sm border border-border accent-[var(--qc-accent)]"}
-                    aria-label={t("files.selectAll")}
-                    title={t("files.selectAll")}
-                  />
-                </th>
-                <SortableTh
-                  label={t("files.colName")}
-                  sortKey="name"
-                  active={sortKey === "name"}
-                  dir={sortDir}
-                  onSort={toggleSort}
-                />
-                <SortableTh
-                  label={t("files.colType")}
-                  sortKey="type"
-                  active={sortKey === "type"}
-                  dir={sortDir}
-                  onSort={toggleSort}
-                />
-                <SortableTh
-                  label={t("files.colDate")}
-                  sortKey="date"
-                  active={sortKey === "date"}
-                  dir={sortDir}
-                  onSort={toggleSort}
-                />
-                <SortableTh
-                  label={t("files.colOwner")}
-                  sortKey="owner"
-                  active={sortKey === "owner"}
-                  dir={sortDir}
-                  onSort={toggleSort}
-                />
-                <TableHead>{t("files.colMemo")}</TableHead>
-              </tr>
-            </thead>
-            <tbody>
-              {/* Only [start, end) of the rows are mounted: O(visible) DOM
-                  nodes regardless of total. The spacer rows keep the table at
-                  its natural height so the scrollbar and sticky header stay
-                  aligned. */}
-              {start > 0 && (
-                <tr aria-hidden>
-                  <td colSpan={5} className="p-0" style={{ height: start * ROW_HEIGHT }} />
-                </tr>
-              )}
-              {rows.slice(start, end).map((row) => (
-                <tr
-                  key={row.id}
-                  onClick={() => setView({ kind: "coding", sourceId: row.id })}
-                  onContextMenu={(e) => openMenuAt(e, row)}
-                  style={{ height: ROW_HEIGHT }}
-                  className="cursor-pointer hover:bg-surface-higher"
-                >
-                  <td className="w-8 border-b border-border px-1 text-center">
+            <Upload size={22} className="text-accent" aria-hidden />
+            <p className="text-sm font-medium text-accent">{t("files.dropImport")}</p>
+            <p className="text-xs text-text-secondary">{t("files.dropImportHint")}</p>
+          </div>
+        )}
+        {loading && sources.length === 0 ? (
+          <LoadingState>{t("files.loading")}</LoadingState>
+        ) : loadError ? (
+          <div className="flex flex-1 items-center justify-center">
+            <div className="max-w-md text-center">
+              <p className="flex items-center justify-center gap-1.5 text-sm text-danger">
+                <CircleAlert size={16} aria-hidden />
+                {loadError}
+              </p>
+              <Button variant="secondary" className="mt-3" onClick={() => void load()}>
+                {t("common.retry")}
+              </Button>
+            </div>
+          </div>
+        ) : sources.length === 0 ? (
+          <EmptyState>
+            <p className="text-sm text-text-secondary">{t("files.empty")}</p>
+            <Button
+              variant="primary"
+              icon={<Upload size={14} aria-hidden />}
+              onClick={() => fileInputRef.current?.click()}
+            >
+              {t("files.importFiles")}
+            </Button>
+          </EmptyState>
+        ) : rows.length === 0 ? (
+          <EmptyState>
+            {t("files.noMatch", { query: fileQuery })}
+          </EmptyState>
+        ) : (
+          <div
+            ref={scrollRef}
+            onScroll={(e) => setScrollTop(e.currentTarget.scrollTop)}
+            className="min-h-0 flex-1 overflow-auto"
+          >
+            <table className="w-full border-separate border-spacing-0">
+              <thead className="sticky top-0 z-10 bg-surface">
+                <tr>
+                  <th className="w-8 border-b border-border px-1 text-center">
                     <input
                       type="checkbox"
-                      checked={selected.has(row.id)}
-                      onChange={() => toggleSelected(row.id)}
-                      onClick={(e) => e.stopPropagation()}
+                      checked={rows.length > 0 && rows.every((r) => selected.has(r.id))}
+                      onChange={toggleSelectAll}
                       className={"h-3.5 w-3.5 shrink-0 cursor-pointer rounded-sm border border-border accent-[var(--qc-accent)]"}
-                    aria-label={t("files.selectRow", { name: row.name })}
-                    title={t("files.selectRow", { name: row.name })}
+                      aria-label={t("files.selectAll")}
+                      title={t("files.selectAll")}
                     />
-                  </td>
-                  <td className="max-w-64 border-b border-border px-3 py-2">
-                    <span className="flex items-center gap-2">
-                      {fileIcon(row.media_type)}
-                      <span className="truncate font-medium">{row.name}</span>
-                    </span>
-                  </td>
-                  <td className="whitespace-nowrap border-b border-border px-3 py-2 text-text-secondary">
-                    {mediaTypeLabel(row.media_type, row.name)}
-                  </td>
-                  <td className="whitespace-nowrap border-b border-border px-3 py-2 text-text-secondary">
-                    {row.date}
-                  </td>
-                  <td className="max-w-40 truncate border-b border-border px-3 py-2 text-text-secondary">
-                    {row.owner}
-                  </td>
-                  <td className="max-w-64 truncate border-b border-border px-3 py-2 text-text-secondary">
-                    {row.memo || <span className="italic">—</span>}
-                  </td>
+                  </th>
+                  <SortableTh
+                    label={t("files.colName")}
+                    sortKey="name"
+                    active={sortKey === "name"}
+                    dir={sortDir}
+                    onSort={toggleSort}
+                  />
+                  <SortableTh
+                    label={t("files.colType")}
+                    sortKey="type"
+                    active={sortKey === "type"}
+                    dir={sortDir}
+                    onSort={toggleSort}
+                  />
+                  <SortableTh
+                    label={t("files.colDate")}
+                    sortKey="date"
+                    active={sortKey === "date"}
+                    dir={sortDir}
+                    onSort={toggleSort}
+                  />
+                  <SortableTh
+                    label={t("files.colOwner")}
+                    sortKey="owner"
+                    active={sortKey === "owner"}
+                    dir={sortDir}
+                    onSort={toggleSort}
+                  />
+                  <TableHead>{t("files.colMemo")}</TableHead>
                 </tr>
-              ))}
-              {end < rows.length && (
-                <tr aria-hidden>
-                  <td colSpan={5} className="p-0" style={{ height: (rows.length - end) * ROW_HEIGHT }} />
-                </tr>
-              )}
-            </tbody>
-          </table>
-        </div>
-      )}
+              </thead>
+              <tbody>
+                {/* Only [start, end) of the rows are mounted: O(visible) DOM
+                    nodes regardless of total. The spacer rows keep the table at
+                    its natural height so the scrollbar and sticky header stay
+                    aligned. */}
+                {start > 0 && (
+                  <tr aria-hidden>
+                    <td colSpan={5} className="p-0" style={{ height: start * ROW_HEIGHT }} />
+                  </tr>
+                )}
+                {rows.slice(start, end).map((row) => (
+                  <tr
+                    key={row.id}
+                    onClick={() => setView({ kind: "coding", sourceId: row.id })}
+                    onContextMenu={(e) => openMenuAt(e, row)}
+                    style={{ height: ROW_HEIGHT }}
+                    className="cursor-pointer hover:bg-surface-higher"
+                  >
+                    <td className="w-8 border-b border-border px-1 text-center">
+                      <input
+                        type="checkbox"
+                        checked={selected.has(row.id)}
+                        onChange={() => toggleSelected(row.id)}
+                        onClick={(e) => e.stopPropagation()}
+                        className={"h-3.5 w-3.5 shrink-0 cursor-pointer rounded-sm border border-border accent-[var(--qc-accent)]"}
+                        aria-label={t("files.selectRow", { name: row.name })}
+                        title={t("files.selectRow", { name: row.name })}
+                      />
+                    </td>
+                    <td className="max-w-64 border-b border-border px-3 py-2">
+                      <span className="flex items-center gap-2">
+                        {fileIcon(row.media_type)}
+                        <span className="truncate font-medium">{row.name}</span>
+                      </span>
+                    </td>
+                    <td className="whitespace-nowrap border-b border-border px-3 py-2 text-text-secondary">
+                      {mediaTypeLabel(row.media_type, row.name)}
+                    </td>
+                    <td className="whitespace-nowrap border-b border-border px-3 py-2 text-text-secondary">
+                      {row.date}
+                    </td>
+                    <td className="max-w-40 truncate border-b border-border px-3 py-2 text-text-secondary">
+                      {row.owner}
+                    </td>
+                    <td className="max-w-64 truncate border-b border-border px-3 py-2 text-text-secondary">
+                      {row.memo || <span className="italic">—</span>}
+                    </td>
+                  </tr>
+                ))}
+                {end < rows.length && (
+                  <tr aria-hidden>
+                    <td colSpan={5} className="p-0" style={{ height: (rows.length - end) * ROW_HEIGHT }} />
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
 
       {/* Row actions menu */}
       {menu && menuRow && (

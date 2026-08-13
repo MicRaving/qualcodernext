@@ -19,7 +19,6 @@ import {
 } from "lucide-react";
 import { api, type AiIndexStatus, type Pseudonym, type RStatus } from "@/lib/api";
 import { errorDetail } from "@/features/ai/format";
-import { InterchangeView } from "@/features/interchange/InterchangeView";
 import { A11yControls } from "@/features/accessibility/A11yControls";
 import { useI18n, LOCALE_NAMES, type Locale } from "@/lib/i18n";
 import {
@@ -165,6 +164,28 @@ export function SettingsView() {
 
   // R integration status
   const [rStatus, setRStatus] = useState<RStatus | null>(null);
+
+  // Auto-load project on start (packaged app only; harmless elsewhere).
+  const [autoLoadProject, setAutoLoadProject] = useState(true);
+
+  useEffect(() => {
+    api
+      .appSettings()
+      .then((s) => setAutoLoadProject(s.auto_open_project))
+      .catch(() => {
+        /* backend unreachable — keep the default */
+      });
+  }, []);
+
+  async function toggleAutoLoadProject() {
+    const next = !autoLoadProject;
+    setAutoLoadProject(next);
+    try {
+      await api.saveAppSettings({ auto_open_project: next });
+    } catch {
+      /* keep the local toggle; the backend error surfaces on the next load */
+    }
+  }
 
 
   // Help popovers (anchored for the shared HelpFlyout)
@@ -374,6 +395,7 @@ export function SettingsView() {
     <LeftBar
       borderSide="l"
       width="lg"
+      className="h-full min-h-0"
       header={<BarHeader title={t("settings.title")} />}
     >
       {saveError && <ErrorBanner>{saveError}</ErrorBanner>}
@@ -429,8 +451,28 @@ export function SettingsView() {
             </div>
           </div>
 
-          <div className="mt-2">
-            <InterchangeView embedded />
+          <div className="mt-3 border-t border-border pt-3">
+            <button
+              type="button"
+              role="switch"
+              aria-checked={autoLoadProject}
+              aria-label={t("settings.autoLoadProject")}
+              onClick={() => void toggleAutoLoadProject()}
+              className="flex items-center gap-2"
+            >
+              <span
+                className={`relative h-4 w-8 rounded-full transition-colors ${
+                  autoLoadProject ? "bg-accent" : "bg-border"
+                }`}
+              >
+                <span
+                  className="absolute top-0.5 h-3 w-3 rounded-full bg-white transition-all"
+                  style={{ left: autoLoadProject ? 18 : 2 }}
+                />
+              </span>
+              <span className="text-xs text-text-primary">{t("settings.autoLoadProject")}</span>
+            </button>
+            <p className="mt-1 text-xs text-text-secondary">{t("settings.autoLoadProjectHint")}</p>
           </div>
 
           <div className="mt-3 border-t border-border pt-3">

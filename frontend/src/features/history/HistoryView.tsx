@@ -152,6 +152,7 @@ export function HistoryView() {
   return (
     <LeftBar
       borderSide="l"
+      className="h-full min-h-0"
       header={
         <>
           <BarHeader

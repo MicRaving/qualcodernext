@@ -22,6 +22,11 @@ class SyncSettingsRequest(BaseModel):
     enabled: bool
 
 
+class SyncOverrideRequest(BaseModel):
+    project_path: str
+    mode: str = "auto"
+
+
 @router.get("/settings")
 async def get_sync_settings() -> dict:
     """The per-machine sync switch state."""
@@ -63,6 +68,25 @@ async def sync_status(svc: ServiceDep) -> dict:
     return await sync.sync_status(
         svc.session_factory, svc.project_path, user_settings.get_codername()
     )
+
+
+@router.get("/auto-detect")
+async def sync_auto_detect(project_path: str) -> dict:
+    """Report whether a project path looks like a shared/synced folder
+    (marker file, UNC path or change sidecars from other raters)."""
+    return sync.detect_shared(project_path, user=user_settings.get_codername())
+
+
+@router.put("/override")
+async def put_sync_override(req: SyncOverrideRequest) -> dict:
+    """Remember a per-project sync decision. A manual toggle ("on"/"off")
+    wins over the auto-detection on the next project open; "auto" restores
+    the re-detecting behaviour."""
+    try:
+        saved = user_settings.set_sync_override(req.project_path, req.mode)
+    except ValueError as err:
+        raise HTTPException(status_code=422, detail=str(err)) from err
+    return {"ok": True, "project_path": req.project_path, "mode": saved}
 
 
 @router.post("/now")

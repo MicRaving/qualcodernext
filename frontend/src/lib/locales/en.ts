@@ -69,6 +69,8 @@ export const en: Record<string, string> = {
   "settings.title": "Settings",
   "settings.general": "General",
   "settings.generalHint": "Appearance, language and file interchange.",
+  "settings.autoLoadProject": "Auto-load last project on start",
+  "settings.autoLoadProjectHint": "In the desktop app, the most recently opened project opens automatically on start.",
   "settings.aiProviderOpencodeGo": "OpenCode Go",
   "settings.appearance": "Appearance",
   "settings.appearanceHint": "Choose the application theme.",
@@ -153,6 +155,9 @@ export const en: Record<string, string> = {
   "coder.statsLoading": "Loading…",
   "coder.statsTotal": "Total",
   "coder.contextMenu": "Coder actions — {name}",
+  "coder.refreshProject": "Refresh project data",
+  "coder.refreshProjectHint": "Reloads the project from disk — files, codes, codings and settings. Use after editing files outside QCnext or when another instance changed the project.",
+  "coder.enableCollaboration": "Enable collaboration",
   "coder.tasks": "Background tasks",
   "coder.tasksStart": "Start",
   "coder.tasksPause": "Pause",
@@ -335,6 +340,7 @@ export const en: Record<string, string> = {
   "tasks.delete": "Remove task for {name}",
   "tasks.kindTranscribe": "Transcription",
   "tasks.kindAutocode": "Autocode",
+  "tasks.kindImport": "Import",
   "tasks.autocoded": "Autocoded {count} passages",
   "tasks.autocodeFailed": "Autocode failed",
   "tasks.autocodeQueueHint": "Queued as background tasks — progress shows in the top bar.",
@@ -362,6 +368,7 @@ export const en: Record<string, string> = {
   "common.dismiss": "Dismiss",
   "common.save": "Save",
   "common.cancel": "Cancel",
+  "common.apply": "Apply",
   "common.delete": "Delete",
   "common.rename": "Rename",
   "common.add": "Add",
@@ -384,12 +391,15 @@ export const en: Record<string, string> = {
   "files.searchPlaceholder": "Search files…",
   "files.searchAria": "Search files",
   "files.import": "Import",
-  "files.transcribeSelectedCount": "Transcribe ({eligible}/{n})",
+  "files.transcribeEligible": "Transcribe ({n})",
+  "files.transcribeSkipped": "Transcribe ({n}) — {skipped} skipped (already transcribed)",
   "files.autocodeSelectedCount": "Autocode ({eligible}/{n})",
   "files.transcribeNone": "No selected audio/video file can be transcribed",
   "pdf.split": "Side-by-side view",
   "files.autocodeNone": "No selected file has a text/transcript",
   "files.importFiles": "Import files",
+  "files.dropImport": "Drop files to import",
+  "files.dropImportHint": "Add documents, PDFs, images, audio or video",
   "files.importing": "Importing {done} of {total}…",
   "files.importingShort": "Importing",
   "files.importFailed": "Could not import {name}",
@@ -578,6 +588,20 @@ export const en: Record<string, string> = {
   "pdfCoder.pageWithDate": "Page {page} · {date}",
   "pdfCoder.removeConfirm": "Remove the coding for {name}?",
 
+  // html coder (webpage snapshots)
+  "htmlCoder.loading": "Loading codings…",
+  "htmlCoder.loadCodingsError": "Could not load the codings",
+  "htmlCoder.plainText": "Plain text",
+  "htmlCoder.plainTextHint": "Code the extracted page text",
+  "htmlCoder.webpage": "Webpage",
+  "htmlCoder.webpageHint": "Show the captured webpage snapshot",
+  "htmlCoder.loadingWebpage": "Loading webpage…",
+  "htmlCoder.webpageLoadError": "Could not load the saved webpage",
+  "htmlCoder.noSnapshot": "No snapshot available — re-import the page as HTML",
+  "htmlCoder.downloadPdf": "Save as PDF",
+  "htmlCoder.downloadPdfHint": "Export the page as a PDF document",
+  "htmlCoder.downloadError": "PDF export failed",
+
   // image coder
   "imageCoder.loading": "Loading image codings…",
   "imageCoder.dragHint": "drag on the image to create a code region",
@@ -609,8 +633,15 @@ export const en: Record<string, string> = {
   "avCoder.hint": "Play the media, press “Set start”, then “Set end & code…” to create a coded segment.",
   "avCoder.transcribeMode": "Transcribe",
   "avCoder.transcribeSave": "Save transcript",
-  "avCoder.transcribeHint": "Enter: insert timestamp · Space/F9: play/pause",
+  "avCoder.transcribeHint": "Enter: insert timestamp · Tab: new segment · Space/F9: play/pause",
   "avCoder.transcribeInsert": "Insert timestamp at cursor",
+  "avCoder.transcribeNext": "Next",
+  "avCoder.transcribeNextTitle": "Current position — the timestamp Enter/Tab will insert",
+  "avCoder.transcribeCreateError": "Could not create an empty transcript.",
+  "avCoder.deleteTranscript": "Delete transcript",
+  "avCoder.deleteTranscriptTitle": "Delete the transcript and its text codings",
+  "avCoder.deleteTranscriptConfirm": "Delete this transcript? Codings, annotations and case links on the transcript text will be removed.",
+  "avCoder.deleteTranscriptError": "Could not delete the transcript.",
 
   // code picker
   "codePicker.ariaTitle": "Pick a code",
@@ -1048,6 +1079,9 @@ export const en: Record<string, string> = {
   "interchange.countReferences": "References",
   "interchange.countAttributes": "Attributes",
   "interchange.importComplete": "Import complete",
+  "interchange.customization": "Import options",
+  "interchange.customizationNone": "This format is imported with the default options.",
+  "interchange.detectedFormat": "Detected format",
 
   // ai
   "ai.welcomeReady": "AI assistant ready. Ask about your project.",
@@ -1081,8 +1115,13 @@ export const en: Record<string, string> = {
   "ai.modeMemos": "Memo analysis",
   "ai.promptLabel": "Instructions:",
   "ai.promptNone": "Default",
+  "ai.promptHelp": "Predefined prompt templates for each analysis mode — pick one to prefill the chat input.",
+  "ai.promptsEmptyHint": "No prompt templates for this mode.",
 
   // AI memo chat + quick actions
+  "ai.contextMemos": "Context memos",
+  "ai.selectAll": "Select all",
+  "ai.deselectAll": "Deselect all",
   "ai.memosSearch": "Search memos…",
   "ai.memosFile": "File memos",
   "ai.memosCode": "Code memos",
@@ -1138,11 +1177,14 @@ export const en: Record<string, string> = {
 
   // Region editing
   "imageCoder.editRegion": "Edit region",
-  "imageCoder.regionGeometry": "Position and size (x, y, width, height)",
   "imageCoder.regionSaved": "Region updated",
   "imageCoder.regionSaveError": "Could not update the region",
+  "imageCoder.x": "X",
+  "imageCoder.y": "Y",
+  "imageCoder.w": "W",
+  "imageCoder.h": "H",
+  "imageCoder.page": "Page",
   "pdfCoder.editRegion": "Edit region",
-  "pdfCoder.regionGeometry": "Position and size (x, y, width, height)",
 
   // Speakers
   "avCoder.markSpeakers": "Mark speakers…",
@@ -1178,6 +1220,18 @@ export const en: Record<string, string> = {
   "tree.demote": "Demote",
   "tree.promoteFail": "Could not promote",
   "tree.demoteFail": "Could not demote",
+
+  // Code tree drag & drop + merge
+  "tree.moveFail": "Could not move",
+  "tree.moveChild": "Move here as child",
+  "tree.dropInto": "Add as child",
+  "tree.dropBefore": "Insert before",
+  "tree.dropAfter": "Insert after",
+  "tree.dropMerge": "Merge into",
+  "tree.mergeInto": "Merge into…",
+  "tree.mergeConfirm": "Merge \"{name}\" into \"{target}\"? Its codings move to the target and \"{name}\" is deleted.",
+  "tree.mergeSearch": "Search items…",
+  "tree.mergeEmpty": "No other items to merge into.",
 
   // Autocode within-code mode
   "coder.autoWithin": "Only within code",
@@ -1494,6 +1548,7 @@ export const en: Record<string, string> = {
   "sync.now": "Sync now",
   "sync.lastSyncShort": "{when} ago",
   "sync.error": "Sync error",
+  "sync.autoEnabled": "Collaboration sync enabled — this project is in a shared folder",
 
   // R console (Rscript bridge)
   "analyze.titleRConsole": "R console",

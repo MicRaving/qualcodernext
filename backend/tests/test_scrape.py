@@ -124,6 +124,18 @@ class FakeYoutubeDL:
         pass
 
 
+def make_ydl_factory(info: dict) -> tuple[list, ...]:
+    """Patch side_effect that builds a FakeYoutubeDL and records its options."""
+    created: list[FakeYoutubeDL] = []
+
+    def factory(options=None):
+        ydl = FakeYoutubeDL(options=options, info=info)
+        created.append(ydl)
+        return ydl
+
+    return factory, created
+
+
 def make_youtube_info(**overrides) -> dict:
     info = {
         "title": "Demo Video",
@@ -229,6 +241,55 @@ def test_reddit_rejects_non_json_response():
         scrape_service.scrape_reddit("https://www.reddit.com/r/x/comments/a/")
 
 
+def test_reddit_accepts_single_listing_object():
+    post_listing = {"kind": "Listing", "data": {"children": [REDDIT_POST["data"]["children"][0]]}}
+    payload = json.dumps(post_listing).encode("utf-8")
+    with patch("qualcoder_api.services.scrape_service.fetch_url", return_value=payload):
+        content = scrape_service.scrape_reddit("https://www.reddit.com/r/Test/comments/abc123/")
+
+    text = content.data.decode("utf-8")
+    assert "My Reddit Thread" in text
+    assert "The selftext body." in text
+    assert "Comments" not in text
+
+
+@pytest.mark.parametrize("code", [403, 429])
+def test_reddit_http_block_maps_to_rate_limit_message(code):
+    err = ScrapeError(f"server returned HTTP {code} for https://www.reddit.com/...", code=code)
+    with (
+        patch("qualcoder_api.services.scrape_service.fetch_url", side_effect=err),
+        pytest.raises(ScrapeError, match="rate-limited"),
+    ):
+        scrape_service.scrape_reddit("https://www.reddit.com/r/Test/comments/abc123/")
+
+
+def test_reddit_json_suffix_handles_trailing_slash_after_json():
+    assert scrape_service._reddit_json_url("https://www.reddit.com/r/x/comments/a/b.json/") == (
+        "https://www.reddit.com/r/x/comments/a/b.json"
+    )
+
+
+def test_reddit_skips_removed_and_deleted_comments():
+    comments_listing = {
+        "kind": "Listing",
+        "data": {
+            "children": [
+                {"kind": "t1", "data": {"author": "alice", "body": "Visible.", "replies": ""}},
+                {"kind": "t1", "data": {"author": "bob", "body": "[removed]", "replies": ""}},
+                {"kind": "t1", "data": {"author": "[deleted]", "body": "[deleted]", "replies": ""}},
+            ]
+        },
+    }
+    payload = json.dumps([REDDIT_POST, comments_listing]).encode("utf-8")
+    with patch("qualcoder_api.services.scrape_service.fetch_url", return_value=payload):
+        content = scrape_service.scrape_reddit("https://www.reddit.com/r/Test/comments/abc123/")
+
+    text = content.data.decode("utf-8")
+    assert "u/alice: Visible." in text
+    assert "[removed]" not in text
+    assert "u/[deleted]" not in text
+
+
 # ----------------------------------------------------------------------
 # Articles
 # ----------------------------------------------------------------------
@@ -253,14 +314,38 @@ def test_article_empty_page_raises():
 # YouTube
 # ----------------------------------------------------------------------
 
-def test_youtube_extracts_captions_and_comments():
-    info = make_youtube_info()
+def test_youtube_extracts_comments_instead_of_captions():
+    info = make_youtube_info(
+        comments=[
+            {
+                "id": "1",
+                "author": "alice",
+                "text": "Loved it",
+                "timestamp": 1700000000,
+                "like_count": 12,
+                "replies": [
+                    {
+                        "id": "2",
+                        "author": "bob",
+                        "text": "Me too",
+                        "timestamp": 1700000100,
+                        "like_count": 3,
+                        "replies": [],
+                    }
+                ],
+            },
+            {"id": "3", "text": "No author, no meta"},
+        ]
+    )
+    factory, created = make_ydl_factory(info)
     with (
-        patch("qualcoder_api.services.scrape_service.yt_dlp.YoutubeDL", return_value=FakeYoutubeDL(info=info)),
-        patch("qualcoder_api.services.scrape_service.fetch_url", return_value=VTT_CAPTIONS),
+        patch("qualcoder_api.services.scrape_service.yt_dlp.YoutubeDL", side_effect=factory),
+        patch("qualcoder_api.services.scrape_service.fetch_url") as fetch,
     ):
         content = scrape_service.scrape_youtube("https://www.youtube.com/watch?v=abc")
 
+    assert created[0].options.get("getcomments") is True
+    fetch.assert_not_called()  # captions are dropped when comments exist
     assert content.mode == "youtube"
     assert content.filename == "Demo Video.txt"
     text = content.data.decode("utf-8")
@@ -268,13 +353,28 @@ def test_youtube_extracts_captions_and_comments():
     assert "Uploader: Demo Channel" in text
     assert "Duration: 1:23" in text
     assert "A description." in text
+    assert "u/alice (12 likes, 2023-11-14 22:13): Loved it" in text
+    assert "  u/bob (3 likes, 2023-11-14 22:15): Me too" in text
+    assert "u/unknown: No author, no meta" in text
+    assert "Captions" not in text
+    assert "Hello caption text" not in text
+
+
+def test_youtube_falls_back_to_captions_when_comments_missing():
+    info = make_youtube_info(comments=[])
+    with (
+        patch("qualcoder_api.services.scrape_service.yt_dlp.YoutubeDL", return_value=FakeYoutubeDL(info=info)),
+        patch("qualcoder_api.services.scrape_service.fetch_url", return_value=VTT_CAPTIONS),
+    ):
+        content = scrape_service.scrape_youtube("https://www.youtube.com/watch?v=abc")
+
+    text = content.data.decode("utf-8")
     assert "[00:01] Hello caption text" in text
     assert "[00:03] Second line" in text
-    assert "u/viewer1: Great video" in text
-    assert "  u/viewer2: Agreed" in text
+    assert "Comments" not in text
 
 
-def test_youtube_without_captions_keeps_header():
+def test_youtube_without_comments_or_captions_keeps_header():
     info = make_youtube_info(subtitles={}, automatic_captions={}, comments=[])
     with (
         patch("qualcoder_api.services.scrape_service.yt_dlp.YoutubeDL", return_value=FakeYoutubeDL(info=info)),
@@ -288,6 +388,25 @@ def test_youtube_without_captions_keeps_header():
     assert "A description." in text
     assert "Captions" not in text
     assert "Comments" not in text
+
+
+def test_youtube_reports_when_comment_extraction_unsupported():
+    info = make_youtube_info()
+    factory, created = make_ydl_factory(info)
+    with (
+        patch.object(scrape_service, "_YT_DLP_COMMENTS_SUPPORTED", False),
+        patch("qualcoder_api.services.scrape_service.yt_dlp.YoutubeDL", side_effect=factory),
+        patch("qualcoder_api.services.scrape_service.fetch_url") as fetch,
+    ):
+        content = scrape_service.scrape_youtube("https://www.youtube.com/watch?v=abc")
+
+    assert "getcomments" not in created[0].options
+    fetch.assert_not_called()
+    text = content.data.decode("utf-8")
+    assert "Demo Video" in text
+    assert "u/viewer1" not in text
+    assert "Captions" not in text
+    assert "cannot extract comments" in text
 
 
 def test_youtube_caption_fetch_failure_keeps_header():

@@ -1,7 +1,7 @@
 /**
  * Left sidebar — Files / Codes / Cases trees built from the API.
  */
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type DragEvent as ReactDragEvent, type ReactNode } from "react";
 import {
   Check,
   ChevronDown,
@@ -58,7 +58,7 @@ import { isPdf } from "@/lib/media";
 import { useToast } from "@/lib/toast";
 import { useI18n } from "@/lib/i18n";
 import { useProjectStore } from "@/stores/project";
-import { clampToViewport, matchTargetByName } from "@/features/sidebar/codeActions";
+import { clampToViewport } from "@/features/sidebar/codeActions";
 
 type ContextMenu =
   | { kind: "code"; x: number; y: number; item: CodeTreeItem }
@@ -73,12 +73,55 @@ interface MenuAction {
 
 const MENU_WIDTH = 176;
 
+/** Payload of the in-flight HTML5 drag. Module-level so it survives
+ *  re-renders; ``subtree`` is the dragged node's descendant keys, computed
+ *  once at dragstart and reused for every cycle guard (the tree cannot
+ *  change while a drag is in flight). */
+interface DragNode {
+  kind: "code" | "category";
+  id: number;
+  subtree: Set<string>;
+}
+
+let dragNode: DragNode | null = null;
+
+/** 1×1 transparent GIF — hides the browser's native drag ghost. */
+const TRANSPARENT_GIF =
+  "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7";
+
+/** The current drop affordance on the hovered row (``key`` = kind:id). */
+type DropZone =
+  | { mode: "before"; key: string }
+  | { mode: "after"; key: string }
+  | { mode: "into"; key: string }
+  | { mode: "merge"; key: string };
+
+/** Body shapes of the backend move endpoints (only set fields are sent;
+ *  an explicit null means "move to the root / clear the parent"). */
+type CodeMoveOpts = {
+  parent_catid?: number | null;
+  supercid?: number | null;
+  after_cid?: number | null;
+  before_cid?: number | null;
+};
+type CategoryMoveOpts = {
+  supercatid?: number | null;
+  after_catid?: number | null;
+  before_catid?: number | null;
+};
+
 export function Sidebar() {
   const { t } = useI18n();
   const toast = useToast();
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
   const [menu, setMenu] = useState<ContextMenu | null>(null);
   const [toolbarError, setToolbarError] = useState<string | null>(null);
+  /** Tree row selected for the toolbar promote/demote buttons. */
+  const [treeSelection, setTreeSelection] = useState<{ kind: "code" | "category"; id: number } | null>(null);
+  /** Drop indicator while a code/category is dragged over the tree. */
+  const [dropZone, setDropZone] = useState<DropZone | null>(null);
+  /** Key of the row currently being dragged (dimmed during the drag). */
+  const [draggingKey, setDraggingKey] = useState<string | null>(null);
   /** Inline name editing (no system prompts): which row is being edited. */
   const [editing, setEditing] = useState<{ kind: "code" | "category" | "file"; id: number } | null>(null);
   // Code search (coding view only); the files search lives in the store so
@@ -88,6 +131,14 @@ export function Sidebar() {
   const setFileQuery = useProjectStore((s) => s.setFileQuery);
   const [colorMenu, setColorMenu] = useState<{ item: CodeTreeItem; x: number; y: number } | null>(null);
   const [palette, setPalette] = useState<string[]>([]);
+  /** "Merge into…" submenu opened from a context menu. */
+  const [mergeMenu, setMergeMenu] = useState<{
+    kind: "code" | "category";
+    item: CodeTreeItem;
+    x: number;
+    y: number;
+    search: string;
+  } | null>(null);
   // Code sets (MAXQDA-style named subsets of codes): the set list, the
   // select's active entry, the APPLIED filter (client-side tree visibility)
   // and the manage/membership-editor popups.
@@ -133,13 +184,18 @@ export function Sidebar() {
   }, [projectOpen, t]);
 
   useEffect(() => {
-    if (!menu) return;
+    if (!menu && !mergeMenu && !colorMenu && !manageMenu) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setMenu(null);
+      if (e.key === "Escape") {
+        setMenu(null);
+        setMergeMenu(null);
+        setColorMenu(null);
+        setManageMenu(null);
+      }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [menu]);
+  }, [menu, mergeMenu, colorMenu, manageMenu]);
 
   const groups = useMemo(() => {
     const g: Record<string, Source[]> = {
@@ -229,6 +285,16 @@ export function Sidebar() {
     walk("root");
     return out;
   }, [treeItems]);
+
+  /** The selected tree row (for the toolbar promote/demote buttons), derived
+   *  from the live tree so a stale selection (deleted/merged row) just
+   *  disables the buttons. */
+  const selectionItem = useMemo(() => {
+    if (!treeSelection) return null;
+    return (
+      codeTree.find((i) => i.kind === treeSelection.kind && i.id === treeSelection.id) ?? null
+    );
+  }, [codeTree, treeSelection]);
 
   /** Move the inline editor to the next row of the same list (Tab key).
    *  The tree is namespace-aware: in legacy projects category and code ids
@@ -386,48 +452,40 @@ export function Sidebar() {
     void selectFile(fid);
   }
 
-  async function mergeCodeInto(item: CodeTreeItem) {
-    const targetName = window.prompt(t("sidebar.mergeCodePrompt", { name: item.name }));
-    if (!targetName?.trim()) return;
+  /** Merge ``source`` into ``target`` after a confirm dialog (drop-onto and
+   *  the "Merge into…" submenu share this path). */
+  async function confirmAndMerge(source: CodeTreeItem, target: CodeTreeItem) {
+    if (!window.confirm(t("tree.mergeConfirm", { name: source.name, target: target.name }))) return;
     setToolbarError(null);
-    const targetId = matchTargetByName(codeTree, targetName, "code");
-    if (targetId == null) {
-      const detail = t("sidebar.noCodeFound", { name: targetName.trim() });
-      setToolbarError(detail);
-      toast.error(detail);
-      return;
-    }
     try {
-      await api.mergeCode(item.id, targetId);
-      await useProjectStore.getState().refreshProject();
-      toast.success(t("sidebar.codeMerged", { name: item.name }));
+      if (source.kind === "category") {
+        await api.mergeCategory(source.id, target.id);
+        clearInspectorIfSelected(source);
+        await useProjectStore.getState().refreshProject();
+        toast.success(t("sidebar.categoryMerged", { name: source.name }));
+      } else {
+        await api.mergeCode(source.id, target.id);
+        clearInspectorIfSelected(source);
+        await useProjectStore.getState().refreshProject();
+        toast.success(t("sidebar.codeMerged", { name: source.name }));
+      }
     } catch (e) {
-      const detail = e instanceof Error ? e.message : t("sidebar.mergeCodeError");
+      const detail =
+        e instanceof Error
+          ? e.message
+          : source.kind === "category"
+            ? t("sidebar.mergeCategoryError")
+            : t("sidebar.mergeCodeError");
       setToolbarError(detail);
       toast.error(detail);
     }
   }
 
-  async function mergeCategoryInto(item: CodeTreeItem) {
-    const targetName = window.prompt(t("sidebar.mergeCategoryPrompt", { name: item.name }));
-    if (!targetName?.trim()) return;
-    setToolbarError(null);
-    const targetId = matchTargetByName(codeTree, targetName, "category");
-    if (targetId == null) {
-      const detail = t("sidebar.noCategoryFound", { name: targetName.trim() });
-      setToolbarError(detail);
-      toast.error(detail);
-      return;
-    }
-    try {
-      await api.mergeCategory(item.id, targetId);
-      await useProjectStore.getState().refreshProject();
-      toast.success(t("sidebar.categoryMerged", { name: item.name }));
-    } catch (e) {
-      const detail = e instanceof Error ? e.message : t("sidebar.mergeCategoryError");
-      setToolbarError(detail);
-      toast.error(detail);
-    }
+  /** Open the "Merge into…" submenu listing every other node of the same
+   *  kind (closes the context menu it was opened from). */
+  function openMergeMenu(item: CodeTreeItem, kind: "code" | "category", x: number, y: number) {
+    setMenu(null);
+    setMergeMenu({ kind, item, x, y, search: "" });
   }
 
   function clearInspectorIfSelected(item: CodeTreeItem) {
@@ -556,6 +614,144 @@ export function Sidebar() {
       setToolbarError(detail);
       toast.error(detail);
     }
+  }
+
+  /* ------------------------------------------------------------------ */
+  /* Drag & drop rearranging                                             */
+  /* ------------------------------------------------------------------ */
+
+  /** Move a dragged node through the backend, then refresh the tree. */
+  async function moveDragged(drag: DragNode, opts: CodeMoveOpts | CategoryMoveOpts) {
+    setToolbarError(null);
+    try {
+      if (drag.kind === "category") await api.moveCategory(drag.id, opts as CategoryMoveOpts);
+      else await api.moveCode(drag.id, opts as CodeMoveOpts);
+      await useProjectStore.getState().refreshProject();
+    } catch (e) {
+      const detail = e instanceof Error ? e.message : t("tree.moveFail");
+      setToolbarError(detail);
+      toast.error(detail);
+    }
+  }
+
+  /** A category can only nest in categories; a code nests in a category or
+   *  as a sub-code — never under its own descendant (cycle guard). */
+  function canDropInto(drag: DragNode, target: CodeTreeItem): boolean {
+    if (drag.kind === "category" && target.kind !== "category") return false;
+    return !drag.subtree.has(`${target.kind}:${target.id}`);
+  }
+
+  /** before/after land in the target's sibling group — only same-kind rows
+   *  can anchor a sibling slot, and never inside the dragged node's own
+   *  subtree (the backend would reject that cycle anyway). */
+  function canOrderSibling(drag: DragNode, target: CodeTreeItem): boolean {
+    if (drag.kind !== target.kind) return false;
+    return !drag.subtree.has(`${target.kind}:${target.id}`);
+  }
+
+  /** Merge-onto needs a same-kind target outside the dragged subtree. */
+  function canDropMerge(drag: DragNode, target: CodeTreeItem): boolean {
+    if (drag.kind !== target.kind) return false;
+    return !drag.subtree.has(`${target.kind}:${target.id}`);
+  }
+
+  /** Resolve the drop zone from the pointer position: the top/bottom bands
+   *  give the before/after insertion lines, the left indent gutter gives
+   *  the "into" (make child) zone, the row body gives the merge target. */
+  function computeDropZone(
+    e: ReactDragEvent<HTMLButtonElement>,
+    item: CodeTreeItem,
+    depth: number,
+    drag: DragNode,
+  ): DropZone | null {
+    if (drag.kind === item.kind && drag.id === item.id) return null;
+    const rect = e.currentTarget.getBoundingClientRect();
+    const y = (e.clientY - rect.top) / Math.max(1, rect.height);
+    const x = e.clientX - rect.left;
+    const key = `${item.kind}:${item.id}`;
+    if (y < 0.25) return canOrderSibling(drag, item) ? { mode: "before", key } : null;
+    if (y > 0.75) return canOrderSibling(drag, item) ? { mode: "after", key } : null;
+    if (x < 8 + depth * 16 + 28) {
+      return canDropInto(drag, item) ? { mode: "into", key } : null;
+    }
+    return canDropMerge(drag, item) ? { mode: "merge", key } : null;
+  }
+
+  function handleRowDragStart(e: ReactDragEvent<HTMLButtonElement>, item: CodeTreeItem) {
+    dragNode = { kind: item.kind, id: item.id, subtree: subtreeKeysOf(item) };
+    setDraggingKey(`${item.kind}:${item.id}`);
+    e.dataTransfer.effectAllowed = "move";
+    e.dataTransfer.setData("text/plain", `${item.kind}:${item.id}`);
+    // No native drag image — the tree renders its own drop indicator.
+    const ghost = new Image();
+    ghost.src = TRANSPARENT_GIF;
+    e.dataTransfer.setDragImage(ghost, 0, 0);
+  }
+
+  function handleRowDragOver(e: ReactDragEvent<HTMLButtonElement>, item: CodeTreeItem, depth: number) {
+    const drag = dragNode;
+    if (!drag) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "move";
+    setDropZone((prev) => {
+      const next = computeDropZone(e, item, depth, drag);
+      return prev?.mode === next?.mode && prev?.key === next?.key ? prev : next;
+    });
+  }
+
+  function handleRowDragLeave(e: ReactDragEvent<HTMLButtonElement>) {
+    if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setDropZone(null);
+  }
+
+  function handleRowDrop(e: ReactDragEvent<HTMLButtonElement>, item: CodeTreeItem, depth: number) {
+    const drag = dragNode;
+    if (!drag) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const zone = computeDropZone(e, item, depth, drag);
+    dragNode = null;
+    setDraggingKey(null);
+    setDropZone(null);
+    if (!zone) return;
+    if (zone.mode === "before" || zone.mode === "after") {
+      const before = zone.mode === "before";
+      if (drag.kind === "category") {
+        void moveDragged(drag, before ? { before_catid: item.id } : { after_catid: item.id });
+      } else {
+        void moveDragged(drag, before ? { before_cid: item.id } : { after_cid: item.id });
+      }
+    } else if (zone.mode === "into") {
+      if (drag.kind === "category") void moveDragged(drag, { supercatid: item.id });
+      else if (item.kind === "category") void moveDragged(drag, { parent_catid: item.id });
+      else void moveDragged(drag, { supercid: item.id });
+    } else {
+      // Merge-on-drop: dropped onto the row body of a same-kind node.
+      const source = codeTree.find((i) => i.kind === drag.kind && i.id === drag.id);
+      const target = codeTree.find((i) => i.kind === item.kind && i.id === item.id);
+      if (source && target) void confirmAndMerge(source, target);
+    }
+  }
+
+  function handleRowDragEnd() {
+    dragNode = null;
+    setDraggingKey(null);
+    setDropZone(null);
+  }
+
+  /** All ``kind:id`` keys of the subtree rooted at ``item`` (inclusive) —
+   *  the cycle-guard lookup for drop zones. */
+  function subtreeKeysOf(item: CodeTreeItem): Set<string> {
+    const keys = new Set<string>();
+    const stack: CodeTreeItem[] = [item];
+    let depth = 0;
+    while (stack.length > 0 && depth <= MAX_TREE_DEPTH) {
+      depth += 1;
+      const cur = stack.pop()!;
+      keys.add(`${cur.kind}:${cur.id}`);
+      const childKey = cur.kind === "category" ? `cat:${cur.id}` : `code:${cur.id}`;
+      for (const child of treeItems.get(childKey) ?? []) stack.push(child);
+    }
+    return keys;
   }
 
   /* ------------------------------------------------------------------ */
@@ -732,23 +928,7 @@ export function Sidebar() {
         {
           label: t("sidebar.menuMergeInto"),
           icon: <GitMerge size={14} aria-hidden />,
-          run: close(() => void mergeCategoryInto(menu.item)),
-        },
-        {
-          label: t("tree.promote"),
-          icon: <IndentDecrease size={14} aria-hidden />,
-          run: close(() => void promoteItem(menu.item)),
-        },
-        {
-          label: t("tree.demote"),
-          icon: <IndentIncrease size={14} aria-hidden />,
-          run: close(() => void demoteItem(menu.item)),
-        },
-        {
-          label: t("common.delete"),
-          icon: <Trash2 size={14} aria-hidden />,
-          danger: true,
-          run: close(() => void deleteCategoryItem(menu.item)),
+          run: close(() => openMergeMenu(menu.item, "category", menu.x, menu.y)),
         },
       );
     } else {
@@ -769,11 +949,6 @@ export function Sidebar() {
           run: close(() => void createCode(null, menu.item.id)),
         },
         {
-          label: t("sidebar.menuRename"),
-          icon: <Pencil size={14} aria-hidden />,
-          run: close(() => void renameCode(menu.item)),
-        },
-        {
           label: t("sidebar.menuColour"),
           icon: <Palette size={14} aria-hidden />,
           run: () => {
@@ -792,7 +967,7 @@ export function Sidebar() {
         {
           label: t("sidebar.menuMergeInto"),
           icon: <GitMerge size={14} aria-hidden />,
-          run: close(() => void mergeCodeInto(menu.item)),
+          run: close(() => openMergeMenu(menu.item, "code", menu.x, menu.y)),
         },
         ...(menu.item.subcode
           ? [
@@ -803,22 +978,6 @@ export function Sidebar() {
               },
             ]
           : []),
-        {
-          label: t("tree.promote"),
-          icon: <IndentDecrease size={14} aria-hidden />,
-          run: close(() => void promoteItem(menu.item)),
-        },
-        {
-          label: t("tree.demote"),
-          icon: <IndentIncrease size={14} aria-hidden />,
-          run: close(() => void demoteItem(menu.item)),
-        },
-        {
-          label: t("common.delete"),
-          icon: <Trash2 size={14} aria-hidden />,
-          danger: true,
-          run: close(() => void deleteCodeItem(menu.item)),
-        },
       );
     }
   }
@@ -862,6 +1021,17 @@ export function Sidebar() {
       .sort((a, b) => a.label.localeCompare(b.label));
   }, [codeTree]);
 
+  /** Candidates for the "Merge into…" submenu: every other node of the same
+   *  kind as the source, optionally filtered by the search box. */
+  const mergeCandidates = mergeMenu
+    ? codeTree.filter((i) => i.kind === mergeMenu.kind && i.id !== mergeMenu.item.id)
+    : [];
+  const mergeFiltered = (() => {
+    const q = mergeMenu?.search.trim().toLowerCase();
+    if (!q) return mergeCandidates;
+    return mergeCandidates.filter((c) => c.name.toLowerCase().includes(q));
+  })();
+
   /* ------------------------------------------------------------------ */
   /* Rendering                                                           */
   /* ------------------------------------------------------------------ */
@@ -896,11 +1066,31 @@ export function Sidebar() {
         );
       }
       return (
-        <div key={key}>
+        <div key={key} className="relative">
+          {/* Insertion lines (before/after drop zones) */}
+          {dropZone?.mode === "before" && dropZone.key === key && (
+            <div
+              className="pointer-events-none absolute inset-x-1 top-0 z-10 h-0.5 rounded-full bg-accent"
+              aria-hidden
+            />
+          )}
+          {dropZone?.mode === "after" && dropZone.key === key && (
+            <div
+              className="pointer-events-none absolute inset-x-1 bottom-0 z-10 h-0.5 rounded-full bg-accent"
+              aria-hidden
+            />
+          )}
           <div className="group flex items-center">
             <button
             type="button"
+            draggable={!editingThis}
+            onDragStart={(e) => handleRowDragStart(e, item)}
+            onDragOver={(e) => handleRowDragOver(e, item, depth)}
+            onDragLeave={handleRowDragLeave}
+            onDrop={(e) => handleRowDrop(e, item, depth)}
+            onDragEnd={handleRowDragEnd}
             onClick={() => {
+              setTreeSelection({ kind: item.kind, id: item.id });
               if (item.kind === "category") {
                 if (hasChildren) setCollapsed((c) => ({ ...c, [key]: !isCollapsed }));
               } else {
@@ -918,6 +1108,7 @@ export function Sidebar() {
             }}
             onContextMenu={(e) => {
               e.preventDefault();
+              setTreeSelection({ kind: item.kind, id: item.id });
               setMenu({ kind: "code", x: e.clientX, y: e.clientY, item });
             }}
             className={`flex min-w-0 flex-1 items-center gap-1.5 rounded-sm px-2 py-1 text-left text-sm hover:bg-surface-higher ${
@@ -928,7 +1119,13 @@ export function Sidebar() {
               item.kind === "code" && hiddenCodes.includes(item.id)
                 ? "opacity-40"
                 : ""
-            }`}
+            } ${
+              dropZone?.key === key && dropZone.mode === "merge"
+                ? "ring-2 ring-accent"
+                : dropZone?.key === key && dropZone.mode === "into"
+                  ? "bg-accent/10 ring-1 ring-accent"
+                  : ""
+            } ${draggingKey === key ? "opacity-50" : ""}`}
             style={rowStyle}
           >
             {item.kind === "category" ? (
@@ -965,6 +1162,18 @@ export function Sidebar() {
               </>
             )}
             <span className="truncate">{item.name}</span>
+            {dropZone?.key === key && dropZone.mode === "into" && (
+              <span className="ml-auto flex shrink-0 items-center gap-1 rounded-sm bg-accent px-1.5 py-0.5 text-[10px] font-medium text-[var(--qc-bg)]">
+                <Plus size={10} aria-hidden />
+                {t("tree.dropInto")}
+              </span>
+            )}
+            {dropZone?.key === key && dropZone.mode === "merge" && (
+              <span className="ml-auto flex shrink-0 items-center gap-1 rounded-sm bg-accent px-1.5 py-0.5 text-[10px] font-medium text-[var(--qc-bg)]">
+                <GitMerge size={10} aria-hidden />
+                {t("tree.dropMerge")}
+              </span>
+            )}
           </button>
           <span className="flex shrink-0 items-center gap-0.5 pr-1 opacity-0 transition-opacity group-hover:opacity-100 hover:opacity-100">
             <IconButton
@@ -1112,6 +1321,30 @@ export function Sidebar() {
             title={t("nav.codes")}
             actions={
               <>
+                <IconButton
+                  label={t("tree.promote")}
+                  title={t("tree.promote")}
+                  size="sm"
+                  disabled={!selectionItem}
+                  className="disabled:opacity-40"
+                  onClick={() => {
+                    if (selectionItem) void promoteItem(selectionItem);
+                  }}
+                >
+                  <IndentDecrease size={14} aria-hidden />
+                </IconButton>
+                <IconButton
+                  label={t("tree.demote")}
+                  title={t("tree.demote")}
+                  size="sm"
+                  disabled={!selectionItem}
+                  className="disabled:opacity-40"
+                  onClick={() => {
+                    if (selectionItem) void demoteItem(selectionItem);
+                  }}
+                >
+                  <IndentIncrease size={14} aria-hidden />
+                </IconButton>
                 <Button
                   variant="primary"
                   icon={<Plus size={12} aria-hidden />}
@@ -1132,7 +1365,14 @@ export function Sidebar() {
         )
       }
     >
-      <div className="relative shrink-0 border-b border-border px-3 py-1.5">
+      <div
+        className="relative shrink-0 border-b border-border px-3 py-1.5"
+        onDragOver={(e) => {
+          // Chrome above the tree: never a drop target — clear any leftover
+          // indicator while the pointer is over the search box.
+          if (dragNode && e.target === e.currentTarget) setDropZone(null);
+        }}
+      >
         <Search
           size={14}
           className="pointer-events-none absolute left-5 top-1/2 -translate-y-1/2 text-text-secondary"
@@ -1150,7 +1390,13 @@ export function Sidebar() {
         />
       </div>
       {view.kind === "coding" && (
-        <div className="flex shrink-0 items-center gap-1 border-b border-border px-2 py-1">
+        <div
+          className="flex shrink-0 items-center gap-1 border-b border-border px-2 py-1"
+          onDragOver={(e) => {
+            // Code-set toolbar is never a drop target either.
+            if (dragNode && e.target === e.currentTarget) setDropZone(null);
+          }}
+        >
           <Select
             value={activeSetId ?? ""}
             onChange={(e) => setActiveSetId(e.target.value ? Number(e.target.value) : null)}
@@ -1206,7 +1452,16 @@ export function Sidebar() {
           <span className="min-w-0 truncate">{toolbarError}</span>
         </p>
       )}
-      <div className={view.kind === "coding" ? "pt-1" : undefined}>
+      <div
+        className={view.kind === "coding" ? "pt-1" : undefined}
+        onDragOver={(e) => {
+          // Dropping on empty tree space cancels the drag (no zone).
+          if (dragNode && e.target === e.currentTarget) {
+            e.preventDefault();
+            setDropZone(null);
+          }
+        }}
+      >
         {view.kind === "coding" ? (
           query.trim() ? (
             <div className="pb-2">
@@ -1220,6 +1475,7 @@ export function Sidebar() {
                     key={`${item.kind}:${item.id}`}
                     type="button"
                     onClick={() => {
+                      setTreeSelection({ kind: item.kind, id: item.id });
                       if (item.kind !== "category") {
                         setActiveCode(item.id);
                         void selectCode(item.id);
@@ -1230,6 +1486,7 @@ export function Sidebar() {
                     }}
                     onContextMenu={(e) => {
                       e.preventDefault();
+                      setTreeSelection({ kind: item.kind, id: item.id });
                       setMenu({ kind: "code", x: e.clientX, y: e.clientY, item });
                     }}
                     className={`flex w-full items-center gap-1.5 rounded-sm px-2 py-1 text-left text-sm hover:bg-surface-higher ${
@@ -1343,6 +1600,74 @@ export function Sidebar() {
                   aria-label={color}
                 />
               ))}
+            </div>
+          </Menu>
+        </>
+      )}
+      {/* "Merge into…" submenu (context menu → Merge into…) */}
+      {mergeMenu && (
+        <>
+          <div
+            className="fixed inset-0 z-30"
+            onClick={() => setMergeMenu(null)}
+            onContextMenu={(e) => {
+              e.preventDefault();
+              setMergeMenu(null);
+            }}
+            aria-hidden
+          />
+          <Menu
+            position="fixed"
+            className="min-w-56 p-1.5"
+            style={{
+              left: Math.min(mergeMenu.x + MENU_WIDTH - 8, window.innerWidth - 240),
+              top: Math.min(mergeMenu.y, window.innerHeight - 360),
+            }}
+            role="menu"
+            aria-label={t("tree.mergeInto")}
+          >
+            <p className="mb-1 truncate px-1 pt-0.5 text-[10px] text-text-secondary">
+              {t("tree.mergeInto")} — {mergeMenu.item.name}
+            </p>
+            {mergeCandidates.length > 10 && (
+              <div className="relative mb-1">
+                <Search
+                  size={12}
+                  className="pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 text-text-secondary"
+                  aria-hidden
+                />
+                <Input
+                  value={mergeMenu.search}
+                  onChange={(e) => setMergeMenu({ ...mergeMenu, search: e.target.value })}
+                  placeholder={t("tree.mergeSearch")}
+                  className="w-full pl-6!"
+                />
+              </div>
+            )}
+            <div className="qc-scroll max-h-72 overflow-y-auto">
+              {mergeFiltered.length === 0 ? (
+                <p className="px-2 py-2 text-xs text-text-secondary">{t("tree.mergeEmpty")}</p>
+              ) : (
+                mergeFiltered.map((c) => (
+                  <MenuItem
+                    key={`${c.kind}:${c.id}`}
+                    role="menuitem"
+                    onClick={() => {
+                      setMergeMenu(null);
+                      void confirmAndMerge(mergeMenu.item, c);
+                    }}
+                  >
+                    {c.kind === "code" && (
+                      <span
+                        className="inline-block h-3 w-3 shrink-0 rounded-sm border border-border"
+                        style={{ backgroundColor: c.color ?? "#ccc" }}
+                        aria-hidden
+                      />
+                    )}
+                    <span className="min-w-0 truncate">{c.name}</span>
+                  </MenuItem>
+                ))
+              )}
             </div>
           </Menu>
         </>

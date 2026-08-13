@@ -11,6 +11,16 @@ export function usesPdfCoder(source: { name: string; media_type: string }): bool
   return source.media_type === "text" && isPdf(source.name);
 }
 
+/** True when a file name is an HTML document (a captured webpage snapshot). */
+export function isHtml(filename: string): boolean {
+  return filename.toLowerCase().endsWith(".html") || filename.toLowerCase().endsWith(".htm");
+}
+
+/** True when a source should open in the HTML coder (webpage + plain text). */
+export function usesHtmlCoder(source: { name: string; media_type: string }): boolean {
+  return source.media_type === "text" && isHtml(source.name);
+}
+
 /**
  * True when a source can be transcribed (single source of truth for the
  * batch transcribe button AND the AV coder's transcribe button, so the two

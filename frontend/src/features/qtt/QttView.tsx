@@ -150,6 +150,7 @@ export function QttList() {
 
   return (
     <LeftBar
+      className="h-full min-h-0"
       header={
         <BarHeader
           title={

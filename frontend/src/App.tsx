@@ -53,12 +53,19 @@ function App() {
   useEffect(() => {
     // Resolve the backend base URL early (packaged app: the backend may be
     // on an ephemeral port when a second instance is running).
-    void initApiBase().then(() => {
+    void initApiBase().then(async () => {
       // In the packaged app, jump straight to the dashboard: auto-open the
-      // most recent project. The embedded backend takes ~10s to start, so
-      // retry until it answers. Plain-browser dev keeps the empty dashboard
-      // so the E2E suite can exercise the create/open flows deterministically.
+      // most recent project (gated by the "auto-load project" setting —
+      // default on). The embedded backend takes ~10s to start, so retry
+      // until it answers. Plain-browser dev keeps the empty dashboard so
+      // the E2E suite can exercise the create/open flows deterministically.
       if (typeof window !== "undefined" && "__TAURI_INTERNALS__" in window) {
+        try {
+          const appSettings = await api.appSettings();
+          if (!appSettings.auto_open_project) return;
+        } catch {
+          /* settings unreachable at boot — keep the default (auto-open) */
+        }
         const store = useProjectStore.getState();
         store.setAutoOpening(true);
         store.setAutoOpenStage("backend");

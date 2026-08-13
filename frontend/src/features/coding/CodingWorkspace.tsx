@@ -6,11 +6,12 @@ import { lazy, Suspense, useEffect, useState } from "react";
 import { CircleAlert } from "lucide-react";
 import { Button, LoadingState } from "@/components/ui/orchestrator";
 import { api, type Source } from "@/lib/api";
-import { isPdf } from "@/lib/media";
+import { isHtml, isPdf } from "@/lib/media";
 import { useI18n } from "@/lib/i18n";
 import { TextCoder } from "@/features/coding/TextCoder";
 import { ImageCoder } from "@/features/coding/ImageCoder";
 import { AvCoder } from "@/features/coding/AvCoder";
+import { HtmlCoder } from "@/features/coding/HtmlCoder";
 
 // pdfjs-dist is heavy (~1.2 MB worker); load it only when a PDF is opened.
 const PdfCoder = lazy(() =>
@@ -81,6 +82,9 @@ export function CodingWorkspace({ sourceId }: { sourceId: number }) {
 
   if (source.media_type === "text" && isPdf(source.name)) {
     return <LazyPdfCoder source={source} />;
+  }
+  if (source.media_type === "text" && isHtml(source.name)) {
+    return <HtmlCoder source={source} />;
   }
   if (source.media_type === "text") {
     return <TextCoder sourceId={sourceId} />;

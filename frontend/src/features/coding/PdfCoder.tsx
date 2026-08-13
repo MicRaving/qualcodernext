@@ -83,6 +83,29 @@ type PendingAction =
   | { kind: "region"; pageNumber: number; rect: NormalizedRect }
   | { kind: "text"; pos0: number; pos1: number; seltext: string };
 
+/** String draft of a region's geometry (+ page) while the inline editor
+ *  is open. Coordinates are in PDF units; the page is pdf_page-aware. */
+interface RectDraft {
+  x1: string;
+  y1: string;
+  width: string;
+  height: string;
+  page: string;
+}
+
+/** Parse the geometry draft; null when any field is missing/negative. */
+function parseDraftRect(draft: RectDraft): { x1: number; y1: number; width: number; height: number } | null {
+  const vals = [draft.x1, draft.y1, draft.width, draft.height].map((v) => Number(v));
+  if (vals.some((n) => !Number.isFinite(n) || n < 0)) return null;
+  return { x1: vals[0], y1: vals[1], width: vals[2], height: vals[3] };
+}
+
+/** Parse the draft page number; null unless it is a positive integer. */
+function parseDraftPage(draft: RectDraft): number | null {
+  const page = Number(draft.page);
+  return Number.isInteger(page) && page >= 1 ? page : null;
+}
+
 /** Text items whose rects overlap the drag rectangle (PDF units). */
 function coveredTextItems(
   items: TextItemData[],
@@ -180,6 +203,7 @@ export function PdfCoder({ source }: { source: Source }) {
   const [pendingRect, setPendingRect] = useState<{ pageNumber: number; rect: NormalizedRect } | null>(null);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [selectedImid, setSelectedImid] = useState<number | null>(null);
+  const [editDraft, setEditDraft] = useState<RectDraft | null>(null);
 
   const containerRef = useRef<HTMLDivElement | null>(null);
   const canvasRefs = useRef(new Map<number, HTMLCanvasElement>());
@@ -518,6 +542,7 @@ export function PdfCoder({ source }: { source: Source }) {
     if (e.button !== 0) return;
     e.preventDefault();
     setSelectedImid(null);
+    setEditDraft(null);
     setPendingRect(null);
     pendingActionRef.current = null;
     const pt = pagePointFromEvent(e);
@@ -675,6 +700,7 @@ export function PdfCoder({ source }: { source: Source }) {
       setDrag(null);
       setPendingRect(null);
       setSelectedImid(null);
+      setEditDraft(null);
       pendingActionRef.current = null;
     };
     window.addEventListener("keydown", onKey);
@@ -697,6 +723,7 @@ export function PdfCoder({ source }: { source: Source }) {
       try {
         await api.deleteImageCoding(row.imid);
         setSelectedImid(null);
+        setEditDraft(null);
         await refreshCodings();
       } catch (e) {
         setErrMsg(e instanceof Error ? e.message : t("coder.removeError"));
@@ -720,29 +747,31 @@ export function PdfCoder({ source }: { source: Source }) {
     })();
   }
 
-  function editRegion(row: ImageCoding) {
-    const current = `${Math.round(row.x1)},${Math.round(row.y1)},${Math.round(row.width)},${Math.round(row.height)}`;
-    const raw = window.prompt(t("pdfCoder.regionGeometry"), current);
-    if (raw === null) return;
-    const parts = raw.split(",").map((p) => Number(p.trim()));
-    if (parts.length !== 4 || parts.some((n) => !Number.isFinite(n) || n < 0)) {
+  function startEditGeometry(row: ImageCoding) {
+    setEditDraft({
+      x1: String(Math.round(row.x1)),
+      y1: String(Math.round(row.y1)),
+      width: String(Math.round(row.width)),
+      height: String(Math.round(row.height)),
+      page: String(row.pdf_page ?? 1),
+    });
+  }
+
+  async function applyEditGeometry() {
+    const row = selectedCoding;
+    if (!editDraft || !row) return;
+    const rect = parseDraftRect(editDraft);
+    if (!rect) {
       setErrMsg(t("imageCoder.regionSaveError"));
       return;
     }
-    void (async () => {
-      try {
-        await api.patchImageCoding(row.imid, {
-          x1: parts[0],
-          y1: parts[1],
-          width: parts[2],
-          height: parts[3],
-        });
-        setSelectedImid(null);
-        await refreshCodings();
-      } catch (e) {
-        setErrMsg(e instanceof Error ? e.message : t("imageCoder.regionSaveError"));
-      }
-    })();
+    try {
+      await api.patchImageCoding(row.imid, rect);
+      setEditDraft(null);
+      await refreshCodings();
+    } catch (e) {
+      setErrMsg(e instanceof Error ? e.message : t("imageCoder.regionSaveError"));
+    }
   }
 
   function onPageInputChange(e: ChangeEvent<HTMLInputElement>) {
@@ -951,9 +980,31 @@ export function PdfCoder({ source }: { source: Source }) {
                       }}
                       title={overlayTitle(o)}
                       onMouseDown={(e) => e.stopPropagation()}
-                      onClick={() => setSelectedImid(o.key)}
+                      onClick={() => {
+                        setEditDraft(null);
+                        setSelectedImid(o.key);
+                      }}
                     />
                   ))}
+
+                  {/* Live overlay of the geometry being edited (drawn on the
+                      page selected in the editor, respecting pdf_page). */}
+                  {editDraft && (() => {
+                    if (parseDraftPage(editDraft) !== p) return null;
+                    const rect = parseDraftRect(editDraft);
+                    if (!rect) return null;
+                    return (
+                      <div
+                        className="pointer-events-none absolute border-2 border-accent bg-accent/20"
+                        style={{
+                          left: rect.x1 * scale,
+                          top: rect.y1 * scale,
+                          width: rect.width * scale,
+                          height: rect.height * scale,
+                        }}
+                      />
+                    );
+                  })()}
 
                   {/* Text codings (shared with the plain-text mode) as
                       best-effort overlays on their matched items. */}
@@ -1058,7 +1109,10 @@ export function PdfCoder({ source }: { source: Source }) {
             <IconButton
               label={t("common.closeDetails")}
               size="sm"
-              onClick={() => setSelectedImid(null)}
+              onClick={() => {
+                setSelectedImid(null);
+                setEditDraft(null);
+              }}
             >
               <X size={14} aria-hidden />
             </IconButton>
@@ -1112,14 +1166,16 @@ export function PdfCoder({ source }: { source: Source }) {
                 </IconButton>
               </span>
               <div className="flex-1" />
-              <IconButton
-                label={t("pdfCoder.editRegion")}
-                title={t("pdfCoder.editRegion")}
-                size="sm"
-                onClick={() => editRegion(selectedCoding)}
-              >
-                <Pencil size={14} aria-hidden />
-              </IconButton>
+              {!editDraft && (
+                <IconButton
+                  label={t("pdfCoder.editRegion")}
+                  title={t("pdfCoder.editRegion")}
+                  size="sm"
+                  onClick={() => startEditGeometry(selectedCoding)}
+                >
+                  <Pencil size={14} aria-hidden />
+                </IconButton>
+              )}
               <IconButton
                 label={t("coder.removeThis")}
                 title={t("coder.removeThis")}
@@ -1131,6 +1187,42 @@ export function PdfCoder({ source }: { source: Source }) {
               </IconButton>
             </li>
           </ul>
+          {editDraft && (
+            <div className="mt-1.5 flex flex-wrap items-end gap-2 rounded-sm border border-border bg-bg px-2 py-1.5">
+              <CoordField
+                label={t("imageCoder.x")}
+                value={editDraft.x1}
+                onChange={(v) => setEditDraft((d) => (d ? { ...d, x1: v } : d))}
+              />
+              <CoordField
+                label={t("imageCoder.y")}
+                value={editDraft.y1}
+                onChange={(v) => setEditDraft((d) => (d ? { ...d, y1: v } : d))}
+              />
+              <CoordField
+                label={t("imageCoder.w")}
+                value={editDraft.width}
+                onChange={(v) => setEditDraft((d) => (d ? { ...d, width: v } : d))}
+              />
+              <CoordField
+                label={t("imageCoder.h")}
+                value={editDraft.height}
+                onChange={(v) => setEditDraft((d) => (d ? { ...d, height: v } : d))}
+              />
+              <CoordField
+                label={t("imageCoder.page")}
+                value={editDraft.page}
+                onChange={(v) => setEditDraft((d) => (d ? { ...d, page: v } : d))}
+              />
+              <div className="flex-1" />
+              <Button variant="secondary" onClick={() => setEditDraft(null)}>
+                {t("common.cancel")}
+              </Button>
+              <Button variant="primaryCompact" onClick={() => void applyEditGeometry()}>
+                {t("common.apply")}
+              </Button>
+            </div>
+          )}
         </div>
       )}
 
@@ -1170,5 +1262,33 @@ function PreviewRect({ start, current }: { start: PagePoint; current: PagePoint 
         opacity: 0.15,
       }}
     />
+  );
+}
+
+/** Small labeled number input for one region-coordinate field. */
+function CoordField({
+  label,
+  value,
+  onChange,
+  className = "",
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  className?: string;
+}) {
+  return (
+    <label className={`flex flex-col gap-0.5 ${className}`}>
+      <span className="text-[10px] font-medium uppercase tracking-wide text-text-secondary">{label}</span>
+      <Input
+        type="number"
+        min={0}
+        step={1}
+        value={value}
+        aria-label={label}
+        onChange={(e) => onChange(e.target.value)}
+        className="w-16"
+      />
+    </label>
   );
 }

@@ -445,6 +445,92 @@ async def test_gpt_models_bearer_and_listing(project_client, tmp_path, monkeypat
     assert fake.calls[0]["headers"] == {"Authorization": "Bearer sk-secret"}
 
 
+async def test_models_all_urls_fail_returns_error_detail(
+    project_client, tmp_path, monkeypatch
+):
+    """When every candidate URL fails, the list returns an empty array plus a
+    sanitized error detail instead of a silent empty list."""
+    client, _ = project_client
+    await configure_gemini(client, monkeypatch, tmp_path, api_key="AIzaTopSecret")
+    fake = FakeGetClient(
+        {
+            "/v1beta/models": httpx.ConnectError("All connection attempts failed"),
+            "/v1beta/models?key=AIzaTopSecret": httpx.ConnectError("refused"),
+        }
+    )
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: fake)
+    res = await client.get("/api/v1/ai/models?provider=gemini")
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert body["models"] == []
+    assert "error" in body
+    assert body["error"]
+    assert "AIzaTopSecret" not in body["error"]
+
+
+async def test_models_error_redacts_api_key_from_url(
+    project_client, tmp_path, monkeypatch
+):
+    """httpx exceptions carry the request URL — the Gemini ``?key=`` fallback
+    would leak the API key into the error detail, so it must be redacted."""
+    client, _ = project_client
+    await configure_gemini(client, monkeypatch, tmp_path, api_key="AIzaSuperSecret")
+    key_url = (
+        "https://generativelanguage.googleapis.com/v1beta/models?key=AIzaSuperSecret"
+    )
+    request = httpx.Request("GET", key_url)
+    fake = FakeGetClient(
+        {
+            "/v1beta/models": httpx.ConnectError("refused"),
+            "/v1beta/models?key=AIzaSuperSecret": httpx.HTTPStatusError(
+                "Client error '401 Unauthorized' for url '" + key_url + "'",
+                request=request,
+                response=FakeResponse({"error": {"message": "invalid key"}}, 401),
+            ),
+        }
+    )
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: fake)
+    res = await client.get("/api/v1/ai/models?provider=gemini")
+    body = res.json()
+    assert body["models"] == []
+    assert "AIzaSuperSecret" not in body["error"]
+    assert "key=" in body["error"]
+
+
+async def test_models_local_provider_failure_has_error_too(
+    project_client, tmp_path, monkeypatch
+):
+    """Local providers report the failure detail as well (e.g. Ollama down)."""
+    client, _ = project_client
+    settings_file = tmp_path / "settings.json"
+    monkeypatch.setattr(user_settings, "SETTINGS_FILE", settings_file)
+    res = await client.put(
+        "/api/v1/ai/settings",
+        json={
+            "enabled": True,
+            "provider": "ollama",
+            "api_base": "http://localhost:11434/v1",
+            "model": "llama3.2",
+            "api_key": "",
+        },
+    )
+    assert res.status_code == 200, res.text
+    fake = FakeGetClient(
+        {
+            "/v1/models": httpx.ConnectError("Connection refused"),
+            "/models": httpx.ConnectError("Connection refused"),
+        }
+    )
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: fake)
+    res = await client.get("/api/v1/ai/models?provider=ollama")
+    body = res.json()
+    assert body["models"] == []
+    assert "error" in body
+    assert body["error"]
+    assert len(fake.calls) == 2  # both candidate URLs were tried
+    assert fake.calls[0]["headers"] == {}
+
+
 async def test_status_probe_gemini_hits_models_endpoint(
     project_client, tmp_path, monkeypatch
 ):

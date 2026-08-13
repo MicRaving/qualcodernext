@@ -24,6 +24,12 @@ SYSTEM_PROMPT = (
 SIMILARITY_THRESHOLD = 0.15
 CHUNK_MAX_CHARS = 2000
 
+# Project-context injection for chat (permission-gated, read-only queries).
+PROJECT_CONTEXT_MAX_CHARS = 3000
+PROJECT_CONTEXT_MODES = ("general", "topic_exploration", "code_analysis", "text_analysis")
+PROJECT_CONTEXT_CODE_LINES = 30
+PROJECT_CONTEXT_SOURCE_LINES = 20
+
 
 class AiUnavailable(Exception):
     """Raised when the AI backend is unreachable or misconfigured."""
@@ -129,6 +135,10 @@ class AiService:
             memo_context = await self._memo_context(memo_ids)
             if memo_context:
                 context = f"{memo_context}\n\n{context}" if context else memo_context
+        if mode in PROJECT_CONTEXT_MODES:
+            project_context = await self._project_context(ai)
+            if project_context:
+                context = f"{project_context}\n\n{context}" if context else project_context
         from qualcoder_api.services.ai_prompts import prompt_for, system_prompt_for
 
         system_prompt = system_prompt_for(mode)
@@ -196,6 +206,72 @@ class AiService:
                 if memo and str(memo).strip():
                     blocks.append(f"# {name or cid} (code memo):\n{_truncate_memo(str(memo))}")
         return "\n\n".join(blocks)
+
+    async def _project_context(self, ai: dict) -> str:
+        """Compact read-only summary of the open project, for the chat prompt.
+
+        Gives the model real context about the project the user is working
+        in: the code tree (names with coding counts), the open source files
+        (first 20, with media type), total codings and the case count.
+
+        Permission-gated: injected only when AI is enabled AND
+        ``mcp_permissions`` is ``"read"`` or ``"full"`` — the ``"write"``
+        profile gets no project context. No project open (no session
+        factory) or any query failure is skipped gracefully ("").
+        """
+        if self.session_factory is None:
+            return ""
+        if not ai.get("enabled"):
+            return ""
+        if ai.get("mcp_permissions", "read") not in ("read", "full"):
+            return ""
+        from sqlalchemy import func, select
+
+        from qualcoder_api.core.enums import MediaType
+        from qualcoder_api.persistence import tables
+
+        try:
+            async with self.session_factory() as session:
+                code_rows = (
+                    await session.execute(
+                        select(tables.code_name.c.cid, tables.code_name.c.name).order_by(
+                            tables.code_name.c.name
+                        )
+                    )
+                ).all()
+                counts: dict[int, int] = {}
+                total_codings = 0
+                for table in (tables.code_text, tables.code_image, tables.code_av):
+                    for cid, n in await session.execute(
+                        select(table.c.cid, func.count()).group_by(table.c.cid)
+                    ):
+                        counts[cid] = counts.get(cid, 0) + n
+                        total_codings += n
+                source_rows = (
+                    await session.execute(
+                        select(tables.source.c.name, tables.source.c.mediapath).order_by(
+                            tables.source.c.name
+                        )
+                    )
+                ).all()
+                case_count = (
+                    await session.execute(select(func.count()).select_from(tables.cases))
+                ).scalar_one()
+        except Exception:
+            # The chat must never fail because the summary query broke.
+            return ""
+        lines = [
+            "PROJECT CONTEXT",
+            f"Sources: {len(source_rows)} total, {PROJECT_CONTEXT_SOURCE_LINES} shown",
+        ]
+        for name, mediapath in source_rows[:PROJECT_CONTEXT_SOURCE_LINES]:
+            lines.append(f"- {name} ({MediaType.from_mediapath(mediapath).value})")
+        lines.append(f"Codes: {len(code_rows)} total, {PROJECT_CONTEXT_CODE_LINES} shown")
+        for cid, name in code_rows[:PROJECT_CONTEXT_CODE_LINES]:
+            lines.append(f"- {name}: {counts.get(cid, 0)} codings")
+        lines.append(f"Total codings: {total_codings}")
+        lines.append(f"Cases: {case_count}")
+        return _truncate_memo("\n".join(lines), PROJECT_CONTEXT_MAX_CHARS)
 
     async def semantic_search(self, ai: dict, query: str, limit: int = 10) -> dict:
         ok, _ = self.is_configured(ai)

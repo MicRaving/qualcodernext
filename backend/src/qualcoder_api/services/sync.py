@@ -25,6 +25,7 @@ import contextvars
 import hashlib
 import json
 import logging
+import os
 import time
 from pathlib import Path
 from typing import Any, cast
@@ -521,6 +522,52 @@ def sync_enabled() -> bool:
         return get_sync_settings().get("enabled", False)
     except Exception:  # pragma: no cover - defensive
         return False
+
+
+# ----------------------------------------------------------------------
+# Shared-folder detection (auto-enable on project open)
+# ----------------------------------------------------------------------
+
+def detect_shared(project_path: str, user: str | None = None) -> dict:
+    """Detect whether a project lives in a shared/synced folder.
+
+    Heuristics (first match wins):
+
+    1. a ``.qcnext-shared`` marker file inside the project folder;
+    2. a UNC path (``\\\\server\\share`` — Windows network shares);
+    3. a ``changes/`` directory holding sidecar change files from OTHER
+       raters (the project's own user is excluded).
+    """
+    root = Path(project_path)
+    if (root / ".qcnext-shared").exists():
+        return {"shared": True, "reason": "shared-folder marker"}
+    if os.name == "nt" and project_path.startswith("\\\\"):
+        return {"shared": True, "reason": "network path (UNC)"}
+    changes_root = root / SYNC_DIR_NAME
+    if changes_root.is_dir():
+        for sidecar in sorted(changes_root.glob("*/changes.jsonl")):
+            if user and sidecar.parent.name == user:
+                continue
+            return {"shared": True, "reason": "change sidecars from other raters"}
+    return {"shared": False, "reason": "not a shared folder"}
+
+
+def auto_enable_decision(project_path: str, user: str | None = None) -> dict:
+    """Override-aware auto-enable decision for the project-open flow.
+
+    The per-project ``sync_override`` ("on"/"off") wins over the heuristic;
+    "auto" (the default) enables sync when the project lives in a shared
+    folder.
+    """
+    from qualcoder_api.services.user_settings import get_sync_override
+
+    mode = get_sync_override(project_path)
+    if mode == "on":
+        return {"sync_auto_enabled": True, "reason": "per-project override"}
+    if mode == "off":
+        return {"sync_auto_enabled": False, "reason": "per-project override"}
+    detected = detect_shared(project_path, user)
+    return {"sync_auto_enabled": detected["shared"], "reason": detected["reason"]}
 
 
 async def sync_status(session_factory, project_path: str, user: str) -> dict:

@@ -8,9 +8,14 @@ placeholders and the source row behave exactly like any other file import.
 Modes:
 - ``reddit``  — anonymous ``.json`` API: submission selftext + flattened
   comment tree (indented by depth, authors prefixed ``u/<author>:``).
-- ``youtube`` — yt-dlp metadata (title/uploader/duration/description),
-  the best available caption track (manual over automatic) fetched from
-  its subtitle URL, and comments when present.
+- ``youtube`` — yt-dlp metadata (title/uploader/duration/description) and
+  the comment thread: top-level comments with author, like count and UTC
+  timestamp, replies indented by depth. Comments are the primary content;
+  caption tracks are fetched ONLY as a fallback when a video has no
+  comments (e.g. disabled) — when comments exist, captions are dropped
+  entirely. If the installed yt-dlp predates comment extraction
+  (2021.12.17) the output is header + description only, with a note in
+  the text, and captions are not fetched either.
 - ``article`` — page fetched with urllib, cleaned with trafilatura
   (falling back to the project's own ``html_to_text``).
 - ``html``    — raw page HTML saved verbatim as a ``.html`` source.
@@ -24,6 +29,7 @@ import re
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from urllib.parse import urlparse
 
 import trafilatura
@@ -46,6 +52,11 @@ _CUE_RE = re.compile(r"^(\d{1,2}):(\d{2}):(\d{2})[.,]\d{0,3}\s*-->")
 
 class ScrapeError(ValueError):
     """A URL could not be fetched or parsed (surfaces as HTTP 422)."""
+
+    def __init__(self, message: str, *, code: int | None = None) -> None:
+        """``code`` carries the HTTP status when the failure came from a server."""
+        super().__init__(message)
+        self.code = code
 
 
 @dataclass(frozen=True)
@@ -94,7 +105,9 @@ def fetch_url(url: str, timeout: int = FETCH_TIMEOUT) -> bytes:
         with urllib.request.urlopen(request, timeout=timeout) as response:
             return response.read()
     except urllib.error.HTTPError as err:
-        raise ScrapeError(f"server returned HTTP {err.code} for {url}") from err
+        raise ScrapeError(
+            f"server returned HTTP {err.code} for {url}", code=err.code
+        ) from err
     except urllib.error.URLError as err:
         raise ScrapeError(f"could not reach {url}: {err.reason}") from err
 
@@ -158,11 +171,29 @@ def _format_duration(seconds: object) -> str:
 # ----------------------------------------------------------------------
 
 def _reddit_json_url(url: str) -> str:
+    """Append ``.json`` to the path, keeping the query string and fragment."""
     parsed = urlparse(url)
-    path = parsed.path
+    path = parsed.path.rstrip("/") or "/"
     if not path.endswith(".json"):
-        path = path.rstrip("/") + ".json"
+        path += ".json"
     return parsed._replace(path=path).geturl()
+
+
+def _reddit_listing_payload(payload: object) -> tuple[dict, dict]:
+    """Split a Reddit JSON payload into (post listing, comments listing).
+
+    Reddit serves the comments endpoint either as a two-element array
+    ``[post_listing, comments_listing]`` (www/old/m.reddit, including the
+    new reddit API) or as a single listing object
+    ``{"data": {"children": [...]}}`` on some API paths.
+    """
+    if isinstance(payload, list):
+        post = payload[0] if payload and isinstance(payload[0], dict) else {}
+        comments = payload[1] if len(payload) > 1 and isinstance(payload[1], dict) else {}
+        return post, comments
+    if isinstance(payload, dict) and "data" in payload:
+        return payload, {}
+    raise ScrapeError("unexpected Reddit response shape")
 
 
 def _first_child(listing: object) -> dict:
@@ -209,15 +240,23 @@ def _reddit_comments(comments_listing: object) -> list[str]:
 
 def scrape_reddit(url: str) -> ScrapedContent:
     """Fetch a Reddit submission + comments through the anonymous .json API."""
-    raw = fetch_url(_reddit_json_url(url))
     try:
-        listing = json.loads(raw.decode("utf-8", errors="replace"))
+        raw = fetch_url(_reddit_json_url(url))
+    except ScrapeError as err:
+        if err.code in (403, 429):
+            raise ScrapeError("Reddit rate-limited — wait a minute and retry") from err
+        raise
+
+    try:
+        payload = json.loads(raw.decode("utf-8", errors="replace"))
     except ValueError as err:
         raise ScrapeError("Reddit response is not JSON") from err
-    if not isinstance(listing, list) or len(listing) < 2:
+
+    post_listing, comments_listing = _reddit_listing_payload(payload)
+    post = _first_child(post_listing)
+    if not post:
         raise ScrapeError("unexpected Reddit response shape")
 
-    post = _first_child(listing[0])
     title = (post.get("title") or "").strip()
     author = post.get("author") or "unknown"
     selftext = (post.get("selftext") or "").strip()
@@ -229,7 +268,7 @@ def scrape_reddit(url: str) -> ScrapedContent:
         lines.append("")
         lines.append(selftext)
 
-    comment_lines = _reddit_comments(listing[1])
+    comment_lines = _reddit_comments(comments_listing)
     if comment_lines:
         lines.append("")
         lines.append("Comments")
@@ -249,6 +288,27 @@ def scrape_reddit(url: str) -> ScrapedContent:
 # ----------------------------------------------------------------------
 # YouTube (yt-dlp)
 # ----------------------------------------------------------------------
+
+#: yt-dlp gained comment extraction (``getcomments``) in 2021.12.17.
+_YT_DLP_COMMENTS_MIN_VERSION = (2021, 12, 17)
+
+
+def _yt_dlp_comments_supported() -> bool:
+    """Whether the installed yt-dlp can extract comments (checked at import)."""
+    try:
+        from yt_dlp.version import __version__
+    except ImportError:
+        return True
+    parts = [int(part) for part in __version__.split(".") if part.isdigit()]
+    if len(parts) < 3:
+        return True
+    return tuple(parts[:3]) >= _YT_DLP_COMMENTS_MIN_VERSION
+
+
+#: When False, ``getcomments`` is not requested and the scraper falls back
+#: to caption-free header + description (with a note in the output text).
+_YT_DLP_COMMENTS_SUPPORTED = _yt_dlp_comments_supported()
+
 
 def _pick_caption_language(langs: dict) -> list:
     for lang in _PREFERRED_CAPTION_LANGS:
@@ -335,8 +395,57 @@ def _youtube_captions(info: dict) -> str:
     return ""
 
 
+def _format_likes(value: object) -> str:
+    """``like_count`` -> ``"N likes"`` ("" when the field is missing)."""
+    count = _as_int(value)
+    if count is None:
+        return ""
+    return f"{count:,} likes"
+
+
+def _format_comment_timestamp(value: object) -> str:
+    """Unix epoch seconds -> ``YYYY-MM-DD HH:MM`` UTC ("" when unknown)."""
+    ts = _as_int(value)
+    if ts is None:
+        return ""
+    try:
+        return datetime.fromtimestamp(ts, tz=UTC).strftime("%Y-%m-%d %H:%M")
+    except (OverflowError, OSError, ValueError):
+        return ""
+
+
+def _comment_lines(comment: dict, depth: int) -> list[str]:
+    """Render one comment plus its nested ``replies`` (indented by depth)."""
+    lines: list[str] = []
+    text = (comment.get("text") or "").strip()
+    if text:
+        author = (comment.get("author") or "unknown").strip() or "unknown"
+        meta = ", ".join(
+            part
+            for part in (
+                _format_likes(comment.get("like_count")),
+                _format_comment_timestamp(comment.get("timestamp")),
+            )
+            if part
+        )
+        label = f"u/{author}: {text}" if not meta else f"u/{author} ({meta}): {text}"
+        lines.append("  " * depth + label)
+    replies = comment.get("replies")
+    if isinstance(replies, list):
+        for reply in replies:
+            if isinstance(reply, dict):
+                lines.extend(_comment_lines(reply, depth + 1))
+    return lines
+
+
 def _youtube_comments(info: dict) -> list[str]:
-    """Flatten the comments list; replies are indented one level per parent."""
+    """Flatten the comment list; replies are indented one level per depth.
+
+    Handles both yt-dlp layouts defensively: nested ``replies`` lists
+    (``{author, text, timestamp, like_count, replies: [...]}``) and the
+    flat list where every comment carries ``id``/``parent`` references.
+    Missing fields fall back to ``unknown`` / no metadata.
+    """
     comments = info.get("comments")
     if not isinstance(comments, list) or not comments:
         return []
@@ -345,35 +454,55 @@ def _youtube_comments(info: dict) -> list[str]:
         if isinstance(comment, dict) and comment.get("id"):
             by_id[comment["id"]] = comment
 
-    def indent_of(comment: dict, depth: int = 0) -> int:
-        if depth >= 5:
-            return depth
-        parent = comment.get("parent")
-        if parent and parent in by_id:
-            return indent_of(by_id[parent], depth + 1)
+    def depth_of(comment: dict) -> int:
+        depth = 0
+        current = comment
+        seen: set[object] = set()
+        while depth < 10:
+            parent = current.get("parent")
+            if not parent or parent in seen:
+                return depth
+            parent_comment = by_id.get(parent)
+            if not isinstance(parent_comment, dict):
+                return depth
+            seen.add(current.get("id"))
+            current = parent_comment
+            depth += 1
         return depth
 
+    emitted: set[object] = set()
     lines: list[str] = []
     for comment in comments:
         if not isinstance(comment, dict):
             continue
-        text = (comment.get("text") or "").strip()
-        if not text:
+        comment_id = comment.get("id")
+        if comment_id is not None and comment_id in emitted:
             continue
-        author = (comment.get("author") or "unknown").strip()
-        lines.append("  " * indent_of(comment) + f"u/{author}: {text}")
+        lines.extend(_comment_lines(comment, depth_of(comment)))
+        if comment_id is not None:
+            emitted.add(comment_id)
     return lines
 
 
 def scrape_youtube(url: str) -> ScrapedContent:
-    """Extract video metadata, the best caption track and comments."""
+    """Extract video metadata and the comment thread (captions only as fallback).
+
+    Comments are the primary content: when the video has any, captions are
+    dropped entirely. Caption text is fetched only when comments are
+    unavailable (e.g. disabled). When the installed yt-dlp cannot extract
+    comments (``_YT_DLP_COMMENTS_SUPPORTED`` False), the output is header
+    + description only, with a note, and captions are not fetched either.
+    """
     options = {
         "noplaylist": True,
         "skip_download": True,
+        "writesubtitles": False,
         "quiet": True,
         "no_warnings": True,
         "socket_timeout": 30,
     }
+    if _YT_DLP_COMMENTS_SUPPORTED:
+        options["getcomments"] = True
     try:
         ydl = yt_dlp.YoutubeDL(options)
         try:
@@ -400,19 +529,31 @@ def scrape_youtube(url: str) -> ScrapedContent:
         lines.append("")
         lines.append(description)
 
-    caption_text = _youtube_captions(info)
-    if caption_text:
+    if _YT_DLP_COMMENTS_SUPPORTED:
+        comment_lines = _youtube_comments(info)
+        if comment_lines:
+            lines.append("")
+            lines.append("Comments")
+            lines.append("")
+            lines.extend(comment_lines)
+        else:
+            caption_text = _youtube_captions(info)
+            if caption_text:
+                logger.info("YouTube comments unavailable; falling back to captions for %s", url)
+                lines.append("")
+                lines.append("Captions")
+                lines.append("")
+                lines.append(caption_text)
+            else:
+                logger.warning("YouTube comments unavailable for %s", url)
+    else:
+        note = (
+            "Note: comments are unavailable — the installed yt-dlp "
+            "version cannot extract comments."
+        )
+        logger.warning("YouTube comment extraction unsupported: %s (%s)", note, url)
         lines.append("")
-        lines.append("Captions")
-        lines.append("")
-        lines.append(caption_text)
-
-    comment_lines = _youtube_comments(info)
-    if comment_lines:
-        lines.append("")
-        lines.append("Comments")
-        lines.append("")
-        lines.extend(comment_lines)
+        lines.append(note)
 
     text = "\n".join(lines).strip()
     if not text:

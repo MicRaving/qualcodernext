@@ -9,6 +9,7 @@ the other's sidecar and the projects converge.
 from __future__ import annotations
 
 import json
+import os
 import shutil
 from pathlib import Path
 
@@ -316,3 +317,125 @@ async def test_sync_endpoints(project_client):
     assert res.json()["exported"] == 0  # nothing mutated yet
     res = await client.put("/api/v1/sync/settings", json={"enabled": False})
     assert res.json()["enabled"] is False
+
+
+# ----------------------------------------------------------------------
+# Shared-folder detection (auto-enable on project open)
+# ----------------------------------------------------------------------
+
+async def test_detect_shared_changes_dir_with_foreign_sidecars(rater_a):
+    """A changes/ folder holding ANOTHER rater's sidecar marks the project
+    as shared (the current user's own sidecar does not)."""
+    changes = Path(rater_a.project_path) / sync.SYNC_DIR_NAME
+    (changes / "berta").mkdir(parents=True)
+    (changes / "berta" / "changes.jsonl").write_text("", encoding="utf-8")
+    result = sync.detect_shared(rater_a.project_path, user="anna")
+    assert result == {"shared": True, "reason": "change sidecars from other raters"}
+    # The rater's own sidecar alone is not evidence of sharing.
+    (changes / "anna").mkdir(parents=True)
+    (changes / "anna" / "changes.jsonl").write_text("", encoding="utf-8")
+    (changes / "berta" / "changes.jsonl").unlink()
+    (changes / "berta").rmdir()
+    assert sync.detect_shared(rater_a.project_path, user="anna") == {
+        "shared": False,
+        "reason": "not a shared folder",
+    }
+
+
+def test_detect_shared_marker(tmp_path):
+    project = tmp_path / "M.qda"
+    project.mkdir()
+    (project / ".qcnext-shared").write_text("", encoding="utf-8")
+    assert sync.detect_shared(str(project)) == {
+        "shared": True,
+        "reason": "shared-folder marker",
+    }
+
+
+def test_detect_shared_unc_path(monkeypatch, tmp_path):
+    monkeypatch.setattr(os, "name", "nt")
+    project = tmp_path / "N.qda"
+    project.mkdir()
+    assert sync.detect_shared("\\\\server\\share\\N.qda") == {
+        "shared": True,
+        "reason": "network path (UNC)",
+    }
+
+
+def test_detect_shared_plain_folder(tmp_path):
+    project = tmp_path / "P.qda"
+    project.mkdir()
+    assert sync.detect_shared(str(project)) == {
+        "shared": False,
+        "reason": "not a shared folder",
+    }
+
+
+async def test_auto_enable_decision_honors_override(rater_a, tmp_path, monkeypatch):
+    from qualcoder_api.services import user_settings
+
+    monkeypatch.setattr(user_settings, "SETTINGS_FILE", tmp_path / "settings.json")
+    (Path(rater_a.project_path) / ".qcnext-shared").write_text("", encoding="utf-8")
+    # "auto" (default) follows the detection.
+    assert sync.auto_enable_decision(rater_a.project_path) == {
+        "sync_auto_enabled": True,
+        "reason": "shared-folder marker",
+    }
+    # "off" wins over a detected shared folder.
+    user_settings.set_sync_override(rater_a.project_path, "off")
+    assert sync.auto_enable_decision(rater_a.project_path) == {
+        "sync_auto_enabled": False,
+        "reason": "per-project override",
+    }
+    # "on" forces sync on even for a plain folder.
+    (Path(rater_a.project_path) / ".qcnext-shared").unlink()
+    user_settings.set_sync_override(rater_a.project_path, "on")
+    assert sync.auto_enable_decision(rater_a.project_path) == {
+        "sync_auto_enabled": True,
+        "reason": "per-project override",
+    }
+
+
+async def test_sync_auto_detect_endpoint(project_client):
+    client, target = project_client
+    res = await client.get("/api/v1/sync/auto-detect", params={"project_path": str(target)})
+    assert res.status_code == 200
+    assert res.json() == {"shared": False, "reason": "not a shared folder"}
+    (target / ".qcnext-shared").write_text("", encoding="utf-8")
+    res = await client.get("/api/v1/sync/auto-detect", params={"project_path": str(target)})
+    assert res.json()["shared"] is True
+
+
+async def test_sync_override_endpoint(project_client):
+    client, target = project_client
+    res = await client.put(
+        "/api/v1/sync/override", json={"project_path": str(target), "mode": "off"}
+    )
+    assert res.status_code == 200
+    assert res.json() == {"ok": True, "project_path": str(target), "mode": "off"}
+    res = await client.put(
+        "/api/v1/sync/override", json={"project_path": str(target), "mode": "sometimes"}
+    )
+    assert res.status_code == 422
+
+
+async def test_open_result_reports_sync_auto_enable(project_client):
+    """The open result carries the shared-folder decision; the per-project
+    override wins over the detection."""
+    client, target = project_client
+    await client.post("/api/v1/projects/close")
+    res = await client.post("/api/v1/projects/open", json={"project_path": str(target)})
+    body = res.json()
+    assert body["ok"] is True
+    assert body["sync_auto_enabled"] is False
+    assert body["sync_auto_reason"] == "not a shared folder"
+    await client.post("/api/v1/projects/close")
+    (target / ".qcnext-shared").write_text("", encoding="utf-8")
+    res = await client.post("/api/v1/projects/open", json={"project_path": str(target)})
+    assert res.json()["sync_auto_enabled"] is True
+    await client.post("/api/v1/projects/close")
+    await client.put(
+        "/api/v1/sync/override", json={"project_path": str(target), "mode": "off"}
+    )
+    res = await client.post("/api/v1/projects/open", json={"project_path": str(target)})
+    assert res.json()["sync_auto_enabled"] is False

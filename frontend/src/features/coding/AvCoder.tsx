@@ -138,7 +138,11 @@ export function AvCoder({ source }: { source: Source }) {
   const [transcribeMode, setTranscribeMode] = useState(false);
   const [transcribeDraft, setTranscribeDraft] = useState("");
   const [transcribeSaving, setTranscribeSaving] = useState(false);
+  const [transcribeBusy, setTranscribeBusy] = useState(false);
   const transcribeAreaRef = useRef<HTMLTextAreaElement | null>(null);
+  /** The companion this view created itself — the transcriptId switch it
+   *  causes must not tear down the transcription mode it just entered. */
+  const createdTranscriptRef = useRef<number | null>(null);
 
   // Bookmark
   const [avBookmarkMs, setAvBookmarkMs] = useState<number | null>(null);
@@ -515,10 +519,13 @@ export function AvCoder({ source }: { source: Source }) {
     }
   }, [source.id, t]);
 
-  // The transcript source id may appear AFTER a background transcription
-  // finishes (the store's sources list refreshes then) — track it live.
+  // The transcript source id may change AFTER this view mounts: background
+  // transcription links a companion, manual transcription creates one, and
+  // transcript deletion clears the link. The store's sources list refreshes
+  // in every one of those cases, so the LIVE value wins; the prop only
+  // serves as a mount-time fallback before the store has the source.
   const liveSource = useProjectStore((s) => s.sources.find((x) => x.id === source.id));
-  const transcriptId = source.av_text_id ?? liveSource?.av_text_id ?? null;
+  const transcriptId = liveSource?.av_text_id ?? source.av_text_id ?? null;
 
   const loadTranscript = useCallback(async () => {
     if (!transcriptId) {
@@ -753,10 +760,33 @@ export function AvCoder({ source }: { source: Source }) {
       setTranscribeMode(false);
       setTranscribeDraft("");
     } else {
-      setTranscribeDraft(transcriptText);
-      setTranscribeMode(true);
-      requestAnimationFrame(() => transcribeAreaRef.current?.focus());
+      void enterTranscribeMode();
     }
+  }
+
+  /** Enter manual transcription. Without a transcript companion yet, an
+   *  EMPTY one is created first (POST /sources/{id}/transcript) so the
+   *  draft always has a save target — projects imported before the
+   *  import-time companion then transcribe exactly like new ones. */
+  async function enterTranscribeMode() {
+    if (transcribeBusy) return;
+    if (transcriptId == null) {
+      setTranscribeBusy(true);
+      setTError(null);
+      try {
+        const companion = await api.createTranscript(source.id);
+        createdTranscriptRef.current = companion.id;
+        await useProjectStore.getState().refreshProject();
+      } catch (e) {
+        setTError(e instanceof Error ? e.message : t("avCoder.transcribeCreateError"));
+        setTranscribeBusy(false);
+        return;
+      }
+      setTranscribeBusy(false);
+    }
+    setTranscribeDraft(transcriptText);
+    setTranscribeMode(true);
+    requestAnimationFrame(() => transcribeAreaRef.current?.focus());
   }
 
   /** Insert "[mm:ss] " for the current playback position at the caret. */
@@ -775,6 +805,43 @@ export function AvCoder({ source }: { source: Source }) {
       el.focus();
       el.setSelectionRange(caret, caret);
     });
+  }
+
+  /** Tab: force a NEW segment — a line break plus the current timestamp,
+   *  even MID-TEXT. Enter only prefixes a timestamp when the caret is at a
+   *  line start; Tab always starts a fresh segment, so every timestamped
+   *  entry stays parseable as its own line. */
+  function insertNewSegment() {
+    const el = transcribeAreaRef.current;
+    if (!el) return;
+    const caret = el.selectionStart;
+    const end = el.selectionEnd;
+    const insertion = `\n${transcriptTimestamp(currentMsRef.current)} `;
+    const text = transcribeDraft.slice(0, caret) + insertion + transcribeDraft.slice(end);
+    setTranscribeDraft(text);
+    requestAnimationFrame(() => {
+      el.focus();
+      el.setSelectionRange(caret + insertion.length, caret + insertion.length);
+    });
+  }
+
+  /** Delete the transcript companion entirely (text codings on it are
+   *  removed with it) and clear the av_text_id link. */
+  async function deleteTranscript() {
+    if (transcriptId == null || transcribeBusy) return;
+    if (!window.confirm(t("avCoder.deleteTranscriptConfirm"))) return;
+    setTranscribeBusy(true);
+    setTError(null);
+    try {
+      await api.deleteTranscript(source.id);
+      setTranscribeMode(false);
+      setTranscribeDraft("");
+      await useProjectStore.getState().refreshProject();
+    } catch (e) {
+      setTError(e instanceof Error ? e.message : t("avCoder.deleteTranscriptError"));
+    } finally {
+      setTranscribeBusy(false);
+    }
   }
 
   /** Persist the manual transcript through the commit-edit path, which
@@ -799,8 +866,14 @@ export function AvCoder({ source }: { source: Source }) {
   }
 
   // The transcript companion may switch (re-transcription) — never keep a
-  // draft that belongs to another source's text.
+  // draft that belongs to another source's text. Exception: the companion
+  // this view created to enter transcription mode (the transcriptId switch
+  // it causes must not cancel the mode it was created for).
   useEffect(() => {
+    if (createdTranscriptRef.current != null && transcriptId === createdTranscriptRef.current) {
+      createdTranscriptRef.current = null;
+      return;
+    }
     setTranscribeMode(false);
     setTranscribeDraft("");
     setTSel(null);
@@ -975,13 +1048,19 @@ export function AvCoder({ source }: { source: Source }) {
               variant="secondary"
               onClick={toggleTranscribeMode}
               aria-pressed={transcribeMode}
-              disabled={transcriptId == null}
+              disabled={transcribeBusy}
               title={t("avCoder.transcribeHint")}
               className={cn(
                 "shrink-0",
                 transcribeMode ? "border-accent text-accent" : "bg-bg text-text-secondary",
               )}
-              icon={<FilePen size={12} aria-hidden />}
+              icon={
+                transcribeBusy ? (
+                  <LoaderCircle size={12} className="animate-spin" aria-hidden />
+                ) : (
+                  <FilePen size={12} aria-hidden />
+                )
+              }
             >
               {t("avCoder.transcribeMode")}
             </Button>
@@ -1125,9 +1204,24 @@ export function AvCoder({ source }: { source: Source }) {
                 </span>
               )}
               {transcribeMode && (
-                <span className="ml-1 truncate text-[10px] text-accent">
-                  {t("avCoder.transcribeHint")}
-                </span>
+                <>
+                  <span className="ml-1 truncate text-[10px] text-accent">
+                    {t("avCoder.transcribeHint")}
+                  </span>
+                  {/* Live current-position readout: the exact "[mm:ss]" the
+                      next Enter/Tab inserts, formatted like the stored
+                      timestamps so the preview never lies. */}
+                  <span
+                    className="ml-1 flex shrink-0 items-center gap-1 text-[10px] text-text-secondary"
+                    title={t("avCoder.transcribeNextTitle")}
+                  >
+                    <Clock size={10} aria-hidden />
+                    {t("avCoder.transcribeNext")}:
+                    <span className="font-mono text-xs text-accent">
+                      {transcriptTimestamp(currentMs)}
+                    </span>
+                  </span>
+                </>
               )}
               <div className="flex-1" />
               {transcribeMode ? (
@@ -1176,6 +1270,18 @@ export function AvCoder({ source }: { source: Source }) {
                   </Button>
                 )
               )}
+              {transcriptId != null && !transcribeSaving && (
+                <Button
+                  variant="danger"
+                  className="h-6 px-1.5"
+                  icon={<Trash2 size={12} aria-hidden />}
+                  onClick={() => void deleteTranscript()}
+                  disabled={transcribeBusy}
+                  title={t("avCoder.deleteTranscriptTitle")}
+                >
+                  {t("avCoder.deleteTranscript")}
+                </Button>
+              )}
               {tError && <span className="text-xs text-danger">{tError}</span>}
               <IconButton
                 label={t("common.close")}
@@ -1192,9 +1298,17 @@ export function AvCoder({ source }: { source: Source }) {
                 value={transcribeDraft}
                 onChange={(e) => setTranscribeDraft(e.target.value)}
                 onKeyDown={(e) => {
+                  if (e.key === "Tab") {
+                    // New segment: a line break + current timestamp even
+                    // mid-text; never move focus out of the textarea.
+                    e.preventDefault();
+                    insertNewSegment();
+                    return;
+                  }
                   if (e.key === "Enter" && !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey) {
                     e.preventDefault();
                     insertTranscriptTimestamp();
+                    return;
                   }
                   if ((e.ctrlKey || e.metaKey) && e.key === "s") {
                     e.preventDefault();

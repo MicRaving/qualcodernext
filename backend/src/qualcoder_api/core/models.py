@@ -70,6 +70,7 @@ class Code(BaseModel):
     date: str = ""
     color: str = "#ffffff"
     supercid: int | None = None
+    position: int = 0
 
 
 class Category(BaseModel):
@@ -83,6 +84,7 @@ class Category(BaseModel):
     date: str = ""
     memo: str = ""
     supercatid: int | None = None
+    position: int = 0
 
 
 class Coding(BaseModel):

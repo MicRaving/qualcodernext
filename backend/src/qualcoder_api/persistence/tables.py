@@ -185,6 +185,9 @@ code_cat = Table(
     Column("date", String),
     Column("memo", Text),
     Column("supercatid", Integer),
+    # Tree ordering position within the sibling group (v31); siblings are
+    # ordered by (position, catid).
+    Column("position", Integer, nullable=False, server_default=text("0")),
 )
 
 code_text = Table(
@@ -218,6 +221,9 @@ code_name = Table(
     Column("supercid", Integer),
     # MAXQDA-style memo type id (v28); "" = untyped (renders as "general").
     Column("memo_type", String, nullable=False, server_default=text("''")),
+    # Tree ordering position within the sibling group (v31); siblings are
+    # ordered by (position, cid).
+    Column("position", Integer, nullable=False, server_default=text("0")),
 )
 
 journal = Table(

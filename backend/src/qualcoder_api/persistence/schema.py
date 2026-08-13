@@ -38,12 +38,13 @@ _SCHEMA_SQL: list[str] = [
     "CREATE TABLE cases (caseid integer primary key, name text, memo text, owner text,date text, "
     "constraint ucm unique(name))",
     "CREATE TABLE code_cat (catid integer primary key, name text, owner text, date text, memo text, "
-    "supercatid integer, unique(name))",
+    "supercatid integer, position integer not null default 0, unique(name))",
     "CREATE TABLE code_text (ctid integer primary key, cid integer, fid integer,seltext text, pos0 integer, "
     "pos1 integer, owner text, date text, memo text, avid integer, important integer, weight integer, "
     "unique(cid,fid,pos0,pos1, owner))",
     "CREATE TABLE code_name (cid integer primary key, name text, memo text, catid integer, owner text,"
-    "date text, color text, supercid integer, memo_type text not null default '', unique(name))",
+    "date text, color text, supercid integer, memo_type text not null default '', "
+    "position integer not null default 0, unique(name))",
     "CREATE TABLE journal (jid integer primary key, name text, jentry text, date text, owner text, unique(name))",
     "CREATE TABLE stored_sql (title text, description text, grouper text, ssql text, unique(title))",
     "CREATE TABLE graph (grid integer primary key, name text, description text, "
@@ -164,7 +165,7 @@ async def create_new_project_schema(
     await cur.execute(
         "INSERT INTO project VALUES(?,?,?,?,?,?,?,?,?,?,?)",
         (
-            "v30",
+            "v31",
             datetime.datetime.now().astimezone().strftime("%Y-%m-%d %H:%M:%S"),
             "",
             app_version,

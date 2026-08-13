@@ -57,6 +57,8 @@ class Prompt:
     name: str
     description: str
     text: str
+    label: str = ""  # friendly display label (falls back to ``name``)
+    hidden: bool = False  # True for underscore-root/internal prompts (_init, …)
 
 
 @dataclass(frozen=True)
@@ -108,6 +110,7 @@ def _parse(path: str, text: str) -> Prompt:
         mode = "help"
     name = path.rsplit("/", 1)[-1].replace(".md", "")
     description = ""
+    label = ""
     match = FRONTMATTER_RE.match(text)
     body = text
     if match:
@@ -118,10 +121,14 @@ def _parse(path: str, text: str) -> Prompt:
                 name = value.strip("\"'")
             elif key == "description":
                 description = value.strip("\"'")
+            elif key == "label":
+                label = value.strip("\"'")
     return Prompt(
         id=path.replace(".md", "").replace("\\", "/"),
         mode=mode,
         name=name,
+        label=label or name,
+        hidden=path.rsplit("/", 1)[-1].startswith("_"),
         description=description,
         text=body.strip(),
     )

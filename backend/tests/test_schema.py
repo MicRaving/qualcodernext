@@ -95,7 +95,7 @@ async def test_initial_project_row(new_db):
     )
     row = await cur.fetchone()
     assert row is not None
-    assert row[0] == "v30"
+    assert row[0] == "v31"
     assert row[1] == ""
     assert row[2] == "4.0-test"
     assert row[3] == 0

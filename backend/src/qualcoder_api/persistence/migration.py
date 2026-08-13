@@ -289,6 +289,7 @@ class MigrationChain:
         applied += await self.migrate_v28(app_version)
         applied += await self.migrate_v29(app_version)
         applied += await self.migrate_v30(app_version)
+        applied += await self.migrate_v31(app_version)
         return applied
 
     async def migrate_v21(self, app_version: str) -> list[str]:
@@ -529,6 +530,33 @@ class MigrationChain:
             await cur.execute('update project set databaseversion="v30", about=?', [app_version])
             await self.conn.commit()
             return ["v30"]
+        return []
+
+    async def migrate_v31(self, app_version: str) -> list[str]:
+        """v31: tree ordering positions — ``position`` on code_name and
+        code_cat.
+
+        Sibling groups are ordered by (position, id); existing rows start
+        at position 0 (falling back to id order) and the move endpoints
+        maintain the column afterwards.
+        """
+        if self.conn is None:
+            return []
+        cur = await self.conn.cursor()
+        changed = False
+        for table in ("code_name", "code_cat"):
+            if await self._has_table(cur, table) and not await self._has_column(
+                cur, table, "position"
+            ):
+                await cur.execute(
+                    f"ALTER TABLE {table} ADD position INTEGER NOT NULL DEFAULT 0"
+                )
+                await self.conn.commit()
+                changed = True
+        if changed:
+            await cur.execute('update project set databaseversion="v31", about=?', [app_version])
+            await self.conn.commit()
+            return ["v31"]
         return []
 
     async def migrate_v20(self) -> list[str]:

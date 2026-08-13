@@ -52,7 +52,12 @@ DEFAULT_SETTINGS: dict = {
     "transcription": dict(TRANSCRIPTION_DEFAULTS),
     "sync": {"enabled": False},
     "updates": {"check_interval": "daily", "auto_update": False},
+    "auto_open_project": True,
 }
+
+# Per-project collaboration-sync decisions: "auto" re-detects the shared
+# folder on every open; "on"/"off" are remembered manual toggles.
+SYNC_OVERRIDE_MODES: tuple[str, ...] = ("auto", "on", "off")
 
 UPDATES_DEFAULTS: dict = {
     "check_interval": "daily",
@@ -107,6 +112,50 @@ def save_sync_settings(enabled: bool, settings: dict | None = None) -> dict:
     settings["sync"] = {"enabled": bool(enabled)}
     save_settings(settings)
     return {"enabled": bool(enabled)}
+
+
+def get_sync_override(project_path: str, settings: dict | None = None) -> str:
+    """The remembered per-project sync decision ("auto" by default).
+
+    "on"/"off" are written by manual toggles in the UI and win over the
+    shared-folder auto-detection on the next project open; "auto" keeps
+    re-detecting on every open.
+    """
+    settings = settings or load_settings()
+    overrides = settings.get("sync_override")
+    if isinstance(overrides, dict):
+        mode = overrides.get(project_path)
+        if mode in SYNC_OVERRIDE_MODES:
+            return mode
+    return "auto"
+
+
+def set_sync_override(project_path: str, mode: str, settings: dict | None = None) -> str:
+    """Remember a per-project sync decision (manual toggle)."""
+    settings = settings or load_settings()
+    if mode not in SYNC_OVERRIDE_MODES:
+        raise ValueError(f"sync override must be one of {SYNC_OVERRIDE_MODES}")
+    overrides = settings.get("sync_override")
+    if not isinstance(overrides, dict):
+        overrides = {}
+    overrides[project_path] = mode
+    settings["sync_override"] = overrides
+    save_settings(settings)
+    return mode
+
+
+def get_auto_open_project(settings: dict | None = None) -> bool:
+    """Whether the packaged app auto-opens the most recent project."""
+    settings = settings or load_settings()
+    return bool(settings.get("auto_open_project", DEFAULT_SETTINGS["auto_open_project"]))
+
+
+def save_auto_open_project(enabled: bool, settings: dict | None = None) -> bool:
+    """Persist the auto-open-on-start setting."""
+    settings = settings or load_settings()
+    settings["auto_open_project"] = bool(enabled)
+    save_settings(settings)
+    return bool(enabled)
 
 
 def load_settings() -> dict:

@@ -48,6 +48,13 @@ const QUICK_ACTIONS = [
   { promptId: "sentiment", labelKey: "ai.quickSentiment" },
 ] as const;
 
+/** Modes that attach memo context to the chat request. */
+const MEMO_MODES: ReadonlySet<AiMode> = new Set([
+  "memo_analysis",
+  "code_analysis",
+  "text_analysis",
+]);
+
 async function fetchMemos(): Promise<MemoEntry[]> {
   const base = await initApiBase();
   const res = await fetchWithTimeout(`${base}/memos`);
@@ -92,42 +99,72 @@ function MemoPicker({
   onQuery,
   selected,
   onToggle,
+  onSelectAll,
+  onDeselectAll,
 }: {
   memos: MemoEntry[];
   query: string;
   onQuery: (q: string) => void;
   selected: Set<string>;
   onToggle: (key: string) => void;
+  onSelectAll: (keys: string[]) => void;
+  onDeselectAll: () => void;
 }) {
   const { t } = useI18n();
   const q = query.trim().toLowerCase();
+  const visible = useMemo(
+    () =>
+      memos.filter(
+        (m) =>
+          !q || m.name.toLowerCase().includes(q) || m.memo.toLowerCase().includes(q),
+      ),
+    [memos, q],
+  );
   const groups = useMemo(
     () => [
       {
         kind: "file",
         label: t("ai.memosFile"),
-        items: memos.filter(
-          (m) =>
-            m.kind === "file" &&
-            (!q || m.name.toLowerCase().includes(q) || m.memo.toLowerCase().includes(q)),
-        ),
+        items: visible.filter((m) => m.kind === "file"),
       },
       {
         kind: "code",
         label: t("ai.memosCode"),
-        items: memos.filter(
-          (m) =>
-            m.kind === "code" &&
-            (!q || m.name.toLowerCase().includes(q) || m.memo.toLowerCase().includes(q)),
-        ),
+        items: visible.filter((m) => m.kind === "code"),
       },
     ],
-    [memos, q, t],
+    [visible, t],
   );
+  const visibleKeys = useMemo(() => visible.map((m) => `${m.kind}:${m.id}`), [visible]);
+  const allVisibleSelected =
+    visibleKeys.length > 0 && visibleKeys.every((key) => selected.has(key));
 
   return (
     <div className="shrink-0 border-t border-border bg-surface px-3 py-2">
       <div className="mx-auto flex max-w-2xl flex-col gap-1.5">
+        <div className="flex items-center justify-between gap-1.5">
+          <span className="text-[10px] font-semibold uppercase tracking-wide text-text-secondary">
+            {t("ai.contextMemos")}
+          </span>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => onSelectAll(visibleKeys)}
+              disabled={visibleKeys.length === 0 || allVisibleSelected}
+              className="text-[11px] text-accent hover:underline disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {t("ai.selectAll")}
+            </button>
+            <button
+              type="button"
+              onClick={onDeselectAll}
+              disabled={selected.size === 0}
+              className="text-[11px] text-accent hover:underline disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {t("ai.deselectAll")}
+            </button>
+          </div>
+        </div>
         <div className="flex items-center gap-1.5">
           <Search size={12} className="shrink-0 text-text-secondary" aria-hidden />
           <Input
@@ -260,6 +297,19 @@ export function AiChatPanel({
     });
   }
 
+  function selectAllMemos(keys: string[]) {
+    if (keys.length === 0) return;
+    setSelectedKeys((prev) => {
+      const next = new Set(prev);
+      for (const key of keys) next.add(key);
+      return next;
+    });
+  }
+
+  function deselectAllMemos() {
+    setSelectedKeys(new Set());
+  }
+
   async function sendWith(promptOverride?: string) {
     const text = input.trim();
     if (!text || waiting || disabled) return;
@@ -268,15 +318,14 @@ export function AiChatPanel({
     setWaiting(true);
     try {
       const effectivePromptId = promptOverride ?? (promptId || undefined);
-      const res =
-        mode === "memo_analysis"
-          ? await chatWithMemos({
-              message: text,
-              mode,
-              promptId: effectivePromptId,
-              memoIds: selectedMemoIds,
-            })
-          : await api.aiChat(text, "", mode, effectivePromptId);
+      const res = MEMO_MODES.has(mode)
+        ? await chatWithMemos({
+            message: text,
+            mode,
+            promptId: effectivePromptId,
+            memoIds: selectedMemoIds,
+          })
+        : await api.aiChat(text, "", mode, effectivePromptId);
       setMessages((m) => [...m, { role: "assistant", text: res.reply }]);
     } catch (e) {
       setMessages((m) => [...m, { role: "error", text: errorDetail(e) }]);
@@ -295,7 +344,7 @@ export function AiChatPanel({
   const chipsDisabled = disabled || waiting || input.trim() === "";
 
   return (
-    <div className="flex h-full min-h-0 flex-col bg-bg">
+    <div className="flex min-h-0 flex-1 flex-col bg-bg">
       {disabled && (
         <ErrorBanner tone="warning">{welcomeMessage(false)}</ErrorBanner>
       )}
@@ -341,17 +390,19 @@ export function AiChatPanel({
         </div>
       </div>
 
-      {/* Memo picker (memo_analysis mode) */}
-      {mode === "memo_analysis" && memos !== null && (
+      {/* Memo picker (memo/code/text analysis modes) */}
+      {MEMO_MODES.has(mode) && memos !== null && (
         <MemoPicker
           memos={memos}
           query={memoQuery}
           onQuery={setMemoQuery}
           selected={selectedKeys}
           onToggle={toggleMemo}
+          onSelectAll={selectAllMemos}
+          onDeselectAll={deselectAllMemos}
         />
       )}
-      {mode === "memo_analysis" && memos === null && (
+      {MEMO_MODES.has(mode) && memos === null && (
         <p className="shrink-0 border-t border-border bg-surface px-3 py-1.5 text-center text-xs text-text-secondary">
           {t("ai.memosLoading")}
         </p>

@@ -107,7 +107,8 @@ export type WorkspaceView =
   | { kind: "graphs" }
   | { kind: "history" }
   | { kind: "settings" }
-  | { kind: "ai" };
+  | { kind: "ai" }
+  | { kind: "interchange" };
 
 /** Which panel the right bar shows. Inspector is the default; AI, Settings,
  *  History and Creative are toggleable panes driven from the top bar. */
@@ -134,8 +135,9 @@ export type ReportId =
 
 export type InspectorSelection = { kind: "code" | "file"; id: number } | null;
 
-/** A background job as tracked by the UI (transcription, autocode or R). */
-export type TaskKind = "transcribe" | "autocode" | "r";
+/** A background job as tracked by the UI (transcription, autocode, R or
+ *  a local file import). */
+export type TaskKind = "transcribe" | "autocode" | "r" | "import";
 export type TaskState = "queued" | "running" | "done" | "error";
 export interface TaskInfo {
   kind: TaskKind;
@@ -154,6 +156,9 @@ export interface TaskInfo {
 interface ProjectState {
   projectOpen: boolean;
   projectName: string;
+  /** Absolute path of the open project ("" when none). Used by the sync
+   *  override (per-project decisions) and the shared-folder notice. */
+  projectPath: string;
   /** File search query shared by the left sidebar and the center Files
    *  table (the sidebar box filters both). */
   fileQuery: string;
@@ -232,8 +237,10 @@ interface ProjectState {
   /** Cancel and remove every background task (queued, running, finished). */
   clearAllTasks: () => void;
 
-  /** Background file import progress (shown in the ribbon indicator). */
-  importState: { done: number; total: number } | null;
+  /** Background file-import progress. Kept as a task entry (kind "import",
+   *  id "import") in `tasks` — the queue flyout renders it like any other
+   *  background job. FileManager calls this to report done/total; null
+   *  marks the task finished. */
   setImportState: (v: { done: number; total: number } | null) => void;
 
   /** Import-request tick: the left bar's Import button asks the FileManager
@@ -244,8 +251,15 @@ interface ProjectState {
   /** Collaboration sync (Option B: sidecar change files over folder sync). */
   syncStatus: SyncStatus | null;
   setSyncStatus: (v: SyncStatus | null) => void;
-  setSyncEnabled: (enabled: boolean) => Promise<boolean>;
+  /** Enable/disable the sync cycle. A manual toggle (remember: true) also
+   *  writes the per-project override so the decision survives reopens;
+   *  the shared-folder auto-enable passes remember: false. */
+  setSyncEnabled: (enabled: boolean, opts?: { remember?: boolean }) => Promise<boolean>;
   runSyncNow: () => Promise<boolean>;
+  /** Set by the store when the backend reported a shared folder on open;
+   *  the shell shows a transient notice and clears it. */
+  syncAutoNotice: boolean;
+  setSyncAutoNotice: (v: boolean) => void;
 
   inspectorSelection: InspectorSelection;
   inspectorDetails: CodeDetails | SourceDetails | null;
@@ -363,6 +377,7 @@ let inspectorSelectSeq = 0;
 export const useProjectStore = create<ProjectState>((set, get) => ({
   projectOpen: false,
   projectName: "",
+  projectPath: "",
   fileQuery: "",
   setFileQuery: (q) => set({ fileQuery: q }),
   summary: null,
@@ -508,6 +523,11 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   removeTask: (id) => {
     const task = useProjectStore.getState().tasks.find((j) => j.id === id);
     if (!task) return;
+    if (task.kind === "import") {
+      // Local-only task: nothing to cancel on the backend.
+      set((s) => ({ tasks: s.tasks.filter((j) => j.id !== id) }));
+      return;
+    }
     if (task.kind === "transcribe") void api.transcribeJobDelete(id);
     else if (task.kind === "r") void api.rJobDelete(id);
     else void api.autocodeJobDelete(id);
@@ -531,6 +551,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   startAllTasks: () => set({ tasksPaused: false }),
   clearAllTasks: () => {
     for (const job of useProjectStore.getState().tasks) {
+      if (job.kind === "import") continue; // local-only task
       if (job.kind === "transcribe") void api.transcribeJobDelete(job.id);
       else if (job.kind === "r") void api.rJobDelete(job.id);
       else void api.autocodeJobDelete(job.id);
@@ -538,16 +559,65 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     set({ tasks: [] });
   },
 
-  importState: null,
-  setImportState: (v) => set({ importState: v }),
   importTick: 0,
   requestImport: () => set((s) => ({ importTick: s.importTick + 1 })),
 
+  setImportState: (v) => {
+    const existing = useProjectStore.getState().tasks.find((j) => j.kind === "import");
+    if (v === null) {
+      // Finished: the task stays in the queue (done) so the user sees the
+      // completed import until they clear finished tasks.
+      if (!existing) return;
+      set((s) => ({
+        tasks: s.tasks.map((j) =>
+          j.kind === "import" && j.state === "running"
+            ? { ...j, state: "done", progress: 100, message: "done" }
+            : j,
+        ),
+      }));
+      return;
+    }
+    const progress = v.total > 0 ? (v.done / v.total) * 100 : 0;
+    if (existing) {
+      set((s) => ({
+        tasks: s.tasks.map((j) =>
+          j.kind === "import"
+            ? { ...j, state: "running", progress, message: `${v.done}/${v.total}` }
+            : j,
+        ),
+      }));
+    } else {
+      set((s) => ({
+        tasks: [
+          ...s.tasks,
+          {
+            kind: "import",
+            id: "import",
+            sourceId: 0,
+            sourceName: "",
+            state: "running",
+            progress,
+            message: `${v.done}/${v.total}`,
+          },
+        ],
+      }));
+    }
+  },
+
   syncStatus: null,
   setSyncStatus: (v) => set({ syncStatus: v }),
-  setSyncEnabled: async (enabled) => {
+  setSyncEnabled: async (enabled, opts) => {
     try {
       await api.setSyncEnabled(enabled);
+      // A manual toggle (the coder flyout) becomes the remembered
+      // per-project override; the shared-folder auto-enable must NOT
+      // write it, so the next open re-detects.
+      if (opts?.remember !== false) {
+        const path = useProjectStore.getState().projectPath;
+        if (path) {
+          void api.syncSetOverride(path, enabled ? "on" : "off").catch(() => {});
+        }
+      }
       const status = await api.syncStatus();
       set({ syncStatus: status });
       return true;
@@ -555,6 +625,8 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       return false;
     }
   },
+  syncAutoNotice: false,
+  setSyncAutoNotice: (v) => set({ syncAutoNotice: v }),
   runSyncNow: async () => {
     try {
       const res = await api.syncNow();
@@ -585,7 +657,12 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
         return false;
       }
       await get().refreshProject();
-      set({ projectOpen: true, projectName: res.project_name, busy: false });
+      set({
+        projectOpen: true,
+        projectName: res.project_name,
+        projectPath: res.project_path,
+        busy: false,
+      });
       void get().loadCoders();
       return true;
     } catch (e) {
@@ -603,8 +680,20 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
         return false;
       }
       await get().refreshProject();
-      set({ projectOpen: true, projectName: res.project_name, busy: false });
+      set({
+        projectOpen: true,
+        projectName: res.project_name,
+        projectPath: res.project_path,
+        busy: false,
+      });
       void get().loadCoders();
+      if (res.sync_auto_enabled) {
+        // Shared folder: enable the collaboration sync cycle and let the
+        // shell show the transient notice. The override is NOT written —
+        // the decision stays "auto" so the next open re-detects.
+        set({ syncAutoNotice: true });
+        void get().setSyncEnabled(true, { remember: false });
+      }
       return true;
     } catch (e) {
       set({ busy: false, error: e instanceof Error ? e.message : "Could not open project" });
@@ -621,6 +710,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     set({
       projectOpen: false,
       projectName: "",
+      projectPath: "",
           summary: null,
       sources: [],
       codeTree: [],
@@ -631,6 +721,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       inspectorLoading: false,
       inspectorError: null,
       activeCodeId: null,
+      syncAutoNotice: false,
     });
   },
 
