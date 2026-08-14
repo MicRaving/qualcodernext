@@ -8,21 +8,25 @@
  *  Coding happens on the PLAIN TEXT side (html sources are media_type
  *  "text", so TextCoder codes them as text); the WEBPAGE side mirrors the
  *  codings LIVE: coded segments are highlighted in the rendered page by a
- *  small controlled script injected into the sandboxed iframe. The script
- *  only marks text — it walks the DOM text nodes, matches each segment's
- *  `seltext` (the extracted fulltext and the rendered DOM text differ, so
- *  matching by seltext with a prefix fallback is the robust approach) and
- *  wraps matches in `<mark class="qc-live-coding">` marks. Codings are
- *  pushed into the iframe via postMessage whenever they change, so the
- *  webpage stays mounted (scroll position preserved) and the marks are
- *  re-computed in place.
+ *  small controlled script injected into the sandboxed iframe.
+ *
+ *  Matching reality: the backend's text extraction decodes entities, collapses
+ *  spaces and inserts newlines at block tags, so a segment's `seltext` almost
+ *  never appears verbatim in a single DOM text node. The injected script
+ *  therefore builds ONE collapsed text layer over the page's visible text
+ *  nodes (with a per-character mapping back to the nodes) and matches on that
+ *  layer — whitespace-insensitively, with a whitespace-free fallback for
+ *  segments crossing element boundaries and a 40-char prefix fallback. The
+ *  matching core itself lives in `htmlHighlight.ts` (pure, unit-tested) and
+ *  its source is embedded into the script verbatim, so the tests exercise
+ *  exactly the code the iframe runs.
  *
  *  SECURITY: enabling `allow-scripts` would execute the page's own inline
  *  scripts too, so the srcDoc is sanitized first — all `<script>` blocks
- *  and inline `on*="…"` event handlers are stripped from the snapshot, and
- *  only OUR highlight script runs (the offline snapshot file itself is
- *  never modified). `allow-same-origin` stays so relative images/css keep
- *  resolving.
+ *  (including unterminated ones), inline `on*="…"` handlers and javascript:
+ *  URLs are stripped from the snapshot, and only OUR highlight script runs
+ *  (the offline snapshot file itself is never modified). `allow-same-origin`
+ *  stays so relative images/css keep resolving.
  *
  *  The raw bytes come from the file-serving endpoint, which sends
  *  application/octet-stream without a charset (and res.text() would
@@ -49,6 +53,13 @@ import {
   type Coding,
   type Source,
 } from "@/lib/api";
+import {
+  MAX_HIGHLIGHTS,
+  injectHighlightScript,
+  qcFindMatches,
+  stripPageScripts,
+  type QcCodingPayload,
+} from "@/features/coding/htmlHighlight";
 import { TextCoder } from "@/features/coding/TextCoder";
 import { cn } from "@/lib/utils";
 import { useI18n } from "@/lib/i18n";
@@ -103,33 +114,11 @@ function decodeHtmlBytes(bytes: Uint8Array, declared: string | null): string {
 }
 
 /* -------------------------------------------------- highlight injection */
-/* The iframe runs with `allow-scripts` (needed for our injected script),  */
+/* The iframe runs with `allow-scripts` (needed for our injected script), */
 /* so the page's own code MUST NOT survive into the srcDoc. The snapshot   */
-/* file stays untouched; only the in-memory copy is sanitized.             */
-
-/** Payload pushed into the iframe for one coded segment. */
-interface QcCodingPayload {
-  seltext: string;
-  color: string | null;
-  name: string;
-}
-
-/**
- * Remove the page's own executable code from the snapshot copy:
- *  - `<script>…</script>` blocks (including self-closing tags) and
- *  - inline `on*="…"` event handlers (equivalent to scripts once
- *    `allow-scripts` is on).
- * Regex-based removal is deliberately coarse (a real parser would
- * re-serialize the document and shift the rendering); snapshot pages
- * rarely contain literal `</script>` inside JS strings, so the non-greedy
- * pair match is acceptable here.
- */
-function stripPageScripts(html: string): string {
-  return html
-    .replace(/<script\b[^>]*\/>/gi, "")
-    .replace(/<script\b[^>]*>[\s\S]*?<\/script\s*>/gi, "")
-    .replace(/\son[a-z][a-z0-9]*\s*=\s*(?:"[^"]*"|'[^']*')/gi, "");
-}
+/* file stays untouched; only the in-memory copy is sanitized. Sanitizing, */
+/* injection and the matching core live in htmlHighlight.ts (pure,         */
+/* unit-tested); the matching core is embedded below verbatim.             */
 
 /**
  * Our controlled highlight script, injected as the LAST element of the
@@ -137,19 +126,32 @@ function stripPageScripts(html: string): string {
  * current codings on the iframe `load` event, so nothing is missed).
  *
  * On every `qc:codings` message it removes the old marks and re-marks:
- * each segment's `seltext` is located by plain string search in the text
- * nodes (the rendered DOM text differs from the extracted fulltext, so the
- * segment text itself is the reliable anchor). First occurrence per
- * segment, deduped by start position; matches inside script/style/noscript
- * content are skipped (they are not visible); a prefix fallback of the
- * first ~40 chars covers DOM text that HTML-escapes or splits the segment;
- * the total mark count is capped.
+ *
+ *  - a text model is built over the visible text nodes — one collapsed
+ *    string (whitespace runs -> single space) with a per-character map back
+ *    to (node, original offset), plus a whitespace-free variant;
+ *  - `qcFindMatches` (the shared core from htmlHighlight.ts, spliced in
+ *    verbatim) locates each segment in that model: exact collapsed
+ *    substring, then a 40-char prefix fallback, then a whitespace-free
+ *    fallback for segments the DOM splits across element boundaries;
+ *  - matches are expanded to node ranges and applied right-to-left, so
+ *    splitting one text node never shifts a later target; ranges are
+ *    clamped per node so overlapping matches cannot corrupt the DOM;
+ *  - content inside script/style/noscript/template/code/pre is skipped;
+ *  - the total mark count is capped.
+ *
+ * The message listener verifies the sender (parent window / inherited
+ * origin) — about:srcdoc with allow-same-origin inherits the parent origin.
  */
 const QC_HIGHLIGHT_SCRIPT = `(function () {
   "use strict";
+
   var ACCENT_RGB = "217,119,6";
-  var MAX_MARKS = 500;
-  var PREFIX_FALLBACK_LEN = 40;
+  var MAX_MARKS = ${MAX_HIGHLIGHTS};
+
+  // Matching core — the SAME function the TS side unit-tests. Its source is
+  // spliced in verbatim so the iframe and the tests can never drift.
+  var CORE = ${qcFindMatches.toString()};
 
   function hexToRgb(color) {
     var m = /^#([0-9a-f]{6})$/i.exec(color || "");
@@ -158,15 +160,16 @@ const QC_HIGHLIGHT_SCRIPT = `(function () {
   }
 
   function styleFor(color) {
-    var rgb = hexToRgb(color) || ACCENT_RGB;
-    return "background:rgba(" + rgb + ",.22);outline:1px solid rgba(" + rgb + ",.6);border-radius:2px";
+    var rgb = hexToRgb(color) || ACCENT_RGB.split(",");
+    return "background:rgba(" + rgb.join(",") + ",.22);outline:1px solid rgba(" + rgb.join(",") + ",.6);border-radius:2px;color:inherit;padding:0";
   }
 
-  function isHiddenContainer(node) {
+  function isExcluded(node) {
     for (var el = node.parentNode; el; el = el.parentNode) {
+      if (el.nodeType !== 1) continue;
       var tag = el.nodeName;
-      if (tag === "SCRIPT" || tag === "STYLE" || tag === "NOSCRIPT" || tag === "TEMPLATE") return true;
-      if (el === document.documentElement) break;
+      if (tag === "SCRIPT" || tag === "STYLE" || tag === "NOSCRIPT" || tag === "TEMPLATE" || tag === "CODE" || tag === "PRE") return true;
+      if (el === document.documentElement || el === document.body) break;
     }
     return false;
   }
@@ -175,81 +178,176 @@ const QC_HIGHLIGHT_SCRIPT = `(function () {
     var marks = document.querySelectorAll("mark.qc-live-coding");
     for (var i = marks.length - 1; i >= 0; i--) {
       var m = marks[i];
-      if (m.parentNode) {
-        m.parentNode.replaceChild(document.createTextNode(m.textContent), m);
-        m.parentNode.normalize();
+      // replaceChild detaches m (parentNode becomes null), so grab the
+      // parent first — normalize() must run on it, not on m.
+      var parent = m.parentNode;
+      if (parent) {
+        parent.replaceChild(document.createTextNode(m.textContent), m);
+        parent.normalize();
       }
     }
   }
 
-  function applyMark(node, offset, text, seg) {
-    var parent = node.parentNode;
-    if (!parent) return;
-    // splitText returns the new node holding [offset..end] (for offset 0 the
-    // new node holds everything and is inserted before the original).
-    var mid = node.splitText(offset);
-    mid.splitText(text.length);
-    var mark = document.createElement("mark");
-    mark.className = "qc-live-coding";
-    if (seg.name) mark.setAttribute("title", seg.name);
-    mark.setAttribute("style", styleFor(seg.color));
-    parent.replaceChild(mark, mid);
-    mark.appendChild(mid);
+  function isWsChar(c) {
+    return c === " " || c === "\\t" || c === "\\n" || c === "\\r" || c === "\\f" || c === "\\v" || c === "\\u00A0" || c === "\\uFEFF";
   }
 
-  function markSegments(segments) {
-    removeMarks();
-    if (!segments || !segments.length || !document.body) return;
+  // One collapsed text layer over the visible text nodes, with a per-char
+  // (node, original offset) map, plus a whitespace-free variant for the
+  // stripped matching fallback.
+  function buildModel() {
     var nodes = [];
     var walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, null);
     while (walker.nextNode()) {
       var n = walker.currentNode;
-      if (!n.nodeValue || !n.nodeValue.trim() || isHiddenContainer(n)) continue;
+      if (!n.nodeValue || !n.nodeValue.trim() || isExcluded(n)) continue;
       nodes.push(n);
     }
-    if (!nodes.length) return;
-    var seen = {};
-    var marked = 0;
-    for (var s = 0; s < segments.length && marked < MAX_MARKS; s++) {
-      var seg = segments[s];
-      var text = seg.seltext;
-      if (!text || !text.trim()) continue;
-      var target = null;
-      var at = null;
-      for (var i = 0; i < nodes.length; i++) {
-        var idx = nodes[i].nodeValue.indexOf(text);
-        if (idx >= 0) { target = text; at = [i, idx]; break; }
-      }
-      if (!at && text.length > PREFIX_FALLBACK_LEN) {
-        var prefix = text.slice(0, PREFIX_FALLBACK_LEN);
-        for (var j = 0; j < nodes.length; j++) {
-          var pidx = nodes[j].nodeValue.indexOf(prefix);
-          if (pidx >= 0) { target = prefix; at = [j, pidx]; break; }
+    if (!nodes.length) return null;
+
+    var text = "";
+    var chars = [];
+    var firstOrig = [];
+    var lastOrig = [];
+    var lastSpace = false;
+    for (var i = 0; i < nodes.length; i++) {
+      var raw = nodes[i].nodeValue;
+      firstOrig[i] = -1;
+      lastOrig[i] = -1;
+      for (var j = 0; j < raw.length; j++) {
+        var c = raw.charAt(j);
+        if (isWsChar(c)) {
+          if (!lastSpace && text.length > 0) {
+            text += " ";
+            chars.push(i, j);
+            if (firstOrig[i] < 0) firstOrig[i] = j;
+            lastOrig[i] = j;
+          }
+          lastSpace = true;
+        } else {
+          text += c;
+          chars.push(i, j);
+          if (firstOrig[i] < 0) firstOrig[i] = j;
+          lastOrig[i] = j;
+          lastSpace = false;
         }
       }
-      if (!at) continue;
-      var key = at[0] + ":" + at[1];
-      if (seen[key]) continue;
-      seen[key] = true;
-      applyMark(nodes[at[0]], at[1], target, seg);
-      marked++;
     }
+
+    var stripped = "";
+    var strippedToText = [];
+    for (var k = 0; k < text.length; k++) {
+      if (text.charAt(k) !== " ") {
+        strippedToText.push(k);
+        stripped += text.charAt(k);
+      }
+    }
+
+    return {
+      nodes: nodes,
+      text: text,
+      chars: chars,
+      firstOrig: firstOrig,
+      lastOrig: lastOrig,
+      stripped: stripped,
+      strippedToText: strippedToText,
+    };
+  }
+
+  function applyNodeRange(node, from, len, seg) {
+    if (!node.parentNode) return;
+    // splitText returns the new node holding [offset..end] (for offset 0 the
+    // new node holds everything and is inserted before the original).
+    var mid = node.splitText(from);
+    mid.splitText(len);
+    var mark = document.createElement("mark");
+    mark.className = "qc-live-coding";
+    if (seg.name) mark.setAttribute("title", seg.name);
+    mark.setAttribute("style", styleFor(seg.color));
+    node.parentNode.replaceChild(mark, mid);
+    mark.appendChild(mid);
+  }
+
+  function markSegments(payload) {
+    removeMarks();
+    if (!payload || !payload.length) return;
+    var model = buildModel();
+    if (!model) return;
+
+    var segTexts = [];
+    for (var i = 0; i < payload.length; i++) segTexts.push(payload[i].seltext);
+    var matches = CORE(model.text, segTexts, MAX_MARKS);
+    if (!matches || !matches.length) return;
+
+    // Expand each match into concrete node ranges (first/last covered char,
+    // fully covered nodes in between).
+    var ranges = [];
+    for (var m = 0; m < matches.length; m++) {
+      var hit = matches[m];
+      var s = hit.start;
+      var e = hit.start + hit.len;
+      if (hit.mode === "stripped") {
+        if (hit.start + hit.len - 1 >= model.strippedToText.length) continue;
+        s = model.strippedToText[hit.start];
+        e = model.strippedToText[hit.start + hit.len - 1] + 1;
+      }
+      if (s < 0 || e <= s || e > model.text.length) continue;
+      var f = model.chars[s * 2];
+      var fo = model.chars[s * 2 + 1];
+      var l = model.chars[(e - 1) * 2];
+      var lo = model.chars[(e - 1) * 2 + 1];
+      var seg = payload[hit.seg];
+      if (f === l) {
+        ranges.push({ n: f, from: fo, to: lo, seg: seg });
+      } else {
+        if (model.lastOrig[f] >= 0) ranges.push({ n: f, from: fo, to: model.lastOrig[f], seg: seg });
+        for (var x = f + 1; x < l; x++) {
+          if (model.firstOrig[x] >= 0 && model.lastOrig[x] >= 0) {
+            ranges.push({ n: x, from: model.firstOrig[x], to: model.lastOrig[x], seg: seg });
+          }
+        }
+        if (model.firstOrig[l] >= 0) ranges.push({ n: l, from: model.firstOrig[l], to: lo, seg: seg });
+      }
+    }
+    if (!ranges.length) return;
+
+    // Apply right-to-left so earlier splits never shift later targets; clamp
+    // each range against the next higher split in the same node so
+    // overlapping matches cannot corrupt the DOM.
+    ranges.sort(function (a, b) { return b.n - a.n || b.from - a.from; });
+    var splitAt = {};
+    for (var r = 0; r < ranges.length; r++) {
+      var rg = ranges[r];
+      var node = model.nodes[rg.n];
+      if (!node || !node.parentNode) continue;
+      var nodeLen = node.nodeValue ? node.nodeValue.length : 0;
+      var to = rg.to;
+      if (splitAt[rg.n] !== undefined) to = Math.min(to, splitAt[rg.n] - 1);
+      if (rg.from < 0 || rg.from > to || to >= nodeLen) continue;
+      applyNodeRange(node, rg.from, to - rg.from + 1, rg.seg);
+      splitAt[rg.n] = rg.from;
+    }
+  }
+
+  function isTrustedMessage(e) {
+    if (!e || !e.source) return false;
+    if (e.source === window.parent) return true;
+    // about:srcdoc with allow-same-origin inherits the parent origin; a
+    // frame without it reports the opaque "null" origin.
+    return e.origin === window.origin || e.origin === "null";
   }
 
   window.addEventListener("message", function (e) {
     var d = e.data;
-    if (d && d.type === "qc:codings" && Array.isArray(d.codings)) {
-      markSegments(d.codings);
-    }
+    if (!d || d.type !== "qc:codings" || !Array.isArray(d.codings)) return;
+    if (!isTrustedMessage(e)) return;
+    markSegments(d.codings);
   });
 })();`;
 
 /** Insert our controlled script into the sanitized snapshot srcDoc. */
-function injectHighlightScript(html: string): string {
-  const scriptTag = `<script>${QC_HIGHLIGHT_SCRIPT}</script>`;
-  const bodyClose = html.toLowerCase().lastIndexOf("</body>");
-  if (bodyClose >= 0) return `${html.slice(0, bodyClose)}${scriptTag}${html.slice(bodyClose)}`;
-  return `${html}${scriptTag}`;
+function injectScript(html: string): string {
+  return injectHighlightScript(html, `<script>${QC_HIGHLIGHT_SCRIPT}</script>`);
 }
 
 export function HtmlCoder({ source }: { source: Source }) {
@@ -316,7 +414,7 @@ export function HtmlCoder({ source }: { source: Source }) {
 
   // Sanitized snapshot + our controlled highlight script. Rebuilt only when
   // the raw HTML changes; coding updates flow through postMessage instead.
-  const srcDoc = useMemo(() => (html != null ? injectHighlightScript(stripPageScripts(html)) : null), [html]);
+  const srcDoc = useMemo(() => (html != null ? injectScript(stripPageScripts(html)) : null), [html]);
 
   /* ------------------------------------------------------- split resize */
 

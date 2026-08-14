@@ -31,6 +31,7 @@ import {
   FORCEABLE_FORMATS,
   importInterchange,
   previewInterchange,
+  type InterchangeDestination,
   type InterchangePreview,
 } from "@/features/interchange/importApi";
 import { useI18n } from "@/lib/i18n";
@@ -81,6 +82,44 @@ function formatHelp(t: (key: string) => string, kind: string): string {
   const key = `interchange.help${kind.charAt(0).toUpperCase()}${kind.slice(1)}`;
   const localized = t(key);
   return localized !== key ? localized : "";
+}
+
+/** Display order of the destination counts ("cases · attributes · files …"). */
+const DESTINATION_ORDER: [keyof InterchangeDestination["counts"], string][] = [
+  ["cases", "interchange.countCases"],
+  ["attributes", "interchange.countAttributes"],
+  ["files", "interchange.countFiles"],
+  ["codings", "interchange.countCodings"],
+  ["codes", "interchange.countCodes"],
+  ["categories", "interchange.countCategories"],
+  ["sources", "interchange.countSources"],
+  ["references", "interchange.countReferences"],
+];
+
+/** "24 Cases · 6 Attributes · 2 Files · 48 Codings" from the non-zero counts. */
+function destinationSummary(
+  t: (key: string) => string,
+  dest: InterchangeDestination,
+): string {
+  const parts = DESTINATION_ORDER.map(([key, label]) => ({
+    n: dest.counts[key] ?? 0,
+    label: t(label),
+  }))
+    .filter((part) => part.n > 0)
+    .map((part) => `${part.n} ${part.label}`);
+  return parts.length > 0 ? `→ ${parts.join(" · ")}` : "";
+}
+
+/** One-line per-file destination ("→ 2 Cases · 1 File"), or the fallback
+ *  note when the format cannot be counted (destination null / no counts). */
+function destinationLine(
+  t: (key: string) => string,
+  dest: InterchangeDestination,
+  format: string,
+): string {
+  const summary = destinationSummary(t, dest);
+  if (summary) return summary;
+  return dest.note ?? (formatHelp(t, format) || t("interchange.previewNone"));
 }
 
 function errorDetail(e: unknown): string {
@@ -411,6 +450,16 @@ export function ImportPreview() {
                   ))}
                 </Select>
               </div>
+              {item.preview && !item.detecting && item.status === "pending" && (
+                <p
+                  className="mt-0.5 truncate pl-5 text-[10px] text-text-secondary"
+                  title={item.preview.destination?.note ?? undefined}
+                >
+                  {item.preview.destination
+                    ? destinationLine(t, item.preview.destination, item.format)
+                    : formatHelp(t, item.format) || t("interchange.previewNone")}
+                </p>
+              )}
               {item.detecting && (
                 <p className="mt-0.5 flex items-center gap-1 pl-5 text-[10px] text-text-secondary">
                   <LoaderCircle size={10} className="animate-spin" aria-hidden />

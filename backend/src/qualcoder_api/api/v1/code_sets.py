@@ -129,7 +129,7 @@ async def create_code_set(req: CodeSetCreate, db: DbDep) -> dict:
     assert row is not None
     await audit.record(
         db, user=owner, action="code_set.create", entity="code_set",
-        entity_id=set_id, detail={"name": name},
+        entity_id=set_id, detail={"name": name, "row": dict(row._mapping)},
     )
     return {**dict(row._mapping), "member_count": 0}
 
@@ -166,6 +166,14 @@ async def delete_code_set(set_id: int, db: DbDep) -> None:
     if row is None:
         raise HTTPException(status_code=404, detail="code set not found")
     data = dict(row._mapping)
+    members = [
+        dict(r._mapping)
+        for r in (
+            await db.execute(
+                select(tables.code_set_member).where(tables.code_set_member.c.set_id == set_id)
+            )
+        ).all()
+    ]
     await db.execute(
         delete(tables.code_set_member).where(tables.code_set_member.c.set_id == set_id)
     )
@@ -173,7 +181,7 @@ async def delete_code_set(set_id: int, db: DbDep) -> None:
     await db.commit()
     await audit.record(
         db, user=get_codername(), action="code_set.delete", entity="code_set",
-        entity_id=set_id, detail=data,
+        entity_id=set_id, detail={**data, "row": data, "members": members},
     )
 
 
@@ -220,7 +228,7 @@ async def add_code_set_members(set_id: int, req: CodeSetMembers, db: DbDep) -> d
         await db.commit()
     await audit.record(
         db, user=get_codername(), action="code_set.members_add", entity="code_set",
-        entity_id=set_id, detail={"cids": cids, "added": len(to_add)},
+        entity_id=set_id, detail={"cids": cids, "added": len(to_add), "added_cids": to_add},
     )
     return {"set_id": set_id, "added": len(to_add), "cids": to_add}
 
@@ -231,8 +239,21 @@ async def remove_code_set_members(set_id: int, req: CodeSetMembers, db: DbDep) -
     many members were actually removed."""
     _ = await _get_set(db, set_id)
     cids = list(dict.fromkeys(req.cids))
+    removed_cids: list[int] = []
     removed = 0
     if cids:
+        existing = {
+            int(r[0])
+            for r in (
+                await db.execute(
+                    select(tables.code_set_member.c.cid).where(
+                        tables.code_set_member.c.set_id == set_id,
+                        tables.code_set_member.c.cid.in_(cids),
+                    )
+                )
+            ).all()
+        }
+        removed_cids = [c for c in cids if c in existing]
         result = await db.execute(
             delete(tables.code_set_member).where(
                 tables.code_set_member.c.set_id == set_id,
@@ -243,6 +264,7 @@ async def remove_code_set_members(set_id: int, req: CodeSetMembers, db: DbDep) -
         await db.commit()
     await audit.record(
         db, user=get_codername(), action="code_set.members_remove", entity="code_set",
-        entity_id=set_id, detail={"cids": cids, "removed": removed},
+        entity_id=set_id,
+        detail={"cids": cids, "removed": removed, "removed_cids": removed_cids},
     )
     return {"set_id": set_id, "removed": removed, "cids": cids}

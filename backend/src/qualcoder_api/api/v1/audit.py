@@ -8,7 +8,7 @@ from fastapi import APIRouter
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select, text
 
-from qualcoder_api.api.v1.deps import DbDep
+from qualcoder_api.api.v1.deps import DbDep, ServiceDep
 
 router = APIRouter(prefix="/audit", tags=["audit"])
 
@@ -102,7 +102,7 @@ class AuditActionRequest(BaseModel):
 
 
 @router.post("/undo", response_model=dict)
-async def audit_undo(req: AuditActionRequest, db: DbDep) -> dict:
+async def audit_undo(req: AuditActionRequest, db: DbDep, svc: ServiceDep) -> dict:
     """Revert one audit-logged change."""
     from fastapi import HTTPException
 
@@ -114,7 +114,7 @@ async def audit_undo(req: AuditActionRequest, db: DbDep) -> dict:
     if row is None:
         raise HTTPException(status_code=404, detail="audit row not found")
     try:
-        message = await apply(db, dict(row), undo=True)
+        message = await apply(db, dict(row), undo=True, project_path=svc.project_path)
     except UnsupportedAction as err:
         raise HTTPException(status_code=422, detail=str(err)) from err
     await db.commit()
@@ -122,7 +122,7 @@ async def audit_undo(req: AuditActionRequest, db: DbDep) -> dict:
 
 
 @router.post("/redo", response_model=dict)
-async def audit_redo(req: AuditActionRequest, db: DbDep) -> dict:
+async def audit_redo(req: AuditActionRequest, db: DbDep, svc: ServiceDep) -> dict:
     """Re-apply a previously undone audit-logged change."""
     from fastapi import HTTPException
 
@@ -134,7 +134,7 @@ async def audit_redo(req: AuditActionRequest, db: DbDep) -> dict:
     if row is None:
         raise HTTPException(status_code=404, detail="audit row not found")
     try:
-        message = await apply(db, dict(row), undo=False)
+        message = await apply(db, dict(row), undo=False, project_path=svc.project_path)
     except UnsupportedAction as err:
         raise HTTPException(status_code=422, detail=str(err)) from err
     await db.commit()

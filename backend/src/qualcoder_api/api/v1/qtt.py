@@ -298,7 +298,7 @@ async def create_qtt_sheet(req: QttSheetCreate, db: DbDep) -> dict:
         action="qtt.create",
         entity="qtt_sheet",
         entity_id=sheet_id,
-        detail={"name": name, "kind": kind, "sections": sections},
+        detail={"name": name, "kind": kind, "sections": sections, "row": data},
     )
     return _sheet_response(data, {})
 
@@ -306,6 +306,7 @@ async def create_qtt_sheet(req: QttSheetCreate, db: DbDep) -> dict:
 @router.patch("/{sheet_id}", response_model=dict)
 async def update_qtt_sheet(sheet_id: int, req: QttSheetUpdate, db: DbDep) -> dict:
     row = await _get_sheet(db, sheet_id)
+    before = dict(row)
     values = req.model_dump(exclude_none=True)
     if "name" in values:
         name = (values["name"] or "").strip()
@@ -331,7 +332,7 @@ async def update_qtt_sheet(sheet_id: int, req: QttSheetUpdate, db: DbDep) -> dic
             action="qtt.update",
             entity="qtt_sheet",
             entity_id=sheet_id,
-            detail=values,
+            detail={**values, "before": before, "after": data},
         )
     counts = await _section_counts(db)
     return _sheet_response(row, counts)
@@ -350,6 +351,14 @@ async def delete_qtt_sheet(sheet_id: int, db: DbDep) -> None:
         ).scalar()
         or 0
     )
+    items = [
+        dict(r._mapping)
+        for r in (
+            await db.execute(
+                select(tables.qtt_item).where(tables.qtt_item.c.sheet_id == sheet_id)
+            )
+        ).all()
+    ]
     await db.execute(
         delete(tables.qtt_item).where(tables.qtt_item.c.sheet_id == sheet_id)
     )
@@ -367,7 +376,8 @@ async def delete_qtt_sheet(sheet_id: int, db: DbDep) -> None:
         action="qtt.delete",
         entity="qtt_sheet",
         entity_id=sheet_id,
-        detail={"name": row["name"], "kind": row["kind"], "item_count": item_count},
+        detail={"name": row["name"], "kind": row["kind"], "item_count": item_count,
+                "row": dict(row), "items": items},
     )
 
 
@@ -437,6 +447,7 @@ async def create_qtt_item(sheet_id: int, req: QttItemCreate, db: DbDep) -> dict:
             "section": section,
             "kind": req.kind,
             "payload": payload,
+            "row": data,
         },
     )
     return await _resolve_item(db, data)
@@ -452,6 +463,7 @@ async def update_qtt_item(item_id: int, req: QttItemUpdate, db: DbDep) -> dict:
     if row is None:
         raise HTTPException(status_code=404, detail="worksheet item not found")
     item = dict(row._mapping)
+    item_before = dict(item)
     sheet = await _get_sheet(db, item["sheet_id"])
     values: dict[str, Any] = {}
     if req.section is not None:
@@ -502,7 +514,7 @@ async def update_qtt_item(item_id: int, req: QttItemUpdate, db: DbDep) -> dict:
             entity="qtt_item",
             entity_id=item_id,
             source_id=payload.get("fid") if item.get("kind") == "segment" else None,
-            detail=values,
+            detail={**values, "before": item_before, "after": item},
         )
     return await _resolve_item(db, item)
 
@@ -539,6 +551,7 @@ async def delete_qtt_item(item_id: int, db: DbDep) -> None:
             "sheet_id": item["sheet_id"],
             "section": item["section"],
             "kind": item["kind"],
+            "row": item,
         },
     )
 
@@ -589,6 +602,7 @@ async def send_segment(sheet_id: int, req: QttSendSegment, db: DbDep) -> dict:
         entity="qtt_item",
         entity_id=item_id,
         source_id=req.fid,
-        detail={"sheet_id": sheet_id, "section": section, "pos0": req.pos0, "pos1": req.pos1},
+        detail={"sheet_id": sheet_id, "section": section, "pos0": req.pos0, "pos1": req.pos1,
+                "row": data},
     )
     return await _resolve_item(db, data)

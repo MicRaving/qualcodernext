@@ -563,6 +563,200 @@ async def test_preview_survey(tmp_path):
         # The case-name column is excluded; numeric columns are not qualitative.
         assert body["qual_columns"] == ["Comment"]
         assert body["lines"] is None
+        # Destination: 2 data rows → cases; Age becomes an attribute type;
+        # the Comment column creates one text file + coding per row.
+        dest = body["destination"]
+        assert dest["kind"] == "survey"
+        assert dest["counts"] == {
+            "codes": 0, "categories": 0, "sources": 0, "codings": 2,
+            "cases": 2, "attributes": 1, "references": 0, "files": 1,
+        }
+        assert dest["note"] is None
+
+
+async def test_preview_destination_refi(tmp_path):
+    """REFI-QDA previews its entity counts from a real XML parse."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as c:
+        xml = """<?xml version="1.0" encoding="UTF-8"?>
+<QDAProject xmlns="urn:QDA-XML:project:1.0">
+  <CodeBook>
+    <Categories>
+      <Category guid="cat-1" name="Theme"/>
+    </Categories>
+    <Codes>
+      <Code guid="code-1" name="Positive"/>
+      <Code guid="code-2" name="Negative"/>
+    </Codes>
+  </CodeBook>
+  <Sources>
+    <TextSource guid="src-1" name="a.txt" mediaType="TEXT">
+      <Description><FullText>aaa bbb ccc</FullText></Description>
+    </TextSource>
+    <TextSource guid="src-2" name="b.txt" mediaType="TEXT">
+      <Description><FullText>ddd eee</FullText></Description>
+    </TextSource>
+  </Sources>
+  <CodedTexts>
+    <CodedText guid="ct-1">
+      <Description>
+        <CodedSelection>
+          <SourceRef targetGUID="src-1"/>
+          <TextRef start="0" end="3"/>
+        </CodedSelection>
+        <CodeRef targetGUID="code-1"/>
+      </Description>
+    </CodedText>
+    <CodedText guid="ct-2">
+      <Description>
+        <CodedSelection>
+          <SourceRef targetGUID="src-1"/>
+          <TextRef start="4" end="7"/>
+        </CodedSelection>
+        <CodeRef targetGUID="code-2"/>
+      </Description>
+    </CodedText>
+    <CodedText guid="ct-3">
+      <Description>
+        <CodedSelection>
+          <SourceRef targetGUID="src-2"/>
+          <TextRef start="0" end="3"/>
+        </CodedSelection>
+        <CodeRef targetGUID="code-1"/>
+      </Description>
+    </CodedText>
+  </CodedTexts>
+  <Cases>
+    <Case guid="case-1" name="C1"/>
+  </Cases>
+</QDAProject>"""
+        res = await c.post(
+            "/api/v1/interchange/import/preview",
+            files={"file": ("project.qdp", xml.encode("utf-8"), "application/xml")},
+        )
+        assert res.status_code == 200, res.text
+        body = res.json()
+        assert body["format"] == "refi"
+        assert body["columns"] is None
+        assert body["lines"] is None
+        dest = body["destination"]
+        assert dest["kind"] == "refi"
+        assert dest["counts"] == {
+            "codes": 2, "categories": 1, "sources": 2, "codings": 3,
+            "cases": 1, "attributes": 0, "references": 0, "files": 0,
+        }
+        assert dest["note"] is None
+
+
+async def test_preview_destination_codebook(tmp_path):
+    """Codebooks count codes and distinct category paths."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as c:
+        codebook = "Theme>>Subtheme>>code1\nTheme>>code2\n"
+        res = await c.post(
+            "/api/v1/interchange/import/preview",
+            files={"file": ("codebook.txt", codebook.encode(), "text/plain")},
+        )
+        assert res.status_code == 200, res.text
+        body = res.json()
+        assert body["format"] == "codebook"
+        dest = body["destination"]
+        assert dest["kind"] == "codebook"
+        # Two codes; two category paths ("Theme", "Theme>>Subtheme").
+        assert dest["counts"]["codes"] == 2
+        assert dest["counts"]["categories"] == 2
+        assert dest["note"] is None
+
+
+async def test_preview_destination_ris(tmp_path):
+    """RIS previews the number of reference records."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as c:
+        ris = "TY  - JOUR\nTI  - Title\nAU  - Author\nPY  - 2020\nER  -\n"
+        res = await c.post(
+            "/api/v1/interchange/import/preview",
+            files={"file": ("refs.ris", ris.encode(), "text/plain")},
+        )
+        assert res.status_code == 200, res.text
+        body = res.json()
+        assert body["format"] == "ris"
+        dest = body["destination"]
+        assert dest["kind"] == "ris"
+        assert dest["counts"]["references"] == 1
+        assert dest["note"] is None
+
+
+async def test_preview_destination_merge_unknown(tmp_path):
+    """A zipped .qda project cannot be counted cheaply — destination is null."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as c:
+        import io
+        import zipfile
+
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, "w") as archive:
+            archive.writestr("data.qda", b"SQLite format 3\x00 not really")
+        res = await c.post(
+            "/api/v1/interchange/import/preview",
+            files={"file": ("project.qda.zip", buffer.getvalue(), "application/octet-stream")},
+        )
+        assert res.status_code == 200, res.text
+        body = res.json()
+        assert body["format"] == "merge"
+        assert body["destination"] is None
+
+
+async def test_preview_destination_transana(tmp_path):
+    """Transana databases preview row counts of the mapped tables."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as c:
+        media_dir = tmp_path / "media"
+        media_dir.mkdir()
+        media_file = media_dir / "sample.mp4"
+        media_file.write_bytes(b"fake mp4 bytes")
+        tprd_path = tmp_path / "sample.tprd"
+        await build_transana_db(tprd_path, str(media_file))
+        res = await c.post(
+            "/api/v1/interchange/import/preview",
+            files={"file": ("sample.tprd", tprd_path.read_bytes(), "application/octet-stream")},
+        )
+        assert res.status_code == 200, res.text
+        body = res.json()
+        assert body["format"] == "transana"
+        dest = body["destination"]
+        assert dest["kind"] == "transana"
+        # Transcript source + keyword type + keyword + two assignments.
+        assert dest["counts"]["sources"] == 1
+        assert dest["counts"]["categories"] == 1
+        assert dest["counts"]["codes"] == 1
+        assert dest["counts"]["codings"] == 2
+        # The media file next to the database is not part of the upload —
+        # the preview notes that media sources are conditional.
+        assert dest["note"] is not None
+        assert "media" in dest["note"]
+
+
+async def test_preview_destination_rqda(tmp_path):
+    """RQDA databases preview row counts of the mapped tables."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as c:
+        rqda_path = tmp_path / "sample.rqda"
+        await build_rqda_db(rqda_path)
+        res = await c.post(
+            "/api/v1/interchange/import/preview",
+            files={"file": ("sample.rqda", rqda_path.read_bytes(), "application/octet-stream")},
+        )
+        assert res.status_code == 200, res.text
+        body = res.json()
+        assert body["format"] == "rqda"
+        dest = body["destination"]
+        assert dest["kind"] == "rqda"
+        assert dest["counts"]["sources"] == 1
+        assert dest["counts"]["categories"] == 1
+        assert dest["counts"]["codes"] == 1
+        assert dest["counts"]["codings"] == 1
+        assert dest["counts"]["cases"] == 1
+        assert dest["note"] is None
 
 
 async def test_preview_codebook_lines(tmp_path):
@@ -606,6 +800,7 @@ async def test_preview_force_kind_override(tmp_path):
         body = res.json()
         assert body["format"] == "codebook"
         assert body["lines"] == ["Name,Age", "alice,42"]
+        assert body["destination"]["kind"] == "codebook"
 
         res = await c.post(
             "/api/v1/interchange/import/preview",

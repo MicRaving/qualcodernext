@@ -42,22 +42,26 @@ async def get_bookmarks(db: DbDep) -> dict:
 
 @router.put("/bookmarks")
 async def set_bookmark(req: BookmarkRequest, db: DbDep) -> dict:
+    before = await ProjectRepository(db).get_bookmarks()
     result = await ProjectRepository(db).set_bookmark(file_id=req.file_id, pos=req.pos)
     await audit.record(
         db, user=get_codername(), action="bookmark.set", entity="project",
-        detail={"file_id": req.file_id, "pos": req.pos},
+        detail={"file_id": req.file_id, "pos": req.pos,
+                "before": before, "after": result},
     )
     return result
 
 
 @router.put("/bookmarks/av")
 async def set_av_bookmark(req: AVBookmarkRequest, db: DbDep) -> dict:
+    before = await ProjectRepository(db).get_bookmarks()
     result = await ProjectRepository(db).set_av_bookmark(
         file_id=req.file_id, msec=req.msec, textpos=req.textpos
     )
     await audit.record(
         db, user=get_codername(), action="bookmark.set", entity="project",
-        detail={"file_id": req.file_id, "msec": req.msec, "textpos": req.textpos},
+        detail={"file_id": req.file_id, "msec": req.msec, "textpos": req.textpos,
+                "before": before, "after": result},
     )
     return result
 
@@ -96,7 +100,7 @@ async def add_pseudonym(req: PseudonymAdd, svc: ServiceDep, db: DbDep) -> dict:
         raise HTTPException(status_code=422, detail=str(err)) from err
     await audit.record(
         db, user=get_codername(), action="pseudonym.add", entity="pseudonym",
-        detail={"original": req.original},
+        detail={"original": req.original, "pseudonym": entry["pseudonym"]},
     )
     return {"pseudonym": entry}
 
@@ -107,10 +111,14 @@ async def delete_pseudonym(original: str, svc: ServiceDep, db: DbDep) -> dict:
 
     if svc.project_path == "":
         raise HTTPException(status_code=409, detail="no project is open")
+    entry = next(
+        (d for d in pseudonyms.load_pseudonyms(svc.project_path) if d["original"] == original),
+        None,
+    )
     pseudonyms.delete_pseudonym(svc.project_path, original)
     await audit.record(
         db, user=get_codername(), action="pseudonym.delete", entity="pseudonym",
-        detail={"original": original},
+        detail={"original": original, "pseudonym": (entry or {}).get("pseudonym") or ""},
     )
     return {"ok": True}
 
@@ -127,6 +135,23 @@ class SpeakersDetectRequest(BaseModel):
 
 class SpeakersMarkRequest(SpeakersDetectRequest):
     selected: list[str] | None = None
+
+
+def _speakers_mark_detail(result: dict) -> dict:
+    """Audit detail for a speaker run: the created code ids + coding ids
+    (capped so the undo stays bounded)."""
+    detail = {
+        "turns_marked": result.get("turns_marked", 0),
+        "codes_created": result.get("codes_created", 0),
+        "skipped_duplicates": result.get("skipped_duplicates", 0),
+    }
+    ctids = result.get("created_ctids") or []
+    if len(ctids) <= 5000:
+        detail["created_code_ids"] = result.get("created_code_ids") or []
+        detail["created_ctids"] = ctids
+    else:
+        detail["too_many_codings"] = True
+    return detail
 
 
 @router.post("/speakers/detect")
@@ -154,11 +179,7 @@ async def speakers_mark(req: SpeakersMarkRequest, db: DbDep) -> dict:
         raise HTTPException(status_code=422, detail=str(err)) from err
     await audit.record(
         db, user=owner, action="speakers.mark", entity="code_text",
-        detail={
-            "turns_marked": result.get("turns_marked", 0),
-            "codes_created": result.get("codes_created", 0),
-            "skipped_duplicates": result.get("skipped_duplicates", 0),
-        },
+        detail=_speakers_mark_detail(result),
     )
     return result
 
@@ -178,10 +199,18 @@ async def list_references(db: DbDep) -> dict:
 async def delete_reference(risid: int, db: DbDep) -> None:
     from qualcoder_api.services.references import delete_reference
 
+    ris_rows = [
+        dict(r._mapping)
+        for r in (await db.execute(select(tables.ris).where(tables.ris.c.risid == risid))).all()
+    ]
+    source_ids = [
+        r[0]
+        for r in (await db.execute(select(tables.source.c.id).where(tables.source.c.risid == risid))).all()
+    ]
     await delete_reference(db, risid)
     await audit.record(
         db, user=get_codername(), action="reference.delete", entity="ris",
-        entity_id=risid,
+        entity_id=risid, detail={"rows": ris_rows, "source_ids": source_ids},
     )
 
 
@@ -279,6 +308,7 @@ async def bulk_rename_path(req: BulkRenameRequest, db: DbDep) -> dict:
     )
     updated = 0
     skipped = 0
+    updated_rows: list[list] = []
     for sid, mediapath in rows:
         if mediapath is None or ":" not in mediapath:
             continue
@@ -290,13 +320,15 @@ async def bulk_rename_path(req: BulkRenameRequest, db: DbDep) -> dict:
                 text("UPDATE source SET mediapath = :mp WHERE id = :id"),
                 {"mp": new_path, "id": sid},
             )
+            updated_rows.append([sid, mediapath, new_path])
             updated += 1
         elif instances > 1:
             skipped += 1
     await db.commit()
     await audit.record(
         db, user=get_codername(), action="source.link_fix", entity="source",
-        detail={"bulk": True, "old": old_text, "new": new_text, "updated": updated},
+        detail={"bulk": True, "old": old_text, "new": new_text, "updated": updated,
+                "rows": updated_rows[:5000]},
     )
     return {"ok": True, "updated": updated, "skipped_multiples": skipped}
 
@@ -319,6 +351,18 @@ async def replace_source_file(
 
     if svc.project_path == "":
         raise HTTPException(status_code=409, detail="no project is open")
+    before_row = (
+        await db.execute(select(tables.source).where(tables.source.c.id == source_id))
+    ).first()
+    before_source = dict(before_row._mapping) if before_row is not None else None
+    segments: dict[str, list[dict]] = {}
+    for table, col in (
+        (tables.code_text, tables.code_text.c.fid),
+        (tables.annotation, tables.annotation.c.fid),
+        (tables.case_text, tables.case_text.c.fid),
+    ):
+        rows = (await db.execute(select(table).where(col == source_id))).all()
+        segments[table.name] = [dict(r._mapping) for r in rows]
     tmp = svc.project_path + "/_replace_" + (file.filename or "replace")
     with open(tmp, "wb") as out:  # noqa: ASYNC230 - small local temp write
         while chunk := await file.read(1 << 20):
@@ -334,7 +378,14 @@ async def replace_source_file(
             os.remove(tmp)
     await audit.record(
         db, user=get_codername(), action="source.replace", entity="source",
-        entity_id=source_id, detail=result,
+        entity_id=source_id,
+        detail={
+            **result,
+            "before_source": before_source,
+            "code_text": segments.get("code_text", []),
+            "annotation": segments.get("annotation", []),
+            "case_text": segments.get("case_text", []),
+        },
     )
     return result
 
@@ -388,7 +439,8 @@ async def create_filter(req: FilterCreate, db: DbDep) -> dict:
         await db.commit()
     await audit.record(
         db, user=get_codername(), action="filter.create", entity="files_filter",
-        entity_id=filterid, detail={"name": req.name},
+        entity_id=filterid,
+        detail={"name": req.name, "row": dict(row._mapping) if row is not None else None},
     )
     return {"ok": True, "filterid": filterid}
 
@@ -409,6 +461,7 @@ async def delete_filter(filterid: int, db: DbDep) -> None:
     await audit.record(
         db, user=get_codername(), action="filter.delete", entity="files_filter",
         entity_id=filterid,
+        detail={"row": dict(row._mapping) if row is not None else None},
     )
 
 
@@ -447,9 +500,16 @@ async def attach_reference_file(
             os.remove(tmp)
     await audit.record(
         db, user=get_codername(), action="reference.attach", entity="source",
-        entity_id=result["source_id"], detail={"risid": risid, "name": result["name"]},
+        entity_id=result["source_id"],
+        detail={"risid": risid, "name": result["name"],
+                "row": await _source_row(db, result["source_id"])},
     )
     return result
+
+
+async def _source_row(db, source_id: int) -> dict | None:
+    row = (await db.execute(select(tables.source).where(tables.source.c.id == source_id))).first()
+    return dict(row._mapping) if row is not None else None
 
 
 @router.delete("/references/{risid}/attach/{source_id}", status_code=204)

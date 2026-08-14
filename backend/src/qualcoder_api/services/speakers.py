@@ -346,8 +346,10 @@ async def mark_speakers(
         turns.extend(parse_transcript(source_id, filename, fulltext, pattern, anywhere))
 
     created_codes = 0
+    created_code_ids: list[int] = []
     marked = 0
     skipped_duplicates = 0
+    created_ctids: list[int] = []
 
     # Create one code per speaker name (deterministic order).
     for name in sorted({t["name"] for t in turns}, key=str.lower):
@@ -381,6 +383,7 @@ async def mark_speakers(
                 }
             )
             created_codes += 1
+            created_code_ids.append(new_id)
 
     for turn in turns:
         if selected_set and turn["name"] not in selected_set:
@@ -400,6 +403,7 @@ async def mark_speakers(
                     memo="",
                     date=_now(),
                     important=0,
+                    weight=0,
                 )
             )
             ctid = int(_inserted_pk(result))
@@ -411,6 +415,7 @@ async def mark_speakers(
             if coding_after is not None:
                 await _capture(session, "code_text", "insert", "ctid", ctid, _rowdict(coding_after))
             marked += 1
+            created_ctids.append(ctid)
         except Exception:
             skipped_duplicates += 1
     await session.commit()
@@ -421,4 +426,6 @@ async def mark_speakers(
         "codes_created": created_codes,
         "category": SPEAKERS_CATEGORY_NAME,
         "owner": SPEAKER_CODER_NAME,
+        "created_code_ids": created_code_ids,
+        "created_ctids": created_ctids,
     }

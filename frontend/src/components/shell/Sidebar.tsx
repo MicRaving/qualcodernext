@@ -700,8 +700,11 @@ export function Sidebar() {
      native file drag can provide dataTransfer.files). */
 
   function handleRowPointerDown(e: ReactPointerEvent<HTMLDivElement>, item: CodeTreeItem) {
-    if (e.button !== 0 || e.pointerType === "mouse" && e.ctrlKey) return;
-    if ((e.target as HTMLElement).closest("button, input, select, textarea, a")) return;
+    if (e.button !== 0 || (e.pointerType === "mouse" && e.ctrlKey)) return;
+    // Only editable elements opt out — the row body IS a button (the code
+    // name), so rejecting buttons here would make the drag unarmable.
+    // The click that follows a completed drag is suppressed separately.
+    if ((e.target as HTMLElement).closest("input, select, textarea")) return;
     pointerDownRef.current = { item, x: e.clientX, y: e.clientY };
     dragStartedRef.current = false;
   }

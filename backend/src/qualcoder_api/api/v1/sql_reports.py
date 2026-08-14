@@ -125,19 +125,19 @@ async def create_saved_query(req: SavedQueryCreate, db: DbDep) -> dict:
         raise HTTPException(status_code=409, detail="duplicate title") from None
     from qualcoder_api.persistence.repositories import _capture
 
+    row_data = {
+        "title": req.title,
+        "description": req.description or "",
+        "grouper": req.grouper or "",
+        "ssql": req.ssql,
+    }
     await _capture(
-        db, "stored_sql", "insert", "title", req.title,
-        {
-            "title": req.title,
-            "description": req.description or "",
-            "grouper": req.grouper or "",
-            "ssql": req.ssql,
-        },
+        db, "stored_sql", "insert", "title", req.title, row_data
     )
     await db.commit()
     await audit.record(
         db, user=get_codername(), action="sql.save", entity="stored_sql",
-        detail={"title": req.title},
+        detail={"title": req.title, "row": row_data},
     )
     return req.model_dump()
 
@@ -161,5 +161,5 @@ async def delete_saved_query(title: str, db: DbDep) -> None:
     await db.commit()
     await audit.record(
         db, user=get_codername(), action="sql.delete", entity="stored_sql",
-        detail={"title": title},
+        detail={"title": title, "row": dict(row._mapping) if row is not None else None},
     )

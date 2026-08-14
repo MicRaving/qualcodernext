@@ -161,6 +161,18 @@ def make_youtube_info(**overrides) -> dict:
     return info
 
 
+def youtube_comment_table(text: str) -> list[list[str]]:
+    """Rows under the ``Comments`` heading split on ``\t`` (header excluded).
+
+    Returns ``[]`` when the text has no heading + header pair.
+    """
+    lines = text.splitlines()
+    for i, line in enumerate(lines):
+        if line == "Comments" and i + 1 < len(lines) and lines[i + 1] == "author\tlikes\tdate\tcomment":
+            return [row.split("\t") for row in lines[i + 2 :]]
+    return []
+
+
 @pytest.fixture
 async def scrape_client(tmp_path):
     """API client with a fresh open project (scrape router included)."""
@@ -464,9 +476,76 @@ def test_youtube_extracts_comments_instead_of_captions():
     assert "author\tlikes\tdate\tcomment" in text
     assert "alice\t12 likes\t2023-11-14 22:13\tLoved it" in text
     assert "→ bob\t3 likes\t2023-11-14 22:15\tMe too" in text
-    assert "unknown\t\t\tNo author, no meta" in text
+    assert "unknown\t-\t-\tNo author, no meta" in text
+    for row in youtube_comment_table(text):
+        assert len(row) == 4
     assert "Captions" not in text
     assert "Hello caption text" not in text
+
+
+def test_youtube_comment_rows_have_exactly_four_fields():
+    """Flat-layout comments: every row is 4 fields, missing likes/date are
+    ``-``, and tabs/newlines inside a comment collapse to spaces."""
+    info = make_youtube_info(
+        comments=[
+            {"id": "1", "author": "alice", "text": "Top", "like_count": 5, "timestamp": 1700000000},
+            {"id": "2", "author": "bob", "text": "Reply", "parent": "1"},
+            {"id": "3", "author": "carol", "text": "Flat\ttab\nnewline"},
+        ]
+    )
+    with patch("qualcoder_api.services.scrape_service.subprocess.run", return_value=yt_completed(info)):
+        content = scrape_service.scrape_youtube("https://www.youtube.com/watch?v=abc")
+
+    rows = youtube_comment_table(content.data.decode("utf-8"))
+    assert len(rows) == 3
+    for row in rows:
+        assert len(row) == 4
+    assert rows[0] == ["alice", "5 likes", "2023-11-14 22:13", "Top"]
+    assert rows[1] == ["→ bob", "-", "-", "Reply"]
+    assert rows[2] == ["carol", "-", "-", "Flat tab newline"]
+
+
+def test_youtube_nested_replies_keep_four_fields_with_author_prefix():
+    """Nested ``replies`` lists: each reply is its own 4-field row with the
+    ``→ `` nesting prefix in the author column only."""
+    info = make_youtube_info(
+        comments=[
+            {
+                "id": "1",
+                "author": "alice",
+                "text": "Top level",
+                "like_count": 2,
+                "timestamp": 1700000000,
+                "replies": [
+                    {
+                        "id": "2",
+                        "author": "bob",
+                        "text": "Nested reply",
+                        "replies": [
+                            {"id": "3", "author": "carol", "text": "Deep reply"},
+                        ],
+                    }
+                ],
+            }
+        ]
+    )
+    with patch("qualcoder_api.services.scrape_service.subprocess.run", return_value=yt_completed(info)):
+        content = scrape_service.scrape_youtube("https://www.youtube.com/watch?v=abc")
+
+    rows = youtube_comment_table(content.data.decode("utf-8"))
+    for row in rows:
+        assert len(row) == 4
+    assert rows == [
+        ["alice", "2 likes", "2023-11-14 22:13", "Top level"],
+        ["→ bob", "-", "-", "Nested reply"],
+        ["→ → carol", "-", "-", "Deep reply"],
+    ]
+
+
+def test_comment_row_field_count_check_normalizes_stray_cells():
+    """The field_count guard rebuilds any row that is not exactly 4 fields."""
+    row = scrape_service._comment_row("a\tb", "1", "x", "text\nmore")
+    assert row.split("\t") == ["a b", "1", "x", "text more"]
 
 
 def test_youtube_subprocess_parses_playlist_wrapper():
@@ -496,7 +575,9 @@ def test_youtube_falls_back_to_captions_when_comments_missing():
     assert "Comments" not in text
 
 
-def test_youtube_without_comments_or_captions_keeps_header():
+def test_youtube_without_comments_or_captions_reports_no_comments():
+    """No comments + no captions still prints the heading, the header row
+    and a ``-\t-\t-\tNo comments`` placeholder row."""
     info = make_youtube_info(subtitles={}, automatic_captions={}, comments=[])
     with (
         patch("qualcoder_api.services.scrape_service.subprocess.run", return_value=yt_completed(info)),
@@ -509,7 +590,9 @@ def test_youtube_without_comments_or_captions_keeps_header():
     assert "Demo Video" in text
     assert "A description." in text
     assert "Captions" not in text
-    assert "Comments" not in text
+    assert "author\tlikes\tdate\tcomment" in text
+    assert "-\t-\t-\tNo comments" in text
+    assert youtube_comment_table(text) == [["-", "-", "-", "No comments"]]
 
 
 def test_youtube_reports_when_comment_extraction_unsupported():

@@ -52,6 +52,18 @@ export interface InterchangePreview {
   qual_columns?: string[] | null;
   /** First codebook lines. */
   lines?: string[] | null;
+  /** What the import would create — best-effort counts from a real parse
+   *  (null = cannot be counted until the import runs, e.g. merge). */
+  destination?: InterchangeDestination | null;
+}
+
+/** Counts of the entities an import would create, per format (best-effort).
+ *  Only the keys relevant to the format are non-zero; the note carries a
+ *  caveat when part of the file cannot be counted exactly. */
+export interface InterchangeDestination {
+  kind: string;
+  counts: Record<string, number>;
+  note: string | null;
 }
 
 async function interchangeRequest<T>(

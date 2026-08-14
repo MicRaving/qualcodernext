@@ -11,12 +11,17 @@ Modes:
 - ``youtube`` — yt-dlp metadata (title/uploader/duration/description) and
   the comment thread as tab-separated rows (``author\tlikes\tdate\tcomment``,
   one row per comment; replies are their own rows with a ``→ `` nesting
-  prefix in the author column). Comments are the primary content; caption
-  tracks are fetched ONLY as a fallback when a video has no
-  comments (e.g. disabled) — when comments exist, captions are dropped
-  entirely. If the installed yt-dlp predates comment extraction
-  (2021.12.17) the output is header + description only, with a note in
-  the text, and captions are not fetched either.
+  prefix in the author column only). The tab layout is the machine-readable
+  contract: every row after the header has exactly four fields, cells are
+  never padded or aligned, and tabs/newlines inside a cell collapse to
+  spaces; missing likes/dates render as ``-``. Comments are the primary
+  content; caption tracks are fetched ONLY as a fallback when a video has
+  no comments (e.g. disabled) — when comments exist, captions are dropped
+  entirely. A video with neither comments nor captions still prints the
+  ``Comments`` heading, the header row and a ``-\t-\t-\tNo comments`` row.
+  If the installed yt-dlp predates comment extraction (2021.12.17) the
+  output is header + description only, with a note in the text, and
+  captions are not fetched either.
 - ``article`` — page fetched with urllib, cleaned with trafilatura
   (falling back to the project's own ``html_to_text``).
 - ``html``    — offline snapshot: the page HTML with same-origin
@@ -358,6 +363,11 @@ def scrape_reddit(url: str) -> ScrapedContent:
 #: yt-dlp gained comment extraction (``getcomments``) in 2021.12.17.
 _YT_DLP_COMMENTS_MIN_VERSION = (2021, 12, 17)
 
+#: Header row of the comment table — tabs are the machine-readable
+#: contract: every row after this header has exactly four fields and
+#: cells are never padded or aligned.
+_COMMENT_HEADER = "author\tlikes\tdate\tcomment"
+
 
 def _yt_dlp_comments_supported() -> bool:
     """Whether the installed yt-dlp can extract comments (checked at import)."""
@@ -462,22 +472,22 @@ def _youtube_captions(info: dict) -> str:
 
 
 def _format_likes(value: object) -> str:
-    """``like_count`` -> ``"N likes"`` ("" when the field is missing)."""
+    """``like_count`` -> ``"N likes"`` (``-`` when the field is missing)."""
     count = _as_int(value)
     if count is None:
-        return ""
+        return "-"
     return f"{count:,} likes"
 
 
 def _format_comment_timestamp(value: object) -> str:
-    """Unix epoch seconds -> ``YYYY-MM-DD HH:MM`` UTC ("" when unknown)."""
+    """Unix epoch seconds -> ``YYYY-MM-DD HH:MM`` UTC (``-`` when unknown)."""
     ts = _as_int(value)
     if ts is None:
-        return ""
+        return "-"
     try:
         return datetime.fromtimestamp(ts, tz=UTC).strftime("%Y-%m-%d %H:%M")
     except (OverflowError, OSError, ValueError):
-        return ""
+        return "-"
 
 
 def _normalize_column(value: str) -> str:
@@ -485,11 +495,26 @@ def _normalize_column(value: str) -> str:
     return re.sub(r"[\t\r\n]+", " ", value).strip()
 
 
+def _comment_row(author: str, likes: str, date: str, text: str) -> str:
+    """Join the four columns into one tab-separated row.
+
+    The 4-field contract holds for every row: cells must already be free
+    of tabs/newlines, and if one ever slips through, the row is rebuilt
+    with ``_normalize_column`` per cell so the field count stays exactly
+    four (the ``field_count`` consistency check).
+    """
+    row = "\t".join((author, likes, date, text))
+    if len(row.split("\t")) != 4:
+        row = "\t".join(_normalize_column(cell) for cell in (author, likes, date, text))
+    return row
+
+
 def _comment_lines(comment: dict, depth: int) -> list[str]:
     """Render one comment plus its nested ``replies`` as tab-separated rows.
 
-    Each row is ``author\tlikes\tdate\tcomment``. Replies are their own
-    row with a ``→ `` prefix (one per depth level) in the author column.
+    Each row is ``author\tlikes\tdate\tcomment`` with exactly four fields.
+    Replies are their own row with a ``→ `` prefix (one per depth level)
+    in the author column only; missing likes/dates render as ``-``.
     """
     lines: list[str] = []
     text = _normalize_column(comment.get("text") or "")
@@ -498,13 +523,11 @@ def _comment_lines(comment: dict, depth: int) -> list[str]:
         if depth:
             author = "→ " * depth + author
         lines.append(
-            "\t".join(
-                (
-                    author,
-                    _format_likes(comment.get("like_count")),
-                    _format_comment_timestamp(comment.get("timestamp")),
-                    text,
-                )
+            _comment_row(
+                author,
+                _format_likes(comment.get("like_count")),
+                _format_comment_timestamp(comment.get("timestamp")),
+                text,
             )
         )
     replies = comment.get("replies")
@@ -522,7 +545,7 @@ def _youtube_comments(info: dict) -> list[str]:
     Handles both yt-dlp layouts defensively: nested ``replies`` lists
     (``{author, text, timestamp, like_count, replies: [...]}``) and the
     flat list where every comment carries ``id``/``parent`` references.
-    Missing fields fall back to ``unknown`` / no metadata.
+    Missing fields fall back to ``unknown`` / ``-``.
     """
     comments = info.get("comments")
     if not isinstance(comments, list) or not comments:
@@ -851,7 +874,7 @@ def scrape_youtube(url: str) -> ScrapedContent:
         if comment_lines:
             lines.append("")
             lines.append("Comments")
-            lines.append("author\tlikes\tdate\tcomment")
+            lines.append(_COMMENT_HEADER)
             lines.extend(comment_lines)
         else:
             caption_text = _youtube_captions(info)
@@ -863,6 +886,12 @@ def scrape_youtube(url: str) -> ScrapedContent:
                 lines.append(caption_text)
             else:
                 logger.warning("YouTube comments unavailable for %s", url)
+                # Keep the tabular contract intact even when there is
+                # nothing to report: heading + header + a placeholder row.
+                lines.append("")
+                lines.append("Comments")
+                lines.append(_COMMENT_HEADER)
+                lines.append("-\t-\t-\tNo comments")
     else:
         note = (
             "Note: comments are unavailable — the installed yt-dlp "

@@ -8,7 +8,7 @@ import {
   useRef,
   useState,
   type ChangeEvent,
-  type DragEvent,
+  type DragEvent as ReactDragEvent,
   type MouseEvent,
 } from "react";
 import {
@@ -339,39 +339,57 @@ export function FileManager() {
     }
   }
 
-  async function importFiles(list: File[]) {
-    if (list.length === 0) return;
-    setSkipped([]);
-    setActionError(null);
-    useProjectStore.getState().setImportState({ done: 0, total: list.length });
-    const dupes: string[] = [];
-    let failed: string | null = null;
-    for (let i = 0; i < list.length; i++) {
-      const file = list[i];
-      try {
-        const src = await api.importSource(file);
-        useProjectStore.setState((s) => ({
-          sources: [...s.sources.filter((x) => x.name !== src.name), src],
-        }));
-      } catch (e) {
-        if (e instanceof ApiError && e.status === 409) {
-          dupes.push(file.name);
-        } else {
-          failed = e instanceof Error ? e.message : t("files.importFailed", { name: file.name });
+  const importFiles = useCallback(
+    async (list: File[]) => {
+      if (list.length === 0) return;
+      setSkipped([]);
+      setActionError(null);
+      useProjectStore.getState().setImportState({ done: 0, total: list.length });
+      const dupes: string[] = [];
+      let failed: string | null = null;
+      for (let i = 0; i < list.length; i++) {
+        const file = list[i];
+        try {
+          const src = await api.importSource(file);
+          useProjectStore.setState((s) => ({
+            sources: [...s.sources.filter((x) => x.name !== src.name), src],
+          }));
+        } catch (e) {
+          if (e instanceof ApiError && e.status === 409) {
+            dupes.push(file.name);
+          } else {
+            failed = e instanceof Error ? e.message : t("files.importFailed", { name: file.name });
+          }
         }
+        useProjectStore.getState().setImportState({ done: i + 1, total: list.length });
       }
-      useProjectStore.getState().setImportState({ done: i + 1, total: list.length });
-    }
-    useProjectStore.getState().setImportState(null);
-    setSkipped(dupes);
-    if (failed) setActionError(failed);
-    await load();
-  }
+      useProjectStore.getState().setImportState(null);
+      setSkipped(dupes);
+      if (failed) setActionError(failed);
+      await load();
+    },
+    [load, t],
+  );
 
   function handleFilesChange(e: ChangeEvent<HTMLInputElement>) {
     const files = Array.from(e.target.files ?? []);
     e.target.value = "";
     void importFiles(files);
+  }
+
+  // Extract the files of an OS drag. `dataTransfer.files` is the standard
+  // source, but WebView2 versions have shipped where a drop carries the
+  // payload ONLY on `dataTransfer.items` (files list empty) — and vice
+  // versa. Iterate both: `getAsFile()` is only valid synchronously inside
+  // the event, which is exactly where this runs.
+  function filesFromDataTransfer(dt: DataTransfer): File[] {
+    const fromFiles = Array.from(dt.files ?? []);
+    if (fromFiles.length > 0) return fromFiles;
+    const items = Array.from(dt.items ?? []);
+    return items
+      .filter((item) => item.kind === "file")
+      .map((item) => item.getAsFile())
+      .filter((f): f is File => f !== null);
   }
 
   // Drop target on the center area: importing OS files goes through the
@@ -385,7 +403,7 @@ export function FileManager() {
     setDragActive(true);
   }
 
-  function handleDragOver(e: DragEvent<HTMLDivElement>) {
+  function handleDragOver(e: ReactDragEvent<HTMLDivElement>) {
     e.preventDefault();
     e.dataTransfer.dropEffect = "copy";
     setDragActive(true);
@@ -401,14 +419,37 @@ export function FileManager() {
     if (dragDepth.current === 0) setDragActive(false);
   }
 
-  function handleDrop(e: DragEvent<HTMLDivElement>) {
+  function handleDrop(e: ReactDragEvent<HTMLDivElement>) {
     e.preventDefault();
     dragDepth.current = 0;
     setDragActive(false);
-    const files = Array.from(e.dataTransfer.files ?? []);
-    if (files.length === 0) return;
+    const files = filesFromDataTransfer(e.dataTransfer);
+    if (files.length === 0) {
+      toast.error(t("files.dropNoFiles"));
+      return;
+    }
     void importFiles(files);
   }
+
+  // Final net for WebView2 quirks: the OS drop can surface on `document`
+  // instead of the element under the cursor (the engine sometimes skips the
+  // target dispatch entirely), or the pointer can release outside the drop
+  // container (e.g. over the header). A document-level listener catches
+  // both. The container's own handler already called preventDefault() for
+  // drops it processed, so `e.defaultPrevented` tells this net to stand
+  // down — every drop is imported exactly once.
+  useEffect(() => {
+    const onDocumentDrop = (e: DragEvent) => {
+      if (e.defaultPrevented) return;
+      e.preventDefault();
+      if (!e.dataTransfer) return;
+      const files = filesFromDataTransfer(e.dataTransfer);
+      if (files.length === 0) return;
+      void importFiles(files);
+    };
+    document.addEventListener("drop", onDocumentDrop);
+    return () => document.removeEventListener("drop", onDocumentDrop);
+  }, [importFiles, toast]);
 
   async function renameSource(row: Source) {
     const next = window.prompt(t("files.renamePrompt", { name: row.name }), row.name);
@@ -699,6 +740,7 @@ export function FileManager() {
 
       {/* Body — the whole center area is a drop target for OS files */}
       <div
+        data-testid="files-drop-zone"
         className="relative flex min-h-0 flex-1 flex-col"
         onDragEnter={handleDragEnter}
         onDragOver={handleDragOver}

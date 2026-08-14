@@ -53,13 +53,29 @@ async def create_dictionary(req: DictionaryCreate, db: DbDep) -> dict:
         raise HTTPException(status_code=409, detail="duplicate dictionary name")
     await audit.record(
         db, user=owner, action="dictionary.create", entity="dictionary",
-        entity_id=dictionary["id"], detail={"name": dictionary["name"]},
+        entity_id=dictionary["id"],
+        detail={
+            "name": dictionary["name"],
+            "row": {
+                "id": dictionary["id"],
+                "name": dictionary["name"],
+                "owner": dictionary.get("owner"),
+                "created": dictionary.get("created"),
+            },
+        },
     )
     return dictionary
 
 
 @router.patch("/{dict_id}")
 async def rename_dictionary(dict_id: int, req: DictionaryRename, db: DbDep) -> dict:
+    from sqlalchemy import select
+
+    from qualcoder_api.persistence import tables
+
+    old_row = (
+        await db.execute(select(tables.dictionary).where(tables.dictionary.c.id == dict_id))
+    ).first()
     try:
         dictionary = await dictionary_service.rename_dictionary(db, dict_id, req.name)
     except ValueError as err:
@@ -68,18 +84,38 @@ async def rename_dictionary(dict_id: int, req: DictionaryRename, db: DbDep) -> d
         raise HTTPException(status_code=404, detail="dictionary not found")
     await audit.record(
         db, user=get_codername(), action="dictionary.update", entity="dictionary",
-        entity_id=dict_id, detail={"name": dictionary["name"]},
+        entity_id=dict_id,
+        detail={
+            "new_name": dictionary["name"],
+            "old_name": old_row[1] if old_row is not None else None,
+        },
     )
     return dictionary
 
 
 @router.delete("/{dict_id}", status_code=204)
 async def delete_dictionary(dict_id: int, db: DbDep) -> None:
+    from sqlalchemy import select
+
+    from qualcoder_api.persistence import tables
+
+    row = (
+        await db.execute(select(tables.dictionary).where(tables.dictionary.c.id == dict_id))
+    ).first()
+    entries = [
+        dict(r._mapping)
+        for r in (
+            await db.execute(
+                select(tables.dictionary_entry).where(tables.dictionary_entry.c.dict_id == dict_id)
+            )
+        ).all()
+    ]
     if not await dictionary_service.delete_dictionary(db, dict_id):
         raise HTTPException(status_code=404, detail="dictionary not found")
     await audit.record(
         db, user=get_codername(), action="dictionary.delete", entity="dictionary",
         entity_id=dict_id,
+        detail={"row": dict(row._mapping) if row is not None else None, "entries": entries},
     )
 
 
@@ -104,11 +140,21 @@ async def add_entry(dict_id: int, req: DictionaryEntryCreate, db: DbDep) -> dict
 
 @router.delete("/entries/{entry_id}", status_code=204)
 async def remove_entry(entry_id: int, db: DbDep) -> None:
+    from sqlalchemy import select
+
+    from qualcoder_api.persistence import tables
+
+    row = (
+        await db.execute(
+            select(tables.dictionary_entry).where(tables.dictionary_entry.c.id == entry_id)
+        )
+    ).first()
     if not await dictionary_service.remove_entry(db, entry_id):
         raise HTTPException(status_code=404, detail="entry not found")
     await audit.record(
         db, user=get_codername(), action="dictionary.entry_delete",
         entity="dictionary_entry", entity_id=entry_id,
+        detail={"row": dict(row._mapping) if row is not None else None},
     )
 
 

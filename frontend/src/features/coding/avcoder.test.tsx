@@ -18,6 +18,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { I18nProvider } from "@/lib/i18n";
 import { ToastProvider } from "@/lib/toast";
 import { useProjectStore } from "@/stores/project";
+import type { TaskState } from "@/stores/project";
 import type { Source } from "@/lib/api";
 import { AvCoder } from "@/features/coding/AvCoder";
 
@@ -59,6 +60,18 @@ vi.mock("@/lib/api", () => ({
 const MEDIA_ID = 1;
 const COMPANION_ID = 7;
 
+/** The transcript companion as "stored" on the backend: deleted/replaced by
+ *  the delete/complete flows, overwritten by commitEdit (manual saves). */
+let currentCompanion: { id: number; fulltext: string };
+/** The transcribe job as reported by api.transcribeJob while it runs. */
+let currentJob: {
+  state: string;
+  progress: number;
+  message: string;
+  live_text: string | null;
+  transcript_source_id: number | null;
+};
+
 function mediaSource(avTextId: number | null, hasTranscript: boolean): Source {
   return {
     id: MEDIA_ID,
@@ -77,9 +90,9 @@ function mediaSource(avTextId: number | null, hasTranscript: boolean): Source {
 
 function companionSource(): Source {
   return {
-    id: COMPANION_ID,
+    id: currentCompanion.id,
     name: "talk.mp3.txt",
-    fulltext: "[00:00] Hello world",
+    fulltext: currentCompanion.fulltext,
     mediapath: null,
     memo: "",
     owner: "default",
@@ -104,7 +117,10 @@ function setupApiMocks() {
   });
   (fns.avCodings ??= vi.fn()).mockResolvedValue([]);
   (fns.codesFlat ??= vi.fn()).mockResolvedValue([]);
-  (fns.getSource ??= vi.fn()).mockResolvedValue(companionSource());
+  (fns.getSource ??= vi.fn()).mockImplementation(async (id: number) => {
+    if (id !== currentCompanion.id) throw new Error("unknown source");
+    return companionSource();
+  });
   (fns.sources ??= vi.fn()).mockImplementation(async () => currentSources);
   (fns.projectSummary ??= vi.fn()).mockResolvedValue({ summary: null });
   (fns.codeTree ??= vi.fn()).mockResolvedValue([]);
@@ -115,6 +131,29 @@ function setupApiMocks() {
     // av_text_id link — the next sources() list reflects that.
     currentSources = [mediaSource(null, false)];
   });
+  // Manual transcription: lazily created empty companion, then the draft
+  // is saved through commitEdit (which overwrites the companion text).
+  (fns.createTranscript ??= vi.fn()).mockImplementation(async () => {
+    currentCompanion = { id: COMPANION_ID, fulltext: "" };
+    currentSources = [mediaSource(COMPANION_ID, false)];
+    return companionSource();
+  });
+  (fns.commitEdit ??= vi.fn()).mockImplementation(
+    async (body: { fid: number; new_text: string }) => {
+      if (body.fid === currentCompanion.id) currentCompanion.fulltext = body.new_text;
+      return {};
+    },
+  );
+  (fns.transcribeJob ??= vi.fn()).mockImplementation(async () => ({
+    id: "job-1",
+    state: currentJob.state,
+    progress: currentJob.progress,
+    message: currentJob.message,
+    segments: [],
+    error: null,
+    live_text: currentJob.live_text,
+    transcript_source_id: currentJob.transcript_source_id,
+  }));
   (fns.transcribeStatus ??= vi.fn()).mockResolvedValue({
     engines: { whisper: true },
     models_cached: ["tiny"],
@@ -194,9 +233,111 @@ async function deleteTranscript(container: HTMLElement) {
   await flushUi();
 }
 
+/** Type into the manual transcription editor (the first keystroke prefills
+ *  "[mm:ss] " and lazily creates the companion). */
+async function typeIntoEditor(container: HTMLElement, text: string) {
+  const editor = findTranscribeEditor(container);
+  expect(editor).not.toBeNull();
+  await act(async () => {
+    // React 19 tracks the value property — use the native setter so the
+    // change reaches the onChange handler.
+    const setter = Object.getOwnPropertyDescriptor(
+      window.HTMLTextAreaElement.prototype,
+      "value",
+    )!.set!;
+    setter.call(editor, text);
+    editor!.dispatchEvent(new Event("input", { bubbles: true }));
+    await vi.waitFor(() => {
+      expect((findTranscribeEditor(container) as HTMLTextAreaElement | null)?.value).toBe(
+        `[00:00] ${text}`,
+      );
+    });
+  });
+  await flushUi();
+}
+
+/** The transcribe job's backend-side state (what api.transcribeJob reports).
+ *  Does NOT touch the store — job lifecycle in the store is driven by the
+ *  dialog's enqueue and the explicit setState calls in the tests. */
+function setJobState(
+  state: string,
+  opts: { live_text?: string | null; transcript_source_id?: number | null } = {},
+) {
+  currentJob = {
+    state,
+    progress: state === "done" ? 100 : state === "error" ? 50 : 0,
+    message: state,
+    live_text: opts.live_text ?? null,
+    transcript_source_id: opts.transcript_source_id ?? null,
+  };
+}
+
+function jobTask(state: TaskState, transcriptSourceId: number | null) {
+  return {
+    kind: "transcribe" as const,
+    id: "job-1",
+    sourceId: MEDIA_ID,
+    sourceName: "talk.mp3",
+    state,
+    progress: state === "done" ? 100 : state === "error" ? 50 : 0,
+    message: state,
+    transcriptSourceId,
+  };
+}
+
+/** Open the Transcribe dialog via the header button and start the job. */
+async function startTranscription(container: HTMLElement) {
+  const transcribeBtn = findButton(container, "Transcribe");
+  expect(transcribeBtn).not.toBeNull();
+  await act(async () => {
+    (transcribeBtn as HTMLButtonElement).click();
+  });
+  await flushUi();
+
+  const dialog = container.querySelector('[role="dialog"][aria-label="Transcribe audio/video"]');
+  expect(dialog).not.toBeNull();
+
+  const startBtn = Array.from(dialog!.querySelectorAll("button")).find(
+    (b) => b.textContent?.trim() === "Start transcription",
+  );
+  expect(startBtn).not.toBeNull();
+  await act(async () => {
+    (startBtn as HTMLButtonElement).click();
+    // The submit handler awaits api.transcribeStart and enqueues the job
+    // before closing the dialog — wait for it inside act.
+    await vi.waitFor(() => {
+      expect(apiMock.fns.transcribeStart).toHaveBeenCalled();
+    });
+  });
+  await flushUi();
+  await vi.waitFor(() => {
+    expect(container.querySelector('[role="dialog"]')).toBeNull();
+  });
+}
+
+/** Complete the job: the store task turns done and the sources list links
+ *  the new companion (mirrors ProjectShell's poll + refreshProject). */
+function completeJob(transcriptSourceId: number, finalText: string) {
+  currentCompanion = { id: transcriptSourceId, fulltext: finalText };
+  act(() => {
+    useProjectStore.setState({
+      tasks: [jobTask("done", transcriptSourceId)],
+    });
+    useProjectStore.setState({ sources: [mediaSource(transcriptSourceId, true)] });
+  });
+}
+
 describe("AvCoder transcript delete + re-transcription", () => {
   beforeEach(() => {
     currentSources = [mediaSource(COMPANION_ID, true)];
+    currentCompanion = { id: COMPANION_ID, fulltext: "[00:00] Hello world" };
+    currentJob = {
+      state: "running",
+      progress: 0,
+      message: "running",
+      live_text: null,
+      transcript_source_id: null,
+    };
     setupApiMocks();
     vi.spyOn(window, "confirm").mockReturnValue(true);
     seedStore();
@@ -280,30 +421,9 @@ describe("AvCoder transcript delete + re-transcription", () => {
       expect(findTranscribeEditor(container)).not.toBeNull();
     });
 
-    // Open the automatic transcription dialog via the header button.
-    const transcribeBtn = findButton(container, "Transcribe");
-    expect(transcribeBtn).not.toBeNull();
-    await act(async () => {
-      (transcribeBtn as HTMLButtonElement).click();
-    });
-    await flushUi();
-
-    const dialog = container.querySelector('[role="dialog"][aria-label="Transcribe audio/video"]');
-    expect(dialog).not.toBeNull();
-
-    const startBtn = Array.from(dialog!.querySelectorAll("button")).find(
-      (b) => b.textContent?.trim() === "Start transcription",
-    );
-    expect(startBtn).not.toBeNull();
-    await act(async () => {
-      (startBtn as HTMLButtonElement).click();
-      // The submit handler awaits api.transcribeStart and enqueues the job
-      // before closing the dialog — wait for it inside act.
-      await vi.waitFor(() => {
-        expect(apiMock.fns.transcribeStart).toHaveBeenCalled();
-      });
-    });
-    await flushUi();
+    // Open the automatic transcription dialog via the header button and
+    // start the job.
+    await startTranscription(container);
 
     // The job POST fires through the api call path with the media source.
     expect(apiMock.fns.transcribeStart).toHaveBeenCalledTimes(1);
@@ -318,9 +438,152 @@ describe("AvCoder transcript delete + re-transcription", () => {
       id: "job-1",
       state: "running",
     });
+
+    act(() => root.unmount());
+    container.remove();
+  });
+
+  it("shows the live preview while the job runs and the finished transcript after", async () => {
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+    const root = renderAvCoder(container);
+    await flushUi();
     await vi.waitFor(() => {
-      expect(container.querySelector('[role="dialog"]')).toBeNull();
+      expect(container.textContent).toContain("Hello world");
     });
+
+    await deleteTranscript(container);
+    await vi.waitFor(() => {
+      expect(findTranscribeEditor(container)).not.toBeNull();
+    });
+
+    // The backend starts producing live output as soon as the job runs.
+    setJobState("running", { live_text: "[00:00] Live preview part" });
+    await startTranscription(container);
+
+    // The manual editor is suppressed while the job runs…
+    await vi.waitFor(() => {
+      expect(findTranscribeEditor(container)).toBeNull();
+    });
+    // …and the LIVE preview shows instead.
+    await vi.waitFor(() => {
+      expect(container.textContent).toContain("Live preview part");
+    });
+
+    // The job finishes: the backend creates/links the companion and the
+    // store refresh lands.
+    completeJob(COMPANION_ID, "[00:00] Auto transcript result");
+    await flushUi();
+
+    // The read-only transcript replaces the preview; no manual editor.
+    await vi.waitFor(() => {
+      expect(container.textContent).toContain("Auto transcript result");
+    });
+    expect(container.textContent).not.toContain("Live preview part");
+    expect(findTranscribeEditor(container)).toBeNull();
+    // The displayed transcript IS the auto-created companion.
+    expect(apiMock.fns.getSource).toHaveBeenLastCalledWith(COMPANION_ID);
+
+    act(() => root.unmount());
+    container.remove();
+  });
+
+  it("replaces a lazy-created manual companion with the finished auto transcript", async () => {
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+    const root = renderAvCoder(container);
+    await flushUi();
+    await vi.waitFor(() => {
+      expect(container.textContent).toContain("Hello world");
+    });
+
+    await deleteTranscript(container);
+    await vi.waitFor(() => {
+      expect(findTranscribeEditor(container)).not.toBeNull();
+    });
+
+    // The first keystroke lazily creates the empty companion and saves the
+    // draft through commitEdit.
+    await typeIntoEditor(container, "hello");
+    await vi.waitFor(() => {
+      expect(apiMock.fns.createTranscript).toHaveBeenCalledWith(MEDIA_ID);
+    });
+    await vi.waitFor(() => {
+      expect(apiMock.fns.commitEdit).toHaveBeenCalledWith(
+        expect.objectContaining({ fid: COMPANION_ID, new_text: "[00:00] hello" }),
+      );
+    });
+    expect(useProjectStore.getState().sources[0].av_text_id).toBe(COMPANION_ID);
+    // The editor persists with the draft on the (empty) companion.
+    expect(findTranscribeEditor(container)?.value).toBe("[00:00] hello");
+    const commitsBefore = apiMock.fns.commitEdit.mock.calls.length;
+
+    // The user starts the automatic job — the manual editor is suppressed
+    // immediately (the draft was already flushed; no further commit lands).
+    setJobState("running", { live_text: "[00:00] Auto partial" });
+    await startTranscription(container);
+    await vi.waitFor(() => {
+      expect(findTranscribeEditor(container)).toBeNull();
+    });
+    await vi.waitFor(() => {
+      expect(container.textContent).toContain("Auto partial");
+    });
+    expect(apiMock.fns.commitEdit.mock.calls.length).toBe(commitsBefore);
+
+    // The job finishes and the backend FOLDS the result into the existing
+    // lazy companion (same av_text_id, fulltext overwritten).
+    completeJob(COMPANION_ID, "[00:00] Auto transcript result");
+    await flushUi();
+
+    // The read-only transcript shows; the manual draft is gone.
+    await vi.waitFor(() => {
+      expect(container.textContent).toContain("Auto transcript result");
+    });
+    expect(findTranscribeEditor(container)).toBeNull();
+    expect(container.textContent).not.toContain("hello");
+    // The same companion id is still linked — the job reused it.
+    expect(useProjectStore.getState().sources[0].av_text_id).toBe(COMPANION_ID);
+
+    act(() => root.unmount());
+    container.remove();
+  });
+
+  it("returns to the manual editor with the draft when the job fails", async () => {
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+    const root = renderAvCoder(container);
+    await flushUi();
+    await vi.waitFor(() => {
+      expect(container.textContent).toContain("Hello world");
+    });
+
+    await deleteTranscript(container);
+    await vi.waitFor(() => {
+      expect(findTranscribeEditor(container)).not.toBeNull();
+    });
+
+    // A lazy companion with a manual draft exists, then the job starts.
+    await typeIntoEditor(container, "hello");
+    await vi.waitFor(() => {
+      expect(apiMock.fns.commitEdit).toHaveBeenCalled();
+    });
+    setJobState("error");
+    await startTranscription(container);
+    await vi.waitFor(() => {
+      expect(findTranscribeEditor(container)).toBeNull();
+    });
+
+    // The job fails: the editor returns with the draft intact (the
+    // companion still holds it — nothing replaced it).
+    act(() => {
+      useProjectStore.setState({ tasks: [jobTask("error", null)] });
+    });
+    await flushUi();
+    await vi.waitFor(() => {
+      expect(findTranscribeEditor(container)).not.toBeNull();
+    });
+    expect(findTranscribeEditor(container)?.value).toBe("[00:00] hello");
+    expect(useProjectStore.getState().sources[0].av_text_id).toBe(COMPANION_ID);
 
     act(() => root.unmount());
     container.remove();

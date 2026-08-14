@@ -297,12 +297,19 @@ class McpService:
         from qualcoder_api.services.user_settings import get_codername
 
         cid = int(args.get("cid", 0))
+        old_row = (
+            await session.execute(
+                select(tables.code_name.c.memo).where(tables.code_name.c.cid == cid)
+            )
+        ).first()
         await session.execute(
             update(tables.code_name).where(tables.code_name.c.cid == cid).values(memo=str(args.get("memo") or ""))
         )
         await session.commit()
         await audit.record(session, user=get_codername(), action="code.memo", entity="code",
-                           entity_id=cid, detail={"memo": str(args.get("memo") or "")})
+                           entity_id=cid,
+                           detail={"memo": str(args.get("memo") or ""),
+                                   "old_memo": old_row[0] if old_row is not None else ""})
         return {"ok": True}
 
     async def _tool_delete_code(self, session: AsyncSession, args: dict) -> dict:
@@ -402,11 +409,21 @@ class McpService:
             values["name"] = str(args["name"]).strip()
         if args.get("memo") is not None:
             values["memo"] = str(args["memo"])
+        old_row = (
+            await session.execute(select(tables.cases).where(tables.cases.c.caseid == caseid))
+        ).first()
+        old = dict(old_row._mapping) if old_row is not None else {}
         case = await CaseRepository(session).update_case(caseid, **values)
         if case is None:
             raise McpError(-32002, f"case {caseid} not found")
         await audit.record(session, user=get_codername(), action="case.update", entity="case",
-                           entity_id=caseid, detail=values)
+                           entity_id=caseid,
+                           detail={
+                               "old_name": old.get("name"),
+                               "new_name": values.get("name", old.get("name")),
+                               "old_memo": old.get("memo"),
+                               "new_memo": values.get("memo", old.get("memo")),
+                           })
         return {"case": case.model_dump()}
 
     async def _tool_set_attribute_value(self, session: AsyncSession, args: dict) -> dict:
@@ -414,15 +431,36 @@ class McpService:
         from qualcoder_api.persistence.repositories import AttributeRepository
         from qualcoder_api.services.user_settings import get_codername
 
+        name = str(args.get("name") or "")
+        attr_type = str(args.get("attr_type") or "case")
+        entity_id = int(args.get("entity_id", 0))
+        prev = (
+            await session.execute(
+                select(tables.attribute).where(
+                    tables.attribute.c.name == name,
+                    tables.attribute.c.attr_type == attr_type,
+                    tables.attribute.c.id == entity_id,
+                )
+            )
+        ).first()
+        before = dict(prev._mapping) if prev is not None else None
         attr = await AttributeRepository(session).set_value(
-            name=str(args.get("name") or ""),
-            attr_type=str(args.get("attr_type") or "case"),
+            name=name,
+            attr_type=attr_type,
             value=str(args.get("value") or ""),
-            entity_id=int(args.get("entity_id", 0)),
+            entity_id=entity_id,
             owner=get_codername(),
         )
+        after_row = (
+            await session.execute(
+                select(tables.attribute).where(tables.attribute.c.attrid == attr.id)
+            )
+        ).first()
         await audit.record(session, user=get_codername(), action="attribute.set_value", entity="attribute",
-                           entity_id=attr.id, detail={"name": attr.name, "value": attr.value})
+                           entity_id=attr.id,
+                           detail={"name": attr.name, "value": attr.value,
+                                   "before": before,
+                                   "after": dict(after_row._mapping) if after_row is not None else None})
         return {"attribute": attr.model_dump()}
 
     # ------------------------------------------------------------------

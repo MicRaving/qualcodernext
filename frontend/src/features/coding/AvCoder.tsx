@@ -164,6 +164,10 @@ export function AvCoder({ source }: { source: Source }) {
   /** A companion creation is in flight — skip repeat POSTs while the first
    *  keystroke's transcriptId has not arrived yet. */
   const transcribeCreatingRef = useRef(false);
+  /** A transcription job for this source ran since the last effect pass —
+   *  its completion (or failure) transition is handled once by the mode
+   *  effect below. */
+  const jobWasRunningRef = useRef(false);
 
   // Continuous saving (mirrors the text coder's edit mode): every keystroke
   // schedules a debounced commitEdit, and the latest draft lives in a ref so
@@ -226,6 +230,17 @@ export function AvCoder({ source }: { source: Source }) {
       (j) => j.kind === "transcribe" && j.sourceId === source.id && j.state === "running",
     )?.id,
   );
+  /** The transcription job for THIS source in any state. While it is
+   *  queued/running the manual editor must yield to it (the panel shows
+   *  the live preview), and a finished job's transcript replaces any
+   *  manual draft — the backend folds the result into the companion,
+   *  overwriting its fulltext. */
+  const transcribeJob = useProjectStore((s) =>
+    s.tasks.find((j) => j.kind === "transcribe" && j.sourceId === source.id),
+  );
+  const transcribeJobState = transcribeJob?.state ?? null;
+  const jobTranscriptSourceId = transcribeJob?.transcriptSourceId ?? null;
+  const jobPending = transcribeJobState === "running" || transcribeJobState === "queued";
   useEffect(() => {
     if (!runningJobId) {
       setLiveTranscript(null);
@@ -301,7 +316,7 @@ export function AvCoder({ source }: { source: Source }) {
 
   async function copyTranscriptLink() {
     const sel = tSelRef.current;
-    if (!sel || transcriptId == null) return;
+    if (!sel || transcriptId == null || jobPending) return;
     try {
       const pos0 = renderedToRaw(transcriptRaw, crAt, sel.start);
       const pos1 = renderedToRaw(transcriptRaw, crAt, sel.end);
@@ -319,7 +334,7 @@ export function AvCoder({ source }: { source: Source }) {
   async function pasteTranscriptLink() {
     const sel = tSelRef.current;
     const target = clipboardLink;
-    if (!sel || transcriptId == null || !target) return;
+    if (!sel || transcriptId == null || jobPending || !target) return;
     setTSel(null);
     try {
       const pos0 = renderedToRaw(transcriptRaw, crAt, sel.start);
@@ -340,7 +355,9 @@ export function AvCoder({ source }: { source: Source }) {
 
   function onTranscriptMouseUp() {
     const container = transcriptTextRef.current;
-    if (!container || transcriptId == null) return;
+    // The live preview while a job runs is transient — never select/code
+    // it (the offsets would not survive the job's finalize).
+    if (!container || transcriptId == null || jobPending) return;
     const sel = getSelectionOffsets(container, window.getSelection());
     if (!sel || sel.start === sel.end) {
       setTSel(null);
@@ -358,7 +375,7 @@ export function AvCoder({ source }: { source: Source }) {
 
   async function codeTranscriptSelection(cid: number) {
     const sel = tSelRef.current;
-    if (!sel || transcriptId == null) return;
+    if (!sel || transcriptId == null || jobPending) return;
     setTSel(null);
     try {
       const pos0 = renderedToRaw(transcriptRaw, crAt, sel.start);
@@ -382,7 +399,7 @@ export function AvCoder({ source }: { source: Source }) {
   async function codeTranscriptInVivo() {
     const name = tInVivoName.trim();
     const sel = tSelRef.current;
-    if (!name || tInVivoBusy || !sel || transcriptId == null) return;
+    if (!name || tInVivoBusy || !sel || transcriptId == null || jobPending) return;
     setTInVivoBusy(true);
     setTError(null);
     try {
@@ -428,7 +445,7 @@ export function AvCoder({ source }: { source: Source }) {
 
   async function saveTranscriptAnnotation() {
     const sel = tSelRef.current;
-    if (!sel || transcriptId == null) return;
+    if (!sel || transcriptId == null || jobPending) return;
     setTSel(null);
     setTAnnotateOpen(false);
     setTAnnotateMemo("");
@@ -980,13 +997,58 @@ export function AvCoder({ source }: { source: Source }) {
   // default; a companion is created lazily on the first keystroke. Once
   // real content exists the panel is read-only — the transition is handled
   // here (a background result) or by the companion-switch effect above.
+  // A background transcription job (queued or running) OVERRIDES the mode:
+  // the manual editor is suppressed so the panel shows the live preview
+  // instead, and a finished job's transcript replaces any manual draft
+  // (the backend folds the result into the companion, overwriting its
+  // fulltext — so a stale draft must never be kept over it). A failed job
+  // returns the editor with the draft intact.
   useEffect(() => {
-    const noContent = transcriptId == null || (transcript != null && transcript.fulltext === "");
-    if (noContent) {
-      if (!transcribeMode) {
+    if (jobPending) {
+      if (transcribeMode) {
+        // The job owns the transcript from here on: cancel pending
+        // debounced commits and flush the current draft, so no stale
+        // commit can land after the job's finalize. The draft ref
+        // survives — a failed job returns the editor with it.
+        if (transcribeSaveTimer.current) {
+          clearTimeout(transcribeSaveTimer.current);
+          transcribeSaveTimer.current = null;
+        }
+        transcribeNeedsAnotherRef.current = false;
+        void flushTranscribeSaveRef.current();
+        setTranscribeMode(false);
+      }
+      jobWasRunningRef.current = true;
+      return;
+    }
+    if (jobWasRunningRef.current) {
+      jobWasRunningRef.current = false;
+      if (transcribeJobState === "done" && jobTranscriptSourceId != null) {
+        // The finished auto transcript replaced any manual draft.
         transcribeDraftRef.current = "";
         transcribeSavedRef.current = "";
         setTranscribeDraft("");
+        // The transcript (re)load lands right behind the task update —
+        // stay read-only this pass, or the editor flashes over a
+        // finished transcript.
+        const reloadPending =
+          transcriptId !== jobTranscriptSourceId ||
+          (transcriptId != null && (transcript == null || transcript.fulltext === ""));
+        if (reloadPending) {
+          setTranscribeMode(false);
+          return;
+        }
+      } else if (transcribeDraftRef.current !== "") {
+        // The job failed or finished without producing a transcript: the
+        // manual draft is still the companion's content — return to the
+        // editor with it.
+        setTranscribeMode(true);
+        return;
+      }
+    }
+    const noContent = transcriptId == null || (transcript != null && transcript.fulltext === "");
+    if (noContent) {
+      if (!transcribeMode) {
         setTranscribeMode(true);
       }
       return;
@@ -996,7 +1058,7 @@ export function AvCoder({ source }: { source: Source }) {
     if (transcribeMode && transcribeDraftRef.current === "") {
       setTranscribeMode(false);
     }
-  }, [transcriptId, transcript, transcribeMode]);
+  }, [transcriptId, transcript, transcribeMode, transcribeJobState, jobPending, jobTranscriptSourceId]);
 
   function handleTimelineClick(e: React.MouseEvent) {
     const el = timelineRef.current;
@@ -1294,7 +1356,7 @@ export function AvCoder({ source }: { source: Source }) {
             <div className="flex shrink-0 items-center gap-1 border-b border-border bg-surface px-3 py-1.5">
               <Captions size={12} className="text-text-secondary" aria-hidden />
               <span className="text-xs font-medium text-text-primary">{t("avCoder.transcript")}</span>
-              {transcriptId != null && !transcribeMode && (
+              {transcriptId != null && !transcribeMode && !jobPending && (
                 <span className="ml-1 truncate text-[10px] text-text-secondary">
                   {t("avCoder.transcriptSelectHint")}
                 </span>
@@ -1302,6 +1364,12 @@ export function AvCoder({ source }: { source: Source }) {
               {transcribeMode && (
                 <span className="ml-1 truncate text-[10px] text-accent">
                   {t("avCoder.transcribeHint")}
+                </span>
+              )}
+              {jobPending && (
+                <span className="ml-1 flex shrink-0 items-center gap-1 text-[10px] text-accent" role="status">
+                  <LoaderCircle size={10} className="animate-spin" aria-hidden />
+                  {t("transcribe.running")}
                 </span>
               )}
               <div className="flex-1" />
@@ -1409,9 +1477,15 @@ export function AvCoder({ source }: { source: Source }) {
               aria-live="off"
             >
               {subtitleSegments.length === 0 ? (
-                <p className="py-6 text-center text-sm text-text-secondary">
-                  {t("avCoder.noTranscript")}
-                </p>
+                jobPending ? (
+                  <p className="py-6 text-center text-sm text-text-secondary" role="status">
+                    {t("avCoder.transcribingJob")}
+                  </p>
+                ) : (
+                  <p className="py-6 text-center text-sm text-text-secondary">
+                    {t("avCoder.noTranscript")}
+                  </p>
+                )
               ) : (
                 (() => {
                   // Absolute text offsets per line (timestamps included) so

@@ -302,6 +302,7 @@ async def dictionary_autocode(
           "total": n,
           "unmatched_codes": ["...", ...],
           "skipped_terms": [term, ...],
+          "created_rows": [<full code_text row>, ...],
         }
     """
     from qualcoder_api.services.coding_service import autocode
@@ -321,6 +322,7 @@ async def dictionary_autocode(
 
     per_code: Counter[str] = Counter()
     skipped_terms: list[str] = []
+    created_rows: list[dict] = []
     for entry in entries:
         cid = cid_by_name.get(entry["code_name"])
         if cid is None:
@@ -339,6 +341,7 @@ async def dictionary_autocode(
                     owner=owner,
                 )
                 per_code[entry["code_name"]] += len(result["created"])
+                created_rows.extend(result["created"])
         else:
             result = await autocode(
                 session,
@@ -350,6 +353,7 @@ async def dictionary_autocode(
                 owner=owner,
             )
             per_code[entry["code_name"]] += len(result["created"])
+            created_rows.extend(result["created"])
 
     unmatched = sorted(
         {entry["code_name"] for entry in entries if entry["code_name"] not in cid_by_name}
@@ -364,6 +368,7 @@ async def dictionary_autocode(
         "total": sum(per_code.values()),
         "unmatched_codes": unmatched,
         "skipped_terms": skipped_terms,
+        "created_rows": created_rows,
     }
 
 

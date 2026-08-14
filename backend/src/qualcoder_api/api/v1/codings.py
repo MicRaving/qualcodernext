@@ -331,15 +331,22 @@ async def autocode_endpoint(req: AutocodeRequest, db: DbDep) -> dict:
             )
     except ValueError:
         raise HTTPException(status_code=422, detail="invalid regex or mode") from None
+    created = result.get("created") or []
+    detail = {
+        "cids": req.cids,
+        "count": result["count"],
+        "prompt": (req.prompt or "")[:200],
+        "suggested": [s["name"] for s in result["suggested"]],
+    }
+    if len(created) <= 5000:
+        detail["text_ids"] = [c["ctid"] for c in created if c.get("ctid")]
+        detail["created_rows"] = created
+    else:
+        detail["too_many"] = True
     await audit.record(
         db, user=owner, action="coding.autocode", entity="code_text",
         source_id=req.fid,
-        detail={
-            "cids": req.cids,
-            "count": result["count"],
-            "prompt": (req.prompt or "")[:200],
-            "suggested": [s["name"] for s in result["suggested"]],
-        },
+        detail=detail,
     )
     return result
 
@@ -372,15 +379,22 @@ async def dictionary_autocode_endpoint(req: DictionaryAutocodeRequest, db: DbDep
     )
     if result is None:
         raise HTTPException(status_code=404, detail="dictionary not found")
+    created = result.get("created_rows") or []
+    detail = {
+        "dictionary_id": req.dictionary_id,
+        "count": result["total"],
+        "per_code": result["per_code"],
+        "unmatched_codes": result["unmatched_codes"],
+    }
+    if len(created) <= 5000:
+        detail["text_ids"] = [c["ctid"] for c in created if c.get("ctid")]
+        detail["created_rows"] = created
+    else:
+        detail["too_many"] = True
     await audit.record(
         db, user=owner, action="coding.autocode", entity="dictionary",
         entity_id=req.dictionary_id,
-        detail={
-            "dictionary_id": req.dictionary_id,
-            "count": result["total"],
-            "per_code": result["per_code"],
-            "unmatched_codes": result["unmatched_codes"],
-        },
+        detail=detail,
     )
     return result
 
@@ -530,6 +544,6 @@ async def undo_endpoint(req: UndoCodingsRequest, db: DbDep) -> dict:
     restored = await undo_codings(db, req.items)
     await audit.record(
         db, user=get_codername(), action="coding.undo", entity="code_text",
-        detail={"restored": restored},
+        detail={"restored": restored, "items": (req.items or [])[:5000]},
     )
     return {"restored": restored}

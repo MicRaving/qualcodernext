@@ -37,6 +37,7 @@ async def get_sync_settings() -> dict:
 async def put_sync_settings(req: SyncSettingsRequest, svc: ServiceDep) -> dict:
     """Turn the background sync cycle on/off for this machine. Enabling runs
     an immediate cycle when a project is open."""
+    before = user_settings.get_sync_settings().get("enabled", False)
     saved = user_settings.save_sync_settings(req.enabled)
     if req.enabled and svc.project_path and svc.session_factory:
         import asyncio
@@ -54,7 +55,7 @@ async def put_sync_settings(req: SyncSettingsRequest, svc: ServiceDep) -> dict:
         async with factory() as session:
             await audit.record(
                 session, user=user_settings.get_codername(), action="sync.toggle",
-                entity="project", detail={"enabled": req.enabled},
+                entity="project", detail={"enabled": req.enabled, "before": before},
             )
     return saved
 

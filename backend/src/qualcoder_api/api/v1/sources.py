@@ -626,7 +626,34 @@ async def delete_transcript(source_id: int, db: DbDep) -> None:
 
 @router.delete("/{source_id}", status_code=204)
 async def delete_source(source_id: int, db: DbDep) -> None:
+    from qualcoder_api.persistence.repositories import _rowdict
+
+    async def _snapshot(table, col) -> list[dict]:
+        rows = (await db.execute(select(table).where(col == source_id))).all()
+        return [_rowdict(r) for r in rows]
+
+    row = (
+        await db.execute(select(tables.source).where(tables.source.c.id == source_id))
+    ).first()
+    detail = {
+        "row": dict(row._mapping) if row is not None else None,
+        "code_text": await _snapshot(tables.code_text, tables.code_text.c.fid),
+        "code_image": await _snapshot(tables.code_image, tables.code_image.c.id),
+        "code_av": await _snapshot(tables.code_av, tables.code_av.c.id),
+        "annotation": await _snapshot(tables.annotation, tables.annotation.c.fid),
+        "case_text": await _snapshot(tables.case_text, tables.case_text.c.fid),
+        "attribute": await _snapshot(tables.attribute, tables.attribute.c.id),
+        "av_text_pointers": [
+            r[0]
+            for r in (
+                await db.execute(
+                    select(tables.source.c.id).where(tables.source.c.av_text_id == source_id)
+                )
+            ).all()
+        ],
+    }
     await SourceRepository(db).delete_source(source_id)
     await audit.record(
-        db, user=get_codername(), action="source.delete", entity="source", entity_id=source_id
+        db, user=get_codername(), action="source.delete", entity="source", entity_id=source_id,
+        detail=detail,
     )

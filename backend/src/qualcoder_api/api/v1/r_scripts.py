@@ -132,7 +132,7 @@ async def create_r_script(req: RScriptCreate, db: DbDep) -> dict:
     await db.commit()
     await audit.record(
         db, user=owner, action="r_script.create", entity="r_script",
-        entity_id=script_id, detail={"name": name, "script": req.script[:200]},
+        entity_id=script_id, detail={"name": name, "script": req.script[:200], "row": data},
     )
     return data
 
@@ -179,6 +179,8 @@ async def update_r_script(script_id: int, req: RScriptUpdate, db: DbDep) -> dict
             detail={
                 **values,
                 "old_name": old.get("name"),
+                "before": old,
+                "after": data,
             },
         )
         return data

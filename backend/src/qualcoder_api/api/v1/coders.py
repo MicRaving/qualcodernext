@@ -329,6 +329,12 @@ async def set_coder_visibility(name: str, req: VisibilityRequest, svc: ServiceDe
         raise HTTPException(status_code=404, detail=f'coder "{name}" does not exist')
     _, factory = svc._ensure_engine()
     async with factory() as session:
+        old = (
+            await session.execute(
+                text("SELECT visibility FROM coder_names WHERE name = :n"), {"n": name}
+            )
+        ).first()
+        before = bool(old[0]) if old is not None else None
         await session.execute(
             text(
                 "INSERT INTO coder_names (name, visibility) VALUES (:n, :v) "
@@ -338,6 +344,7 @@ async def set_coder_visibility(name: str, req: VisibilityRequest, svc: ServiceDe
         )
         await session.commit()
     await _record_audit(
-        svc, action="coder.visibility", detail={"name": name, "visible": req.visible}
+        svc, action="coder.visibility",
+        detail={"name": name, "visible": req.visible, "before": before},
     )
     return {"ok": True, "name": name, "visible": req.visible}

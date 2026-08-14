@@ -4,12 +4,20 @@ from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
+from sqlalchemy import select
 
 from qualcoder_api.api.v1.deps import DbDep
+from qualcoder_api.persistence import tables
 from qualcoder_api.services import audit, graph_service
 from qualcoder_api.services.user_settings import get_codername
 
 router = APIRouter(prefix="/graphs", tags=["graphs"])
+
+
+async def _graph_row(db, table, pk: str, value) -> dict | None:
+    """The current state of one graph row (for the undo detail)."""
+    row = (await db.execute(select(table).where(table.c[pk] == value))).first()
+    return dict(row._mapping) if row is not None else None
 
 
 class GraphCreate(BaseModel):
@@ -134,7 +142,8 @@ async def create_graph(req: GraphCreate, db: DbDep) -> dict:
         raise HTTPException(status_code=409, detail="duplicate graph name") from None
     await audit.record(
         db, user=get_codername(), action="graph.create", entity="graph",
-        entity_id=graph["grid"], detail={"name": graph["name"]},
+        entity_id=graph["grid"],
+        detail={"name": graph["name"], "row": await _graph_row(db, tables.graph, "grid", graph["grid"])},
     )
     return graph
 
@@ -149,21 +158,35 @@ async def get_graph(grid: int, db: DbDep) -> dict:
 
 @router.patch("/{grid}")
 async def update_graph(grid: int, req: GraphUpdate, db: DbDep) -> dict:
+    before = await _graph_row(db, tables.graph, "grid", grid)
     graph = await graph_service.update_graph(db, grid, **req.model_dump(exclude_none=True))
     if graph is None:
         raise HTTPException(status_code=404, detail="graph not found")
     await audit.record(
         db, user=get_codername(), action="graph.update", entity="graph", entity_id=grid,
-        detail={"name": graph.get("name")},
+        detail={"name": graph.get("name"), "before": before, "after": graph},
     )
     return graph
 
 
 @router.delete("/{grid}", status_code=204)
 async def delete_graph(grid: int, db: DbDep) -> None:
+    detail: dict = {"row": await _graph_row(db, tables.graph, "grid", grid)}
+    for table in (
+        tables.gr_cdct_text_item,
+        tables.gr_case_text_item,
+        tables.gr_file_text_item,
+        tables.gr_free_text_item,
+        tables.gr_memo_item,
+        tables.gr_cdct_line_item,
+        tables.gr_free_line_item,
+    ):
+        rows = (await db.execute(select(table).where(table.c.grid == grid))).all()
+        detail[table.name] = [dict(r._mapping) for r in rows]
     await graph_service.delete_graph(db, grid)
     await audit.record(
-        db, user=get_codername(), action="graph.delete", entity="graph", entity_id=grid
+        db, user=get_codername(), action="graph.delete", entity="graph", entity_id=grid,
+        detail=detail,
     )
 
 
@@ -183,29 +206,33 @@ async def add_cdct_item(grid: int, req: CdctItemCreate, db: DbDep) -> dict:
         raise HTTPException(status_code=404, detail=str(err)) from err
     await audit.record(
         db, user=get_codername(), action="graph.item_add", entity="gr_cdct_text_item",
-        entity_id=item["gtextid"], detail={"grid": grid, "kind": req.kind, "ref_id": req.ref_id},
+        entity_id=item["gtextid"],
+        detail={"grid": grid, "kind": req.kind, "ref_id": req.ref_id,
+                "row": await _graph_row(db, tables.gr_cdct_text_item, "gtextid", item["gtextid"])},
     )
     return item
 
 
 @router.patch("/{grid}/items/cdct/{gtextid}")
 async def update_cdct_item(grid: int, gtextid: int, req: ItemPosUpdate, db: DbDep) -> dict:
+    before = await _graph_row(db, tables.gr_cdct_text_item, "gtextid", gtextid)
     item = await graph_service.update_cdct_item(db, gtextid, **req.model_dump(exclude_none=True))
     if item is None:
         raise HTTPException(status_code=404, detail="item not found")
     await audit.record(
         db, user=get_codername(), action="graph.item_update", entity="gr_cdct_text_item",
-        entity_id=gtextid, detail={"grid": grid},
+        entity_id=gtextid, detail={"grid": grid, "before": before, "after": item},
     )
     return item
 
 
 @router.delete("/{grid}/items/cdct/{gtextid}", status_code=204)
 async def delete_cdct_item(grid: int, gtextid: int, db: DbDep) -> None:
+    row = await _graph_row(db, tables.gr_cdct_text_item, "gtextid", gtextid)
     await graph_service.delete_cdct_item(db, gtextid)
     await audit.record(
         db, user=get_codername(), action="graph.item_delete", entity="gr_cdct_text_item",
-        entity_id=gtextid, detail={"grid": grid},
+        entity_id=gtextid, detail={"grid": grid, "row": row},
     )
 
 
@@ -214,29 +241,33 @@ async def add_case_item(grid: int, req: CaseItemCreate, db: DbDep) -> dict:
     item = await graph_service.add_case_item(db, grid, req.caseid, req.x, req.y, req.color)
     await audit.record(
         db, user=get_codername(), action="graph.item_add", entity="gr_case_text_item",
-        entity_id=item["gcaseid"], detail={"grid": grid, "caseid": req.caseid},
+        entity_id=item["gcaseid"],
+        detail={"grid": grid, "caseid": req.caseid,
+                "row": await _graph_row(db, tables.gr_case_text_item, "gcaseid", item["gcaseid"])},
     )
     return item
 
 
 @router.patch("/{grid}/items/case/{gcaseid}")
 async def update_case_item(grid: int, gcaseid: int, req: ItemPosUpdate, db: DbDep) -> dict:
+    before = await _graph_row(db, tables.gr_case_text_item, "gcaseid", gcaseid)
     item = await graph_service.update_case_item(db, gcaseid, **req.model_dump(exclude_none=True))
     if item is None:
         raise HTTPException(status_code=404, detail="item not found")
     await audit.record(
         db, user=get_codername(), action="graph.item_update", entity="gr_case_text_item",
-        entity_id=gcaseid, detail={"grid": grid},
+        entity_id=gcaseid, detail={"grid": grid, "before": before, "after": item},
     )
     return item
 
 
 @router.delete("/{grid}/items/case/{gcaseid}", status_code=204)
 async def delete_case_item(grid: int, gcaseid: int, db: DbDep) -> None:
+    row = await _graph_row(db, tables.gr_case_text_item, "gcaseid", gcaseid)
     await graph_service.delete_case_item(db, gcaseid)
     await audit.record(
         db, user=get_codername(), action="graph.item_delete", entity="gr_case_text_item",
-        entity_id=gcaseid, detail={"grid": grid},
+        entity_id=gcaseid, detail={"grid": grid, "row": row},
     )
 
 
@@ -245,19 +276,22 @@ async def add_file_item(grid: int, req: FileItemCreate, db: DbDep) -> dict:
     item = await graph_service.add_file_item(db, grid, req.fid, req.x, req.y, req.color)
     await audit.record(
         db, user=get_codername(), action="graph.item_add", entity="gr_file_text_item",
-        entity_id=item["gfileid"], detail={"grid": grid, "fid": req.fid},
+        entity_id=item["gfileid"],
+        detail={"grid": grid, "fid": req.fid,
+                "row": await _graph_row(db, tables.gr_file_text_item, "gfileid", item["gfileid"])},
     )
     return item
 
 
 @router.patch("/{grid}/items/file/{gfileid}")
 async def update_file_item(grid: int, gfileid: int, req: ItemPosUpdate, db: DbDep) -> dict:
+    before = await _graph_row(db, tables.gr_file_text_item, "gfileid", gfileid)
     item = await graph_service.update_file_item(db, gfileid, **req.model_dump(exclude_none=True))
     if item is None:
         raise HTTPException(status_code=404, detail="item not found")
     await audit.record(
         db, user=get_codername(), action="graph.item_update", entity="gr_file_text_item",
-        entity_id=gfileid, detail={"grid": grid},
+        entity_id=gfileid, detail={"grid": grid, "before": before, "after": item},
     )
     return item
 
@@ -295,29 +329,33 @@ async def add_memo_item(grid: int, req: MemoItemCreate, db: DbDep) -> dict:
         raise HTTPException(status_code=422, detail=str(err)) from err
     await audit.record(
         db, user=get_codername(), action="graph.item_add", entity="gr_memo_item",
-        entity_id=item["gmemoid"], detail={"grid": grid, "source": req.memo_source_type},
+        entity_id=item["gmemoid"],
+        detail={"grid": grid, "source": req.memo_source_type,
+                "row": await _graph_row(db, tables.gr_memo_item, "gmemoid", item["gmemoid"])},
     )
     return item
 
 
 @router.patch("/{grid}/items/memo/{gmemoid}")
 async def update_memo_item(grid: int, gmemoid: int, req: ItemPosUpdate, db: DbDep) -> dict:
+    before = await _graph_row(db, tables.gr_memo_item, "gmemoid", gmemoid)
     item = await graph_service.update_memo_item(db, gmemoid, **req.model_dump(exclude_none=True))
     if item is None:
         raise HTTPException(status_code=404, detail="item not found")
     await audit.record(
         db, user=get_codername(), action="graph.item_update", entity="gr_memo_item",
-        entity_id=gmemoid, detail={"grid": grid},
+        entity_id=gmemoid, detail={"grid": grid, "before": before, "after": item},
     )
     return item
 
 
 @router.delete("/{grid}/items/memo/{gmemoid}", status_code=204)
 async def delete_memo_item(grid: int, gmemoid: int, db: DbDep) -> None:
+    row = await _graph_row(db, tables.gr_memo_item, "gmemoid", gmemoid)
     await graph_service.delete_memo_item(db, gmemoid)
     await audit.record(
         db, user=get_codername(), action="graph.item_delete", entity="gr_memo_item",
-        entity_id=gmemoid, detail={"grid": grid},
+        entity_id=gmemoid, detail={"grid": grid, "row": row},
     )
 
 
@@ -336,29 +374,32 @@ async def add_cdct_line(grid: int, req: CdctLineCreate, db: DbDep) -> dict:
         raise HTTPException(status_code=422, detail=str(err)) from err
     await audit.record(
         db, user=get_codername(), action="graph.line_add", entity="gr_cdct_line_item",
-        entity_id=line["glineid"], detail={"grid": grid},
+        entity_id=line["glineid"],
+        detail={"grid": grid, "row": await _graph_row(db, tables.gr_cdct_line_item, "glineid", line["glineid"])},
     )
     return line
 
 
 @router.patch("/{grid}/lines/cdct/{glineid}")
 async def update_cdct_line(grid: int, glineid: int, req: LineUpdate, db: DbDep) -> dict:
+    before = await _graph_row(db, tables.gr_cdct_line_item, "glineid", glineid)
     item = await graph_service.update_cdct_line(db, glineid, **req.model_dump(exclude_none=True))
     if item is None:
         raise HTTPException(status_code=404, detail="line not found")
     await audit.record(
         db, user=get_codername(), action="graph.line_update", entity="gr_cdct_line_item",
-        entity_id=glineid, detail={"grid": grid},
+        entity_id=glineid, detail={"grid": grid, "before": before, "after": item},
     )
     return item
 
 
 @router.delete("/{grid}/lines/cdct/{glineid}", status_code=204)
 async def delete_cdct_line(grid: int, glineid: int, db: DbDep) -> None:
+    row = await _graph_row(db, tables.gr_cdct_line_item, "glineid", glineid)
     await graph_service.delete_cdct_line(db, glineid)
     await audit.record(
         db, user=get_codername(), action="graph.line_delete", entity="gr_cdct_line_item",
-        entity_id=glineid, detail={"grid": grid},
+        entity_id=glineid, detail={"grid": grid, "row": row},
     )
 
 
@@ -373,29 +414,32 @@ async def add_entity_line(grid: int, req: EntityLineCreate, db: DbDep) -> dict:
         raise HTTPException(status_code=422, detail=str(err)) from err
     await audit.record(
         db, user=get_codername(), action="graph.line_add", entity="gr_free_line_item",
-        entity_id=line["gflineid"], detail={"grid": grid},
+        entity_id=line["gflineid"],
+        detail={"grid": grid, "row": await _graph_row(db, tables.gr_free_line_item, "gflineid", line["gflineid"])},
     )
     return line
 
 
 @router.patch("/{grid}/lines/entity/{gflineid}")
 async def update_entity_line(grid: int, gflineid: int, req: LineUpdate, db: DbDep) -> dict:
+    before = await _graph_row(db, tables.gr_free_line_item, "gflineid", gflineid)
     item = await graph_service.update_free_line(db, gflineid, **req.model_dump(exclude_none=True))
     if item is None:
         raise HTTPException(status_code=404, detail="line not found")
     await audit.record(
         db, user=get_codername(), action="graph.line_update", entity="gr_free_line_item",
-        entity_id=gflineid, detail={"grid": grid},
+        entity_id=gflineid, detail={"grid": grid, "before": before, "after": item},
     )
     return item
 
 
 @router.delete("/{grid}/lines/entity/{gflineid}", status_code=204)
 async def delete_entity_line(grid: int, gflineid: int, db: DbDep) -> None:
+    row = await _graph_row(db, tables.gr_free_line_item, "gflineid", gflineid)
     await graph_service.delete_free_line(db, gflineid)
     await audit.record(
         db, user=get_codername(), action="graph.line_delete", entity="gr_free_line_item",
-        entity_id=gflineid, detail={"grid": grid},
+        entity_id=gflineid, detail={"grid": grid, "row": row},
     )
 
 
