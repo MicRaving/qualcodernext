@@ -286,7 +286,7 @@ export function Modal({
   if (!open) return null;
   return (
     <div
-      className={`${cls.modalOverlay} ${overlayClassName}`}
+      className={`${cls.modalOverlay} qc-modal-backdrop ${overlayClassName}`}
       onMouseDown={(e) => {
         if (e.target === e.currentTarget && !closeDisabled) onClose?.();
       }}
@@ -294,7 +294,7 @@ export function Modal({
       aria-modal="true"
       aria-label={typeof title === "string" ? title : ariaLabel}
     >
-      <div className={`${cls.modalPanel} ${panelClassName ?? MODAL_SIZES[size]}`}>
+      <div className={`${cls.modalPanel} qc-modal-panel ${panelClassName ?? MODAL_SIZES[size]}`}>
         {title !== undefined && (
           <div className={cls.modalHeader}>
             {icon}
@@ -329,7 +329,7 @@ export function Menu({
         position === "fixed"
           ? "fixed z-40 rounded-md border border-border bg-surface py-1 shadow-lg"
           : cls.menu
-      } ${className}`}
+      } qc-popover ${className}`}
       {...rest}
     >
       {children}
@@ -411,7 +411,7 @@ export function HelpFlyout({
     <div
       ref={ref}
       role="dialog"
-      className={`fixed z-50 w-72 p-3 ${cls.popup} ${className}`}
+      className={`fixed z-50 w-72 p-3 ${cls.popup} ${pos ? "qc-popover" : ""} ${className}`}
       style={pos ? { left: pos.left, top: pos.top } : { visibility: "hidden" }}
     >
       {children}

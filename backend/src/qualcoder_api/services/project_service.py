@@ -228,8 +228,33 @@ class ProjectService:
     # ------------------------------------------------------------------
 
     async def close_project(self) -> None:
-        """Close the project: dispose engine, remove lock file."""
+        """Close the project: dispose engine, flush the WAL, remove lock file.
+
+        The WAL checkpoint runs best-effort after the engine is disposed (no
+        other connection exists then, so the flush is clean): the ``data.qda``
+        file left behind is self-consistent, which also makes any subsequent
+        copy/backup consistent. When the "compact project on close" setting is
+        enabled, the full compaction runs here instead — also best-effort, a
+        failing cleanup must never break closing.
+        """
         await self._dispose_engine_if_any()
+        if self.project_path:
+            from qualcoder_api.services.cleanup_service import checkpoint
+
+            try:
+                await checkpoint(self.db_path())
+            except Exception as err:
+                logger.warning("WAL checkpoint on close failed: %s", err)
+            try:
+                from qualcoder_api.services import user_settings
+
+                if user_settings.get_compact_on_close():
+                    from qualcoder_api.services.cleanup_service import compact_project
+
+                    await compact_project(self.db_path())
+                    user_settings.set_last_compact()
+            except Exception as err:
+                logger.warning("Compact project on close failed: %s", err)
         self.delete_lock_file()
         self.project_path = ""
         self.project_name = ""
@@ -242,10 +267,20 @@ class ProjectService:
         """Copy the project database into the backups folder.
 
         Returns (message, backup_path).
+
+        The WAL is flushed BEFORE the copy: a plain ``data.qda`` file copy
+        would miss committed frames still sitting in the ``-wal`` file, so
+        the backup would open as an inconsistent (older) database.
         """
         db_path = Path(self.project_path) / "data.qda"
         if not db_path.exists():
             return ("no database to back up", "")
+        try:
+            from qualcoder_api.services.cleanup_service import checkpoint
+
+            await checkpoint(str(db_path))
+        except Exception as err:
+            logger.warning("WAL checkpoint before backup failed: %s", err)
         stamp = time.strftime("%Y-%m-%d_%H%M%S")
         backup_name = f"backup_{self.project_name}_{stamp}{suffix}.qda"
         backup_path = Path(self.project_path) / BACKUP_FOLDER / backup_name

@@ -21,10 +21,12 @@ import {
   type Toast,
   type ToastKind,
 } from "@/lib/toast-core";
+import { designTokens } from "@/lib/tokens";
 
 const SUCCESS_DURATION = 4000;
 const ERROR_DURATION = 7000;
 const INFO_DURATION = 4000;
+const EXIT_DURATION = parseInt(designTokens.motion.fast, 10);
 
 const KIND_ICON: Record<ToastKind, LucideIcon> = {
   success: CheckCircle2,
@@ -72,16 +74,24 @@ export function useToast(): ToastApi {
 }
 
 function ToastCard({ toast, onDismiss }: { toast: Toast; onDismiss: (id: number) => void }) {
+  const [leaving, setLeaving] = useState(false);
+
   useEffect(() => {
-    const timer = window.setTimeout(() => onDismiss(toast.id), kindDuration(toast.kind));
+    const timer = window.setTimeout(() => setLeaving(true), kindDuration(toast.kind));
     return () => window.clearTimeout(timer);
-  }, [toast.id, toast.kind, onDismiss]);
+  }, [toast.id, toast.kind]);
+
+  useEffect(() => {
+    if (!leaving) return;
+    const timer = window.setTimeout(() => onDismiss(toast.id), EXIT_DURATION);
+    return () => window.clearTimeout(timer);
+  }, [leaving, toast.id, onDismiss]);
 
   const Icon = KIND_ICON[toast.kind];
   return (
     <div
       role="status"
-      className={`rounded-lg border bg-surface px-3 py-2 shadow ${KIND_BORDER[toast.kind]}`}
+      className={`qc-toast ${leaving ? "qc-toast-out" : ""} rounded-lg border bg-surface px-3 py-2 shadow ${KIND_BORDER[toast.kind]}`}
     >
       <div className="flex items-start gap-2">
         <Icon size={14} className={`mt-px shrink-0 ${KIND_TEXT[toast.kind]}`} aria-hidden />
@@ -89,7 +99,7 @@ function ToastCard({ toast, onDismiss }: { toast: Toast; onDismiss: (id: number)
         <IconButton
           label="Dismiss notification"
           size="sm"
-          onClick={() => onDismiss(toast.id)}
+          onClick={() => setLeaving(true)}
         >
           <X size={12} aria-hidden />
         </IconButton>

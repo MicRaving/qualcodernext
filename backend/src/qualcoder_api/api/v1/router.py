@@ -148,6 +148,24 @@ class AppSettingsRequest(BaseModel):
     auto_open_project: bool = True
 
 
+class MaintenanceSettingsRequest(BaseModel):
+    compact_on_close: bool = False
+
+
+class MaintenanceSettingsResponse(BaseModel):
+    compact_on_close: bool = False
+    last_compact: str = ""
+
+
+class CompactResponse(BaseModel):
+    ok: bool = True
+    before_bytes: int = 0
+    after_bytes: int = 0
+    freed_bytes: int = 0
+    indexes_dropped: int = 0
+    indexes_recreated: int = 0
+
+
 @router.get("/app/settings", response_model=AppSettingsRequest)
 async def get_app_settings() -> AppSettingsRequest:
     """App-level preferences (auto-load project on start)."""
@@ -176,6 +194,25 @@ async def put_updates_settings(req: UpdatesSettingsRequest) -> UpdatesSettingsRe
     from qualcoder_api.services.user_settings import save_updates_settings
 
     return UpdatesSettingsRequest(**save_updates_settings(req.model_dump()))
+
+
+@router.get("/maintenance/settings", response_model=MaintenanceSettingsResponse)
+async def get_maintenance_settings() -> MaintenanceSettingsResponse:
+    """Project-maintenance preferences (compact on close, last compact time)."""
+    from qualcoder_api.services.user_settings import get_maintenance_settings
+
+    return MaintenanceSettingsResponse(**get_maintenance_settings())
+
+
+@router.put("/maintenance/settings", response_model=MaintenanceSettingsResponse)
+async def put_maintenance_settings(
+    req: MaintenanceSettingsRequest,
+) -> MaintenanceSettingsResponse:
+    from qualcoder_api.services.user_settings import save_maintenance_settings
+
+    return MaintenanceSettingsResponse(
+        **save_maintenance_settings({"compact_on_close": req.compact_on_close})
+    )
 
 
 @router.get("/memos", response_model=MemosResponse)
@@ -289,6 +326,40 @@ async def close_project(svc: ServiceDep) -> ProjectResponse:
     name = svc.project_name
     await svc.close_project()
     return ProjectResponse(ok=True, project_name=name)
+
+
+@router.post("/projects/compact", response_model=CompactResponse)
+async def compact_project(svc: ServiceDep) -> CompactResponse:
+    """Maintenance pass on the open project: flush the WAL, drop the
+    rebuildable ``idx_*`` indexes, VACUUM, recreate the indexes.
+
+    Safe while the project stays open: the compaction uses its own raw
+    autocommit connection and the engine pool is idle (no open transaction),
+    so the VACUUM is never blocked by this process (see
+    ``services.cleanup_service`` for the full connection reasoning).
+    """
+    if svc.engine is None or not svc.project_path:
+        raise HTTPException(status_code=409, detail="no project is open")
+    from qualcoder_api.services.cleanup_service import compact_project as run_compact
+
+    stats = await run_compact(svc.db_path())
+
+    _, factory = svc._ensure_engine()
+    async with factory() as session:
+        from qualcoder_api.services import audit
+        from qualcoder_api.services.user_settings import get_codername
+
+        await audit.record(
+            session,
+            user=get_codername(),
+            action="project.compact",
+            entity="project",
+            detail=stats,
+        )
+    from qualcoder_api.services.user_settings import set_last_compact
+
+    set_last_compact()
+    return CompactResponse(ok=True, **stats)
 
 
 @router.get("/projects/current/summary", response_model=SummaryResponse)

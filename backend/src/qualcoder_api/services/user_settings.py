@@ -7,6 +7,7 @@ UI (Phase 9).
 
 from __future__ import annotations
 
+import datetime
 import json
 import logging
 import os
@@ -43,6 +44,15 @@ AI_PROVIDER_DEFAULTS: dict = {
     "claude": {"api_base": "https://api.anthropic.com/v1", "model": "claude-sonnet-4-6"},
 }
 
+#: Project-maintenance preferences. ``compact_on_close`` opts into a full
+#: compaction (checkpoint + VACUUM + index rebuild) on every project close;
+#: ``last_compact`` is a read-only timestamp stamped by the backend whenever
+#: a compaction actually ran (manual or automatic).
+MAINTENANCE_DEFAULTS: dict = {
+    "compact_on_close": False,
+    "last_compact": "",
+}
+
 DEFAULT_SETTINGS: dict = {
     "codername": "default",
     "coders": ["default"],
@@ -52,6 +62,7 @@ DEFAULT_SETTINGS: dict = {
     "transcription": dict(TRANSCRIPTION_DEFAULTS),
     "sync": {"enabled": False},
     "updates": {"check_interval": "daily", "auto_update": False},
+    "maintenance": dict(MAINTENANCE_DEFAULTS),
     "auto_open_project": True,
 }
 
@@ -95,6 +106,72 @@ def save_updates_settings(updates: dict, settings: dict | None = None) -> dict:
     settings["updates"] = clean
     save_settings(settings)
     return dict(clean)
+
+
+def get_maintenance_settings(settings: dict | None = None) -> dict:
+    """Return the project-maintenance preferences (compact on close)."""
+    settings = settings or load_settings()
+    maintenance = settings.get("maintenance")
+    if not isinstance(maintenance, dict):
+        maintenance = {}
+    last_compact = maintenance.get("last_compact")
+    return {
+        "compact_on_close": bool(maintenance.get("compact_on_close", False)),
+        "last_compact": last_compact if isinstance(last_compact, str) else "",
+    }
+
+
+def save_maintenance_settings(maintenance: dict, settings: dict | None = None) -> dict:
+    """Validate and persist the project-maintenance preferences.
+
+    ``last_compact`` is backend-maintained: a blank/missing value keeps the
+    stored timestamp.
+    """
+    settings = settings or load_settings()
+    if not isinstance(maintenance, dict):
+        raise ValueError("maintenance settings must be a dict")
+    current = get_maintenance_settings(settings)
+    last_compact = maintenance.get("last_compact")
+    clean = {
+        "compact_on_close": bool(maintenance.get("compact_on_close", False)),
+        "last_compact": (
+            last_compact if isinstance(last_compact, str) and last_compact else current["last_compact"]
+        ),
+    }
+    settings["maintenance"] = clean
+    save_settings(settings)
+    return dict(clean)
+
+
+def get_compact_on_close(settings: dict | None = None) -> bool:
+    """Whether the full compaction runs automatically on project close."""
+    settings = settings or load_settings()
+    return bool(get_maintenance_settings(settings)["compact_on_close"])
+
+
+def set_compact_on_close(enabled: bool, settings: dict | None = None) -> bool:
+    """Persist the compact-on-close switch."""
+    settings = settings or load_settings()
+    maintenance = get_maintenance_settings(settings)
+    maintenance["compact_on_close"] = bool(enabled)
+    save_maintenance_settings(maintenance, settings)
+    return bool(enabled)
+
+
+def get_last_compact(settings: dict | None = None) -> str:
+    """Timestamp of the last compaction that actually ran ("" if never)."""
+    settings = settings or load_settings()
+    return get_maintenance_settings(settings)["last_compact"]
+
+
+def set_last_compact(settings: dict | None = None) -> str:
+    """Stamp the maintenance settings with the time a compaction ran."""
+    settings = settings or load_settings()
+    timestamp = datetime.datetime.now().astimezone().strftime("%Y-%m-%d %H:%M:%S")
+    maintenance = get_maintenance_settings(settings)
+    maintenance["last_compact"] = timestamp
+    save_maintenance_settings(maintenance, settings)
+    return timestamp
 
 
 def get_sync_settings(settings: dict | None = None) -> dict:

@@ -1,7 +1,7 @@
 /**
  * Left sidebar — Files / Codes / Cases trees built from the API.
  */
-import { useEffect, useMemo, useState, type DragEvent as ReactDragEvent, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type DragEvent as ReactDragEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import {
   Check,
   ChevronDown,
@@ -112,6 +112,11 @@ export function Sidebar() {
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
   const [menu, setMenu] = useState<ContextMenu | null>(null);
   const [toolbarError, setToolbarError] = useState<string | null>(null);
+  /** Pointer-drag state (refs — the drag must survive re-renders). */
+  const pointerDownRef = useRef<{ item: CodeTreeItem; x: number; y: number } | null>(null);
+  const dragStartedRef = useRef(false);
+  const suppressClickRef = useRef(false);
+  const treeContainerRef = useRef<HTMLDivElement | null>(null);
   /** Drop indicator while a code/category is dragged over the tree. */
   const [dropZone, setDropZone] = useState<DropZone | null>(null);
   /** Key of the row currently being dragged (dimmed during the drag). */
@@ -685,42 +690,98 @@ export function Sidebar() {
     return canDropMerge(drag, item) ? { mode: "merge", key } : null;
   }
 
-  function handleRowDragStart(e: ReactDragEvent<HTMLDivElement>, item: CodeTreeItem) {
-    dragNode = { kind: item.kind, id: item.id, subtree: subtreeKeysOf(item) };
-    setDraggingKey(`${item.kind}:${item.id}`);
-    e.dataTransfer.effectAllowed = "move";
-    e.dataTransfer.setData("text/plain", `${item.kind}:${item.id}`);
-    // The browser's native drag ghost is left as-is (WebView2/Chromium can
-    // throw or ignore a programmatically-set drag image, which would cancel
-    // the whole drag); the tree renders its own drop indicator instead.
+  /* --- Pointer-based tree drag ------------------------------------------
+     HTML5 drag & drop repeatedly failed to deliver drops in the packaged
+     WebView2 (drag events cancelled, empty dataTransfer types, render-phase
+     event nulling). Pointer events behave identically in every engine and on
+     touch: pointerdown on a row arms the drag, a 6px movement starts it, the
+     zone is recomputed from elementFromPoint on every move, pointerup
+     commits. The OS-file drop on the files leftbar stays HTML5 (only a
+     native file drag can provide dataTransfer.files). */
+
+  function handleRowPointerDown(e: ReactPointerEvent<HTMLDivElement>, item: CodeTreeItem) {
+    if (e.button !== 0 || e.pointerType === "mouse" && e.ctrlKey) return;
+    if ((e.target as HTMLElement).closest("button, input, select, textarea, a")) return;
+    pointerDownRef.current = { item, x: e.clientX, y: e.clientY };
+    dragStartedRef.current = false;
   }
 
-  function handleRowDragOver(e: ReactDragEvent<HTMLDivElement>, item: CodeTreeItem, depth: number) {
+  function handleTreePointerMove(e: ReactPointerEvent<HTMLDivElement>) {
+    const down = pointerDownRef.current;
+    if (!down) return;
+    if (!dragStartedRef.current) {
+      const dx = e.clientX - down.x;
+      const dy = e.clientY - down.y;
+      if (dx * dx + dy * dy < 36) return; // 6px threshold — below it it's a click
+      dragStartedRef.current = true;
+      suppressClickRef.current = true;
+      dragNode = { kind: down.item.kind, id: down.item.id, subtree: subtreeKeysOf(down.item) };
+      setDraggingKey(`${down.item.kind}:${down.item.id}`);
+      try {
+        treeContainerRef.current?.setPointerCapture(e.pointerId);
+      } catch {
+        /* capture is best-effort */
+      }
+      document.body.style.userSelect = "none";
+    }
+    const el = document.elementFromPoint(e.clientX, e.clientY) as HTMLElement | null;
+    const row = el?.closest?.("[data-tree-row]") as HTMLElement | null;
+    if (!row || !dragNode) {
+      setDropZone(null);
+      return;
+    }
+    const key = row.dataset.treeRow ?? "";
+    const depth = Number(row.dataset.treeDepth ?? 0);
+    const item = codeTree.find((i) => `${i.kind}:${i.id}` === key);
+    const rect = row.getBoundingClientRect();
+    const next =
+      item && rect ? computeDropZone(rect, e.clientX, e.clientY, item, depth, dragNode) : null;
+    setDropZone((prev) => (prev?.mode === next?.mode && prev?.key === next?.key ? prev : next));
+  }
+
+  function handleTreePointerUp(e: ReactPointerEvent<HTMLDivElement>) {
     const drag = dragNode;
-    if (!drag) return;
-    e.preventDefault();
-    e.dataTransfer.dropEffect = "move";
-    // Compute the zone HERE (while currentTarget is still valid) and only
-    // compare inside the updater — reading the event there would throw.
-    const rect = e.currentTarget?.getBoundingClientRect();
-    const next = rect ? computeDropZone(rect, e.clientX, e.clientY, item, depth, drag) : null;
-    setDropZone((prev) => {
-      return prev?.mode === next?.mode && prev?.key === next?.key ? prev : next;
-    });
+    const started = dragStartedRef.current;
+    pointerDownRef.current = null;
+    dragStartedRef.current = false;
+    if (drag && started) {
+      const el = document.elementFromPoint(e.clientX, e.clientY) as HTMLElement | null;
+      const row = el?.closest?.("[data-tree-row]") as HTMLElement | null;
+      let zone: DropZone | null = null;
+      if (row) {
+        const key = row.dataset.treeRow ?? "";
+        const depth = Number(row.dataset.treeDepth ?? 0);
+        const item = codeTree.find((i) => `${i.kind}:${i.id}` === key);
+        const rect = row.getBoundingClientRect();
+        zone = item && rect ? computeDropZone(rect, e.clientX, e.clientY, item, depth, drag) : null;
+      }
+      finishDrop(drag, zone);
+    }
+    try {
+      treeContainerRef.current?.releasePointerCapture(e.pointerId);
+    } catch {
+      /* noop */
+    }
+    document.body.style.userSelect = "";
   }
 
-  function handleRowDragLeave(e: ReactDragEvent<HTMLDivElement>) {
-    if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setDropZone(null);
+  function handleTreePointerCancel() {
+    pointerDownRef.current = null;
+    dragStartedRef.current = false;
+    dragNode = null;
+    setDraggingKey(null);
+    setDropZone(null);
+    document.body.style.userSelect = "";
   }
 
-  function handleRowDrop(e: ReactDragEvent<HTMLDivElement>, item: CodeTreeItem, depth: number) {
-    const drag = dragNode;
-    if (!drag) return;
-    e.preventDefault();
-    e.stopPropagation();
-    const rect = e.currentTarget?.getBoundingClientRect();
-    const zone = rect ? computeDropZone(rect, e.clientX, e.clientY, item, depth, drag) : null;
-    finishDrop(drag, zone);
+  /** Consume the click that follows a completed drag (row onClick fires
+   *  after pointerup; a drag must not toggle the active code). */
+  function consumeDragClick(): boolean {
+    if (suppressClickRef.current) {
+      suppressClickRef.current = false;
+      return true;
+    }
+    return false;
   }
 
   /** Commit a resolved drop (move or merge); clears the drag state. */
@@ -748,33 +809,6 @@ export function Sidebar() {
       const target = codeTree.find((i) => i.kind === item.kind && i.id === item.id);
       if (source && target) void confirmAndMerge(source, target);
     }
-  }
-
-  /** Container-level safety net: a drop that lands between rows (or on the
-   *  container itself) is resolved against the row under the pointer, so the
-   *  drop can never be silently cancelled. */
-  function handleContainerDrop(e: ReactDragEvent<HTMLDivElement>) {
-    const drag = dragNode;
-    if (!drag) return;
-    e.preventDefault();
-    const el = document.elementFromPoint(e.clientX, e.clientY) as HTMLElement | null;
-    const row = el?.closest?.("[data-tree-row]") as HTMLElement | null;
-    if (!row) {
-      finishDrop(drag, null);
-      return;
-    }
-    const key = row.dataset.treeRow ?? "";
-    const depth = Number(row.dataset.treeDepth ?? 0);
-    const item = codeTree.find((i) => `${i.kind}:${i.id}` === key);
-    const rect = row.getBoundingClientRect();
-    const zone = item && rect ? computeDropZone(rect, e.clientX, e.clientY, item, depth, drag) : null;
-    finishDrop(drag, zone);
-  }
-
-  function handleRowDragEnd() {
-    dragNode = null;
-    setDraggingKey(null);
-    setDropZone(null);
   }
 
   /* ------------------------------------------------------------------ */
@@ -1194,24 +1228,20 @@ export function Sidebar() {
               aria-hidden
             />
           )}
-          {/* The row box (button + row actions) is BOTH the draggable element
-              and the drop target — the whole row incl. its edges must accept
-              the drag/drop, so the handlers live on this stable wrapper (the
-              inner button re-renders during the drag; the wrapper must not). */}
+          {/* The row box is the pointer-drag source (the whole row incl. its
+              edges arms the drag; interactive children — buttons, inputs —
+              never start one). The drop indicator + merge highlight render
+              above, driven by the pointer-move zone computation. */}
           <div
             className="group flex items-center"
             data-tree-row={key}
             data-tree-depth={depth}
-            draggable={!editingThis}
-            onDragStart={(e) => handleRowDragStart(e, item)}
-            onDragEnd={handleRowDragEnd}
-            onDragOver={(e) => handleRowDragOver(e, item, depth)}
-            onDragLeave={handleRowDragLeave}
-            onDrop={(e) => handleRowDrop(e, item, depth)}
+            onPointerDown={(e) => handleRowPointerDown(e, item)}
           >
             <button
             type="button"
             onClick={() => {
+              if (consumeDragClick()) return;
               if (item.kind === "category") {
                 if (hasChildren) setCollapsed((c) => ({ ...c, [key]: !isCollapsed }));
               } else {
@@ -1616,13 +1646,10 @@ export function Sidebar() {
             </div>
           ) : (
             <div
-              onDragOver={(e) => {
-                if (dragNode) {
-                  e.preventDefault();
-                  e.dataTransfer.dropEffect = "move";
-                }
-              }}
-              onDrop={handleContainerDrop}
+              ref={treeContainerRef}
+              onPointerMove={handleTreePointerMove}
+              onPointerUp={handleTreePointerUp}
+              onPointerCancel={handleTreePointerCancel}
             >
               {renderCodeNode("root", 0)}
             </div>

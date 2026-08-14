@@ -20,6 +20,12 @@
   --qc-success: #16a34a;
   --qc-warning: #ca8a04;
   --qc-info: #2563eb;
+
+  /* Motion (consumed by the shared transition layer + entry animations
+     below; values match tokens.json motion.fast / motion.slow). */
+  --qc-motion-fast: 150ms;
+  --qc-motion-base: 250ms;
+  --qc-ease: cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 .dark {
@@ -111,6 +117,96 @@ select {
 :focus-visible {
   outline: 2px solid var(--qc-accent);
   outline-offset: 1px;
+}
+
+/* ------------------------------------------------------------------ */
+/* Motion — shared transition layer + entry animations.               */
+/* Only opacity / transform / color — nothing that shifts layout.     */
+/* The .a11y-* modes and the prefers-reduced-motion guard below       */
+/* neutralize these (see the Accessibility modes section).            */
+/* ------------------------------------------------------------------ */
+
+/* Backdrop fade (modal overlay) — 150ms. */
+@keyframes qc-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+/* Modal panel pop: fade + 6px rise + 0.985 scale — 250ms. */
+@keyframes qc-modal-pop {
+  from { opacity: 0; transform: translateY(6px) scale(0.985); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+/* Menu / popover rise: fade + 4px rise — 150ms. */
+@keyframes qc-pop-rise {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+/* Toast slide-in from the right — 150ms. */
+@keyframes qc-toast-slide-in {
+  from { opacity: 0; transform: translateX(16px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
+/* Toast fade-out on dismiss — 150ms. */
+@keyframes qc-toast-fade-out {
+  from { opacity: 1; transform: translateX(0); }
+  to { opacity: 0; transform: translateX(8px); }
+}
+
+/* Shared transition layer: buttons, fields, menu items and cards. */
+.qc-motion {
+  transition:
+    background-color var(--qc-motion-fast) var(--qc-ease),
+    border-color var(--qc-motion-fast) var(--qc-ease),
+    color var(--qc-motion-fast) var(--qc-ease),
+    box-shadow var(--qc-motion-fast) var(--qc-ease),
+    transform var(--qc-motion-fast) var(--qc-ease);
+}
+
+/* Hover lifts are 1px, never more; the primary button also
+   compresses on press. */
+.qc-btn-lift:hover:not(:disabled) {
+  transform: translateY(-1px);
+}
+.qc-btn-primary:active:not(:disabled) {
+  transform: scale(0.98);
+}
+
+/* Cards lift 1px on hover. */
+.qc-card {
+  transition: transform var(--qc-motion-fast) var(--qc-ease);
+}
+.qc-card:hover {
+  transform: translateY(-1px);
+}
+
+/* Fields: border snaps to accent and a 2px accent ring appears on
+   focus (replaces the global outline so the ring reads as one). */
+.qc-field:focus,
+.qc-field:focus-visible {
+  outline: none;
+  border-color: var(--qc-accent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--qc-accent) 30%, transparent);
+}
+
+/* Entry animations (classes applied by the orchestrator / toast host). */
+.qc-modal-backdrop {
+  animation: qc-fade-in var(--qc-motion-fast) var(--qc-ease);
+}
+.qc-modal-panel {
+  animation: qc-modal-pop var(--qc-motion-base) var(--qc-ease);
+}
+.qc-popover {
+  animation: qc-pop-rise var(--qc-motion-fast) var(--qc-ease);
+}
+.qc-toast {
+  animation: qc-toast-slide-in var(--qc-motion-fast) var(--qc-ease);
+}
+.qc-toast-out {
+  animation: qc-toast-fade-out var(--qc-motion-fast) var(--qc-ease) forwards;
 }
 
 /* Themed scrollbars — thin, quiet, matching the border/surface palette. */
@@ -284,6 +380,19 @@ html.a11y-large-text main {
   animation: none !important;
   transition: none !important;
   scroll-behavior: auto !important;
+}
+
+/* OS-level reduced motion: the same kill switch as the a11y mode above
+   (also what Playwright's reducedMotion: "reduce" emulates in e2e). */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }
 
 /* Colorblind-friendly: accent never carries information alone. */
