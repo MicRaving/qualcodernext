@@ -95,9 +95,18 @@ async def update_case(caseid: int, req: CaseUpdate, db: DbDep) -> Case:
 
 @case_router.delete("/{caseid}", status_code=204)
 async def delete_case(caseid: int, db: DbDep) -> None:
+    from sqlalchemy import select
+
+    from qualcoder_api.persistence import tables
+
+    row = (
+        await db.execute(select(tables.cases).where(tables.cases.c.caseid == caseid))
+    ).first()
+    detail = dict(row._mapping) if row is not None else {}
     await CaseRepository(db).delete_case(caseid)
     await audit.record(
-        db, user=get_codername(), action="case.delete", entity="case", entity_id=caseid
+        db, user=get_codername(), action="case.delete", entity="case", entity_id=caseid,
+        detail=detail,
     )
 
 
@@ -113,7 +122,7 @@ async def link_file(caseid: int, req: LinkFileRequest, db: DbDep) -> CaseText:
     )
     await audit.record(
         db, user=resolve_owner(req.owner), action="case.link_file", entity="case_text",
-        entity_id=link.id, source_id=req.fid,
+        entity_id=link.id, source_id=req.fid, detail={"row": link.model_dump()},
     )
     return link
 
@@ -129,17 +138,30 @@ async def link_span(caseid: int, req: LinkSpanRequest, db: DbDep) -> CaseText:
     await audit.record(
         db, user=resolve_owner(req.owner), action="case.link_span", entity="case_text",
         entity_id=span.id, source_id=req.fid,
-        detail={"caseid": caseid, "pos0": req.pos0, "pos1": req.pos1},
+        detail={"caseid": caseid, "pos0": req.pos0, "pos1": req.pos1, "row": span.model_dump()},
     )
     return span
 
 
 @case_router.delete("/{caseid}/files/{fid}", status_code=204)
 async def unlink_file(caseid: int, fid: int, db: DbDep) -> None:
+    from sqlalchemy import select
+
+    from qualcoder_api.persistence import tables
+
+    rows = (
+        await db.execute(
+            select(tables.case_text).where(
+                tables.case_text.c.caseid == caseid,
+                tables.case_text.c.fid == fid,
+            )
+        )
+    ).all()
     await CaseRepository(db).unlink_file(caseid=caseid, fid=fid)
     await audit.record(
         db, user=get_codername(), action="case.unlink_file", entity="case_text",
-        source_id=fid, detail={"caseid": caseid, "fid": fid},
+        source_id=fid,
+        detail={"caseid": caseid, "fid": fid, "rows": [dict(r._mapping) for r in rows]},
     )
 
 
@@ -171,23 +193,38 @@ async def list_attribute_types(db: DbDep) -> list[AttributeType]:
 
 @attr_router.post("/types", response_model=AttributeType, status_code=201)
 async def create_attribute_type(req: AttrTypeCreate, db: DbDep) -> AttributeType:
+    from sqlalchemy import select
+
+    from qualcoder_api.persistence import tables
+
     attr = await AttributeRepository(db).add_type(
         name=req.name, owner=resolve_owner(req.owner), case_or_file=req.case_or_file,
         value_type=req.value_type, memo=req.memo, value_labels=req.value_labels,
     )
+    row = (
+        await db.execute(select(tables.attribute_type).where(tables.attribute_type.c.name == req.name))
+    ).first()
     await audit.record(
         db, user=resolve_owner(req.owner), action="attribute.create", entity="attribute_type",
-        detail={"name": req.name, "value_labels": req.value_labels},
+        detail={"name": req.name, "value_labels": req.value_labels,
+                "row": dict(row._mapping) if row is not None else None},
     )
     return attr
 
 
 @attr_router.delete("/types/{name}", status_code=204)
 async def delete_attribute_type(name: str, db: DbDep) -> None:
+    from sqlalchemy import select
+
+    from qualcoder_api.persistence import tables
+
+    row = (
+        await db.execute(select(tables.attribute_type).where(tables.attribute_type.c.name == name))
+    ).first()
     await AttributeRepository(db).delete_type(name)
     await audit.record(
         db, user=get_codername(), action="attribute.delete", entity="attribute_type",
-        detail={"name": name},
+        detail={"name": name, "row": dict(row._mapping) if row is not None else None},
     )
 
 
@@ -202,13 +239,29 @@ async def list_attribute_values(
 async def set_attribute_value(
     name: str, attr_type: str, entity_id: int, req: AttrValueSet, db: DbDep
 ) -> Attribute:
+    from sqlalchemy import select
+
+    from qualcoder_api.persistence import tables
+
+    old_row = (
+        await db.execute(
+            select(tables.attribute).where(
+                tables.attribute.c.name == name,
+                tables.attribute.c.attr_type == attr_type,
+                tables.attribute.c.id == entity_id,
+            )
+        )
+    ).first()
     value = await AttributeRepository(db).set_value(
         name=name, attr_type=attr_type, value=req.value,
         entity_id=entity_id, owner=resolve_owner(req.owner),
     )
     await audit.record(
         db, user=resolve_owner(req.owner), action="attribute.set_value", entity="attribute",
-        entity_id=entity_id, detail={"name": name, "value": req.value},
+        entity_id=entity_id,
+        detail={"name": name, "attr_type": attr_type, "entity_id": entity_id, "value": req.value,
+                "before": dict(old_row._mapping) if old_row is not None else None,
+                "after": value.model_dump()},
     )
     return value
 
@@ -276,9 +329,18 @@ async def update_journal(jid: int, req: JournalUpdate, db: DbDep) -> Journal:
 
 @journal_router.delete("/{jid}", status_code=204)
 async def delete_journal(jid: int, db: DbDep) -> None:
+    from sqlalchemy import select
+
+    from qualcoder_api.persistence import tables
+
+    row = (
+        await db.execute(select(tables.journal).where(tables.journal.c.jid == jid))
+    ).first()
+    detail = dict(row._mapping) if row is not None else {}
     await JournalRepository(db).delete_journal(jid)
     await audit.record(
-        db, user=get_codername(), action="journal.delete", entity="journal", entity_id=jid
+        db, user=get_codername(), action="journal.delete", entity="journal",
+        entity_id=jid, detail=detail,
     )
 
 
@@ -350,12 +412,16 @@ async def update_annotation(anid: int, req: AnnotationUpdate, db: DbDep) -> Anno
 
     if req.pos0 is not None and req.pos1 is not None and req.pos1 <= req.pos0:
         raise HTTPException(status_code=422, detail="pos1 must be greater than pos0")
-    # A single-row select for the old memo, not the file's whole list.
-    old_memo = (
+    # A single-row select for the old values, not the file's whole list.
+    old = (
         await db.execute(
-            select(tables.annotation.c.memo).where(tables.annotation.c.anid == anid)
+            select(tables.annotation.c.memo, tables.annotation.c.pos0, tables.annotation.c.pos1)
+            .where(tables.annotation.c.anid == anid)
         )
-    ).scalar_one_or_none()
+    ).first()
+    old_memo = old[0] if old is not None else None
+    old_pos0 = old[1] if old is not None else None
+    old_pos1 = old[2] if old is not None else None
     annotation = await AnnotationRepository(db).update_annotation(
         anid, **req.model_dump(exclude_none=True)
     )
@@ -364,7 +430,15 @@ async def update_annotation(anid: int, req: AnnotationUpdate, db: DbDep) -> Anno
     await audit.record(
         db, user=get_codername(), action="annotation.update", entity="annotation",
         entity_id=anid, source_id=annotation.fid,
-        detail={"anid": anid, "old_memo": old_memo, "new_memo": annotation.memo},
+        detail={
+            "anid": anid,
+            "old_memo": old_memo,
+            "new_memo": annotation.memo,
+            "old_pos0": old_pos0,
+            "new_pos0": annotation.pos0,
+            "old_pos1": old_pos1,
+            "new_pos1": annotation.pos1,
+        },
     )
     return annotation
 

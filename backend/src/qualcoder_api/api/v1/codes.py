@@ -180,6 +180,11 @@ async def create_code(req: CodeCreate, db: DbDep) -> Code:
 async def update_code(cid: int, req: CodeUpdate, db: DbDep) -> Code:
     repo = CodeRepository(db)
     old_code = await repo.get_code(cid)
+    from qualcoder_api.persistence import tables
+
+    old_row = (
+        await db.execute(select(tables.code_name).where(tables.code_name.c.cid == cid))
+    ).first() if old_code is not None else None
     if req.name is not None:
         code = await repo.rename_code(cid, req.name)
         if code is None:
@@ -214,6 +219,8 @@ async def update_code(cid: int, req: CodeUpdate, db: DbDep) -> Code:
             "cid": cid,
             "old_name": old_code.name if old_code else None,
             "new_name": code.name,
+            "before": dict(old_row._mapping) if old_row is not None else None,
+            "after": code.model_dump(),
         },
     )
     return code
@@ -309,13 +316,38 @@ async def merge_code(cid: int, req: MergeRequest, db: DbDep) -> Code:
     repo = CodeRepository(db)
     if cid == req.target_cid:
         raise HTTPException(status_code=422, detail="cannot merge a code into itself")
+    # Capture everything the undo needs: the merged-away code row, every
+    # coding it owns, and its sub-codes.
+    from sqlalchemy import select
+
+    from qualcoder_api.persistence import tables
+
+    old_row = (
+        await db.execute(select(tables.code_name).where(tables.code_name.c.cid == cid))
+    ).first()
+    coding_rows: list[dict] = []
+    for tbl in (tables.code_text, tables.code_av, tables.code_image):
+        coding_rows.extend(
+            dict(r._mapping) for r in (await db.execute(select(tbl).where(tbl.c.cid == cid))).all()
+        )
+    sub_rows = (
+        await db.execute(select(tables.code_name.c.cid).where(tables.code_name.c.supercid == cid))
+    ).all()
+    subcodes = [r[0] for r in sub_rows]
     await repo.merge_codes(cid, req.target_cid)
     code = await repo.get_code(req.target_cid)
     if code is None:
         raise HTTPException(status_code=404, detail="target code not found")
     await audit.record(
         db, user=get_codername(), action="code.merge", entity="code",
-        entity_id=req.target_cid, detail={"from_cid": cid},
+        entity_id=req.target_cid,
+        detail={
+            "from_cid": cid,
+            "target_cid": req.target_cid,
+            "from_code": dict(old_row._mapping) if old_row is not None else None,
+            "from_rows": coding_rows,
+            "subcodes": subcodes,
+        },
     )
     return code
 
@@ -375,7 +407,8 @@ async def move_code(cid: int, req: CodeMove, db: DbDep) -> Code:
     await audit.record(
         db, user=get_codername(), action="code.move", entity="code",
         entity_id=cid,
-        detail=req.model_dump(exclude_none=True) | {"catid": catid, "supercid": supercid},
+        detail=req.model_dump(exclude_none=True)
+        | {"catid": catid, "supercid": supercid, "before": code.model_dump(), "after": moved.model_dump()},
     )
     return moved
 
@@ -395,6 +428,7 @@ async def promote_code(cid: int, db: DbDep) -> Code:
     code = await repo.get_code(cid)
     if code is None:
         raise HTTPException(status_code=404, detail="code not found")
+    before = code.model_dump()
     if code.supercid is not None:
         parent = await repo.get_code(code.supercid)
         position: int | None = None
@@ -436,7 +470,7 @@ async def promote_code(cid: int, db: DbDep) -> Code:
         raise HTTPException(status_code=404, detail="code not found")
     await audit.record(
         db, user=get_codername(), action="code.promote", entity="code",
-        entity_id=cid, detail=code.model_dump(),
+        entity_id=cid, detail={**code.model_dump(), "before": before, "after": code.model_dump()},
     )
     return code
 
@@ -450,6 +484,7 @@ async def demote_code(cid: int, db: DbDep) -> Code:
     code = await repo.get_code(cid)
     if code is None:
         raise HTTPException(status_code=404, detail="code not found")
+    before = code.model_dump()
     sibling = await repo.previous_sibling_code(
         cid, catid=code.catid, supercid=code.supercid
     )
@@ -462,7 +497,7 @@ async def demote_code(cid: int, db: DbDep) -> Code:
         raise HTTPException(status_code=404, detail="code not found")
     await audit.record(
         db, user=get_codername(), action="code.demote", entity="code",
-        entity_id=cid, detail=code.model_dump(),
+        entity_id=cid, detail={**code.model_dump(), "before": before, "after": code.model_dump()},
     )
     return code
 
@@ -476,16 +511,23 @@ async def create_category(req: CategoryCreate, db: DbDep) -> Category:
         raise HTTPException(status_code=409, detail="duplicate category name")
     await audit.record(
         db, user=resolve_owner(req.owner), action="category.create", entity="code_cat",
-        entity_id=category.catid, detail={"name": req.name},
+        entity_id=category.catid, detail=category.model_dump(),
     )
     return category
 
 
 @router.delete("/categories/{catid}", status_code=204)
 async def delete_category(catid: int, db: DbDep) -> None:
+    from qualcoder_api.persistence import tables
+
+    row = (
+        await db.execute(select(tables.code_cat).where(tables.code_cat.c.catid == catid))
+    ).first()
+    detail = dict(row._mapping) if row is not None else {}
     await CodeRepository(db).delete_category(catid)
     await audit.record(
-        db, user=get_codername(), action="category.delete", entity="code_cat", entity_id=catid
+        db, user=get_codername(), action="category.delete", entity="code_cat",
+        entity_id=catid, detail=detail,
     )
 
 
@@ -534,10 +576,34 @@ async def rename_category(catid: int, req: CategoryRename, db: DbDep) -> Categor
 async def merge_category(catid: int, req: MergeCategoryRequest, db: DbDep) -> None:
     if catid == req.target_catid:
         raise HTTPException(status_code=422, detail="cannot merge a category into itself")
+    from sqlalchemy import select
+
+    from qualcoder_api.persistence import tables
+
+    old_row = (
+        await db.execute(select(tables.code_cat).where(tables.code_cat.c.catid == catid))
+    ).first()
+    codes = [
+        r[0] for r in (
+            await db.execute(select(tables.code_name.c.cid).where(tables.code_name.c.catid == catid))
+        ).all()
+    ]
+    subcats = [
+        r[0] for r in (
+            await db.execute(select(tables.code_cat.c.catid).where(tables.code_cat.c.supercatid == catid))
+        ).all()
+    ]
     await CodeRepository(db).merge_category(catid, req.target_catid)
     await audit.record(
         db, user=get_codername(), action="category.merge", entity="code_cat",
-        entity_id=req.target_catid, detail={"from_catid": catid},
+        entity_id=req.target_catid,
+        detail={
+            "from_catid": catid,
+            "target_catid": req.target_catid,
+            "from_category": dict(old_row._mapping) if old_row is not None else None,
+            "codes": codes,
+            "subcats": subcats,
+        },
     )
 
 
@@ -584,7 +650,8 @@ async def move_category(catid: int, req: CategoryMove, db: DbDep) -> Category:
     await audit.record(
         db, user=get_codername(), action="category.move", entity="code_cat",
         entity_id=catid,
-        detail=req.model_dump(exclude_none=True) | {"supercatid": supercatid},
+        detail=req.model_dump(exclude_none=True)
+        | {"supercatid": supercatid, "before": category.model_dump(), "after": moved.model_dump()},
     )
     return moved
 
@@ -602,6 +669,7 @@ async def promote_category(catid: int, db: DbDep) -> Category:
     category = await repo.get_category(catid)
     if category is None:
         raise HTTPException(status_code=404, detail="category not found")
+    before = category.model_dump()
     if not category.supercatid:
         raise HTTPException(status_code=422, detail="This category is already at the top level and cannot be promoted further.")
     parent = await repo.get_category(category.supercatid)
@@ -622,7 +690,8 @@ async def promote_category(catid: int, db: DbDep) -> Category:
         raise HTTPException(status_code=404, detail="category not found")
     await audit.record(
         db, user=get_codername(), action="category.promote", entity="code_cat",
-        entity_id=catid, detail=category.model_dump(),
+        entity_id=catid,
+        detail={**category.model_dump(), "before": before, "after": category.model_dump()},
     )
     return category
 
@@ -636,6 +705,7 @@ async def demote_category(catid: int, db: DbDep) -> Category:
     category = await repo.get_category(catid)
     if category is None:
         raise HTTPException(status_code=404, detail="category not found")
+    before = category.model_dump()
     sibling = await repo.previous_sibling_category(
         catid, supercatid=category.supercatid
     )
@@ -649,6 +719,7 @@ async def demote_category(catid: int, db: DbDep) -> Category:
         raise HTTPException(status_code=404, detail="category not found")
     await audit.record(
         db, user=get_codername(), action="category.demote", entity="code_cat",
-        entity_id=catid, detail=category.model_dump(),
+        entity_id=catid,
+        detail={**category.model_dump(), "before": before, "after": category.model_dump()},
     )
     return category

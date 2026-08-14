@@ -9,9 +9,10 @@ Modes:
 - ``reddit``  — anonymous ``.json`` API: submission selftext + flattened
   comment tree (indented by depth, authors prefixed ``u/<author>:``).
 - ``youtube`` — yt-dlp metadata (title/uploader/duration/description) and
-  the comment thread: top-level comments with author, like count and UTC
-  timestamp, replies indented by depth. Comments are the primary content;
-  caption tracks are fetched ONLY as a fallback when a video has no
+  the comment thread as tab-separated rows (``author\tlikes\tdate\tcomment``,
+  one row per comment; replies are their own rows with a ``→ `` nesting
+  prefix in the author column). Comments are the primary content; caption
+  tracks are fetched ONLY as a fallback when a video has no
   comments (e.g. disabled) — when comments exist, captions are dropped
   entirely. If the installed yt-dlp predates comment extraction
   (2021.12.17) the output is header + description only, with a note in
@@ -479,22 +480,33 @@ def _format_comment_timestamp(value: object) -> str:
         return ""
 
 
+def _normalize_column(value: str) -> str:
+    """Collapse tabs/newlines to spaces so one comment stays a single row."""
+    return re.sub(r"[\t\r\n]+", " ", value).strip()
+
+
 def _comment_lines(comment: dict, depth: int) -> list[str]:
-    """Render one comment plus its nested ``replies`` (indented by depth)."""
+    """Render one comment plus its nested ``replies`` as tab-separated rows.
+
+    Each row is ``author\tlikes\tdate\tcomment``. Replies are their own
+    row with a ``→ `` prefix (one per depth level) in the author column.
+    """
     lines: list[str] = []
-    text = (comment.get("text") or "").strip()
+    text = _normalize_column(comment.get("text") or "")
     if text:
-        author = (comment.get("author") or "unknown").strip() or "unknown"
-        meta = ", ".join(
-            part
-            for part in (
-                _format_likes(comment.get("like_count")),
-                _format_comment_timestamp(comment.get("timestamp")),
+        author = _normalize_column(comment.get("author") or "") or "unknown"
+        if depth:
+            author = "→ " * depth + author
+        lines.append(
+            "\t".join(
+                (
+                    author,
+                    _format_likes(comment.get("like_count")),
+                    _format_comment_timestamp(comment.get("timestamp")),
+                    text,
+                )
             )
-            if part
         )
-        label = f"u/{author}: {text}" if not meta else f"u/{author} ({meta}): {text}"
-        lines.append("  " * depth + label)
     replies = comment.get("replies")
     if isinstance(replies, list):
         for reply in replies:
@@ -504,7 +516,8 @@ def _comment_lines(comment: dict, depth: int) -> list[str]:
 
 
 def _youtube_comments(info: dict) -> list[str]:
-    """Flatten the comment list; replies are indented one level per depth.
+    """Flatten the comment list into tab-separated rows; replies get a
+    ``→ `` nesting prefix in the author column (one per depth level).
 
     Handles both yt-dlp layouts defensively: nested ``replies`` lists
     (``{author, text, timestamp, like_count, replies: [...]}``) and the
@@ -838,7 +851,7 @@ def scrape_youtube(url: str) -> ScrapedContent:
         if comment_lines:
             lines.append("")
             lines.append("Comments")
-            lines.append("")
+            lines.append("author\tlikes\tdate\tcomment")
             lines.extend(comment_lines)
         else:
             caption_text = _youtube_captions(info)

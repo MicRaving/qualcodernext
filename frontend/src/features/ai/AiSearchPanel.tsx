@@ -1,8 +1,9 @@
 /**
  * AiSearchPanel — semantic search over project text sources, shown when the
- * "Semantic search" mode is active. The context pickers (memos / codes /
- * files) sit between the query box and the results; the selected files
- * restrict the search to those sources.
+ * "Semantic search" mode is active. Mirrors the chat composer layout: the
+ * results scroll in the flex area on top, the context pickers and the query
+ * input are pinned at the bottom; the selected files restrict the search to
+ * those sources.
  */
 import { useEffect, useState, type FormEvent } from "react";
 import { CircleAlert, LoaderCircle, Search } from "lucide-react";
@@ -112,37 +113,7 @@ export function AiSearchPanel() {
         <ErrorBanner tone="warning">{welcomeMessage(false)}</ErrorBanner>
       )}
 
-      <form onSubmit={(e) => void handleSearch(e)} className="shrink-0 border-b border-border bg-surface p-3">
-        <div className="mx-auto flex max-w-2xl items-center gap-2">
-          <Input
-            type="text"
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            placeholder={t("ai.searchPlaceholder")}
-            aria-label={t("ai.searchQueryAria")}
-            disabled={disabled}
-            className="min-w-0 flex-1"
-          />
-          <Button
-            variant="primary"
-            type="submit"
-            disabled={disabled || query.trim() === "" || state.kind === "loading"}
-            icon={
-              state.kind === "loading" ? (
-                <LoaderCircle size={14} className="animate-spin" aria-hidden />
-              ) : (
-                <Search size={14} aria-hidden />
-              )
-            }
-          >
-            {t("ai.searchButton")}
-          </Button>
-        </div>
-      </form>
-
-      {/* Context pickers: the selected files restrict the search */}
-      <ContextPickerArea pickers={pickers} />
-
+      {/* Results (scroll above the pinned input) */}
       <div className="min-h-0 flex-1 overflow-y-auto p-3">
         <div className="mx-auto max-w-2xl">
           {state.kind === "idle" && (
@@ -196,6 +167,41 @@ export function AiSearchPanel() {
           )}
         </div>
       </div>
+
+      {/* Context pickers: the selected files restrict the search */}
+      <ContextPickerArea pickers={pickers} initialKind="files" />
+
+      {/* Query input (pinned at the bottom, like the chat composer) */}
+      <form
+        onSubmit={(e) => void handleSearch(e)}
+        className="min-w-0 shrink-0 border-t border-border bg-surface p-3"
+      >
+        <div className="mx-auto flex max-w-2xl items-center gap-2">
+          <Input
+            type="text"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder={t("ai.searchPlaceholder")}
+            aria-label={t("ai.searchQueryAria")}
+            disabled={disabled}
+            className="min-w-0 flex-1"
+          />
+          <Button
+            variant="primary"
+            type="submit"
+            disabled={disabled || query.trim() === "" || state.kind === "loading"}
+            icon={
+              state.kind === "loading" ? (
+                <LoaderCircle size={14} className="animate-spin" aria-hidden />
+              ) : (
+                <Search size={14} aria-hidden />
+              )
+            }
+          >
+            {t("ai.searchButton")}
+          </Button>
+        </div>
+      </form>
     </div>
   );
 }

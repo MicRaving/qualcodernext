@@ -557,8 +557,8 @@ export function CoderSwitcher() {
                     aria-hidden
                   />
                   {syncStatus?.last_sync
-                    ? t("sync.nowWithTime", { when: formatSince(syncStatus.last_sync) })
-                    : t("sync.now")}
+                    ? t("sync.lastSyncShort", { when: formatSince(syncStatus.last_sync) })
+                    : t("sync.never")}
                 </button>
               </div>
             </div>

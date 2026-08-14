@@ -31,16 +31,36 @@ export const CONTEXT_PICKER_KINDS: readonly ContextPickerKind[] = [
 ];
 
 /**
- * Which context pickers each mode shows: memo_analysis shares memos,
- * code_analysis shares codes, text_analysis shares files, topic_exploration
- * and the semantic-search view share all three.
+ * Which context pickers each mode shows (Option A — additive pickers):
+ * every analysis mode exposes ALL three kinds so the user can attach memos
+ * to a code review, codes to a text analysis, etc.; the mode-relevant kind
+ * (see ``primaryContextKind``) is expanded by default. General/help show
+ * none; the semantic-search view shows all three (files act as the filter).
  */
 export const CONTEXT_PICKERS: Record<AiMode, Record<ContextPickerKind, boolean>> = {
   general: { memos: false, codes: false, files: false },
   help: { memos: false, codes: false, files: false },
   topic_exploration: { memos: true, codes: true, files: true },
-  code_analysis: { memos: false, codes: true, files: false },
-  text_analysis: { memos: false, codes: false, files: true },
-  memo_analysis: { memos: true, codes: false, files: false },
+  code_analysis: { memos: true, codes: true, files: true },
+  text_analysis: { memos: true, codes: true, files: true },
+  memo_analysis: { memos: true, codes: true, files: true },
   search: { memos: true, codes: true, files: true },
 };
+
+/**
+ * The picker kind a mode treats as its primary context — expanded by
+ * default in the picker tab row. ``topic_exploration`` and ``search`` have
+ * no single primary; they fall back to the first tab.
+ */
+export function primaryContextKind(mode: AiMode): ContextPickerKind | null {
+  switch (mode) {
+    case "memo_analysis":
+      return "memos";
+    case "code_analysis":
+      return "codes";
+    case "text_analysis":
+      return "files";
+    default:
+      return null;
+  }
+}

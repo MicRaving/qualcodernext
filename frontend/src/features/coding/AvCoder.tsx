@@ -82,9 +82,15 @@ export function AvCoder({ source }: { source: Source }) {
   // transcription links a companion, manual transcription creates one, and
   // transcript deletion clears the link. The store's sources list refreshes
   // in every one of those cases, so the LIVE value wins; the prop only
-  // serves as a mount-time fallback before the store has the source.
+  // serves as a mount-time fallback BEFORE the store has the source.
+  // NOTE: this must not be written with `??`: after a transcript delete the
+  // live value is explicitly null, and a null-coalescing fallback would
+  // resurrect the stale prop id (CodingWorkspace fetched the prop source
+  // once, so it still carries the deleted companion) — the view would keep
+  // believing a transcript exists. The prop is consulted only when the live
+  // source is not in the store at all.
   const liveSource = useProjectStore((s) => s.sources.find((x) => x.id === source.id));
-  const transcriptId = liveSource?.av_text_id ?? source.av_text_id ?? null;
+  const transcriptId = liveSource ? liveSource.av_text_id : (source.av_text_id ?? null);
   /** Live id for the continuous-save helpers (timers and the unmount flush
    *  run outside renders, where the state value would be stale). */
   const transcribeIdRef = useRef(transcriptId);
@@ -865,6 +871,7 @@ export function AvCoder({ source }: { source: Source }) {
       await api.deleteTranscript(source.id);
       transcribeDraftRef.current = "";
       transcribeSavedRef.current = "";
+      setTranscript(null);
       setTranscribeMode(false);
       setTranscribeDraft("");
       await useProjectStore.getState().refreshProject();

@@ -90,6 +90,13 @@ async def list_text_codings(fid: int, db: DbDep) -> list[Coding]:
 async def update_text_coding(ctid: int, req: TextCodingUpdate, db: DbDep) -> Coding:
     if req.pos0 is not None and req.pos1 is not None and req.pos1 <= req.pos0:
         raise HTTPException(status_code=422, detail="pos1 must be greater than pos0")
+    from sqlalchemy import select
+
+    from qualcoder_api.persistence import tables
+
+    old_row = (
+        await db.execute(select(tables.code_text).where(tables.code_text.c.ctid == ctid))
+    ).first()
     coding = await CodingRepository(db).update_text_coding(
         ctid, **req.model_dump(exclude_none=True)
     )
@@ -98,7 +105,8 @@ async def update_text_coding(ctid: int, req: TextCodingUpdate, db: DbDep) -> Cod
     await audit.record(
         db, user=get_codername(), action="coding.update", entity="code_text",
         entity_id=ctid, source_id=coding.fid,
-        detail=coding.model_dump(),
+        detail={"before": dict(old_row._mapping) if old_row is not None else None,
+                "after": coding.model_dump()},
     )
     return coding
 
@@ -152,6 +160,13 @@ class ImageCodingUpdate(BaseModel):
 @router.patch("/image/{imid}", response_model=ImageCoding)
 async def update_image_coding(imid: int, req: ImageCodingUpdate, db: DbDep) -> ImageCoding:
     """Update a coded image/PDF rectangle (port of move/resize rectangle)."""
+    from sqlalchemy import select
+
+    from qualcoder_api.persistence import tables
+
+    old_row = (
+        await db.execute(select(tables.code_image).where(tables.code_image.c.imid == imid))
+    ).first()
     coding = await CodingRepository(db).update_image_coding(
         imid, **req.model_dump(exclude_none=True)
     )
@@ -159,7 +174,9 @@ async def update_image_coding(imid: int, req: ImageCodingUpdate, db: DbDep) -> I
         raise HTTPException(status_code=404, detail="coding not found")
     await audit.record(
         db, user=get_codername(), action="coding.update", entity="code_image",
-        entity_id=imid, source_id=coding.id, detail=coding.model_dump(),
+        entity_id=imid, source_id=coding.id,
+        detail={"before": dict(old_row._mapping) if old_row is not None else None,
+                "after": coding.model_dump()},
     )
     return coding
 
@@ -210,6 +227,13 @@ class AVCodingUpdate(BaseModel):
 @router.patch("/av/{avid}", response_model=AVCoding)
 async def update_av_coding(avid: int, req: AVCodingUpdate, db: DbDep) -> AVCoding:
     """Update an AV time-range coding (memo/weight)."""
+    from sqlalchemy import select
+
+    from qualcoder_api.persistence import tables
+
+    old_row = (
+        await db.execute(select(tables.code_av).where(tables.code_av.c.avid == avid))
+    ).first()
     coding = await CodingRepository(db).update_av_coding(
         avid, **req.model_dump(exclude_none=True)
     )
@@ -217,7 +241,9 @@ async def update_av_coding(avid: int, req: AVCodingUpdate, db: DbDep) -> AVCodin
         raise HTTPException(status_code=404, detail="coding not found")
     await audit.record(
         db, user=get_codername(), action="coding.update", entity="code_av",
-        entity_id=avid, source_id=coding.id, detail=coding.model_dump(),
+        entity_id=avid, source_id=coding.id,
+        detail={"before": dict(old_row._mapping) if old_row is not None else None,
+                "after": coding.model_dump()},
     )
     return coding
 

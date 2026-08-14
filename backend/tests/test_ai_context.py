@@ -623,6 +623,148 @@ async def test_semantic_search_empty_selection_returns_no_results(
 
 
 # ----------------------------------------------------------------------
+# Additive union context (Option A — extra kinds attached per mode)
+# ----------------------------------------------------------------------
+
+async def test_chat_code_analysis_with_memo_and_source_ids_includes_union(
+    project_client, tmp_path, monkeypatch
+):
+    """code_analysis attaches the selected memos and sources to its codes."""
+    client, _ = project_client
+    await enable_ai(client, monkeypatch, tmp_path)
+    memo_sid = await import_text(client, "memoed.txt", "Body.")
+    res = await client.patch(
+        f"/api/v1/sources/{memo_sid}", json={"memo": "Source memo for code review."}
+    )
+    assert res.status_code == 200, res.text
+    happy_cid = await add_code(client, "Happiness")
+    await set_code_memo(client, happy_cid, "Happy code memo.")
+    text_sid = await import_text(client, "interview.txt", "The interview fulltext body.")
+    fake = patch_client(
+        monkeypatch,
+        {"/chat/completions": {"choices": [{"message": {"content": "ok"}}]}},
+    )
+    res = await client.post(
+        "/api/v1/ai/chat",
+        json={
+            "message": "analyze",
+            "mode": "code_analysis",
+            "code_ids": [happy_cid],
+            "memo_ids": [memo_sid],
+            "source_ids": [text_sid],
+        },
+    )
+    assert res.status_code == 200, res.text
+    content = fake.calls[0]["json"]["messages"][1]["content"]
+    assert "CODE ANALYSIS CONTEXT" in content
+    assert "Memo: Happy code memo." in content
+    assert "# memoed.txt (file memo):\nSource memo for code review." in content
+    assert "TEXT ANALYSIS SOURCE\n# interview.txt" in content
+    assert "The interview fulltext body." in content
+    assert content.endswith("\n\nanalyze")
+
+
+async def test_chat_memo_analysis_with_code_ids_includes_code_context(
+    project_client, tmp_path, monkeypatch
+):
+    """memo_analysis attaches the selected codes to the memo block."""
+    client, _ = project_client
+    await enable_ai(client, monkeypatch, tmp_path)
+    memo_sid = await import_text(client, "memoed.txt", "Body.")
+    res = await client.patch(
+        f"/api/v1/sources/{memo_sid}", json={"memo": "Theory note."}
+    )
+    assert res.status_code == 200, res.text
+    happy_cid = await add_code(client, "Happiness")
+    await set_code_memo(client, happy_cid, "Happy code memo.")
+    fake = patch_client(
+        monkeypatch,
+        {"/chat/completions": {"choices": [{"message": {"content": "ok"}}]}},
+    )
+    res = await client.post(
+        "/api/v1/ai/chat",
+        json={
+            "message": "theorize",
+            "mode": "memo_analysis",
+            "code_ids": [happy_cid],
+        },
+    )
+    assert res.status_code == 200, res.text
+    content = fake.calls[0]["json"]["messages"][1]["content"]
+    assert "# memoed.txt (file memo):\nTheory note." in content
+    assert "CODE ANALYSIS CONTEXT" in content
+    assert "Memo: Happy code memo." in content
+    assert content.endswith("\n\ntheorize")
+
+
+async def test_chat_text_analysis_with_code_ids_includes_code_context(
+    project_client, tmp_path, monkeypatch
+):
+    """text_analysis attaches the selected codes to the source fulltext."""
+    client, _ = project_client
+    await enable_ai(client, monkeypatch, tmp_path)
+    text_sid = await import_text(client, "interview.txt", "The interview fulltext body.")
+    happy_cid = await add_code(client, "Happiness")
+    await set_code_memo(client, happy_cid, "Happy code memo.")
+    fake = patch_client(
+        monkeypatch,
+        {"/chat/completions": {"choices": [{"message": {"content": "ok"}}]}},
+    )
+    res = await client.post(
+        "/api/v1/ai/chat",
+        json={
+            "message": "summarize",
+            "mode": "text_analysis",
+            "source_ids": [text_sid],
+            "code_ids": [happy_cid],
+        },
+    )
+    assert res.status_code == 200, res.text
+    content = fake.calls[0]["json"]["messages"][1]["content"]
+    assert "TEXT ANALYSIS SOURCE\n# interview.txt" in content
+    assert "CODE ANALYSIS CONTEXT" in content
+    assert "Memo: Happy code memo." in content
+    assert content.endswith("\n\nsummarize")
+
+
+async def test_chat_union_context_capped_at_12000_chars(
+    project_client, tmp_path, monkeypatch
+):
+    """The combined primary + additive block is capped at 12000 chars."""
+    client, _ = project_client
+    await enable_ai(client, monkeypatch, tmp_path)
+    code_ids = []
+    for i in range(30):
+        cid = await add_code(client, f"Code number {i:02d} " + ("x" * 90))
+        await set_code_memo(client, cid, "m" * 250)
+        code_ids.append(cid)
+    long_body = "paragraph one. " * 500
+    alpha_id = await import_text(client, "alpha.txt", long_body)
+    await import_text(client, "beta.txt", long_body)
+    fake = patch_client(
+        monkeypatch,
+        {"/chat/completions": {"choices": [{"message": {"content": "ok"}}]}},
+    )
+    res = await client.post(
+        "/api/v1/ai/chat",
+        json={
+            "message": "hi",
+            "mode": "code_analysis",
+            "code_ids": code_ids,
+            "source_ids": [alpha_id],
+        },
+    )
+    assert res.status_code == 200, res.text
+    content = fake.calls[0]["json"]["messages"][1]["content"]
+    assert "CODE ANALYSIS CONTEXT" in content
+    assert "TEXT ANALYSIS SOURCE" in content
+    # The code block alone reaches ~5000 chars, the source block ~6000 —
+    # together they must be truncated to the shared 12000 budget.
+    block = content[: content.rfind("\n\nhi")]
+    assert len(block) <= 12000
+
+
+# ----------------------------------------------------------------------
 # Permission & mode gating
 # ----------------------------------------------------------------------
 

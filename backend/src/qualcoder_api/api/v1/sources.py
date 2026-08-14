@@ -584,9 +584,13 @@ async def create_transcript(
         name=name, mediapath=None, fulltext="", owner=resolve_owner(None)
     )
     await repo.update_source(source_id, av_text_id=trans.id)
+    companion_row = (
+        await db.execute(select(tables.source).where(tables.source.c.id == trans.id))
+    ).first()
     await audit.record(
         db, user=get_codername(), action="transcript.create", entity="source",
-        entity_id=trans.id, source_id=source_id, detail={"name": name},
+        entity_id=trans.id, source_id=source_id,
+        detail={"name": name, "companion": dict(companion_row._mapping) if companion_row is not None else None},
     )
     reloaded = await repo.get_source(source_id)
     if reloaded is None:  # pragma: no cover - row was just updated
@@ -607,12 +611,16 @@ async def delete_transcript(source_id: int, db: DbDep) -> None:
     companion = await repo.get_source(source.av_text_id)
     companion_name = companion.name if companion is not None else None
     trans_id = source.av_text_id
+    companion_row = (
+        await db.execute(select(tables.source).where(tables.source.c.id == trans_id))
+    ).first()
     await repo.update_source(source_id, av_text_id=None)
     await repo.delete_source(trans_id)
     await audit.record(
         db, user=get_codername(), action="transcript.delete", entity="source",
         entity_id=trans_id, source_id=source_id,
-        detail={"name": companion_name, "media": source.name},
+        detail={"name": companion_name, "media": source.name,
+                "companion": dict(companion_row._mapping) if companion_row is not None else None},
     )
 
 

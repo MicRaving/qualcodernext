@@ -46,6 +46,9 @@ SOURCE_SELECTION_MAX_CHARS = 12000
 # Topic exploration with explicit selections: union of the selected memos,
 # codes and sources, capped defensively (each part is capped individually).
 TOPIC_SELECTION_MAX_CHARS = 12000
+# Combined per-mode context (primary kind + additive kinds) — the joined
+# block is truncated at this budget no matter which kinds were selected.
+CHAT_CONTEXT_MAX_CHARS = 12000
 
 
 class AiUnavailable(Exception):
@@ -156,15 +159,21 @@ class AiService:
         ok, _ = self.is_configured(ai)
         if not ok:
             raise AiUnavailable("AI is not configured")
-        # Per-mode context, assembled from the mode's picker selections:
-        # - memo_analysis   → the selected memos (all when none selected)
+        # Per-mode context, assembled from the mode's picker selections.
+        # Each analysis mode builds its PRIMARY context plus the other
+        # selected kinds (additive pickers):
+        # - memo_analysis   → memos (all when none selected) + codes +
+        #                     sources when their ids are provided
         # - code_analysis   → the selected codes (memo + counts + examples)
+        #                     + memos + sources when provided
         # - text_analysis   → the selected sources' fulltext (open source
         #                     ``source_id`` still works; falls back to the
-        #                     project summary when nothing matches)
+        #                     project summary when nothing matches) + memos
+        #                     + codes when provided
         # - topic_exploration → union of the selected memos/codes/sources,
         #                     else the default project summary
         # - search          → index-based, no chat context
+        # The joined block is truncated at ``CHAT_CONTEXT_MAX_CHARS``.
         blocks: list[str] = []
         if mode == "memo_analysis":
             block = await self._memo_context(memo_ids)
@@ -193,8 +202,24 @@ class AiService:
             block = await self._project_context(ai)
             if block:
                 blocks.append(block)
+        # Additive kinds: extra context attached to the primary one. Only
+        # explicit selections are included (never the whole project), and
+        # topic_exploration already builds the union itself.
+        if mode != "topic_exploration":
+            if memo_ids and mode != "memo_analysis":
+                block = await self._memo_context(memo_ids)
+                if block:
+                    blocks.append(block)
+            if code_ids and mode != "code_analysis":
+                block = await self._code_analysis_context(ai, code_ids)
+                if block:
+                    blocks.append(block)
+            if source_ids and mode != "text_analysis":
+                block = await self._text_analysis_context(ai, source_ids)
+                if block:
+                    blocks.append(block)
         if blocks:
-            joined = "\n\n".join(blocks)
+            joined = _cap_text("\n\n".join(blocks), CHAT_CONTEXT_MAX_CHARS)
             context = f"{joined}\n\n{context}" if context else joined
         from qualcoder_api.services.ai_prompts import prompt_for, system_prompt_for
 

@@ -1044,6 +1044,7 @@ export const en: Record<string, string> = {
   "interchange.import": "Import",
   "interchange.importing": "Importing…",
   "interchange.importFailed": "Import failed",
+  "interchange.importAborted": "The import took too long and was interrupted — it may still have completed in the background; check the task queue.",
   "interchange.importFileAria": "Import file",
   "interchange.formatLabel": "Format",
   "interchange.fileLabel": "File",
@@ -1123,14 +1124,14 @@ export const en: Record<string, string> = {
   "ai.modeGeneral": "General",
   "ai.modeHelp": "Help & support",
   "ai.modeTopic": "Topic exploration",
-  "ai.modeCode": "Code analysis",
-  "ai.modeText": "Text analysis",
-  "ai.modeMemos": "Memo analysis",
+  "ai.modeCode": "Codes (coding system)",
+  "ai.modeText": "Texts (data)",
+  "ai.modeMemos": "Memos (theory)",
   "ai.modeSearch": "Semantic search",
+  "ai.modePipelineHelp": "Data → codes → memos: the research pipeline.",
   "ai.promptLabel": "Instructions:",
   "ai.promptNone": "Default",
   "ai.promptHelp": "Predefined prompt templates for each analysis mode — pick one to prefill the chat input.",
-  "ai.promptsEmptyHint": "No prompt templates for this mode.",
 
   // AI context pickers (memos / codes / files per analysis mode)
   "ai.contextMemos": "Context memos",
@@ -1152,8 +1153,6 @@ export const en: Record<string, string> = {
   "ai.codesEmpty": "No codes in this project yet.",
   "ai.filesSearch": "Search files…",
   "ai.filesEmpty": "No text sources in this project yet.",
-  "ai.quickParaphrase": "Paraphrase",
-  "ai.quickSentiment": "Sentiment",
 
   // AI semantic index
   "ai.indexSection": "Semantic index",
@@ -1572,8 +1571,8 @@ export const en: Record<string, string> = {
   "sync.pendingExport": "{n} to send",
   "sync.pendingImport": "{n} to receive",
   "sync.now": "Sync now",
-  "sync.nowWithTime": "Sync now · {when} ago",
   "sync.lastSyncShort": "{when} ago",
+  "sync.never": "Never",
   "sync.error": "Sync error",
   "sync.autoEnabled": "Collaboration sync enabled — this project is in a shared folder",
 

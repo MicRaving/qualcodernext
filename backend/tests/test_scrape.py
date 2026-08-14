@@ -437,7 +437,7 @@ def test_youtube_extracts_comments_instead_of_captions():
                     }
                 ],
             },
-            {"id": "3", "text": "No author, no meta"},
+            {"id": "3", "text": "No author,\nno\tmeta"},
         ]
     )
     with (
@@ -459,9 +459,12 @@ def test_youtube_extracts_comments_instead_of_captions():
     assert "Uploader: Demo Channel" in text
     assert "Duration: 1:23" in text
     assert "A description." in text
-    assert "u/alice (12 likes, 2023-11-14 22:13): Loved it" in text
-    assert "  u/bob (3 likes, 2023-11-14 22:15): Me too" in text
-    assert "u/unknown: No author, no meta" in text
+    # A column header row, then one tab-separated row per comment:
+    # author \t likes \t date \t comment
+    assert "author\tlikes\tdate\tcomment" in text
+    assert "alice\t12 likes\t2023-11-14 22:13\tLoved it" in text
+    assert "→ bob\t3 likes\t2023-11-14 22:15\tMe too" in text
+    assert "unknown\t\t\tNo author, no meta" in text
     assert "Captions" not in text
     assert "Hello caption text" not in text
 

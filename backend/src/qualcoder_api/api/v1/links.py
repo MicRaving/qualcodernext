@@ -59,6 +59,13 @@ async def create_link(req: LinkCreate, db: DbDep) -> dict:
         )
     except LinkError as err:
         raise HTTPException(status_code=422, detail=str(err)) from err
+    from sqlalchemy import select
+
+    from qualcoder_api.persistence import tables
+
+    row = (
+        await db.execute(select(tables.link).where(tables.link.c.id == link["id"]))
+    ).first()
     await audit.record(
         db,
         user=resolve_owner(req.owner),
@@ -73,6 +80,7 @@ async def create_link(req: LinkCreate, db: DbDep) -> dict:
             "to_fid": req.to_fid,
             "to_pos0": req.to_pos0,
             "to_pos1": req.to_pos1,
+            "row": dict(row._mapping) if row is not None else None,
         },
     )
     return link

@@ -88,6 +88,12 @@ function errorDetail(e: unknown): string {
   return e instanceof Error ? e.message : "Import failed";
 }
 
+/** True when the client fetch was cancelled (the timeout aborted it) —
+ *  Chromium surfaces this as "signal is aborted without reason". */
+function isAbortError(e: unknown): boolean {
+  return e instanceof DOMException && e.name === "AbortError";
+}
+
 function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
@@ -236,6 +242,12 @@ export function ImportPreview() {
     for (let i = 0; i < pending.length; i++) {
       const item = pending[i];
       patchItem(item.id, { status: "importing", error: null });
+      // Baseline for the post-abort reconciliation: the import endpoint
+      // runs the importer inline, so an aborted fetch does not stop it.
+      const before = {
+        files: store.summary?.files_count ?? null,
+        cases: store.summary?.cases_count ?? null,
+      };
       try {
         const qualitativeHeaders = QUALITATIVE_FORMATS.has(item.format)
           ? item.qualitativeHeaders
@@ -259,7 +271,15 @@ export function ImportPreview() {
           });
         }
       } catch (e) {
-        patchItem(item.id, { status: "error", error: errorDetail(e) });
+        if (isAbortError(e)) {
+          // The request timed out client-side, but the backend may still
+          // finish the import — say so and reconcile against the project
+          // data instead of showing the raw Chromium abort text.
+          patchItem(item.id, { status: "error", error: t("interchange.importAborted") });
+          void reconcileImport(item.id, item.file.name, before);
+        } else {
+          patchItem(item.id, { status: "error", error: errorDetail(e) });
+        }
       }
       const done = i + 1;
       setProgress({ done, total: pending.length });
@@ -268,6 +288,31 @@ export function ImportPreview() {
     store.setImportState(null);
     setBusy(false);
     if (ok > 0) void useProjectStore.getState().refreshProject();
+  }
+
+  /** Best-effort post-abort check: poll the project a few times; when the
+   *  data landed (the backend finished the import despite the abort), mark
+   *  the row done. */
+  async function reconcileImport(
+    id: number,
+    fileName: string,
+    before: { files: number | null; cases: number | null },
+  ) {
+    const base = fileName.replace(/\.[^.]+$/, "");
+    for (let attempt = 0; attempt < 6; attempt++) {
+      await new Promise((r) => setTimeout(r, 5_000));
+      const state = useProjectStore.getState();
+      await state.refreshProject();
+      const fresh = useProjectStore.getState();
+      const landed =
+        fresh.sources.some((s) => s.name === fileName || s.name === base) ||
+        (before.files !== null && (fresh.summary?.files_count ?? null) !== before.files) ||
+        (before.cases !== null && (fresh.summary?.cases_count ?? null) !== before.cases);
+      if (landed) {
+        patchItem(id, { status: "done", error: null });
+        return;
+      }
+    }
   }
 
   const selectedItem = items.find((it) => it.id === selectedId) ?? null;

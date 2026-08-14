@@ -77,69 +77,81 @@ export function AiView() {
       scroll={false}
       className="h-full min-h-0 max-w-full overflow-hidden"
       header={
-        <BarHeader
-          title="AI"
-          actions={
-            <>
-              <Select
-                value={mode}
-                onChange={(e) => {
-                  setMode(e.target.value as AiMode);
-                  setPromptId("");
-                }}
-                aria-label={t("ai.modeLabel")}
-                title={t("ai.modeLabel")}
-                className="min-w-0 max-w-full"
-              >
-                {AI_MODES.map((m) => (
-                  <option key={m} value={m}>
-                    {t(AI_MODE_LABELS[m])}
-                  </option>
-                ))}
-              </Select>
-              {!isSearch && (
-                <>
-                  {modePrompts.length > 0 ? (
-                    <Select
-                      value={promptId}
-                      onChange={(e) => setPromptId(e.target.value)}
-                      aria-label={t("ai.promptLabel")}
-                      title={t("ai.promptLabel")}
-                      className="min-w-0 max-w-20"
+        <>
+          <BarHeader
+            title="AI"
+            actions={
+              <>
+                <Select
+                  value={mode}
+                  onChange={(e) => {
+                    setMode(e.target.value as AiMode);
+                    setPromptId("");
+                  }}
+                  aria-label={t("ai.modeLabel")}
+                  title={t("ai.modeLabel")}
+                  className="min-w-0 max-w-full"
+                >
+                  {AI_MODES.map((m) => (
+                    <option key={m} value={m}>
+                      {t(AI_MODE_LABELS[m])}
+                    </option>
+                  ))}
+                </Select>
+                {!isSearch && (
+                  <>
+                    {modePrompts.length > 0 ? (
+                      <Select
+                        value={promptId}
+                        onChange={(e) => setPromptId(e.target.value)}
+                        aria-label={t("ai.promptLabel")}
+                        title={t("ai.promptLabel")}
+                        className="min-w-0 max-w-20"
+                      >
+                        <option value="">{t("ai.promptNone")}</option>
+                        {modePrompts.map((p) => (
+                          <option key={p.id} value={p.id} title={p.description}>
+                            {promptLabel(p)}
+                          </option>
+                        ))}
+                      </Select>
+                    ) : (
+                      /* Same-size spacer so the bar layout does not jump
+                       * when a mode has no prompt templates. */
+                      <Select
+                        value=""
+                        disabled
+                        aria-label={t("ai.promptLabel")}
+                        className="min-w-0 max-w-20 opacity-60"
+                      >
+                        <option value="">{t("ai.promptNone")}</option>
+                      </Select>
+                    )}
+                    <IconButton
+                      label={t("ai.promptHelp")}
+                      title={t("ai.promptHelp")}
+                      size="sm"
+                      aria-expanded={helpAnchor !== null}
+                      onClick={(e) => setHelpAnchor(helpAnchor ? null : e.currentTarget)}
                     >
-                      <option value="">{t("ai.promptNone")}</option>
-                      {modePrompts.map((p) => (
-                        <option key={p.id} value={p.id} title={p.description}>
-                          {promptLabel(p)}
-                        </option>
-                      ))}
-                    </Select>
-                  ) : (
-                    <span title={t("ai.promptHelp")} className="text-[10px] text-text-secondary">
-                      {t("ai.promptsEmptyHint")}
-                    </span>
-                  )}
-                  <IconButton
-                    label={t("ai.promptHelp")}
-                    title={t("ai.promptHelp")}
-                    size="sm"
-                    aria-expanded={helpAnchor !== null}
-                    onClick={(e) => setHelpAnchor(helpAnchor ? null : e.currentTarget)}
-                  >
-                    <HelpCircle size={12} aria-hidden />
-                  </IconButton>
-                  {helpAnchor && (
-                    <HelpFlyout anchor={helpAnchor} onClose={() => setHelpAnchor(null)}>
-                      <p className="text-xs leading-relaxed text-text-secondary">
-                        {t("ai.promptHelp")}
-                      </p>
-                    </HelpFlyout>
-                  )}
-                </>
-              )}
-            </>
-          }
-        />
+                      <HelpCircle size={12} aria-hidden />
+                    </IconButton>
+                    {helpAnchor && (
+                      <HelpFlyout anchor={helpAnchor} onClose={() => setHelpAnchor(null)}>
+                        <p className="text-xs leading-relaxed text-text-secondary">
+                          {t("ai.promptHelp")}
+                        </p>
+                      </HelpFlyout>
+                    )}
+                  </>
+                )}
+              </>
+            }
+          />
+          <p className="border-b border-border px-3 py-1 text-[10px] leading-snug text-text-secondary">
+            {t("ai.modePipelineHelp")}
+          </p>
+        </>
       }
     >
       {isSearch ? <AiSearchPanel /> : <AiChatPanel mode={mode} promptId={promptId} />}

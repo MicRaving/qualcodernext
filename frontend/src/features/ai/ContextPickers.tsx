@@ -2,11 +2,10 @@
  * ContextPickers — the per-mode context picker strip shared by the chat
  * panel and the semantic-search panel.
  *
- * Each analysis mode shows the relevant entity list (memos for memo
- * analysis, codes for code analysis, files for text analysis, all three
- * for topic exploration and semantic search) with multi-select and
- * Select all / Deselect all. The search panel uses the selected files as
- * a search filter. Data loading and selection state live in
+ * Every analysis mode shows the full Memos / Codes / Files tab row
+ * (additive pickers — the selection may mix kinds); the mode-relevant tab
+ * is expanded by default. The search panel uses the selected files as a
+ * search filter. Data loading and selection state live in
  * ``contextPickerData.ts``.
  */
 import { useEffect, useMemo, useState } from "react";
@@ -162,21 +161,29 @@ const PICKER_TAB_LABELS: Record<ContextPickerKind, string> = {
 };
 
 /**
- * The context strip above the chat input. Single-picker modes render the
- * picker directly (same look as before); multi-picker modes (topic
- * exploration, semantic search) get a Memos / Codes / Files tab row.
+ * The context strip above the chat input. Every analysis mode shows the
+ * full Memos / Codes / Files tab row; ``initialKind`` (the mode's primary
+ * kind) is expanded by default and restored whenever the mode changes.
  */
-export function ContextPickerArea({ pickers }: { pickers: ContextPickerState }) {
+export function ContextPickerArea({
+  pickers,
+  initialKind,
+}: {
+  pickers: ContextPickerState;
+  initialKind?: ContextPickerKind;
+}) {
   const { t } = useI18n();
   const kinds = useMemo(
     () => CONTEXT_PICKER_KINDS.filter((k) => pickers.required[k]),
     [pickers.required],
   );
-  const [active, setActive] = useState<ContextPickerKind>(kinds[0] ?? "memos");
+  const [active, setActive] = useState<ContextPickerKind>(
+    initialKind && kinds.includes(initialKind) ? initialKind : (kinds[0] ?? "memos"),
+  );
 
   useEffect(() => {
-    if (!kinds.includes(active)) setActive(kinds[0] ?? "memos");
-  }, [kinds, active]);
+    setActive(initialKind && kinds.includes(initialKind) ? initialKind : (kinds[0] ?? "memos"));
+  }, [kinds, initialKind]);
 
   const loading = kinds.some((k) => pickers.data[KIND_FIELD[k]] === null);
 

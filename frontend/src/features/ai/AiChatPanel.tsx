@@ -2,11 +2,11 @@
  * AiChatPanel — chat with the project AI assistant. The chat mode and
  * prompt-library selection live in the pane's top bar (AiView).
  *
- * Each analysis mode shows the matching context picker below the thread
- * (memos for memo analysis, codes for code analysis, files for text
- * analysis, all three for topic exploration) and sends the selection with
- * the chat request. The "Paraphrase" and "Sentiment" chips send the current
- * input text with the matching prompt-library id.
+ * The message thread lives in a module-level cache so it survives mode
+ * switches and pane toggles (context is a request property, not a thread
+ * property). Every analysis mode shows all three context pickers
+ * (additive); the mode-relevant one is expanded by default and the
+ * selection is sent with the chat request.
  */
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { Eraser, LoaderCircle, Send } from "lucide-react";
@@ -14,7 +14,7 @@ import { ApiError, api, fetchWithTimeout, initApiBase, type AiStatus } from "@/l
 import { errorDetail, welcomeMessage } from "@/features/ai/format";
 import { useI18n } from "@/lib/i18n";
 import { ErrorBanner, IconButton, Textarea } from "@/components/ui/orchestrator";
-import { CONTEXT_PICKER_KINDS, type AiMode } from "@/features/ai/aiModes";
+import { CONTEXT_PICKER_KINDS, primaryContextKind, type AiMode } from "@/features/ai/aiModes";
 import { ContextPickerArea } from "@/features/ai/ContextPickers";
 import { useContextPickers } from "@/features/ai/contextPickerData";
 
@@ -25,10 +25,17 @@ interface ChatMessage {
   text: string;
 }
 
-const QUICK_ACTIONS = [
-  { promptId: "paraphrase", labelKey: "ai.quickParaphrase" },
-  { promptId: "sentiment", labelKey: "ai.quickSentiment" },
-] as const;
+/**
+ * Module-level thread cache (same pattern as the SettingsView draft): the
+ * AiChatPanel unmounts when the pane closes or the search mode is picked,
+ * and remounting would otherwise wipe the conversation.
+ */
+let threadCache: ChatMessage[] | null = null;
+
+/** Drops the shared thread (used by the clear-chat button). */
+function resetThread(): void {
+  threadCache = null;
+}
 
 async function chatWithContext(opts: {
   message: string;
@@ -73,11 +80,21 @@ export function AiChatPanel({
 }) {
   const { t } = useI18n();
   const pickers = useContextPickers(mode);
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [messages, setMessages] = useState<ChatMessage[]>(() => threadCache ?? []);
   const [input, setInput] = useState("");
   const [waiting, setWaiting] = useState(false);
   const [status, setStatus] = useState<AiStatus | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
+
+  /** Commit to React state and the module cache so the thread survives remounts. */
+  function commitMessages(update: ChatMessage[] | ((prev: ChatMessage[]) => ChatMessage[])) {
+    setMessages((prev) => {
+      const next =
+        typeof update === "function" ? (update as (p: ChatMessage[]) => ChatMessage[])(prev) : update;
+      threadCache = next;
+      return next;
+    });
+  }
 
   useEffect(() => {
     let cancelled = false;
@@ -86,7 +103,13 @@ export function AiChatPanel({
       .then((s) => {
         if (cancelled) return;
         setStatus(s);
-        if (s.enabled) setMessages([{ role: "assistant", text: welcomeMessage(true) }]);
+        // Only seed the welcome message on a fresh thread — a restored
+        // conversation (mode switch / pane reopen) keeps its history.
+        if (s.enabled) {
+          commitMessages((m) =>
+            m.length > 0 ? m : [{ role: "assistant", text: welcomeMessage(true) }],
+          );
+        }
       })
       .catch(() => {
         if (!cancelled) setStatus(null);
@@ -107,28 +130,27 @@ export function AiChatPanel({
     [pickers.required],
   );
 
-  async function sendWith(promptOverride?: string) {
+  async function sendWith() {
     const text = input.trim();
     if (!text || waiting || disabled) return;
-    if (!promptOverride) setInput("");
-    setMessages((m) => [...m, { role: "user", text }]);
+    setInput("");
+    commitMessages((m) => [...m, { role: "user", text }]);
     setWaiting(true);
     try {
-      const effectivePromptId = promptOverride ?? (promptId || undefined);
       const res =
         kinds.length > 0
           ? await chatWithContext({
               message: text,
               mode,
-              promptId: effectivePromptId,
+              promptId: promptId || undefined,
               memoIds: kinds.includes("memos") ? pickers.selectedMemoIds : undefined,
               codeIds: kinds.includes("codes") ? pickers.selectedCodeIds : undefined,
               sourceIds: kinds.includes("files") ? pickers.selectedSourceIds : undefined,
             })
-          : await api.aiChat(text, "", mode, effectivePromptId);
-      setMessages((m) => [...m, { role: "assistant", text: res.reply }]);
+          : await api.aiChat(text, "", mode, promptId || undefined);
+      commitMessages((m) => [...m, { role: "assistant", text: res.reply }]);
     } catch (e) {
-      setMessages((m) => [...m, { role: "error", text: errorDetail(e) }]);
+      commitMessages((m) => [...m, { role: "error", text: errorDetail(e) }]);
     } finally {
       setWaiting(false);
     }
@@ -140,8 +162,6 @@ export function AiChatPanel({
       void sendWith();
     }
   }
-
-  const chipsDisabled = disabled || waiting || input.trim() === "";
 
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-bg">
@@ -190,25 +210,14 @@ export function AiChatPanel({
         </div>
       </div>
 
-      {/* Context picker (per mode: memos / codes / files) */}
-      {kinds.length > 0 && <ContextPickerArea pickers={pickers} />}
+      {/* Context pickers (additive: memos / codes / files per mode) */}
+      {kinds.length > 0 && (
+        <ContextPickerArea pickers={pickers} initialKind={primaryContextKind(mode) ?? undefined} />
+      )}
 
       {/* Input row */}
       <div className="min-w-0 shrink-0 border-t border-border bg-surface p-3">
         <div className="mx-auto flex min-w-0 w-full max-w-2xl flex-col gap-1.5">
-          <div className="flex min-w-0 flex-wrap gap-1">
-            {QUICK_ACTIONS.map((action) => (
-              <button
-                key={action.promptId}
-                type="button"
-                onClick={() => void sendWith(action.promptId)}
-                disabled={chipsDisabled}
-                className="rounded-full border border-border bg-bg px-2 py-0.5 text-[11px] text-text-secondary hover:border-accent hover:text-accent disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                {t(action.labelKey)}
-              </button>
-            ))}
-          </div>
           <div className="flex min-w-0 items-end gap-2">
             <Textarea
               value={input}
@@ -234,7 +243,12 @@ export function AiChatPanel({
               label={t("ai.clearAria")}
               title={t("ai.clearTitle")}
               className="h-8 w-8 border border-border bg-bg"
-              onClick={() => setMessages(status?.enabled ? [{ role: "assistant", text: welcomeMessage(true) }] : [])}
+              onClick={() => {
+                resetThread();
+                commitMessages(
+                  status?.enabled ? [{ role: "assistant", text: welcomeMessage(true) }] : [],
+                );
+              }}
             >
               <Eraser size={14} aria-hidden />
             </IconButton>

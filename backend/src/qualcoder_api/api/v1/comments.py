@@ -163,6 +163,7 @@ async def create_comment(req: CommentCreate, db: DbDep) -> dict:
             "target_kind": req.target_kind,
             "target_id": req.target_id,
             "body": body[:200],
+            "row": data,
         },
     )
     return data
@@ -177,6 +178,7 @@ async def update_comment(comment_id: int, req: CommentUpdate, db: DbDep) -> dict
     ).first()
     if row is None:
         raise HTTPException(status_code=404, detail="comment not found")
+    old_body = row._mapping.get("body") if row is not None else None
     body = (req.body or "").strip()
     if not body:
         raise HTTPException(status_code=422, detail="body must not be empty")
@@ -203,7 +205,13 @@ async def update_comment(comment_id: int, req: CommentUpdate, db: DbDep) -> dict
         action="comment.update",
         entity="comment",
         entity_id=comment_id,
-        detail={"target_kind": data["target_kind"], "target_id": data["target_id"], "body": body[:200]},
+        detail={
+            "target_kind": data["target_kind"],
+            "target_id": data["target_id"],
+            "body": body[:200],
+            "old_body": old_body,
+            "new_body": body,
+        },
     )
     return data
 
@@ -232,5 +240,10 @@ async def delete_comment(comment_id: int, db: DbDep) -> None:
         action="comment.delete",
         entity="comment",
         entity_id=comment_id,
-        detail={"target_kind": data["target_kind"], "target_id": data["target_id"], "body": (data.get("body") or "")[:200]},
+        detail={
+            "target_kind": data["target_kind"],
+            "target_id": data["target_id"],
+            "body": (data.get("body") or "")[:200],
+            "row": data,
+        },
     )

@@ -162,6 +162,7 @@ async def create_creative_item(req: CreativeCreate, db: DbDep) -> dict:
             "source_fid": req.source_fid,
             "pos0": req.pos0,
             "pos1": req.pos1,
+            "row": data,
         },
     )
     return await _resolve(db, data)
@@ -176,6 +177,7 @@ async def update_creative_item(item_id: int, req: CreativeUpdate, db: DbDep) -> 
     ).first()
     if row is None:
         raise HTTPException(status_code=404, detail="creative item not found")
+    before = dict(row._mapping)
     values = req.model_dump(exclude_none=True)
     if "text" in values:
         text = (values["text"] or "").strip()
@@ -207,7 +209,7 @@ async def update_creative_item(item_id: int, req: CreativeUpdate, db: DbDep) -> 
             entity="creative_item",
             entity_id=item_id,
             source_id=data.get("source_fid"),
-            detail=values,
+            detail={**values, "before": before},
         )
     return await _resolve(db, dict(row._mapping))
 
@@ -308,6 +310,14 @@ async def promote_creative_item(item_id: int, req: CreativePromote, db: DbDep) -
         )
         ctid = coding.ctid
 
+    code_row = (
+        await db.execute(select(tables.code_name).where(tables.code_name.c.cid == code.cid))
+    ).first()
+    coding_row = None
+    if ctid is not None:
+        coding_row = (
+            await db.execute(select(tables.code_text).where(tables.code_text.c.ctid == ctid))
+        ).first()
     await audit.record(
         db,
         user=owner,
@@ -315,6 +325,13 @@ async def promote_creative_item(item_id: int, req: CreativePromote, db: DbDep) -
         entity="creative_item",
         entity_id=item_id,
         source_id=fid,
-        detail={"cid": code.cid, "ctid": ctid, "code_name": code.name, "catid": req.catid},
+        detail={
+            "cid": code.cid,
+            "ctid": ctid,
+            "code_name": code.name,
+            "catid": req.catid,
+            "code": dict(code_row._mapping) if code_row is not None else None,
+            "coding": dict(coding_row._mapping) if coding_row is not None else None,
+        },
     )
     return {"cid": code.cid, "ctid": ctid}

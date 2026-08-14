@@ -2,8 +2,10 @@
  * ContextPickers data layer — loading + multi-select state for the
  * per-mode context pickers (shared by the chat and search panels).
  *
- * Memo keys keep the legacy ``file:<id>``/``code:<id>`` shape; codes use
- * ``c:<cid>`` and files ``f:<sid>`` so the three pickers never collide.
+ * Every analysis mode loads all three kinds (additive pickers); the
+ * selection may mix them freely. Memo keys keep the legacy
+ * ``file:<id>``/``code:<id>`` shape; codes use ``c:<cid>`` and files
+ * ``f:<sid>`` so the three pickers never collide.
  */
 import { useEffect, useMemo, useState } from "react";
 import { ApiError, api, fetchWithTimeout, initApiBase, type CodeTreeItem, type Source } from "@/lib/api";

@@ -151,6 +151,9 @@ export function FileManager() {
   const [scrollTop, setScrollTop] = useState(0);
   const [viewportHeight, setViewportHeight] = useState(0);
   const [dragActive, setDragActive] = useState(false);
+  // Depth of the dragenter/dragleave nesting while an OS drag hovers the
+  // container (see handleDragEnter/handleDragLeave).
+  const dragDepth = useRef(0);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -373,24 +376,38 @@ export function FileManager() {
 
   // Drop target on the center area: importing OS files goes through the
   // exact same path as the Import button (importFiles → api.importSource).
-  function handleDragOver(e: DragEvent<HTMLDivElement>) {
-    if (e.dataTransfer.types.includes("Files")) {
-      e.preventDefault();
-      setDragActive(true);
-    }
+  // The dragover handler is deliberately permissive: WebView2 can report an
+  // EMPTY dataTransfer.types list while an OS file drag hovers the window
+  // ("Files" only appears on drop), so gating preventDefault() on it would
+  // let the engine cancel the drop. Non-file payloads are ignored on drop.
+  function handleDragEnter() {
+    dragDepth.current += 1;
+    setDragActive(true);
   }
 
-  function handleDragLeave(e: DragEvent<HTMLDivElement>) {
-    if (!e.currentTarget.contains(e.relatedTarget as Node | null)) {
-      setDragActive(false);
-    }
+  function handleDragOver(e: DragEvent<HTMLDivElement>) {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "copy";
+    setDragActive(true);
+  }
+
+  function handleDragLeave() {
+    // Every transition inside the container pairs one dragleave with one
+    // dragenter, so the depth only reaches 0 when the pointer really leaves
+    // (or the drag is cancelled). Counting instead of checking
+    // e.relatedTarget keeps the overlay stable in WebView2, where
+    // relatedTarget may be null on child-boundary leaves.
+    dragDepth.current = Math.max(0, dragDepth.current - 1);
+    if (dragDepth.current === 0) setDragActive(false);
   }
 
   function handleDrop(e: DragEvent<HTMLDivElement>) {
     e.preventDefault();
+    dragDepth.current = 0;
     setDragActive(false);
-    const files = Array.from(e.dataTransfer.files);
-    if (files.length > 0) void importFiles(files);
+    const files = Array.from(e.dataTransfer.files ?? []);
+    if (files.length === 0) return;
+    void importFiles(files);
   }
 
   async function renameSource(row: Source) {
@@ -683,6 +700,7 @@ export function FileManager() {
       {/* Body — the whole center area is a drop target for OS files */}
       <div
         className="relative flex min-h-0 flex-1 flex-col"
+        onDragEnter={handleDragEnter}
         onDragOver={handleDragOver}
         onDragLeave={handleDragLeave}
         onDrop={handleDrop}

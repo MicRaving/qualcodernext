@@ -31,6 +31,15 @@ export const FORCEABLE_FORMATS = [
 
 export type ForceableFormat = (typeof FORCEABLE_FORMATS)[number];
 
+/** Client-side fetch timeouts for the interchange endpoints (ms). The
+ *  import call is generous: survey/xlsx/sav imports parse and write many
+ *  rows on the backend and can legitimately run for minutes. Aborting the
+ *  client fetch mid-import surfaces as Chromium's "signal is aborted
+ *  without reason" — the import itself keeps running server-side. The
+ *  preview/sniff call stays short. */
+export const PREVIEW_TIMEOUT_MS = 30_000;
+export const IMPORT_TIMEOUT_MS = 300_000;
+
 /** The backend's sniff+sample response for one upload. */
 export interface InterchangePreview {
   format: string;
@@ -49,6 +58,7 @@ async function interchangeRequest<T>(
   path: string,
   file: File,
   extra?: { forceKind?: string; qualitativeHeaders?: string[] },
+  timeoutMs = PREVIEW_TIMEOUT_MS,
 ): Promise<T> {
   const base = await initApiBase();
   const form = new FormData();
@@ -57,7 +67,11 @@ async function interchangeRequest<T>(
   if (extra?.qualitativeHeaders?.length) {
     form.append("qualitative_headers", extra.qualitativeHeaders.join(","));
   }
-  const res = await fetchWithTimeout(`${base}${path}`, { method: "POST", body: form });
+  const res = await fetchWithTimeout(
+    `${base}${path}`,
+    { method: "POST", body: form },
+    timeoutMs,
+  );
   if (!res.ok) {
     let detail: unknown;
     try {
@@ -87,5 +101,10 @@ export function importInterchange(
   file: File,
   opts: { forceKind?: string; qualitativeHeaders?: string[] } = {},
 ): Promise<InterchangeResult> {
-  return interchangeRequest<InterchangeResult>("/interchange/import/auto", file, opts);
+  return interchangeRequest<InterchangeResult>(
+    "/interchange/import/auto",
+    file,
+    opts,
+    IMPORT_TIMEOUT_MS,
+  );
 }
