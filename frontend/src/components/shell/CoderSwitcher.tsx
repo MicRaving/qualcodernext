@@ -556,17 +556,14 @@ export function CoderSwitcher() {
                     className={`shrink-0 ${syncBusy ? "animate-spin" : ""}`}
                     aria-hidden
                   />
-                  {t("sync.now")}
+                  {syncStatus?.last_sync
+                    ? t("sync.nowWithTime", { when: formatSince(syncStatus.last_sync) })
+                    : t("sync.now")}
                 </button>
               </div>
             </div>
             {syncEnabled && (
               <div className="mt-1.5 space-y-1 text-[11px] leading-snug text-text-secondary">
-                <p>
-                  {t("sync.lastSyncShort", {
-                    when: formatSince(syncStatus?.last_sync ?? 0),
-                  })}
-                </p>
                 {syncStatus && (syncStatus.pending_export > 0 || syncStatus.pending_import > 0) && (
                   <p className="text-warning">
                     {t("sync.pending", {

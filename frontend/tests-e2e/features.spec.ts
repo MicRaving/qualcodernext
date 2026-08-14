@@ -426,29 +426,30 @@ test("cases and attributes", async ({ page }) => {
 test("interchange export and import", async ({ page }) => {
   await ensureProjectOpen(page);
 
-  // Import/Export lives in Settings now.
+  // Import/Export lives in Settings now: an Import… button + the Export link.
   await page.getByRole("button", { name: "Settings", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Settings" }).first()).toBeVisible();
-  await expect(page.getByText("Export", { exact: true }).first()).toBeVisible();
-  await expect(page.getByText("Import", { exact: true }).first()).toBeVisible();
+  const settingsPane = page
+    .getByRole("complementary")
+    .filter({ has: page.getByRole("heading", { name: "Settings" }) });
+  await expect(settingsPane.getByRole("button", { name: /^Import/ })).toBeVisible();
+  await expect(settingsPane.getByRole("link", { name: /Export project/ })).toBeVisible();
 
   // Export: the project downloads as a .qdp attachment.
   const downloadPromise = page.waitForEvent("download");
-  await page.getByRole("link", { name: /Export project/ }).click();
+  await settingsPane.getByRole("link", { name: /Export project/ }).click();
   const download = await downloadPromise;
   expect(download.suggestedFilename()).toMatch(/\.qdp$/i);
   const dlPath = await download.path();
   expect(dlPath).toBeTruthy();
 
-  // Import: the handcrafted REFI-QDA file (code + source + coding + case);
-  // picking the file shows the import menu, then Import runs it.
-  const settingsPane = page
-    .getByRole("complementary")
-    .filter({ has: page.getByRole("heading", { name: "Settings" }) });
-  await page.getByLabel("Import file").setInputFiles(MINIMAL_QDP);
-  const importBtn = settingsPane
-    .getByRole("button", { name: "Import", exact: true })
-    .last();
+  // Import: the handcrafted REFI-QDA file (code + source + coding + case).
+  // Import… opens the import-manager overlay; the file is picked there.
+  await settingsPane.getByRole("button", { name: /^Import/ }).click();
+  const overlay = page.getByRole("dialog", { name: "Import interchange files" });
+  await expect(overlay).toBeVisible();
+  await overlay.getByLabel("Import file").setInputFiles(MINIMAL_QDP);
+  const importBtn = overlay.getByRole("button", { name: "Import", exact: true });
   await expect(importBtn).toBeVisible();
   await importBtn.click();
   const imported = page.getByText("Import complete", { exact: true }).first();

@@ -267,7 +267,9 @@ test("seek via segment click and delete the segment", async ({ page }) => {
     timeout: 10_000,
   });
   await expect(page.getByText(/0:0\d – 0:0\d/)).toBeVisible({ timeout: 10_000 });
-  const deleteBtn = page.getByRole("button", { name: "Delete", exact: true });
+  // Two "Delete" buttons exist now: the transcript header's and the segment
+  // details footer's. The footer comes later in the DOM → .last().
+  const deleteBtn = page.getByRole("button", { name: "Delete", exact: true }).last();
   await expect(deleteBtn).toBeVisible();
 
   // Deletion asks via window.confirm; accept it.
@@ -276,7 +278,7 @@ test("seek via segment click and delete the segment", async ({ page }) => {
 
   // The segment disappears from the timeline and the details panel closes.
   await expect(segment).toHaveCount(0, { timeout: 10_000 });
-  await expect(page.getByRole("button", { name: "Delete", exact: true })).toBeHidden({
+  await expect(page.getByRole("button", { name: "Delete", exact: true })).toHaveCount(1, {
     timeout: 10_000,
   });
 });
@@ -325,38 +327,26 @@ test("transcribe audio with whisper and open the transcript", async ({ page }) =
 
 // ---------------------------------------------------------------------------
 
-test("manual transcription mode toggle replaces the transcript with an editor", async ({
+test("manual transcription: empty transcript opens an editor with auto-timestamps", async ({
   page,
 }) => {
   await ensureProjectOpen(page);
   await openToneInCoder(page);
 
-  // The header carries TWO "Transcribe" buttons: the AI transcription dialog
-  // opener and the manual transcription-mode toggle (aria-pressed). The
-  // toggle is enabled because importing the audio auto-created its text
-  // transcript (av_text companion).
+  // The header carries ONE "Transcribe" button now — the AI transcription
+  // dialog opener (the manual-mode toggle was removed; the empty companion
+  // transcript opens the editor automatically).
   const transcribeButtons = page.getByRole("button", { name: "Transcribe", exact: true });
-  await expect(transcribeButtons).toHaveCount(2, { timeout: 20_000 });
-  const modeToggle = transcribeButtons.nth(1);
-  await expect(modeToggle).toBeEnabled({ timeout: 10_000 });
-  await expect(modeToggle).toHaveAttribute("aria-pressed", "false");
+  await expect(transcribeButtons).toHaveCount(1, { timeout: 20_000 });
 
-  // Toggling it swaps the transcript pane for the plain-text editor.
-  await modeToggle.click();
-  await expect(modeToggle).toHaveAttribute("aria-pressed", "true");
-  const editor = page.getByLabel("Transcribe", { exact: true }).last();
+  // The freshly imported audio has an EMPTY companion transcript, so the
+  // transcription editor is shown directly — no toggle press needed.
+  const editor = page.getByLabel("Transcribe", { exact: true });
   await expect(editor).toBeVisible({ timeout: 10_000 });
 
-  // Type a draft — the editor is usable for manual transcription.
-  await editor.fill("Draft transcript line");
-  await expect(editor).toHaveValue("Draft transcript line");
-
-  // Toggling back restores the read-only transcript view (the edited draft
-  // triggers the discard confirmation — accept it).
-  page.on("dialog", (d) => void d.accept());
-  await modeToggle.click();
-  await expect(modeToggle).toHaveAttribute("aria-pressed", "false");
-  await expect(editor).toBeHidden({ timeout: 10_000 });
+  // The first typed character auto-prefills the current segment timestamp.
+  await editor.pressSequentially("Hello", { delay: 5 });
+  await expect(editor).toHaveValue(/^\[\d{2}:\d{2}\] Hello$/);
 });
 
 // ---------------------------------------------------------------------------

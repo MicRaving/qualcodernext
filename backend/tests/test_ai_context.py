@@ -401,6 +401,228 @@ async def test_chat_text_analysis_unknown_source_skips_text(
 
 
 # ----------------------------------------------------------------------
+# Selection-aware context (per-mode context pickers)
+# ----------------------------------------------------------------------
+
+async def test_chat_code_analysis_with_selected_code_ids(
+    project_client, tmp_path, monkeypatch
+):
+    client, _ = project_client
+    await enable_ai(client, monkeypatch, tmp_path)
+    fid = await import_text(client, "alpha.txt", "Alpha body with a happy quote inside.")
+    happy_cid = await add_code(client, "Happiness")
+    sad_cid = await add_code(client, "Sadness")
+    await set_code_memo(client, sad_cid, "Sadness memo text.")
+    await add_coding(client, happy_cid, fid, seltext="a happy quote")
+    await add_coding(client, sad_cid, fid, seltext="a gloomy remark")
+    fake = patch_client(
+        monkeypatch,
+        {"/chat/completions": {"choices": [{"message": {"content": "ok"}}]}},
+    )
+    res = await client.post(
+        "/api/v1/ai/chat",
+        json={"message": "analyze", "mode": "code_analysis", "code_ids": [happy_cid]},
+    )
+    assert res.status_code == 200, res.text
+    content = fake.calls[0]["json"]["messages"][1]["content"]
+    assert "CODE ANALYSIS CONTEXT" in content
+    assert "Codes: 2 total, 1 selected" in content
+    assert "- Happiness" in content
+    assert "- Sadness" not in content
+    assert 'Example: "a happy quote"' in content
+    assert "Memo: Sadness memo" not in content
+
+
+async def test_chat_code_analysis_selected_codes_still_capped(
+    project_client, tmp_path, monkeypatch
+):
+    """A large selection is capped at CODE_ANALYSIS_MAX_CHARS like the default."""
+    client, _ = project_client
+    await enable_ai(client, monkeypatch, tmp_path)
+    for i in range(40):
+        cid = await add_code(client, f"Code number {i:02d} " + ("x" * 90))
+        await set_code_memo(client, cid, "m" * 250)
+    fake = patch_client(
+        monkeypatch,
+        {"/chat/completions": {"choices": [{"message": {"content": "ok"}}]}},
+    )
+    res = await client.post(
+        "/api/v1/ai/chat",
+        json={
+            "message": "hi",
+            "mode": "code_analysis",
+            "code_ids": list(range(1, 41)),
+        },
+    )
+    assert res.status_code == 200, res.text
+    content = fake.calls[0]["json"]["messages"][1]["content"]
+    block = content.split("CODE ANALYSIS CONTEXT", 1)[1].split("\n\n", 1)[0]
+    assert block.startswith("\nCodes: 40 total, 40 selected")
+    assert len(block) <= 5000
+
+
+async def test_chat_text_analysis_with_selected_source_ids(
+    project_client, tmp_path, monkeypatch
+):
+    client, _ = project_client
+    await enable_ai(client, monkeypatch, tmp_path)
+    alpha_body = "Alpha text about cooking recipes."
+    beta_body = "Beta text about mountain hiking."
+    alpha_id = await import_text(client, "alpha.txt", alpha_body)
+    await import_text(client, "beta.txt", beta_body)
+    fake = patch_client(
+        monkeypatch,
+        {"/chat/completions": {"choices": [{"message": {"content": "ok"}}]}},
+    )
+    res = await client.post(
+        "/api/v1/ai/chat",
+        json={
+            "message": "summarize",
+            "mode": "text_analysis",
+            "source_ids": [alpha_id],
+        },
+    )
+    assert res.status_code == 200, res.text
+    content = fake.calls[0]["json"]["messages"][1]["content"]
+    assert "TEXT ANALYSIS SOURCE\n# alpha.txt\n\n" in content
+    assert alpha_body in content
+    assert "beta.txt" not in content
+    assert "mountain hiking" not in content
+    assert content.endswith("\n\nsummarize")
+
+
+async def test_chat_text_analysis_selected_sources_capped_total(
+    project_client, tmp_path, monkeypatch
+):
+    client, _ = project_client
+    await enable_ai(client, monkeypatch, tmp_path)
+    long_body = "paragraph one. " * 500
+    alpha_id = await import_text(client, "alpha.txt", long_body)
+    beta_id = await import_text(client, "beta.txt", long_body)
+    fake = patch_client(
+        monkeypatch,
+        {"/chat/completions": {"choices": [{"message": {"content": "ok"}}]}},
+    )
+    res = await client.post(
+        "/api/v1/ai/chat",
+        json={
+            "message": "hi",
+            "mode": "text_analysis",
+            "source_ids": [alpha_id, beta_id],
+        },
+    )
+    assert res.status_code == 200, res.text
+    content = fake.calls[0]["json"]["messages"][1]["content"]
+    assert "# alpha.txt" in content
+    assert "# beta.txt" in content
+    text_part = content.split("TEXT ANALYSIS SOURCE\n# alpha.txt\n\n", 1)[1].split("\n\n", 1)[0]
+    assert len(text_part) <= 12000
+
+
+async def test_chat_text_analysis_selected_unknown_sources_fall_back_to_summary(
+    project_client, tmp_path, monkeypatch
+):
+    client, _ = project_client
+    await enable_ai(client, monkeypatch, tmp_path)
+    await import_text(client, "alpha.txt", "Body.")
+    fake = patch_client(
+        monkeypatch,
+        {"/chat/completions": {"choices": [{"message": {"content": "ok"}}]}},
+    )
+    res = await client.post(
+        "/api/v1/ai/chat",
+        json={"message": "hi", "mode": "text_analysis", "source_ids": [99999]},
+    )
+    assert res.status_code == 200, res.text
+    content = fake.calls[0]["json"]["messages"][1]["content"]
+    assert "PROJECT CONTEXT" in content
+    assert "TEXT ANALYSIS SOURCE" not in content
+
+
+async def test_chat_topic_exploration_with_selections_includes_union(
+    project_client, tmp_path, monkeypatch
+):
+    client, _ = project_client
+    await enable_ai(client, monkeypatch, tmp_path)
+    memo_sid = await import_text(client, "memoed.txt", "Body.")
+    res = await client.patch(
+        f"/api/v1/sources/{memo_sid}", json={"memo": "Source memo for selection."}
+    )
+    assert res.status_code == 200, res.text
+    fid = await import_text(client, "coded.txt", "Coded body.")
+    happy_cid = await add_code(client, "Happiness")
+    await set_code_memo(client, happy_cid, "Happy code memo.")
+    await add_coding(client, happy_cid, fid, seltext="a happy segment")
+    text_sid = await import_text(client, "interview.txt", "The interview fulltext body.")
+    fake = patch_client(
+        monkeypatch,
+        {"/chat/completions": {"choices": [{"message": {"content": "ok"}}]}},
+    )
+    res = await client.post(
+        "/api/v1/ai/chat",
+        json={
+            "message": "explore",
+            "mode": "topic_exploration",
+            "memo_ids": [memo_sid],
+            "code_ids": [happy_cid],
+            "source_ids": [text_sid],
+        },
+    )
+    assert res.status_code == 200, res.text
+    content = fake.calls[0]["json"]["messages"][1]["content"]
+    assert "# memoed.txt (file memo):\nSource memo for selection." in content
+    assert "CODE ANALYSIS CONTEXT" in content
+    assert "Memo: Happy code memo." in content
+    assert 'Example: "a happy segment"' in content
+    assert "TEXT ANALYSIS SOURCE\n# interview.txt" in content
+    assert "The interview fulltext body." in content
+    assert content.endswith("\n\nexplore")
+
+
+async def test_semantic_search_filters_by_source_ids(project_client, tmp_path, monkeypatch):
+    """The files picker restricts the search to the selected sources."""
+    client, _ = project_client
+    await enable_ai(client, monkeypatch, tmp_path)
+    alpha_id = await import_text(client, "alpha.txt", "The quick brown fox.")
+    await import_text(client, "beta.txt", "A lazy dog sleeps.")
+    fake = patch_client(
+        monkeypatch,
+        {
+            "/embeddings": {
+                "data": [
+                    {"embedding": [1.0, 0.0]},
+                    {"embedding": [0.9, 0.1]},
+                ]
+            }
+        },
+    )
+    res = await client.post(
+        "/api/v1/ai/search", json={"query": "fox", "source_ids": [alpha_id]}
+    )
+    assert res.status_code == 200, res.text
+    results = res.json()["results"]
+    assert len(results) == 1
+    assert results[0]["file_name"] == "alpha.txt"
+    # Only the selected source's chunks are embedded.
+    payload = fake.calls[0]["json"]
+    assert len(payload["input"]) == 2
+
+
+async def test_semantic_search_empty_selection_returns_no_results(
+    project_client, tmp_path, monkeypatch
+):
+    client, _ = project_client
+    await enable_ai(client, monkeypatch, tmp_path)
+    await import_text(client, "alpha.txt", "The quick brown fox.")
+    patch_client(monkeypatch, {"/embeddings": {"data": []}})
+    res = await client.post(
+        "/api/v1/ai/search", json={"query": "fox", "source_ids": [99999]}
+    )
+    assert res.status_code == 200, res.text
+    assert res.json()["results"] == []
+
+
+# ----------------------------------------------------------------------
 # Permission & mode gating
 # ----------------------------------------------------------------------
 

@@ -85,10 +85,6 @@ interface DragNode {
 
 let dragNode: DragNode | null = null;
 
-/** 1×1 transparent GIF — hides the browser's native drag ghost. */
-const TRANSPARENT_GIF =
-  "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7";
-
 /** The current drop affordance on the hovered row (``key`` = kind:id). */
 type DropZone =
   | { mode: "before"; key: string }
@@ -670,16 +666,16 @@ export function Sidebar() {
    *  from a state-updater callback (which runs at render time) would read
    *  a null rect and crash the tree. */
   function computeDropZone(
-    e: ReactDragEvent<HTMLDivElement>,
+    rect: DOMRect,
+    clientX: number,
+    clientY: number,
     item: CodeTreeItem,
     depth: number,
     drag: DragNode,
   ): DropZone | null {
     if (drag.kind === item.kind && drag.id === item.id) return null;
-    const rect = e.currentTarget?.getBoundingClientRect();
-    if (!rect) return null;
-    const y = (e.clientY - rect.top) / Math.max(1, rect.height);
-    const x = e.clientX - rect.left;
+    const y = (clientY - rect.top) / Math.max(1, rect.height);
+    const x = clientX - rect.left;
     const key = `${item.kind}:${item.id}`;
     if (y < 0.25) return canOrderSibling(drag, item) ? { mode: "before", key } : null;
     if (y > 0.75) return canOrderSibling(drag, item) ? { mode: "after", key } : null;
@@ -689,15 +685,14 @@ export function Sidebar() {
     return canDropMerge(drag, item) ? { mode: "merge", key } : null;
   }
 
-  function handleRowDragStart(e: ReactDragEvent<HTMLButtonElement>, item: CodeTreeItem) {
+  function handleRowDragStart(e: ReactDragEvent<HTMLDivElement>, item: CodeTreeItem) {
     dragNode = { kind: item.kind, id: item.id, subtree: subtreeKeysOf(item) };
     setDraggingKey(`${item.kind}:${item.id}`);
     e.dataTransfer.effectAllowed = "move";
     e.dataTransfer.setData("text/plain", `${item.kind}:${item.id}`);
-    // No native drag image — the tree renders its own drop indicator.
-    const ghost = new Image();
-    ghost.src = TRANSPARENT_GIF;
-    e.dataTransfer.setDragImage(ghost, 0, 0);
+    // The browser's native drag ghost is left as-is (WebView2/Chromium can
+    // throw or ignore a programmatically-set drag image, which would cancel
+    // the whole drag); the tree renders its own drop indicator instead.
   }
 
   function handleRowDragOver(e: ReactDragEvent<HTMLDivElement>, item: CodeTreeItem, depth: number) {
@@ -707,7 +702,8 @@ export function Sidebar() {
     e.dataTransfer.dropEffect = "move";
     // Compute the zone HERE (while currentTarget is still valid) and only
     // compare inside the updater — reading the event there would throw.
-    const next = computeDropZone(e, item, depth, drag);
+    const rect = e.currentTarget?.getBoundingClientRect();
+    const next = rect ? computeDropZone(rect, e.clientX, e.clientY, item, depth, drag) : null;
     setDropZone((prev) => {
       return prev?.mode === next?.mode && prev?.key === next?.key ? prev : next;
     });
@@ -722,11 +718,19 @@ export function Sidebar() {
     if (!drag) return;
     e.preventDefault();
     e.stopPropagation();
-    const zone = computeDropZone(e, item, depth, drag);
+    const rect = e.currentTarget?.getBoundingClientRect();
+    const zone = rect ? computeDropZone(rect, e.clientX, e.clientY, item, depth, drag) : null;
+    finishDrop(drag, zone);
+  }
+
+  /** Commit a resolved drop (move or merge); clears the drag state. */
+  function finishDrop(drag: DragNode, zone: DropZone | null) {
     dragNode = null;
     setDraggingKey(null);
     setDropZone(null);
     if (!zone) return;
+    const item = codeTree.find((i) => `${i.kind}:${i.id}` === zone.key);
+    if (!item) return;
     if (zone.mode === "before" || zone.mode === "after") {
       const before = zone.mode === "before";
       if (drag.kind === "category") {
@@ -744,6 +748,27 @@ export function Sidebar() {
       const target = codeTree.find((i) => i.kind === item.kind && i.id === item.id);
       if (source && target) void confirmAndMerge(source, target);
     }
+  }
+
+  /** Container-level safety net: a drop that lands between rows (or on the
+   *  container itself) is resolved against the row under the pointer, so the
+   *  drop can never be silently cancelled. */
+  function handleContainerDrop(e: ReactDragEvent<HTMLDivElement>) {
+    const drag = dragNode;
+    if (!drag) return;
+    e.preventDefault();
+    const el = document.elementFromPoint(e.clientX, e.clientY) as HTMLElement | null;
+    const row = el?.closest?.("[data-tree-row]") as HTMLElement | null;
+    if (!row) {
+      finishDrop(drag, null);
+      return;
+    }
+    const key = row.dataset.treeRow ?? "";
+    const depth = Number(row.dataset.treeDepth ?? 0);
+    const item = codeTree.find((i) => `${i.kind}:${i.id}` === key);
+    const rect = row.getBoundingClientRect();
+    const zone = item && rect ? computeDropZone(rect, e.clientX, e.clientY, item, depth, drag) : null;
+    finishDrop(drag, zone);
   }
 
   function handleRowDragEnd() {
@@ -1169,20 +1194,23 @@ export function Sidebar() {
               aria-hidden
             />
           )}
-          {/* The row box (button + row actions) is the drop target — the
-              whole row incl. its edges must accept the drop, so the handlers
-              live on the wrapper, not on the draggable button. */}
+          {/* The row box (button + row actions) is BOTH the draggable element
+              and the drop target — the whole row incl. its edges must accept
+              the drag/drop, so the handlers live on this stable wrapper (the
+              inner button re-renders during the drag; the wrapper must not). */}
           <div
             className="group flex items-center"
+            data-tree-row={key}
+            data-tree-depth={depth}
+            draggable={!editingThis}
+            onDragStart={(e) => handleRowDragStart(e, item)}
+            onDragEnd={handleRowDragEnd}
             onDragOver={(e) => handleRowDragOver(e, item, depth)}
             onDragLeave={handleRowDragLeave}
             onDrop={(e) => handleRowDrop(e, item, depth)}
           >
             <button
             type="button"
-            draggable={!editingThis}
-            onDragStart={(e) => handleRowDragStart(e, item)}
-            onDragEnd={handleRowDragEnd}
             onClick={() => {
               if (item.kind === "category") {
                 if (hasChildren) setCollapsed((c) => ({ ...c, [key]: !isCollapsed }));
@@ -1587,7 +1615,17 @@ export function Sidebar() {
               )}
             </div>
           ) : (
-            renderCodeNode("root", 0)
+            <div
+              onDragOver={(e) => {
+                if (dragNode) {
+                  e.preventDefault();
+                  e.dataTransfer.dropEffect = "move";
+                }
+              }}
+              onDrop={handleContainerDrop}
+            >
+              {renderCodeNode("root", 0)}
+            </div>
           )}
         </div>
       ) : (

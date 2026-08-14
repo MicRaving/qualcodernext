@@ -27,17 +27,25 @@ class AiSettingsRequest(BaseModel):
 class ChatRequest(BaseModel):
     message: str
     context: str = ""
-    mode: str = "general"  # general | help | topic_exploration | code_analysis | text_analysis | memo_analysis
+    mode: str = "general"  # general | help | topic_exploration | code_analysis | text_analysis | memo_analysis | search
     prompt_id: str | None = None
     memo_ids: list[int] | None = None
     # text_analysis: the source currently open in the coder, so the chat
     # can share its fulltext instead of the generic project summary.
     source_id: int | None = None
+    # code_analysis / topic_exploration: focus the code block (memo, coding
+    # counts, example segments) on these codes.
+    code_ids: list[int] | None = None
+    # text_analysis / topic_exploration: share the fulltext of these
+    # sources (the files context picker).
+    source_ids: list[int] | None = None
 
 
 class SearchRequest(BaseModel):
     query: str
     limit: int = 10
+    # Optional filter: restrict the semantic search to these text sources.
+    source_ids: list[int] | None = None
 
 
 class IndexRequest(BaseModel):
@@ -362,6 +370,7 @@ async def ai_chat(req: ChatRequest, svc: ServiceDep, session: DbDep) -> dict:
         return await AiService(svc.session_factory).chat(
             ai, req.message, req.context, mode=req.mode, prompt_id=req.prompt_id,
             memo_ids=req.memo_ids, source_id=req.source_id,
+            code_ids=req.code_ids, source_ids=req.source_ids,
         )
     except AiUnavailable as err:
         raise HTTPException(status_code=503, detail=str(err)) from err
@@ -391,7 +400,9 @@ async def ai_prompts() -> dict:
 async def ai_search(req: SearchRequest, svc: ServiceDep, session: DbDep) -> dict:
     ai = user_settings.get_ai_settings()
     try:
-        return await AiService(svc.session_factory).semantic_search(ai, req.query, req.limit)
+        return await AiService(svc.session_factory).semantic_search(
+            ai, req.query, req.limit, source_ids=req.source_ids
+        )
     except AiUnavailable as err:
         raise HTTPException(status_code=503, detail=str(err)) from err
 

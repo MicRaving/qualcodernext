@@ -1,10 +1,11 @@
 /**
- * AiView — the AI assistant as a toggleable right-bar pane with a
- * Chat / Search tab toggle; the chat mode and prompt library live in the
- * pane's top bar.
+ * AiView — the AI assistant as a toggleable right-bar pane. The mode
+ * dropdown (chat modes + semantic search) and the prompt library live in
+ * the pane's top bar; the "Semantic search" mode renders the search panel
+ * in the main area, every other mode renders the chat panel.
  */
 import { useEffect, useState } from "react";
-import { HelpCircle, MessageSquare, Search } from "lucide-react";
+import { HelpCircle } from "lucide-react";
 import { api, type AiPromptInfo } from "@/lib/api";
 import {
   BarHeader,
@@ -17,13 +18,6 @@ import { useI18n } from "@/lib/i18n";
 import { AI_MODES, AI_MODE_LABELS, type AiMode } from "@/features/ai/aiModes";
 import { AiChatPanel } from "@/features/ai/AiChatPanel";
 import { AiSearchPanel } from "@/features/ai/AiSearchPanel";
-
-type AiTab = "chat" | "search";
-
-const TABS: { kind: AiTab; label: string; icon: typeof MessageSquare }[] = [
-  { kind: "chat", label: "Chat", icon: MessageSquare },
-  { kind: "search", label: "Search", icon: Search },
-];
 
 /**
  * Prompt catalog entries the backend may extend with ``label`` + ``hidden`` —
@@ -56,7 +50,6 @@ function promptLabel(p: AiPromptInfo): string {
 
 export function AiView() {
   const { t } = useI18n();
-  const [tab, setTab] = useState<AiTab>("chat");
   const [mode, setMode] = useState<AiMode>("general");
   const [prompts, setPrompts] = useState<AiPromptInfo[]>([]);
   const [promptId, setPromptId] = useState<string>("");
@@ -75,6 +68,7 @@ export function AiView() {
     };
   }, []);
 
+  const isSearch = mode === "search";
   const modePrompts = prompts.filter((p) => p.mode === mode && isUsablePrompt(p));
 
   return (
@@ -87,25 +81,24 @@ export function AiView() {
           title="AI"
           actions={
             <>
-              {/* Chat mode lives in the top bar of the pane */}
-              {tab === "chat" && (
+              <Select
+                value={mode}
+                onChange={(e) => {
+                  setMode(e.target.value as AiMode);
+                  setPromptId("");
+                }}
+                aria-label={t("ai.modeLabel")}
+                title={t("ai.modeLabel")}
+                className="min-w-0 max-w-full"
+              >
+                {AI_MODES.map((m) => (
+                  <option key={m} value={m}>
+                    {t(AI_MODE_LABELS[m])}
+                  </option>
+                ))}
+              </Select>
+              {!isSearch && (
                 <>
-                  <Select
-                    value={mode}
-                    onChange={(e) => {
-                      setMode(e.target.value as AiMode);
-                      setPromptId("");
-                    }}
-                    aria-label={t("ai.modeLabel")}
-                    title={t("ai.modeLabel")}
-                    className="min-w-0 max-w-full"
-                  >
-                    {AI_MODES.map((m) => (
-                      <option key={m} value={m}>
-                        {t(AI_MODE_LABELS[m])}
-                      </option>
-                    ))}
-                  </Select>
                   {modePrompts.length > 0 ? (
                     <Select
                       value={promptId}
@@ -144,34 +137,12 @@ export function AiView() {
                   )}
                 </>
               )}
-              <div className="flex shrink-0 items-center gap-0.5 rounded-sm border border-border bg-bg p-0.5">
-                {TABS.map(({ kind, label, icon: Icon }) => (
-                  <button
-                    key={kind}
-                    type="button"
-                    onClick={() => setTab(kind)}
-                    aria-pressed={tab === kind}
-                    className={`flex items-center gap-1 rounded-sm px-2 py-1 text-xs font-medium ${
-                      tab === kind
-                        ? "bg-surface-higher text-accent"
-                        : "text-text-secondary hover:text-text-primary"
-                    }`}
-                  >
-                    <Icon size={12} aria-hidden />
-                    {label}
-                  </button>
-                ))}
-              </div>
             </>
           }
         />
       }
     >
-      {tab === "chat" ? (
-        <AiChatPanel mode={mode} promptId={promptId} />
-      ) : (
-        <AiSearchPanel />
-      )}
+      {isSearch ? <AiSearchPanel /> : <AiChatPanel mode={mode} promptId={promptId} />}
     </LeftBar>
   );
 }

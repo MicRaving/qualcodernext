@@ -11,7 +11,6 @@ import {
   Check,
   Clock,
   Code,
-  FilePen,
   Link as LinkIcon,
   LoaderCircle,
   Mic,
@@ -79,6 +78,18 @@ export function AvCoder({ source }: { source: Source }) {
   const mediaRef = useRef<HTMLVideoElement & HTMLAudioElement>(null);
   const timelineRef = useRef<HTMLDivElement>(null);
 
+  // The transcript source id may change AFTER this view mounts: background
+  // transcription links a companion, manual transcription creates one, and
+  // transcript deletion clears the link. The store's sources list refreshes
+  // in every one of those cases, so the LIVE value wins; the prop only
+  // serves as a mount-time fallback before the store has the source.
+  const liveSource = useProjectStore((s) => s.sources.find((x) => x.id === source.id));
+  const transcriptId = liveSource?.av_text_id ?? source.av_text_id ?? null;
+  /** Live id for the continuous-save helpers (timers and the unmount flush
+   *  run outside renders, where the state value would be stale). */
+  const transcribeIdRef = useRef(transcriptId);
+  transcribeIdRef.current = transcriptId;
+
   const [codings, setCodings] = useState<AVCoding[]>([]);
   const [codes, setCodes] = useState<CodeTreeItem[]>([]);
   const [loading, setLoading] = useState(true);
@@ -133,8 +144,10 @@ export function AvCoder({ source }: { source: Source }) {
   const [tError, setTError] = useState<string | null>(null);
 
   // Manual transcription mode: the transcript becomes an editable draft the
-  // user types while controlling playback with Space/F9/media keys.
-  const [transcribeMode, setTranscribeMode] = useState(false);
+  // user types while controlling playback with Space/F9/media keys. With no
+  // transcript (or only an EMPTY companion) the mode is implicit — the panel
+  // IS the transcription editor, so there is no toggle button.
+  const [transcribeMode, setTranscribeMode] = useState(() => transcriptId == null);
   const [transcribeDraft, setTranscribeDraft] = useState("");
   const [transcribeSaving, setTranscribeSaving] = useState(false);
   const [transcribeBusy, setTranscribeBusy] = useState(false);
@@ -142,6 +155,9 @@ export function AvCoder({ source }: { source: Source }) {
   /** The companion this view created itself — the transcriptId switch it
    *  causes must not tear down the transcription mode it just entered. */
   const createdTranscriptRef = useRef<number | null>(null);
+  /** A companion creation is in flight — skip repeat POSTs while the first
+   *  keystroke's transcriptId has not arrived yet. */
+  const transcribeCreatingRef = useRef(false);
 
   // Continuous saving (mirrors the text coder's edit mode): every keystroke
   // schedules a debounced commitEdit, and the latest draft lives in a ref so
@@ -532,18 +548,6 @@ export function AvCoder({ source }: { source: Source }) {
     }
   }, [source.id, t]);
 
-  // The transcript source id may change AFTER this view mounts: background
-  // transcription links a companion, manual transcription creates one, and
-  // transcript deletion clears the link. The store's sources list refreshes
-  // in every one of those cases, so the LIVE value wins; the prop only
-  // serves as a mount-time fallback before the store has the source.
-  const liveSource = useProjectStore((s) => s.sources.find((x) => x.id === source.id));
-  const transcriptId = liveSource?.av_text_id ?? source.av_text_id ?? null;
-  /** Live id for the continuous-save helpers (timers and the unmount flush
-   *  run outside renders, where the state value would be stale). */
-  const transcribeIdRef = useRef(transcriptId);
-  transcribeIdRef.current = transcriptId;
-
   const loadTranscript = useCallback(async () => {
     if (!transcriptId) {
       setTranscript(null);
@@ -770,55 +774,28 @@ export function AvCoder({ source }: { source: Source }) {
 
   // --- manual transcription mode ----------------------------------------
 
-  function toggleTranscribeMode() {
-    setTSel(null);
-    if (transcribeMode) {
-      // Continuous saving: exiting never discards anything — a final flush
-      // persists the latest draft (there is no Save button to press).
-      void flushTranscribeSave();
-      exitTranscribeMode();
-    } else {
-      void enterTranscribeMode();
-    }
-  }
-
-  /** Leave transcription and show the stored (by now saved) transcript. */
-  function exitTranscribeMode() {
-    // The draft REF keeps the last text for an in-flight commit's follow-up
-    // flush; the controlled value is reset for the read-only panel.
-    setTranscribeMode(false);
-    setTranscribeDraft("");
-    void loadTranscript();
-  }
-
-  /** Enter manual transcription. Without a transcript companion yet, an
-   *  EMPTY one is created first (POST /sources/{id}/transcript) so the
-   *  draft always has a save target — projects imported before the
-   *  import-time companion then transcribe exactly like new ones. The mode
-   *  starts with an empty draft, ready to type: no extra button presses. */
-  async function enterTranscribeMode() {
-    if (transcribeBusy) return;
-    if (transcriptId == null) {
-      setTranscribeBusy(true);
-      setTError(null);
-      try {
-        const companion = await api.createTranscript(source.id);
-        createdTranscriptRef.current = companion.id;
-        await useProjectStore.getState().refreshProject();
-      } catch (e) {
-        setTError(e instanceof Error ? e.message : t("avCoder.transcribeCreateError"));
-        setTranscribeBusy(false);
-        return;
-      }
+  /** Create the EMPTY transcript companion lazily, on the first keystroke
+   *  of a transcript-less source (POST /sources/{id}/transcript). The
+   *  editor is already on screen; the companion only appears once the user
+   *  actually starts typing, so opening a media file for coding alone never
+   *  pollutes the project with an empty transcript. The draft written
+   *  before the companion arrives is flushed by the companion-switch
+   *  effect once the transcriptId it causes lands. */
+  async function ensureTranscribeCompanion() {
+    if (transcriptId != null || transcribeCreatingRef.current) return;
+    transcribeCreatingRef.current = true;
+    setTranscribeBusy(true);
+    setTError(null);
+    try {
+      const companion = await api.createTranscript(source.id);
+      createdTranscriptRef.current = companion.id;
+      await useProjectStore.getState().refreshProject();
+    } catch (e) {
+      setTError(e instanceof Error ? e.message : t("avCoder.transcribeCreateError"));
+    } finally {
+      transcribeCreatingRef.current = false;
       setTranscribeBusy(false);
     }
-    transcribeDraftRef.current = transcriptText;
-    // The stored text is already persisted — nothing is committed until the
-    // draft actually diverges from it.
-    transcribeSavedRef.current = transcriptText;
-    setTranscribeDraft(transcriptText);
-    setTranscribeMode(true);
-    requestAnimationFrame(() => transcribeAreaRef.current?.focus());
   }
 
   /** Insert "[mm:ss] " for the current playback position at the caret.
@@ -836,6 +813,10 @@ export function AvCoder({ source }: { source: Source }) {
     setTranscribeDraft(text);
     transcribeDraftRef.current = text;
     void flushTranscribeSave();
+    // An insert press on a transcript-less source is a first write too —
+    // make sure the draft has a save target (the companion-switch effect
+    // persists the draft once the transcriptId arrives).
+    if (transcriptId == null) void ensureTranscribeCompanion();
     // Re-apply the caret once React has committed the new value.
     requestAnimationFrame(() => {
       el.focus();
@@ -860,6 +841,7 @@ export function AvCoder({ source }: { source: Source }) {
     setTranscribeDraft(text);
     transcribeDraftRef.current = text;
     void flushTranscribeSave();
+    if (transcriptId == null) void ensureTranscribeCompanion();
     requestAnimationFrame(() => {
       el.focus();
       el.setSelectionRange(caret + insertion.length, caret + insertion.length);
@@ -964,6 +946,9 @@ export function AvCoder({ source }: { source: Source }) {
   useEffect(() => {
     if (createdTranscriptRef.current != null && transcriptId === createdTranscriptRef.current) {
       createdTranscriptRef.current = null;
+      // The keystrokes that created the companion arrived before it
+      // existed — persist them now that there is a save target.
+      void flushTranscribeSaveRef.current();
       return;
     }
     // The draft belongs to the OLD companion — cancel pending saves instead
@@ -981,6 +966,30 @@ export function AvCoder({ source }: { source: Source }) {
     setTInVivoOpen(false);
     setTInVivoName("");
   }, [transcriptId]);
+
+  // Transcription mode is implicit for sources without transcript CONTENT:
+  // no companion yet, or a companion whose fulltext is still empty (the
+  // importer pre-creates those). The panel shows the empty editor by
+  // default; a companion is created lazily on the first keystroke. Once
+  // real content exists the panel is read-only — the transition is handled
+  // here (a background result) or by the companion-switch effect above.
+  useEffect(() => {
+    const noContent = transcriptId == null || (transcript != null && transcript.fulltext === "");
+    if (noContent) {
+      if (!transcribeMode) {
+        transcribeDraftRef.current = "";
+        transcribeSavedRef.current = "";
+        setTranscribeDraft("");
+        setTranscribeMode(true);
+      }
+      return;
+    }
+    // Real content arrived: back to the read-only view — but never tear
+    // down an editor that still holds unpersisted user text.
+    if (transcribeMode && transcribeDraftRef.current === "") {
+      setTranscribeMode(false);
+    }
+  }, [transcriptId, transcript, transcribeMode]);
 
   function handleTimelineClick(e: React.MouseEvent) {
     const el = timelineRef.current;
@@ -1145,26 +1154,6 @@ export function AvCoder({ source }: { source: Source }) {
             >
               {t("avCoder.transcript")}
             </Button>
-            <Button
-              variant="secondary"
-              onClick={toggleTranscribeMode}
-              aria-pressed={transcribeMode}
-              disabled={transcribeBusy}
-              title={t("avCoder.transcribeHint")}
-              className={cn(
-                "shrink-0",
-                transcribeMode ? "border-accent text-accent" : "bg-bg text-text-secondary",
-              )}
-              icon={
-                transcribeBusy ? (
-                  <LoaderCircle size={12} className="animate-spin" aria-hidden />
-                ) : (
-                  <FilePen size={12} aria-hidden />
-                )
-              }
-            >
-              {t("avCoder.transcribeMode")}
-            </Button>
             {source.media_type === "video" && (
               <Button
                 variant="secondary"
@@ -1298,31 +1287,15 @@ export function AvCoder({ source }: { source: Source }) {
             <div className="flex shrink-0 items-center gap-1 border-b border-border bg-surface px-3 py-1.5">
               <Captions size={12} className="text-text-secondary" aria-hidden />
               <span className="text-xs font-medium text-text-primary">{t("avCoder.transcript")}</span>
-              <span className="ml-2 truncate text-xs text-text-secondary">{transcript?.name}</span>
               {transcriptId != null && !transcribeMode && (
                 <span className="ml-1 truncate text-[10px] text-text-secondary">
                   {t("avCoder.transcriptSelectHint")}
                 </span>
               )}
               {transcribeMode && (
-                <>
-                  <span className="ml-1 truncate text-[10px] text-accent">
-                    {t("avCoder.transcribeHint")}
-                  </span>
-                  {/* Live current-position readout: the exact "[mm:ss]" the
-                      next Enter/Tab inserts, formatted like the stored
-                      timestamps so the preview never lies. */}
-                  <span
-                    className="ml-1 flex shrink-0 items-center gap-1 text-[10px] text-text-secondary"
-                    title={t("avCoder.transcribeNextTitle")}
-                  >
-                    <Clock size={10} aria-hidden />
-                    {t("avCoder.transcribeNext")}:
-                    <span className="font-mono text-xs text-accent">
-                      {transcriptTimestamp(currentMs)}
-                    </span>
-                  </span>
-                </>
+                <span className="ml-1 truncate text-[10px] text-accent">
+                  {t("avCoder.transcribeHint")}
+                </span>
               )}
               <div className="flex-1" />
               {transcribeMode ? (
@@ -1381,10 +1354,22 @@ export function AvCoder({ source }: { source: Source }) {
                 ref={transcribeAreaRef}
                 value={transcribeDraft}
                 onChange={(e) => {
-                  const v = e.target.value;
+                  // First character of an EMPTY draft: pre-fill the current
+                  // playback position as "[mm:ss] " in front of the typed
+                  // text — transcription starts with the very first
+                  // keystroke, no insert press needed. A transcript-less
+                  // source also gets its companion created lazily here.
+                  let v = e.target.value;
+                  if (transcribeDraft === "" && v !== "") {
+                    v = `${transcriptTimestamp(currentMsRef.current)} ${v}`;
+                  }
                   setTranscribeDraft(v);
                   transcribeDraftRef.current = v;
-                  scheduleTranscribeSave();
+                  if (transcriptId == null) {
+                    void ensureTranscribeCompanion();
+                  } else {
+                    scheduleTranscribeSave();
+                  }
                 }}
                 onKeyDown={(e) => {
                   if (e.key === "Tab") {

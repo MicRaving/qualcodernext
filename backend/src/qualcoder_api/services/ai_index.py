@@ -182,8 +182,13 @@ async def search_index(
     ai: dict,
     query: str,
     limit: int = 10,
+    source_ids: list[int] | None = None,
 ) -> list[dict]:
-    """Semantic search against the stored index (single query embedding)."""
+    """Semantic search against the stored index (single query embedding).
+
+    ``source_ids`` restricts the scan to the chunks of those sources (the
+    search view's files picker acts as a filter).
+    """
     from qualcoder_api.services.ai_service import AiUnavailable
 
     status = index_status(project_path)
@@ -199,10 +204,17 @@ async def search_index(
 
     conn = _connect(project_path)
     try:
-        rows = conn.execute(
-            "SELECT c.source_id, c.source_name, c.text, e.vector FROM chunks c "
-            "JOIN embeddings e ON e.chunk_id = c.chunk_id"
-        ).fetchall()
+        base = (
+            "SELECT c.source_id, c.source_name, c.text, e.vector "
+            "FROM chunks c JOIN embeddings e ON e.chunk_id = c.chunk_id"
+        )
+        if source_ids:
+            placeholders = ",".join("?" * len(source_ids))
+            rows = conn.execute(
+                f"{base} WHERE c.source_id IN ({placeholders})", list(source_ids)
+            ).fetchall()
+        else:
+            rows = conn.execute(base).fetchall()
     finally:
         conn.close()
 

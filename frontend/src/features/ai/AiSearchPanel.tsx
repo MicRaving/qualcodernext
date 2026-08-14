@@ -1,25 +1,65 @@
 /**
- * AiSearchPanel — semantic search over project text sources.
+ * AiSearchPanel — semantic search over project text sources, shown when the
+ * "Semantic search" mode is active. The context pickers (memos / codes /
+ * files) sit between the query box and the results; the selected files
+ * restrict the search to those sources.
  */
 import { useEffect, useState, type FormEvent } from "react";
 import { CircleAlert, LoaderCircle, Search } from "lucide-react";
-import { api, type AiSearchResult, type AiStatus } from "@/lib/api";
+import {
+  ApiError,
+  api,
+  fetchWithTimeout,
+  initApiBase,
+  type AiIndexStatus,
+  type AiSearchResult,
+  type AiStatus,
+} from "@/lib/api";
 import { errorDetail, formatScore, welcomeMessage } from "@/features/ai/format";
 import { Button, ErrorBanner, Input } from "@/components/ui/orchestrator";
 import { useProjectStore } from "@/stores/project";
 import { useI18n } from "@/lib/i18n";
-
+import { ContextPickerArea } from "@/features/ai/ContextPickers";
+import { useContextPickers } from "@/features/ai/contextPickerData";
 type SearchState =
   | { kind: "idle" }
   | { kind: "loading" }
   | { kind: "error"; detail: string }
   | { kind: "done"; results: AiSearchResult[] };
 
+async function runSearch(
+  query: string,
+  sourceIds: number[],
+): Promise<{ results: AiSearchResult[]; indexed?: boolean }> {
+  const base = await initApiBase();
+  const res = await fetchWithTimeout(`${base}/ai/search`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      query,
+      limit: 10,
+      source_ids: sourceIds.length > 0 ? sourceIds : undefined,
+    }),
+  });
+  if (!res.ok) {
+    let detail: unknown;
+    try {
+      detail = (await res.json()).detail;
+    } catch {
+      /* non-JSON error body */
+    }
+    throw new ApiError(res.status, `API error ${res.status} on /ai/search`, detail);
+  }
+  return (await res.json()) as { results: AiSearchResult[]; indexed?: boolean };
+}
+
 export function AiSearchPanel() {
   const { t } = useI18n();
+  const pickers = useContextPickers("search");
   const [query, setQuery] = useState("");
   const [state, setState] = useState<SearchState>({ kind: "idle" });
   const [status, setStatus] = useState<AiStatus | null>(null);
+  const [index, setIndex] = useState<AiIndexStatus | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -36,6 +76,21 @@ export function AiSearchPanel() {
     };
   }, []);
 
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .aiIndexStatus()
+      .then((s) => {
+        if (!cancelled) setIndex(s);
+      })
+      .catch(() => {
+        if (!cancelled) setIndex(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   const disabled = !status?.enabled;
 
   async function handleSearch(e: FormEvent) {
@@ -44,7 +99,7 @@ export function AiSearchPanel() {
     if (!q || disabled || state.kind === "loading") return;
     setState({ kind: "loading" });
     try {
-      const res = await api.aiSearch(q);
+      const res = await runSearch(q, pickers.selectedSourceIds);
       setState({ kind: "done", results: res.results });
     } catch (err) {
       setState({ kind: "error", detail: errorDetail(err) });
@@ -84,6 +139,9 @@ export function AiSearchPanel() {
           </Button>
         </div>
       </form>
+
+      {/* Context pickers: the selected files restrict the search */}
+      <ContextPickerArea pickers={pickers} />
 
       <div className="min-h-0 flex-1 overflow-y-auto p-3">
         <div className="mx-auto max-w-2xl">
@@ -128,6 +186,13 @@ export function AiSearchPanel() {
                 </li>
               ))}
             </ul>
+          )}
+          {index && (
+            <p className="mt-3 text-center text-[10px] text-text-secondary">
+              {index.indexed
+                ? t("ai.indexStatusReady", { chunks: index.chunks, model: index.model })
+                : t("ai.indexStatusNone")}
+            </p>
           )}
         </div>
       </div>

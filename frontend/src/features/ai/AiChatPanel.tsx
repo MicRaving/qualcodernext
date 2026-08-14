@@ -2,31 +2,21 @@
  * AiChatPanel — chat with the project AI assistant. The chat mode and
  * prompt-library selection live in the pane's top bar (AiView).
  *
- * Memo mode ("memo_analysis") shows a memo picker (file + code memos from
- * GET /memos) and sends the selection with the chat request. The "Paraphrase"
- * and "Sentiment" chips send the current input text with the matching
- * prompt-library id.
+ * Each analysis mode shows the matching context picker below the thread
+ * (memos for memo analysis, codes for code analysis, files for text
+ * analysis, all three for topic exploration) and sends the selection with
+ * the chat request. The "Paraphrase" and "Sentiment" chips send the current
+ * input text with the matching prompt-library id.
  */
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
-import { Eraser, LoaderCircle, Search, Send } from "lucide-react";
-import {
-  ApiError,
-  api,
-  fetchWithTimeout,
-  initApiBase,
-  type AiStatus,
-} from "@/lib/api";
+import { Eraser, LoaderCircle, Send } from "lucide-react";
+import { ApiError, api, fetchWithTimeout, initApiBase, type AiStatus } from "@/lib/api";
 import { errorDetail, welcomeMessage } from "@/features/ai/format";
 import { useI18n } from "@/lib/i18n";
-import { useProjectStore } from "@/stores/project";
-import {
-  ErrorBanner,
-  IconButton,
-  Input,
-  SectionLabel,
-  Textarea,
-} from "@/components/ui/orchestrator";
-import type { AiMode } from "@/features/ai/aiModes";
+import { ErrorBanner, IconButton, Textarea } from "@/components/ui/orchestrator";
+import { CONTEXT_PICKER_KINDS, type AiMode } from "@/features/ai/aiModes";
+import { ContextPickerArea } from "@/features/ai/ContextPickers";
+import { useContextPickers } from "@/features/ai/contextPickerData";
 
 type ChatRole = "user" | "assistant" | "error";
 
@@ -35,41 +25,18 @@ interface ChatMessage {
   text: string;
 }
 
-interface MemoEntry {
-  kind: "file" | "code";
-  id: number;
-  name: string;
-  memo: string;
-  date: string;
-  owner: string;
-}
-
 const QUICK_ACTIONS = [
   { promptId: "paraphrase", labelKey: "ai.quickParaphrase" },
   { promptId: "sentiment", labelKey: "ai.quickSentiment" },
 ] as const;
 
-/** Modes that attach memo context to the chat request. */
-const MEMO_MODES: ReadonlySet<AiMode> = new Set([
-  "memo_analysis",
-  "code_analysis",
-  "text_analysis",
-]);
-
-async function fetchMemos(): Promise<MemoEntry[]> {
-  const base = await initApiBase();
-  const res = await fetchWithTimeout(`${base}/memos`);
-  if (!res.ok) throw new ApiError(res.status, `API error ${res.status} on /memos`);
-  const body = (await res.json()) as { memos: MemoEntry[] };
-  return body.memos;
-}
-
-async function chatWithMemos(opts: {
+async function chatWithContext(opts: {
   message: string;
   mode: AiMode;
   promptId?: string;
-  memoIds: number[];
-  sourceId?: number;
+  memoIds?: number[];
+  codeIds?: number[];
+  sourceIds?: number[];
 }): Promise<{ reply: string }> {
   const base = await initApiBase();
   const res = await fetchWithTimeout(`${base}/ai/chat`, {
@@ -81,7 +48,8 @@ async function chatWithMemos(opts: {
       mode: opts.mode,
       prompt_id: opts.promptId,
       memo_ids: opts.memoIds,
-      source_id: opts.sourceId,
+      code_ids: opts.codeIds,
+      source_ids: opts.sourceIds,
     }),
   });
   if (!res.ok) {
@@ -96,129 +64,6 @@ async function chatWithMemos(opts: {
   return (await res.json()) as { reply: string };
 }
 
-function MemoPicker({
-  memos,
-  query,
-  onQuery,
-  selected,
-  onToggle,
-  onSelectAll,
-  onDeselectAll,
-}: {
-  memos: MemoEntry[];
-  query: string;
-  onQuery: (q: string) => void;
-  selected: Set<string>;
-  onToggle: (key: string) => void;
-  onSelectAll: (keys: string[]) => void;
-  onDeselectAll: () => void;
-}) {
-  const { t } = useI18n();
-  const q = query.trim().toLowerCase();
-  const visible = useMemo(
-    () =>
-      memos.filter(
-        (m) =>
-          !q || m.name.toLowerCase().includes(q) || m.memo.toLowerCase().includes(q),
-      ),
-    [memos, q],
-  );
-  const groups = useMemo(
-    () => [
-      {
-        kind: "file",
-        label: t("ai.memosFile"),
-        items: visible.filter((m) => m.kind === "file"),
-      },
-      {
-        kind: "code",
-        label: t("ai.memosCode"),
-        items: visible.filter((m) => m.kind === "code"),
-      },
-    ],
-    [visible, t],
-  );
-  const visibleKeys = useMemo(() => visible.map((m) => `${m.kind}:${m.id}`), [visible]);
-  const allVisibleSelected =
-    visibleKeys.length > 0 && visibleKeys.every((key) => selected.has(key));
-
-  return (
-    <div className="min-w-0 shrink-0 border-t border-border bg-surface px-3 py-2">
-      <div className="mx-auto flex min-w-0 w-full max-w-2xl flex-col gap-1.5">
-        <div className="flex min-w-0 items-center justify-between gap-1.5">
-          <span className="text-[10px] font-semibold uppercase tracking-wide text-text-secondary">
-            {t("ai.contextMemos")}
-          </span>
-          <div className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={() => onSelectAll(visibleKeys)}
-              disabled={visibleKeys.length === 0 || allVisibleSelected}
-              className="text-[11px] text-accent hover:underline disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              {t("ai.selectAll")}
-            </button>
-            <button
-              type="button"
-              onClick={onDeselectAll}
-              disabled={selected.size === 0}
-              className="text-[11px] text-accent hover:underline disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              {t("ai.deselectAll")}
-            </button>
-          </div>
-        </div>
-        <div className="flex min-w-0 items-center gap-1.5">
-          <Search size={12} className="shrink-0 text-text-secondary" aria-hidden />
-          <Input
-            value={query}
-            onChange={(e) => onQuery(e.target.value)}
-            placeholder={t("ai.memosSearch")}
-            aria-label={t("ai.memosSearch")}
-            className="h-7 min-w-0 flex-1 px-2 py-1 text-xs"
-          />
-          <span className="shrink-0 text-[10px] text-text-secondary">
-            {t("ai.memosSelected", { count: selected.size })}
-          </span>
-        </div>
-        <div className="qc-scroll min-w-0 max-h-40 overflow-y-auto rounded-sm border border-border bg-bg p-1">
-          {memos.length === 0 ? (
-            <p className="px-2 py-3 text-center text-xs text-text-secondary">
-              {t("ai.memosEmpty")}
-            </p>
-          ) : (
-            groups.map((group) =>
-              group.items.length === 0 ? null : (
-                <div key={group.kind}>
-                  <SectionLabel>{group.label}</SectionLabel>
-                  {group.items.map((m) => {
-                    const key = `${m.kind}:${m.id}`;
-                    return (
-                      <label
-                        key={key}
-                        className="flex cursor-pointer items-center gap-1.5 rounded-sm px-1.5 py-0.5 text-xs hover:bg-surface-higher"
-                        title={m.memo}
-                      >
-                        <input
-                          type="checkbox"
-                          checked={selected.has(key)}
-                          onChange={() => onToggle(key)}
-                          className="accent-accent"
-                        />
-                        <span className="truncate">{m.name}</span>
-                      </label>
-                    );
-                  })}
-                </div>
-              ),
-            )
-          )}
-        </div>
-      </div>
-    </div>
-  );
-}
-
 export function AiChatPanel({
   mode,
   promptId,
@@ -227,17 +72,12 @@ export function AiChatPanel({
   promptId: string;
 }) {
   const { t } = useI18n();
+  const pickers = useContextPickers(mode);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
   const [waiting, setWaiting] = useState(false);
   const [status, setStatus] = useState<AiStatus | null>(null);
-  const [memos, setMemos] = useState<MemoEntry[] | null>(null);
-  const [memoQuery, setMemoQuery] = useState("");
-  const [selectedKeys, setSelectedKeys] = useState<Set<string>>(new Set());
   const scrollRef = useRef<HTMLDivElement | null>(null);
-  // Text analysis shares the source currently open in the coder (when any).
-  const view = useProjectStore((s) => s.view);
-  const openSourceId = view.kind === "coding" ? view.sourceId : undefined;
 
   useEffect(() => {
     let cancelled = false;
@@ -257,64 +97,15 @@ export function AiChatPanel({
   }, []);
 
   useEffect(() => {
-    if (mode !== "memo_analysis") return;
-    let cancelled = false;
-    setMemos(null);
-    fetchMemos()
-      .then((items) => {
-        if (!cancelled) setMemos(items);
-      })
-      .catch(() => {
-        if (!cancelled) setMemos([]);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [mode]);
-
-  useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
   }, [messages, waiting]);
 
   const disabled = !status?.enabled;
 
-  const memoById = useMemo(
-    () => new Map<string, MemoEntry>((memos ?? []).map((m) => [`${m.kind}:${m.id}`, m])),
-    [memos],
+  const kinds = useMemo(
+    () => CONTEXT_PICKER_KINDS.filter((k) => pickers.required[k]),
+    [pickers.required],
   );
-  const selectedMemoIds = useMemo(
-    () =>
-      Array.from(
-        new Set(
-          [...selectedKeys]
-            .map((key) => memoById.get(key)?.id)
-            .filter((id): id is number => id != null),
-        ),
-      ),
-    [selectedKeys, memoById],
-  );
-
-  function toggleMemo(key: string) {
-    setSelectedKeys((prev) => {
-      const next = new Set(prev);
-      if (next.has(key)) next.delete(key);
-      else next.add(key);
-      return next;
-    });
-  }
-
-  function selectAllMemos(keys: string[]) {
-    if (keys.length === 0) return;
-    setSelectedKeys((prev) => {
-      const next = new Set(prev);
-      for (const key of keys) next.add(key);
-      return next;
-    });
-  }
-
-  function deselectAllMemos() {
-    setSelectedKeys(new Set());
-  }
 
   async function sendWith(promptOverride?: string) {
     const text = input.trim();
@@ -324,15 +115,17 @@ export function AiChatPanel({
     setWaiting(true);
     try {
       const effectivePromptId = promptOverride ?? (promptId || undefined);
-      const res = MEMO_MODES.has(mode)
-        ? await chatWithMemos({
-            message: text,
-            mode,
-            promptId: effectivePromptId,
-            memoIds: selectedMemoIds,
-            sourceId: mode === "text_analysis" ? openSourceId : undefined,
-          })
-        : await api.aiChat(text, "", mode, effectivePromptId);
+      const res =
+        kinds.length > 0
+          ? await chatWithContext({
+              message: text,
+              mode,
+              promptId: effectivePromptId,
+              memoIds: kinds.includes("memos") ? pickers.selectedMemoIds : undefined,
+              codeIds: kinds.includes("codes") ? pickers.selectedCodeIds : undefined,
+              sourceIds: kinds.includes("files") ? pickers.selectedSourceIds : undefined,
+            })
+          : await api.aiChat(text, "", mode, effectivePromptId);
       setMessages((m) => [...m, { role: "assistant", text: res.reply }]);
     } catch (e) {
       setMessages((m) => [...m, { role: "error", text: errorDetail(e) }]);
@@ -397,23 +190,8 @@ export function AiChatPanel({
         </div>
       </div>
 
-      {/* Memo picker (memo/code/text analysis modes) */}
-      {MEMO_MODES.has(mode) && memos !== null && (
-        <MemoPicker
-          memos={memos}
-          query={memoQuery}
-          onQuery={setMemoQuery}
-          selected={selectedKeys}
-          onToggle={toggleMemo}
-          onSelectAll={selectAllMemos}
-          onDeselectAll={deselectAllMemos}
-        />
-      )}
-      {MEMO_MODES.has(mode) && memos === null && (
-        <p className="min-w-0 shrink-0 border-t border-border bg-surface px-3 py-1.5 text-center text-xs text-text-secondary">
-          {t("ai.memosLoading")}
-        </p>
-      )}
+      {/* Context picker (per mode: memos / codes / files) */}
+      {kinds.length > 0 && <ContextPickerArea pickers={pickers} />}
 
       {/* Input row */}
       <div className="min-w-0 shrink-0 border-t border-border bg-surface p-3">

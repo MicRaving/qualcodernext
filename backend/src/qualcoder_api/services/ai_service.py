@@ -41,6 +41,11 @@ CODE_ANALYSIS_PATH_DEPTH = 5
 
 # Text-analysis context: fulltext of the open source, capped.
 SOURCE_CONTEXT_MAX_CHARS = 6000
+# Several selected sources together: per-source cap above, whole block capped.
+SOURCE_SELECTION_MAX_CHARS = 12000
+# Topic exploration with explicit selections: union of the selected memos,
+# codes and sources, capped defensively (each part is capped individually).
+TOPIC_SELECTION_MAX_CHARS = 12000
 
 
 class AiUnavailable(Exception):
@@ -97,6 +102,11 @@ def _truncate_memo(memo: str, max_chars: int = CHUNK_MAX_CHARS) -> str:
     return memo if len(memo) <= max_chars else memo[:max_chars]
 
 
+def _cap_text(text: str, max_chars: int) -> str:
+    """Truncate without stripping — preserves already-trimmed blocks."""
+    return text if len(text) <= max_chars else text[:max_chars]
+
+
 class AiService:
     """Async client for OpenAI-compatible chat and embeddings endpoints."""
 
@@ -140,26 +150,52 @@ class AiService:
         prompt_id: str | None = None,
         memo_ids: list[int] | None = None,
         source_id: int | None = None,
+        code_ids: list[int] | None = None,
+        source_ids: list[int] | None = None,
     ) -> dict:
         ok, _ = self.is_configured(ai)
         if not ok:
             raise AiUnavailable("AI is not configured")
-        if memo_ids or mode == "memo_analysis":
-            memo_context = await self._memo_context(memo_ids)
-            if memo_context:
-                context = f"{memo_context}\n\n{context}" if context else memo_context
-        if mode in PROJECT_CONTEXT_MODES:
-            if mode == "code_analysis":
-                project_context = await self._code_analysis_context(ai)
-            elif mode == "text_analysis" and source_id is not None:
-                # Unknown/empty source falls back to the project summary.
-                project_context = (
-                    await self._source_context(ai, source_id) or await self._project_context(ai)
-                )
+        # Per-mode context, assembled from the mode's picker selections:
+        # - memo_analysis   → the selected memos (all when none selected)
+        # - code_analysis   → the selected codes (memo + counts + examples)
+        # - text_analysis   → the selected sources' fulltext (open source
+        #                     ``source_id`` still works; falls back to the
+        #                     project summary when nothing matches)
+        # - topic_exploration → union of the selected memos/codes/sources,
+        #                     else the default project summary
+        # - search          → index-based, no chat context
+        blocks: list[str] = []
+        if mode == "memo_analysis":
+            block = await self._memo_context(memo_ids)
+            if block:
+                blocks.append(block)
+        elif mode == "code_analysis":
+            block = await self._code_analysis_context(ai, code_ids)
+            if block:
+                blocks.append(block)
+        elif mode == "text_analysis":
+            ids = source_ids if source_ids else ([source_id] if source_id is not None else None)
+            block = await self._text_analysis_context(ai, ids)
+            if not block:
+                # Unknown/empty sources fall back to the project summary.
+                block = await self._project_context(ai)
+            if block:
+                blocks.append(block)
+        elif mode == "topic_exploration":
+            if memo_ids or code_ids or source_ids:
+                block = await self._selection_context(ai, memo_ids, code_ids, source_ids)
             else:
-                project_context = await self._project_context(ai)
-            if project_context:
-                context = f"{project_context}\n\n{context}" if context else project_context
+                block = await self._project_context(ai)
+            if block:
+                blocks.append(block)
+        elif mode in PROJECT_CONTEXT_MODES:
+            block = await self._project_context(ai)
+            if block:
+                blocks.append(block)
+        if blocks:
+            joined = "\n\n".join(blocks)
+            context = f"{joined}\n\n{context}" if context else joined
         from qualcoder_api.services.ai_prompts import prompt_for, system_prompt_for
 
         system_prompt = system_prompt_for(mode)
@@ -294,7 +330,9 @@ class AiService:
         lines.append(f"Cases: {case_count}")
         return _truncate_memo("\n".join(lines), PROJECT_CONTEXT_MAX_CHARS)
 
-    async def _code_analysis_context(self, ai: dict) -> str:
+    async def _code_analysis_context(
+        self, ai: dict, code_ids: list[int] | None = None
+    ) -> str:
         """Code-aware context for the ``code_analysis`` chat mode.
 
         Shares the code tree (names with their category/sub-code path)
@@ -303,6 +341,9 @@ class AiService:
         truncated to 120 chars, with the source file name). At most 30
         codes are shown and the whole block is capped at
         ``CODE_ANALYSIS_MAX_CHARS``.
+
+        ``code_ids`` restricts the block to those codes (still capped);
+        ``None`` shares the default code tree.
 
         Same gating and failure behavior as ``_project_context`` (read-only
         queries, skipped gracefully on any error).
@@ -345,7 +386,11 @@ class AiService:
                         select(table.c.cid, func.count()).group_by(table.c.cid)
                     ):
                         counts[cid] = counts.get(cid, 0) + n
-                selected = code_rows[:CODE_ANALYSIS_MAX_CODES]
+                if code_ids:
+                    wanted = set(code_ids)
+                    selected = [row for row in code_rows if row.cid in wanted]
+                else:
+                    selected = code_rows[:CODE_ANALYSIS_MAX_CODES]
                 cid_list = [row.cid for row in selected]
                 examples: dict[int, list[tuple[str, str]]] = {cid: [] for cid in cid_list}
                 if cid_list:
@@ -394,7 +439,11 @@ class AiService:
 
         lines = [
             "CODE ANALYSIS CONTEXT",
-            f"Codes: {len(code_rows)} total, {len(selected)} shown",
+            (
+                f"Codes: {len(code_rows)} total, {len(selected)} selected"
+                if code_ids
+                else f"Codes: {len(code_rows)} total, {len(selected)} shown"
+            ),
         ]
         for row in selected:
             name = row.name or f"code {row.cid}"
@@ -449,7 +498,59 @@ class AiService:
         text = _truncate_memo(fulltext, SOURCE_CONTEXT_MAX_CHARS)
         return f"TEXT ANALYSIS SOURCE\n# {name or source_id}\n\n{text}"
 
-    async def semantic_search(self, ai: dict, query: str, limit: int = 10) -> dict:
+    async def _text_analysis_context(
+        self, ai: dict, source_ids: list[int] | None
+    ) -> str:
+        """Fulltext of the selected sources for the ``text_analysis`` mode.
+
+        Reuses ``_source_context`` per id (each source capped at
+        ``SOURCE_CONTEXT_MAX_CHARS``); the joined block is capped at
+        ``SOURCE_SELECTION_MAX_CHARS``. ``None``/empty ids and sources
+        without fulltext produce "" — the caller falls back to the generic
+        project summary. Same gating as ``_source_context``.
+        """
+        if not source_ids:
+            return ""
+        blocks: list[str] = []
+        for source_id in source_ids:
+            block = await self._source_context(ai, source_id)
+            if block:
+                blocks.append(block)
+        if not blocks:
+            return ""
+        return _cap_text("\n\n".join(blocks), SOURCE_SELECTION_MAX_CHARS)
+
+    async def _selection_context(
+        self,
+        ai: dict,
+        memo_ids: list[int] | None,
+        code_ids: list[int] | None,
+        source_ids: list[int] | None,
+    ) -> str:
+        """Union of the explicitly selected entities for topic exploration.
+
+        Combines the selected memos, codes (memo + coding counts + example
+        segments) and source fulltexts into one labelled block, capped
+        defensively at ``TOPIC_SELECTION_MAX_CHARS`` (each part is already
+        capped individually).
+        """
+        blocks: list[str] = []
+        memo_block = await self._memo_context(memo_ids)
+        if memo_block:
+            blocks.append(memo_block)
+        code_block = await self._code_analysis_context(ai, code_ids)
+        if code_block:
+            blocks.append(code_block)
+        source_block = await self._text_analysis_context(ai, source_ids)
+        if source_block:
+            blocks.append(source_block)
+        if not blocks:
+            return ""
+        return _cap_text("\n\n".join(blocks), TOPIC_SELECTION_MAX_CHARS)
+
+    async def semantic_search(
+        self, ai: dict, query: str, limit: int = 10, source_ids: list[int] | None = None
+    ) -> dict:
         ok, _ = self.is_configured(ai)
         if not ok:
             raise AiUnavailable("AI is not configured")
@@ -466,7 +567,9 @@ class AiService:
                 status = ai_index.index_status(project_path)
                 if status.get("indexed") and status.get("model") == ai.get("model"):
                     try:
-                        results = await ai_index.search_index(project_path, ai, query, limit)
+                        results = await ai_index.search_index(
+                            project_path, ai, query, limit, source_ids=source_ids
+                        )
                         return {"results": results, "indexed": True}
                     except AiUnavailable:
                         pass
@@ -504,6 +607,11 @@ class AiService:
             if mediapath and not mediapath.startswith(("/docs/", "docs:")):
                 continue
             chunks.extend(_chunk_text(source, fulltext))
+        if source_ids:
+            # The files context picker acts as a search filter: only the
+            # chunks of the selected sources are embedded and scored.
+            allowed = set(source_ids)
+            chunks = [c for c in chunks if c["source_id"] in allowed]
         if not chunks:
             return {"results": [], "indexed": False}
 

@@ -1,6 +1,6 @@
 /**
- * ImportPreview — the interchange import manager (embedded in the Settings
- * pane).
+ * ImportPreview — the interchange import manager (hosted in a Modal
+ * overlay opened from the Settings Import/Export section).
  *
  * Critcomp-inspired layout: a dashed drop zone with an accent drag-over
  * flip, a per-file list with detected/forced format, size and a tinted
@@ -10,8 +10,11 @@
  * batch sequentially through the existing auto-detect endpoint.
  *
  * Overall progress rides the store's background-import task (the ribbon
- * queue chip); per-file status lives in the list. After a successful
- * import the classic result card stays visible (counts per entity).
+ * queue chip); per-file status lives in the list. Closing the overlay
+ * mid-import keeps the batch running in the background — the async loop
+ * drives the store task directly, so an unmount does not interrupt it;
+ * the finished task stays in the queue flyout. After a successful import
+ * the classic result card stays visible (counts per entity).
  */
 import { useRef, useState, type ChangeEvent, type DragEvent } from "react";
 import {
@@ -472,6 +475,11 @@ export function ImportPreview() {
           </div>
         )}
       </div>
+      {busy && (
+        <p className="mt-1.5 text-[10px] text-text-secondary">
+          {t("interchange.importBackgroundNote")}
+        </p>
+      )}
 
       {/* Result card — the counts of the last successful import stay visible. */}
       {lastResult?.ok && (

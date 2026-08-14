@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import subprocess
 from unittest.mock import patch
 
 import pytest
@@ -111,6 +112,22 @@ Second line
 """
 
 
+def yt_completed(
+    info: dict, returncode: int = 0, stderr: str = ""
+) -> subprocess.CompletedProcess:
+    """A canned yt-dlp subprocess result (exit 0 + JSON on stdout)."""
+    return subprocess.CompletedProcess(
+        ["python", "-m", "yt_dlp"],
+        returncode,
+        stdout=json.dumps(info).encode("utf-8"),
+        stderr=stderr.encode("utf-8"),
+    )
+
+
+def record_yt_calls(mock) -> list[list[str]]:
+    return [call.args[0] for call in mock.call_args_list]
+
+
 class FakeYoutubeDL:
     """Minimal yt-dlp stand-in: extract_info returns a fixed info dict."""
 
@@ -123,18 +140,6 @@ class FakeYoutubeDL:
 
     def close(self):
         pass
-
-
-def make_ydl_factory(info: dict) -> tuple[list, ...]:
-    """Patch side_effect that builds a FakeYoutubeDL and records its options."""
-    created: list[FakeYoutubeDL] = []
-
-    def factory(options=None):
-        ydl = FakeYoutubeDL(options=options, info=info)
-        created.append(ydl)
-        return ydl
-
-    return factory, created
 
 
 def make_youtube_info(**overrides) -> dict:
@@ -412,6 +417,7 @@ def test_article_empty_page_raises():
 # ----------------------------------------------------------------------
 
 def test_youtube_extracts_comments_instead_of_captions():
+    """The subprocess path requests comments and renders them (no captions)."""
     info = make_youtube_info(
         comments=[
             {
@@ -434,14 +440,17 @@ def test_youtube_extracts_comments_instead_of_captions():
             {"id": "3", "text": "No author, no meta"},
         ]
     )
-    factory, created = make_ydl_factory(info)
     with (
-        patch("qualcoder_api.services.scrape_service.yt_dlp.YoutubeDL", side_effect=factory),
+        patch("qualcoder_api.services.scrape_service.subprocess.run", return_value=yt_completed(info)) as run,
         patch("qualcoder_api.services.scrape_service.fetch_url") as fetch,
     ):
         content = scrape_service.scrape_youtube("https://www.youtube.com/watch?v=abc")
 
-    assert created[0].options.get("getcomments") is True
+    commands = record_yt_calls(run)
+    assert len(commands) == 1
+    assert "--getcomments" in commands[0]
+    assert "--dump-single-json" in commands[0]
+    assert commands[0][-2:] == ["--", "https://www.youtube.com/watch?v=abc"]
     fetch.assert_not_called()  # captions are dropped when comments exist
     assert content.mode == "youtube"
     assert content.filename == "Demo Video.txt"
@@ -457,10 +466,23 @@ def test_youtube_extracts_comments_instead_of_captions():
     assert "Hello caption text" not in text
 
 
+def test_youtube_subprocess_parses_playlist_wrapper():
+    """--no-playlist can still yield a playlist wrapper; the first entry wins."""
+    info = make_youtube_info(comments=[])
+    wrapper = {"_type": "playlist", "entries": [info]}
+    with (
+        patch("qualcoder_api.services.scrape_service.subprocess.run", return_value=yt_completed(wrapper)),
+        patch("qualcoder_api.services.scrape_service.fetch_url", return_value=VTT_CAPTIONS),
+    ):
+        content = scrape_service.scrape_youtube("https://www.youtube.com/watch?v=abc")
+
+    assert "Demo Video" in content.data.decode("utf-8")
+
+
 def test_youtube_falls_back_to_captions_when_comments_missing():
     info = make_youtube_info(comments=[])
     with (
-        patch("qualcoder_api.services.scrape_service.yt_dlp.YoutubeDL", return_value=FakeYoutubeDL(info=info)),
+        patch("qualcoder_api.services.scrape_service.subprocess.run", return_value=yt_completed(info)),
         patch("qualcoder_api.services.scrape_service.fetch_url", return_value=VTT_CAPTIONS),
     ):
         content = scrape_service.scrape_youtube("https://www.youtube.com/watch?v=abc")
@@ -474,7 +496,7 @@ def test_youtube_falls_back_to_captions_when_comments_missing():
 def test_youtube_without_comments_or_captions_keeps_header():
     info = make_youtube_info(subtitles={}, automatic_captions={}, comments=[])
     with (
-        patch("qualcoder_api.services.scrape_service.yt_dlp.YoutubeDL", return_value=FakeYoutubeDL(info=info)),
+        patch("qualcoder_api.services.scrape_service.subprocess.run", return_value=yt_completed(info)),
         patch("qualcoder_api.services.scrape_service.fetch_url") as fetch,
     ):
         content = scrape_service.scrape_youtube("https://www.youtube.com/watch?v=abc")
@@ -489,15 +511,14 @@ def test_youtube_without_comments_or_captions_keeps_header():
 
 def test_youtube_reports_when_comment_extraction_unsupported():
     info = make_youtube_info()
-    factory, created = make_ydl_factory(info)
     with (
         patch.object(scrape_service, "_YT_DLP_COMMENTS_SUPPORTED", False),
-        patch("qualcoder_api.services.scrape_service.yt_dlp.YoutubeDL", side_effect=factory),
+        patch("qualcoder_api.services.scrape_service.subprocess.run", return_value=yt_completed(info)) as run,
         patch("qualcoder_api.services.scrape_service.fetch_url") as fetch,
     ):
         content = scrape_service.scrape_youtube("https://www.youtube.com/watch?v=abc")
 
-    assert "getcomments" not in created[0].options
+    assert "--getcomments" not in record_yt_calls(run)[0]
     fetch.assert_not_called()
     text = content.data.decode("utf-8")
     assert "Demo Video" in text
@@ -509,7 +530,7 @@ def test_youtube_reports_when_comment_extraction_unsupported():
 def test_youtube_caption_fetch_failure_keeps_header():
     info = make_youtube_info(comments=[])
     with (
-        patch("qualcoder_api.services.scrape_service.yt_dlp.YoutubeDL", return_value=FakeYoutubeDL(info=info)),
+        patch("qualcoder_api.services.scrape_service.subprocess.run", return_value=yt_completed(info)),
         patch(
             "qualcoder_api.services.scrape_service.fetch_url",
             side_effect=ScrapeError("server returned HTTP 403"),
@@ -522,15 +543,98 @@ def test_youtube_caption_fetch_failure_keeps_header():
     assert "Captions" not in text
 
 
-def test_youtube_abort_signal_maps_to_friendly_error():
-    """yt-dlp's internal abort (KeyboardInterrupt out of extract_info) must
-    surface as the friendly ValueError — not as the raw signal."""
+def test_youtube_subprocess_abort_retries_without_comments():
+    """An aborting subprocess (exit 1 + 'Interrupted by user') is retried once
+    without --getcomments; the import then falls back to captions."""
+    abort = yt_completed({}, returncode=1, stderr="ERROR: Interrupted by user\n")
+    ok_without_comments = yt_completed(make_youtube_info(comments=[]))
+    with (
+        patch(
+            "qualcoder_api.services.scrape_service.subprocess.run",
+            side_effect=[abort, ok_without_comments],
+        ) as run,
+        patch("qualcoder_api.services.scrape_service.fetch_url", return_value=VTT_CAPTIONS),
+    ):
+        content = scrape_service.scrape_youtube("https://www.youtube.com/watch?v=abc")
+
+    commands = record_yt_calls(run)
+    assert len(commands) == 2
+    assert "--getcomments" in commands[0]
+    assert "--getcomments" not in commands[1]
+    text = content.data.decode("utf-8")
+    assert "Demo Video" in text
+    assert "[00:01] Hello caption text" in text
+    assert "Comments" not in text
+
+
+def test_youtube_subprocess_abort_without_retry_maps_to_friendly_error():
+    """When comments are unsupported there is nothing to retry: the abort
+    surfaces as the friendly, actionable message — not the raw signal."""
+    abort = yt_completed({}, returncode=1, stderr="ERROR: Interrupted by user\n")
+    with (
+        patch.object(scrape_service, "_YT_DLP_COMMENTS_SUPPORTED", False),
+        patch("qualcoder_api.services.scrape_service.subprocess.run", return_value=abort),
+        pytest.raises(ValueError, match="was interrupted"),
+    ):
+        scrape_service.scrape_youtube("https://www.youtube.com/watch?v=abc")
+
+
+def test_youtube_subprocess_exit_101_maps_to_friendly_error():
+    """DownloadCancelled exits 101 ('Aborting remaining downloads')."""
+    cancelled = yt_completed({}, returncode=101, stderr="")
+    with (
+        patch("qualcoder_api.services.scrape_service.subprocess.run", return_value=cancelled),
+        pytest.raises(ValueError, match="was interrupted"),
+    ):
+        scrape_service.scrape_youtube("https://www.youtube.com/watch?v=abc")
+
+
+def test_youtube_subprocess_real_failure_surfaces_stderr_detail():
+    err = yt_completed({}, returncode=1, stderr="ERROR: Unsupported URL: https://x\n")
+    with (
+        patch("qualcoder_api.services.scrape_service.subprocess.run", return_value=err),
+        pytest.raises(ScrapeError, match=r"extraction failed: Unsupported URL: https://x"),
+    ):
+        scrape_service.scrape_youtube("https://www.youtube.com/watch?v=abc")
+
+
+def test_youtube_subprocess_garbage_stdout_maps_to_no_metadata():
+    garbage = subprocess.CompletedProcess(["python", "-m", "yt_dlp"], 0, stdout=b"not json")
+    with (
+        patch("qualcoder_api.services.scrape_service.subprocess.run", return_value=garbage),
+        pytest.raises(ScrapeError, match="no metadata"),
+    ):
+        scrape_service.scrape_youtube("https://www.youtube.com/watch?v=abc")
+
+
+def test_youtube_subprocess_timeout_kills_and_raises_friendly_error():
+    """subprocess.run raises TimeoutExpired (it killed the child already);
+    the scrape surfaces the friendly timeout error."""
+    with (
+        patch.object(scrape_service, "_YT_TIMEOUT_SECONDS", 0.2),
+        patch(
+            "qualcoder_api.services.scrape_service.subprocess.run",
+            side_effect=subprocess.TimeoutExpired(["python", "-m", "yt_dlp"], 0.2),
+        ),
+        pytest.raises(ScrapeError, match="timed out"),
+    ):
+        scrape_service.scrape_youtube("https://www.youtube.com/watch?v=abc")
+
+
+# ----------------------------------------------------------------------
+# YouTube — in-process fallback (PyInstaller-frozen builds)
+# ----------------------------------------------------------------------
+
+def test_youtube_fallback_abort_signal_maps_to_friendly_error():
+    """The frozen-build fallback still maps yt-dlp's internal abort
+    (KeyboardInterrupt out of extract_info) to the friendly error."""
 
     class AbortingYoutubeDL(FakeYoutubeDL):
         def extract_info(self, url, download=False):
             raise KeyboardInterrupt("signal aborted without reason")
 
     with (
+        patch.object(scrape_service, "_YT_SUBPROCESS_ENABLED", False),
         patch(
             "qualcoder_api.services.scrape_service.yt_dlp.YoutubeDL",
             return_value=AbortingYoutubeDL(info=make_youtube_info()),
@@ -540,7 +644,7 @@ def test_youtube_abort_signal_maps_to_friendly_error():
         scrape_service.scrape_youtube("https://www.youtube.com/watch?v=abc")
 
 
-def test_youtube_abort_string_in_download_error_maps_to_friendly_error():
+def test_youtube_fallback_abort_string_in_download_error_maps_to_friendly_error():
     """Some platforms report the abort as a DownloadError naming the signal
     instead of a KeyboardInterrupt."""
 
@@ -549,6 +653,7 @@ def test_youtube_abort_string_in_download_error_maps_to_friendly_error():
             raise yt_dlp.utils.DownloadError("signal aborted without reason")
 
     with (
+        patch.object(scrape_service, "_YT_SUBPROCESS_ENABLED", False),
         patch(
             "qualcoder_api.services.scrape_service.yt_dlp.YoutubeDL",
             return_value=AbortingYoutubeDL(info=make_youtube_info()),
@@ -558,9 +663,9 @@ def test_youtube_abort_string_in_download_error_maps_to_friendly_error():
         scrape_service.scrape_youtube("https://www.youtube.com/watch?v=abc")
 
 
-def test_youtube_abort_during_comments_retries_without_getcomments():
-    """An abort on the comment-extracting call is retried once with metadata
-    only; the import then falls back to captions instead of failing."""
+def test_youtube_fallback_abort_during_comments_retries_without_getcomments():
+    """The fallback retries an abort on the comment-extracting call once with
+    metadata only; the import then falls back to captions instead of failing."""
     created: list[FakeYoutubeDL] = []
 
     def factory(options=None):
@@ -576,6 +681,7 @@ def test_youtube_abort_during_comments_retries_without_getcomments():
         return ydl
 
     with (
+        patch.object(scrape_service, "_YT_SUBPROCESS_ENABLED", False),
         patch("qualcoder_api.services.scrape_service.yt_dlp.YoutubeDL", side_effect=factory),
         patch("qualcoder_api.services.scrape_service.fetch_url", return_value=VTT_CAPTIONS),
     ):
@@ -583,16 +689,15 @@ def test_youtube_abort_during_comments_retries_without_getcomments():
 
     assert len(created) == 2
     assert created[0].options.get("getcomments") is True
-    assert created[1].options.get("getcomments") is False
+    assert created[1].options.get("getcomments") is not True
     text = content.data.decode("utf-8")
     assert "Demo Video" in text
     assert "[00:01] Hello caption text" in text
     assert "Comments" not in text
 
 
-def test_youtube_hang_times_out_with_friendly_error():
-    """A hanging extractor must be cut off by the wait_for guard (not block
-    the import forever) and surface a friendly timeout error."""
+def test_youtube_fallback_hang_times_out_with_friendly_error():
+    """A hanging fallback extractor surfaces the friendly timeout error."""
     import time
 
     class SlowYoutubeDL(FakeYoutubeDL):
@@ -601,6 +706,7 @@ def test_youtube_hang_times_out_with_friendly_error():
             return self.info
 
     with (
+        patch.object(scrape_service, "_YT_SUBPROCESS_ENABLED", False),
         patch.object(scrape_service, "_YT_TIMEOUT_SECONDS", 0.2),
         patch(
             "qualcoder_api.services.scrape_service.yt_dlp.YoutubeDL",
@@ -611,17 +717,145 @@ def test_youtube_hang_times_out_with_friendly_error():
         scrape_service.scrape_youtube("https://www.youtube.com/watch?v=abc")
 
 
+def test_youtube_fallback_runs_when_subprocess_cannot_start():
+    """A spawn failure (OSError, e.g. the interpreter is gone) must degrade
+    to the in-process path instead of failing the import."""
+    info = make_youtube_info(comments=[])
+    with (
+        patch("qualcoder_api.services.scrape_service.subprocess.run", side_effect=OSError("no python")),
+        patch("qualcoder_api.services.scrape_service.yt_dlp.YoutubeDL", return_value=FakeYoutubeDL(info=info)),
+        patch("qualcoder_api.services.scrape_service.fetch_url", return_value=VTT_CAPTIONS),
+    ):
+        content = scrape_service.scrape_youtube("https://www.youtube.com/watch?v=abc")
+
+    assert "Demo Video" in content.data.decode("utf-8")
+
+
+def test_youtube_subprocess_not_used_in_frozen_builds():
+    """PyInstaller-frozen builds have no ``sys.executable -m yt_dlp``; the
+    subprocess path is disabled at import time there."""
+    assert scrape_service._YT_SUBPROCESS_ENABLED is True  # dev/tests run unfrozen
+    assert hasattr(scrape_service, "_yt_cli_command")
+
+
 # ----------------------------------------------------------------------
-# Raw HTML capture
+# Raw HTML capture (offline snapshot)
 # ----------------------------------------------------------------------
 
-def test_html_mode_keeps_raw_bytes():
+SNAPSHOT_PAGE = b"""<!DOCTYPE html>
+<html>
+<head>
+<title>Snapshot Page</title>
+<link rel="stylesheet" href="/styles/main.css">
+</head>
+<body>
+<img src="images/pic.png" alt="A picture">
+<p>Offline-ready text.</p>
+</body>
+</html>"""
+
+SNAPSHOT_CSS = b"""@font-face { font-family: "Custom"; src: url("fonts/custom.woff2") format("woff2"); }
+body { background: url(https://other.example/bg.png); }
+"""
+
+SNAPSHOT_PNG = b"\x89PNG\r\n\x1a\n" + b"0123456789"
+SNAPSHOT_FONT = b"wOF2-fake-font-bytes"
+
+
+def snapshot_resources() -> dict:
+    """Page + sub-resources keyed by the absolute URL the rewriter resolves."""
+    return {
+        "https://example.org/page": SNAPSHOT_PAGE,
+        "https://example.org/styles/main.css": SNAPSHOT_CSS,
+        "https://example.org/images/pic.png": SNAPSHOT_PNG,
+        "https://example.org/styles/fonts/custom.woff2": SNAPSHOT_FONT,
+    }
+
+
+def test_html_mode_inlines_css_images_and_fonts():
+    """The offline snapshot inlines same-origin stylesheets (with their
+    fonts rewritten to data: URIs, resolved against the CSS's own URL) and
+    images; cross-origin resources stay as links; no relative URLs remain."""
+    resources = snapshot_resources()
+
+    def fake_fetch(url: str, timeout: int = 45) -> bytes:
+        return resources[url]
+
+    with patch("qualcoder_api.services.scrape_service.fetch_url", side_effect=fake_fetch):
+        content = scrape_service.scrape_html("https://example.org/page")
+
+    assert content.mode == "html"
+    assert content.filename == "Snapshot Page.html"
+    text = content.data.decode("utf-8")
+    # CSS inlined into a <style> block with the font as a data: URI
+    assert "<style>" in text
+    assert "</style>" in text
+    assert "@font-face" in text
+    assert "data:font/woff2;base64," in text
+    assert "custom.woff2" not in text
+    assert "https://example.org/styles/fonts/custom.woff2" not in text
+    # Image inlined as a data: URI
+    assert 'src="data:image/png;base64,' in text
+    assert "images/pic.png" not in text
+    # Stylesheet link consumed; cross-origin CSS reference kept
+    assert "/styles/main.css" not in text
+    assert "https://other.example/bg.png" in text
+    # Encoding pinned so the saved file re-renders its own text
+    assert '<meta charset="utf-8">' in text
+    assert "Offline-ready text." in text
+
+
+def test_html_mode_keeps_original_urls_when_subresources_fail():
+    """A sub-resource that cannot be fetched must not break the capture —
+    its original URL stays in place."""
+
+    def fake_fetch(url: str, timeout: int = 45) -> bytes:
+        if url == "https://example.org/page":
+            return SNAPSHOT_PAGE
+        raise ScrapeError("server returned HTTP 404 for " + url, code=404)
+
+    with patch("qualcoder_api.services.scrape_service.fetch_url", side_effect=fake_fetch):
+        content = scrape_service.scrape_html("https://example.org/page")
+
+    text = content.data.decode("utf-8")
+    assert 'href="/styles/main.css"' in text
+    assert 'src="images/pic.png"' in text
+    assert "data:" not in text
+    assert "Offline-ready text." in text
+
+
+def test_html_mode_skips_oversized_images():
+    """Images over the 1 MB per-image cap keep their original URL."""
+    resources = snapshot_resources()
+    page = resources["https://example.org/page"].replace(b"images/pic.png", b"/huge.png")
+    resources["https://example.org/page"] = page
+
+    def fake_fetch(url: str, timeout: int = 45) -> bytes:
+        if url == "https://example.org/huge.png":
+            return b"x" * (1 * 1024 * 1024 + 1)
+        return resources[url]
+
+    with patch("qualcoder_api.services.scrape_service.fetch_url", side_effect=fake_fetch):
+        content = scrape_service.scrape_html("https://example.org/page")
+
+    text = content.data.decode("utf-8")
+    assert 'src="/huge.png"' in text
+    assert "data:image" not in text
+
+
+def test_html_mode_rewrites_page_without_subresources():
+    """A page with no sub-resources round-trips: markup and text preserved,
+    the encoding meta added, nothing inlined."""
     with patch("qualcoder_api.services.scrape_service.fetch_url", return_value=ARTICLE_HTML):
         content = scrape_service.scrape_html("https://example.org/page")
 
     assert content.mode == "html"
     assert content.filename == "Testing Article.html"
-    assert content.data == ARTICLE_HTML
+    text = content.data.decode("utf-8")
+    assert "The first paragraph of the article body with real content." in text
+    assert "Navigation noise that should not appear." in text
+    assert '<meta charset="utf-8">' in text
+    assert "data:" not in text
 
 
 # ----------------------------------------------------------------------

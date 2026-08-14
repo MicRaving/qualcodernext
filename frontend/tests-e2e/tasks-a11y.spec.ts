@@ -119,10 +119,10 @@ test("files-view batch autocode queues background tasks with queue controls", as
   await rowA.locator('input[type="checkbox"]').check();
   await rowB.locator('input[type="checkbox"]').check();
 
-  // The batch buttons appear with the selection counts (eligible/total):
-  // Transcribe only counts AV media (none here → disabled), Autocode counts
-  // text sources (both → enabled).
-  const transcribeBtn = page.getByRole("button", { name: "Transcribe (0/2)" });
+  // The batch buttons appear with the eligible counts: Transcribe only
+  // counts AV media (none here → "Transcribe (0)", disabled), Autocode
+  // counts text sources (both → "Autocode (2/2)").
+  const transcribeBtn = page.getByRole("button", { name: "Transcribe (0)" });
   const autocodeBtn = page.getByRole("button", { name: "Autocode (2/2)" });
   await expect(transcribeBtn).toBeVisible();
   await expect(transcribeBtn).toBeDisabled();
@@ -221,12 +221,9 @@ test("coder flyout stays in the viewport and hosts per-row delete + background t
   await defaultRow.getByRole("button", { name: "Delete", exact: true }).click();
   await expect(defaultRow).toHaveCount(0, { timeout: 10_000 });
 
-  // The flyout hosts the background-tasks section with its queue controls.
-  await expect(flyout.getByText("Background tasks", { exact: true })).toBeVisible();
-  await expect(flyout.getByText("No background tasks.")).toBeVisible();
-  await expect(flyout.getByRole("button", { name: "Start", exact: true })).toBeVisible();
-  await expect(flyout.getByRole("button", { name: "Pause", exact: true })).toBeVisible();
-  await expect(flyout.getByRole("button", { name: "Clear all", exact: true })).toBeVisible();
+  // The coder flyout hosts the sync section: the yellow "Sync now" button
+  // (background-task controls live in the task-queue flyout instead).
+  await expect(flyout.getByRole("button", { name: /Sync now/ })).toBeVisible();
 });
 
 test("sidebars hide when dragged past the minimum and recall via edge arrow", async ({ page }) => {

@@ -22,6 +22,7 @@ import {
   FileText,
   Globe,
   Link2,
+  LoaderCircle,
   Pencil,
   Replace,
   Sparkles,
@@ -141,6 +142,7 @@ export function FileManager() {
   const [activeFilter, setActiveFilter] = useState<number | "">("");
   const [batchTranscribe, setBatchTranscribe] = useState<number[] | null>(null);
   const [batchAutocode, setBatchAutocode] = useState<number[] | null>(null);
+  const [deleting, setDeleting] = useState<{ done: number; total: number } | null>(null);
   const [urlImportOpen, setUrlImportOpen] = useState(false);
 
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -430,20 +432,44 @@ export function FileManager() {
   }
 
   async function deleteSelected() {
-    if (selected.size === 0) return;
+    if (deleting || selected.size === 0) return;
     const n = selected.size;
     if (!window.confirm(t("files.deleteSelectedConfirm", { n }))) return;
     setActionError(null);
+    const ids = [...selected];
+    setDeleting({ done: 0, total: n });
+    let deleted = 0;
+    let failed: string | null = null;
     try {
-      for (const id of selected) {
-        await api.deleteSource(id);
+      for (let i = 0; i < ids.length; i++) {
+        try {
+          await api.deleteSource(ids[i]);
+          deleted += 1;
+          // Drop the row from the store list right away: the table renders
+          // store sources, so each successful delete disappears immediately
+          // without waiting for a final refetch.
+          useProjectStore.setState((s) => ({
+            sources: s.sources.filter((x) => x.id !== ids[i]),
+          }));
+        } catch (e) {
+          // A single failure must not abort the batch (the old code bailed
+          // out of the loop and skipped the refresh, leaving already-deleted
+          // rows visible). Record it and keep going.
+          if (!failed) failed = e instanceof Error ? e.message : t("files.deleteError");
+        }
+        setDeleting({ done: i + 1, total: n });
       }
-      setSelected(new Set());
-      await useProjectStore.getState().refreshProject();
-      toast.success(t("files.deletedSelected", { n }));
-    } catch (e) {
-      setActionError(e instanceof Error ? e.message : t("files.deleteError"));
+    } finally {
+      setDeleting(null);
     }
+    setSelected(new Set());
+    if (failed) setActionError(failed);
+    // Reconcile through the same path the working single-row delete uses
+    // (load() refetches sources and always sets them; refreshProject() runs
+    // a 5-way Promise.all and swallows failures, so it can skip the sources
+    // update when any other endpoint errors).
+    await load();
+    if (deleted > 0) toast.success(t("files.deletedSelected", { n: String(deleted) }));
   }
 
   // Eligible selection counts for the batch buttons: transcribe only AV
@@ -564,7 +590,7 @@ export function FileManager() {
             <Button
               variant="secondary"
               onClick={() => openBatchTranscribe()}
-              disabled={eligibleTranscribe.length === 0}
+              disabled={eligibleTranscribe.length === 0 || deleting !== null}
               icon={<AudioLines size={13} aria-hidden />}
               title={
                 transcribedSelected.length > 0
@@ -584,7 +610,7 @@ export function FileManager() {
             <Button
               variant="secondary"
               onClick={() => openBatchAutocode()}
-              disabled={eligibleAutocode.length === 0}
+              disabled={eligibleAutocode.length === 0 || deleting !== null}
               icon={<Sparkles size={13} aria-hidden />}
               title={t("files.autocodeSelectedCount", {
                 eligible: String(eligibleAutocode.length),
@@ -598,11 +624,23 @@ export function FileManager() {
             </Button>
             <Button
               variant="danger"
-              icon={<Trash2 size={13} aria-hidden />}
+              icon={
+                deleting ? (
+                  <LoaderCircle size={13} className="animate-spin" aria-hidden />
+                ) : (
+                  <Trash2 size={13} aria-hidden />
+                )
+              }
               onClick={() => void deleteSelected()}
+              disabled={deleting !== null}
               title={t("files.deleteSelectedConfirm", { n: selected.size })}
             >
-              {t("files.deleteSelectedButton", { n: selected.size })}
+              {deleting
+                ? t("files.deletingProgress", {
+                    done: String(deleting.done),
+                    total: String(deleting.total),
+                  })
+                : t("files.deleteSelectedButton", { n: selected.size })}
             </Button>
           </>
         )}

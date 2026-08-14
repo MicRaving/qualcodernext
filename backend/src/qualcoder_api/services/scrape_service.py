@@ -18,7 +18,11 @@ Modes:
   the text, and captions are not fetched either.
 - ``article`` — page fetched with urllib, cleaned with trafilatura
   (falling back to the project's own ``html_to_text``).
-- ``html``    — raw page HTML saved verbatim as a ``.html`` source.
+- ``html``    — offline snapshot: the page HTML with same-origin
+  stylesheets inlined into ``<style>`` blocks and same-origin images
+  and fonts inlined as ``data:`` URIs — one self-contained ``.html``
+  file that renders without network access (scripts are never inlined
+  or executed).
 - ``pdf``     — page fetched with urllib and rendered to a PDF document
   with PyMuPDF's Story engine (mirroring the ``GET /sources/{id}/pdf``
   export; a text-only fallback PDF when the layout render fails). Stored
@@ -28,15 +32,20 @@ Modes:
 from __future__ import annotations
 
 import asyncio
+import base64
 import concurrent.futures
+import html
 import json
 import logging
+import os
 import re
+import subprocess
+import sys
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
 
 import trafilatura
 import yt_dlp
@@ -554,11 +563,16 @@ _YT_TIMEOUT_MESSAGE = (
 #: Markers some platforms report through ``DownloadError`` when yt-dlp
 #: aborts (e.g. "signal aborted without reason") instead of raising.
 _YT_ABORT_MARKERS = ("signal aborted", "aborted", "interrupted")
-#: Dedicated executor for yt-dlp extractions: a timed-out call keeps its
-#: thread (threads cannot be killed) but must never block loop teardown.
-_YT_EXTRACTOR_EXECUTOR = concurrent.futures.ThreadPoolExecutor(
-    max_workers=1, thread_name_prefix="yt-extract"
-)
+#: The in-process path is a PyInstaller-frozen fallback: ``sys.executable
+#: -m yt_dlp`` cannot work inside the packaged exe, so frozen builds run
+#: yt-dlp in-process (with the abort guards below). Everything else runs
+#: yt-dlp in a SUBPROCESS, which isolates its internal signals
+#: (KeyboardInterrupt/SystemExit raised out of ``extract_info``, SIGINT/
+#: SIGTERM delivery, "signal aborted without reason" aborts) — they can no
+#: longer propagate into the backend process and surface only as clean
+#: exit codes, and a hung extraction can be killed hard instead of leaving
+#: an unkillable thread behind.
+_YT_SUBPROCESS_ENABLED = not getattr(sys, "frozen", False)
 
 
 class _YouTubeAbortError(ScrapeError):
@@ -571,15 +585,132 @@ def _is_yt_abort(err: BaseException) -> bool:
     return any(marker in message for marker in _YT_ABORT_MARKERS)
 
 
-def _yt_extract_sync(url: str, options: dict) -> dict:
-    """Blocking yt-dlp call: video metadata (+ comments when requested).
+def _yt_cli_command(url: str, getcomments: bool) -> list[str]:
+    """Build the yt-dlp CLI command for a metadata-only extraction.
 
-    yt-dlp aborts long extractions (e.g. huge comment threads) by raising
+    ``--dump-single-json`` prints the sanitized info dict as JSON on
+    stdout; ``--no-progress`` keeps progress bars out of stderr. Comments
+    are included ONLY when ``--getcomments`` is passed (the CLI defaults
+    it to False). The URL is isolated behind ``--`` so it can never be
+    parsed as an option.
+    """
+    command = [
+        sys.executable,
+        "-m",
+        "yt_dlp",
+        "--dump-single-json",
+        "--no-download",
+        "--no-playlist",
+        "--no-warnings",
+        "--no-progress",
+        "--socket-timeout",
+        "30",
+    ]
+    if getcomments:
+        command.append("--getcomments")
+    command.extend(["--", url])
+    return command
+
+
+def _yt_parse_dump(stdout: bytes) -> dict:
+    """Parse the ``--dump-single-json`` stdout into an info dict."""
+    try:
+        info = json.loads(stdout.decode("utf-8", errors="replace"))
+    except ValueError as err:
+        raise ScrapeError("YouTube returned no metadata") from err
+    if isinstance(info, dict) and info.get("_type") in ("playlist", "multi_video"):
+        entries = info.get("entries")
+        info = entries[0] if isinstance(entries, list) and entries else {}
+    if not isinstance(info, dict) or not info:
+        raise ScrapeError("YouTube returned no metadata")
+    return info
+
+
+def _yt_subprocess_error(stderr: bytes) -> str | None:
+    """The last ``ERROR:`` line yt-dlp wrote to stderr (its failure detail)."""
+    text = stderr.decode("utf-8", errors="replace")
+    for line in reversed(text.splitlines()):
+        if "ERROR:" in line:
+            return line.split("ERROR:", 1)[1].strip()
+    return None
+
+
+def _yt_subprocess_is_abort(returncode: int, stderr: bytes) -> bool:
+    """Map a yt-dlp subprocess exit onto the internal-abort bucket.
+
+    yt-dlp's CLI turns a ``KeyboardInterrupt`` into ``SystemExit(1)`` with
+    "ERROR: Interrupted by user" on stderr, and a cancelled download into
+    exit 101 ("Aborting remaining downloads"). Signal deaths (negative
+    return codes on POSIX) count as aborts too.
+    """
+    if returncode == 101 or returncode < 0:
+        return True
+    if returncode != 1:
+        return False
+    text = stderr.decode("utf-8", errors="replace").lower()
+    return "interrupted" in text or "aborting" in text
+
+
+def _yt_extract_subprocess(url: str, getcomments: bool) -> dict:
+    """Run yt-dlp in a separate process; parse the JSON info from stdout.
+
+    A subprocess fully isolates yt-dlp's internal signal handling: any
+    KeyboardInterrupt/SystemExit it raises inside ``extract_info`` is
+    caught by its own CLI and becomes an exit code, never an exception in
+    this process. On timeout the child is killed hard (it cannot linger as
+    an unkillable thread), and ``CREATE_NO_WINDOW`` keeps the packaged app
+    from flashing a console window on Windows.
+    """
+    command = _yt_cli_command(url, getcomments)
+    logger.debug("Running yt-dlp subprocess (%s comments)", "with" if getcomments else "without")
+    creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0
+    try:
+        completed = subprocess.run(
+            command,
+            capture_output=True,
+            timeout=_YT_TIMEOUT_SECONDS,
+            creationflags=creationflags,
+        )
+    except subprocess.TimeoutExpired as err:
+        raise ScrapeError(_YT_TIMEOUT_MESSAGE) from err
+    if completed.returncode == 0:
+        return _yt_parse_dump(completed.stdout)
+    detail = _yt_subprocess_error(completed.stderr)
+    if _yt_subprocess_is_abort(completed.returncode, completed.stderr):
+        raise _YouTubeAbortError(_YT_ABORT_MESSAGE)
+    raise ScrapeError(
+        f"YouTube extraction failed: {detail or f'exit code {completed.returncode}'}"
+    )
+
+
+#: Dedicated executor for the in-process yt-dlp fallback: a timed-out call
+#: keeps its thread (threads cannot be killed) but must never block loop
+#: teardown.
+_YT_EXTRACTOR_EXECUTOR = concurrent.futures.ThreadPoolExecutor(
+    max_workers=1, thread_name_prefix="yt-extract"
+)
+
+
+def _yt_extract_fallback_sync(url: str, getcomments: bool) -> dict:
+    """In-process yt-dlp fallback for frozen (PyInstaller) builds.
+
+    Kept from the previous in-process design: yt-dlp can abort long
+    extractions (e.g. huge comment threads) by raising
     ``KeyboardInterrupt``/``SystemExit`` out of ``extract_info`` — or a
     ``DownloadError`` naming the abort on some platforms. Both are mapped
     to a friendly, actionable ``ScrapeError`` instead of the raw signal
     propagating into the import pipeline.
     """
+    options = {
+        "noplaylist": True,
+        "skip_download": True,
+        "writesubtitles": False,
+        "quiet": True,
+        "no_warnings": True,
+        "socket_timeout": 30,
+    }
+    if getcomments:
+        options["getcomments"] = True
     try:
         ydl = yt_dlp.YoutubeDL(options)
         try:
@@ -597,8 +728,8 @@ def _yt_extract_sync(url: str, options: dict) -> dict:
     return info
 
 
-def _yt_dlp_extract(url: str, options: dict) -> dict:
-    """Run ``_yt_extract_sync`` off-loop with an abort + timeout guard.
+def _yt_extract_fallback(url: str, getcomments: bool) -> dict:
+    """Run the in-process fallback off-loop with an abort + timeout guard.
 
     The yt-dlp call runs in a thread under ``asyncio.wait_for`` so a hung
     network cannot block the import: the timeout surfaces a friendly
@@ -607,10 +738,13 @@ def _yt_dlp_extract(url: str, options: dict) -> dict:
     runs on a private loop in a thread so the caller's loop is never
     blocked.
     """
+
     async def _guarded() -> dict:
         loop = asyncio.get_running_loop()
         return await asyncio.wait_for(
-            loop.run_in_executor(_YT_EXTRACTOR_EXECUTOR, _yt_extract_sync, url, options),
+            loop.run_in_executor(
+                _YT_EXTRACTOR_EXECUTOR, _yt_extract_fallback_sync, url, getcomments
+            ),
             timeout=_YT_TIMEOUT_SECONDS,
         )
 
@@ -633,6 +767,25 @@ def _yt_dlp_extract(url: str, options: dict) -> dict:
             raise ScrapeError(_YT_TIMEOUT_MESSAGE) from err
 
 
+def _yt_dlp_extract(url: str, getcomments: bool) -> dict:
+    """Extract video metadata (+ comments when requested) from a URL.
+
+    The subprocess path is the default: it isolates yt-dlp's internal
+    signals completely and can be killed on timeout. When the subprocess
+    cannot be used (PyInstaller-frozen package, ``sys.executable -m
+    yt_dlp`` unavailable) or fails to start, the in-process fallback runs
+    with its abort + timeout guards instead.
+    """
+    if _YT_SUBPROCESS_ENABLED:
+        try:
+            return _yt_extract_subprocess(url, getcomments)
+        except OSError as err:
+            logger.warning(
+                "yt-dlp subprocess failed to start (%s) — falling back to in-process", err
+            )
+    return _yt_extract_fallback(url, getcomments)
+
+
 def scrape_youtube(url: str) -> ScrapedContent:
     """Extract video metadata and the comment thread (captions only as fallback).
 
@@ -642,26 +795,18 @@ def scrape_youtube(url: str) -> ScrapedContent:
     comments (``_YT_DLP_COMMENTS_SUPPORTED`` False), the output is header
     + description only, with a note, and captions are not fetched either.
 
-    The yt-dlp call is guarded against its internal abort signal (huge
-    comment threads can abort extraction): the first abort is retried once
-    WITHOUT ``getcomments`` so the metadata survives and the import falls
-    back to captions or the plain header; a second abort — or a timeout —
-    surfaces a friendly error instead of the raw signal.
+    Extraction runs in a SEPARATE yt-dlp subprocess (the in-process path
+    is the PyInstaller-frozen fallback only), so yt-dlp's internal abort
+    signal can never propagate into the backend process. The first abort
+    is retried once WITHOUT ``getcomments`` so the metadata survives and
+    the import falls back to captions or the plain header; a second abort
+    — or a timeout — surfaces a friendly error.
     """
-    options = {
-        "noplaylist": True,
-        "skip_download": True,
-        "writesubtitles": False,
-        "quiet": True,
-        "no_warnings": True,
-        "socket_timeout": 30,
-    }
-    if _YT_DLP_COMMENTS_SUPPORTED:
-        options["getcomments"] = True
+    getcomments = _YT_DLP_COMMENTS_SUPPORTED
     try:
-        info = _yt_dlp_extract(url, options)
+        info = _yt_dlp_extract(url, getcomments)
     except _YouTubeAbortError:
-        if not options.get("getcomments"):
+        if not getcomments:
             raise
         # Comment extraction can abort on very large threads — retry once
         # with metadata only; the normal flow then falls back to captions
@@ -669,7 +814,7 @@ def scrape_youtube(url: str) -> ScrapedContent:
         logger.warning(
             "YouTube comment extraction aborted for %s — retrying without comments", url
         )
-        info = _yt_dlp_extract(url, {**options, "getcomments": False})
+        info = _yt_dlp_extract(url, False)
     if not isinstance(info, dict):
         raise ScrapeError("YouTube returned no metadata")
 
@@ -755,14 +900,308 @@ def scrape_article(url: str) -> ScrapedContent:
     )
 
 
+# ----------------------------------------------------------------------
+# Offline HTML snapshot (mode="html")
+# ----------------------------------------------------------------------
+
+#: Per-resource caps for the snapshot; a sub-resource that exceeds its cap
+#: (or cannot be fetched) keeps its original URL instead of breaking the
+#: capture. Data URIs keep the result a single self-contained file.
+_HTML_CSS_MAX_BYTES = 2 * 1024 * 1024
+_HTML_FONT_MAX_BYTES = 2 * 1024 * 1024
+_HTML_IMAGE_MAX_BYTES = 1 * 1024 * 1024
+_HTML_IMAGE_TOTAL_MAX_BYTES = 25 * 1024 * 1024
+
+_IMAGE_MIME_BY_SUFFIX = {
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".gif": "image/gif",
+    ".svg": "image/svg+xml",
+    ".webp": "image/webp",
+    ".avif": "image/avif",
+    ".bmp": "image/bmp",
+    ".ico": "image/x-icon",
+}
+_FONT_MIME_BY_SUFFIX = {
+    ".woff2": "font/woff2",
+    ".woff": "font/woff",
+    ".ttf": "font/ttf",
+    ".otf": "font/otf",
+    ".eot": "application/vnd.ms-fontobject",
+}
+
+#: Magic-byte sniffing for images served without a recognizable suffix.
+_IMAGE_MAGIC = (
+    (b"\x89PNG\r\n\x1a\n", "image/png"),
+    (b"\xff\xd8\xff", "image/jpeg"),
+    (b"GIF87a", "image/gif"),
+    (b"GIF89a", "image/gif"),
+)
+
+_SRC_ATTR_RE = re.compile(r"""\bsrc\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))""", re.IGNORECASE)
+
+
+def _fetch_resource(url: str, max_bytes: int) -> bytes | None:
+    """Fetch a snapshot sub-resource, honoring a byte cap.
+
+    Returns ``None`` (leave the original URL in place) when the resource
+    cannot be fetched or exceeds ``max_bytes``. Goes through the module's
+    ``fetch_url`` so tests mock one spot for page + sub-resources alike.
+    """
+    try:
+        data = fetch_url(url)
+    except ScrapeError as err:
+        logger.debug("snapshot: skipping %s (%s)", url, err)
+        return None
+    if len(data) > max_bytes:
+        logger.debug("snapshot: skipping %s (%d bytes, cap %d)", url, len(data), max_bytes)
+        return None
+    return data
+
+
+def _is_same_origin(page_url: str, resource_url: str) -> bool:
+    """True when a resource URL is http(s) on the page's own origin."""
+    page = urlparse(page_url)
+    resource = urlparse(resource_url)
+    return (
+        resource.scheme in ("http", "https")
+        and resource.scheme == page.scheme
+        and resource.netloc.lower() == page.netloc.lower()
+    )
+
+
+def _url_suffix(url: str) -> str:
+    return os.path.splitext(urlparse(url).path.lower())[1]
+
+
+def _guess_image_mime(data: bytes, url: str) -> str | None:
+    """MIME type for an image, from its suffix or magic bytes (None = unknown)."""
+    known = _IMAGE_MIME_BY_SUFFIX.get(_url_suffix(url))
+    if known:
+        return known
+    for magic, mime in _IMAGE_MAGIC:
+        if data.startswith(magic):
+            return mime
+    if b"<svg" in data[:256].lower():
+        return "image/svg+xml"
+    return None
+
+
+def _data_uri(data: bytes, mime: str) -> str:
+    return f"data:{mime};base64,{base64.b64encode(data).decode('ascii')}"
+
+
+def _rewrite_css_fonts(css: str, css_url: str, page_url: str) -> str:
+    """Inline same-origin ``@font-face`` sources as ``data:`` URIs.
+
+    URL resolution happens against the stylesheet's own URL (that is where
+    relative CSS paths resolve); the same-origin check is against the page
+    so cross-origin font CDNs are left as links. Only known font suffixes
+    are inlined — background-image URLs keep their URLs.
+    """
+    font_re = re.compile(r"""url\(\s*(['"]?)(.*?)\1\s*\)""", re.IGNORECASE | re.DOTALL)
+
+    def _replace(match: re.Match) -> str:
+        quote, raw = match.group(1), match.group(2).strip()
+        if raw.lower().startswith(("data:", "blob:", "javascript:")):
+            return match.group(0)
+        absolute = urljoin(css_url, raw)
+        if not _is_same_origin(page_url, absolute):
+            return match.group(0)
+        mime = _FONT_MIME_BY_SUFFIX.get(_url_suffix(absolute))
+        if mime is None:
+            return match.group(0)
+        data = _fetch_resource(absolute, _HTML_FONT_MAX_BYTES)
+        if data is None:
+            return match.group(0)
+        return f'url("{_data_uri(data, mime)}")' if not quote else f"url('{_data_uri(data, mime)}')"
+
+    return font_re.sub(_replace, css)
+
+
+class _SnapshotRewriter(html.parser.HTMLParser):
+    """Rewrite a fetched page into a self-contained offline snapshot.
+
+    - Same-origin ``<link rel="stylesheet">`` -> ``<style>`` blocks, with
+      same-origin ``@font-face`` sources inside the CSS inlined as data.
+    - Same-origin ``<img src>`` -> ``data:`` URIs (per-image and total
+      caps).
+    - Scripts are NOT inlined or executed (view-only snapshot; the sandbox
+      would not run them anyway) — ``<script src>`` tags stay as-is.
+    - Cross-origin and oversized/failed resources keep their original URLs.
+
+    Everything else (markup, attributes, entities) is re-emitted verbatim,
+    so a page without sub-resources round-trips byte-for-byte.
+    """
+
+    def __init__(self, page_url: str) -> None:
+        super().__init__(convert_charrefs=False)
+        self._page_url = page_url
+        self.parts: list[str] = []
+        self._image_bytes_total = 0
+
+    def _emit(self, text: str) -> None:
+        self.parts.append(text)
+
+    def _render_tag(self, tag: str, attrs: list[tuple[str, str | None]], close: bool) -> str:
+        out = [f"<{tag}"]
+        for name, value in attrs:
+            if value is None:
+                out.append(f" {name}")
+            else:
+                out.append(f' {name}="{html.escape(value, quote=True)}"')
+        if close:
+            out.append(" /")
+        out.append(">")
+        return "".join(out)
+
+    def _raw_or_render(
+        self, tag: str, attrs: list[tuple[str, str | None]], close: bool
+    ) -> str:
+        raw = self.get_starttag_text()
+        return raw if raw is not None else self._render_tag(tag, attrs, close)
+
+    def _inlinable_image(self, url: str) -> bool:
+        if not _is_same_origin(self._page_url, url):
+            return False
+        if _url_suffix(url) in _IMAGE_MIME_BY_SUFFIX:
+            return True
+        page = urlparse(self._page_url)
+        resource = urlparse(url)
+        same_document = (page.scheme, page.netloc, page.path, page.query) == (
+            resource.scheme,
+            resource.netloc,
+            resource.path,
+            resource.query,
+        )
+        return not same_document
+
+    def _try_inline_stylesheet(self, attrs: list[tuple[str, str | None]]) -> bool:
+        """Inline a same-origin stylesheet; True when the tag was consumed."""
+        attr_map = {name.lower(): value for name, value in attrs if value is not None}
+        rel = attr_map.get("rel") or ""
+        href = attr_map.get("href")
+        if "stylesheet" not in rel.lower().split() or not href:
+            return False
+        absolute = urljoin(self._page_url, href)
+        if not _is_same_origin(self._page_url, absolute):
+            return False
+        data = _fetch_resource(absolute, _HTML_CSS_MAX_BYTES)
+        if data is None:
+            return False
+        css = _rewrite_css_fonts(data.decode("utf-8", errors="replace"), absolute, self._page_url)
+        # A literal "</style" inside the CSS would close the block early.
+        css = re.sub(r"(?i)</style", r"<\\/style", css)
+        media = attr_map.get("media")
+        media_attr = f' media="{html.escape(media, quote=True)}"' if media else ""
+        self._emit(f"<style{media_attr}>" + css + "</style>")
+        return True
+
+    def _substitute_src(self, raw: str, src_value: str, replacement: str) -> str:
+        def _replace(match: re.Match) -> str:
+            value = match.group(1) or match.group(2) or match.group(3) or ""
+            if value == src_value:
+                return f'src="{replacement}"'
+            return match.group(0)
+
+        return _SRC_ATTR_RE.sub(_replace, raw, count=1)
+
+    def _rewrite_img(self, tag: str, attrs: list[tuple[str, str | None]], close: bool) -> None:
+        src_value = next((v for n, v in attrs if n.lower() == "src" and v), None)
+        if src_value is None:
+            self._emit(self._raw_or_render(tag, attrs, close))
+            return
+        if src_value.lower().startswith(("data:", "blob:", "javascript:", "#")):
+            self._emit(self._raw_or_render(tag, attrs, close))
+            return
+        absolute = urljoin(self._page_url, src_value)
+        if not self._inlinable_image(absolute):
+            self._emit(self._raw_or_render(tag, attrs, close))
+            return
+        data = _fetch_resource(absolute, _HTML_IMAGE_MAX_BYTES)
+        mime = _guess_image_mime(data, absolute) if data is not None else None
+        if (
+            data is not None
+            and mime is not None
+            and self._image_bytes_total + len(data) <= _HTML_IMAGE_TOTAL_MAX_BYTES
+        ):
+            self._image_bytes_total += len(data)
+            replacement = _data_uri(data, mime)
+            raw = self.get_starttag_text()
+            if raw is not None:
+                self._emit(self._substitute_src(raw, src_value, replacement))
+            else:  # pragma: no cover - the parser always exposes the raw tag
+                rewritten = [
+                    (name, replacement if name.lower() == "src" and value == src_value else value)
+                    for name, value in attrs
+                ]
+                self._emit(self._render_tag(tag, rewritten, close))
+            return
+        self._emit(self._raw_or_render(tag, attrs, close))
+
+    def _handle_tag(self, tag: str, attrs: list[tuple[str, str | None]], close: bool) -> None:
+        if tag == "link" and self._try_inline_stylesheet(attrs):
+            return
+        if tag == "img":
+            self._rewrite_img(tag, attrs, close)
+            return
+        if tag == "head":
+            self._emit(
+                self._raw_or_render(tag, attrs, close) + '<meta charset="utf-8">'
+            )
+            return
+        self._emit(self._raw_or_render(tag, attrs, close))
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        self._handle_tag(tag, attrs, close=False)
+
+    def handle_startendtag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        self._handle_tag(tag, attrs, close=True)
+
+    def handle_endtag(self, tag: str) -> None:
+        self._emit(f"</{tag}>")
+
+    def handle_data(self, data: str) -> None:
+        self._emit(data)
+
+    def handle_entityref(self, name: str) -> None:
+        self._emit(f"&{name};")
+
+    def handle_charref(self, name: str) -> None:
+        self._emit(f"&#{name};")
+
+    def handle_comment(self, data: str) -> None:
+        self._emit(f"<!--{data}-->")
+
+    def handle_decl(self, decl: str) -> None:
+        self._emit(f"<!{decl}>")
+
+    def handle_pi(self, data: str) -> None:
+        self._emit(f"<?{data}>")
+
+
 def scrape_html(url: str) -> ScrapedContent:
-    """Capture mode: save the raw page HTML as a .html source."""
+    """Capture mode: offline snapshot of the page as a self-contained .html.
+
+    Same-origin stylesheets are inlined into ``<style>`` blocks (fonts
+    referenced from them become ``data:`` URIs), same-origin images are
+    inlined as ``data:`` URIs, and the encoding is pinned to UTF-8 — the
+    saved file renders offline with no asset folder. Cross-origin and
+    oversized/failing sub-resources keep their original URLs; scripts are
+    never inlined or executed.
+    """
+    from qualcoder_api.services.import_service import decode_text_with_best_encoding
+
     raw = fetch_url(url)
-    html = _decode_html(raw)
-    title = _page_title(html) or _host_for_name(url)
+    html_text = decode_text_with_best_encoding(raw)
+    rewriter = _SnapshotRewriter(url)
+    rewriter.feed(html_text)
+    rewriter.close()
+    title = _page_title(html_text) or _host_for_name(url)
     return ScrapedContent(
         filename=f"{sanitize_name(title, 'page')}.html",
-        data=raw,
+        data="".join(rewriter.parts).encode("utf-8"),
         mode="html",
     )
 
