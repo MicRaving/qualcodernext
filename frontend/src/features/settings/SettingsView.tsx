@@ -18,6 +18,7 @@ import {
   Trash2,
 } from "lucide-react";
 import { api, type AiIndexStatus, type Pseudonym, type RStatus } from "@/lib/api";
+import { DEFAULT_GITHUB_REPO } from "@/features/bugreport/github";
 import { errorDetail } from "@/features/ai/format";
 import { A11yControls } from "@/features/accessibility/A11yControls";
 import { useI18n, LOCALE_NAMES, type Locale } from "@/lib/i18n";
@@ -52,6 +53,8 @@ interface AiDraft {
   model: string;
   apiKey: string;
   mcpPermissions: string;
+  redditClientId: string;
+  redditClientSecret: string;
 }
 
 let aiDraftCache: AiDraft | null = null;
@@ -83,6 +86,8 @@ export function SettingsView() {
   const { t, locale, setLocale } = useI18n();
   const themeMode = useProjectStore((s) => s.themeMode);
   const setThemeMode = useProjectStore((s) => s.setThemeMode);
+  const autoShowSegmentDetails = useProjectStore((s) => s.autoShowSegmentDetails);
+  const setAutoShowSegmentDetails = useProjectStore((s) => s.setAutoShowSegmentDetails);
 
   // App updates (desktop only — harmless no-op in the plain browser).
   const updatesStatus = useUpdatesStore((s) => s.status);
@@ -139,6 +144,10 @@ export function SettingsView() {
   const [mcpPermissions, setMcpPermissions] = useState(
     () => aiDraftCache?.mcpPermissions ?? "read",
   );
+  const [redditClientId, setRedditClientId] = useState(() => aiDraftCache?.redditClientId ?? "");
+  const [redditClientSecret, setRedditClientSecret] = useState(
+    () => aiDraftCache?.redditClientSecret ?? "",
+  );
   const [models, setModels] = useState<string[]>([]);
   const [modelsLoading, setModelsLoading] = useState(false);
   const [modelsError, setModelsError] = useState<string | null>(null);
@@ -170,6 +179,14 @@ export function SettingsView() {
   // Auto-load project on start (packaged app only; harmless elsewhere).
   const [autoLoadProject, setAutoLoadProject] = useState(true);
 
+  // GitHub bug-report integration (token + target repository). Defaults to
+  // the repo the updater manifest points at (MicRaving/QCnext).
+  const [githubToken, setGithubToken] = useState("");
+  const [githubRepo, setGithubRepo] = useState(DEFAULT_GITHUB_REPO);
+  const [githubSaving, setGithubSaving] = useState(false);
+  const [githubSaved, setGithubSaved] = useState(false);
+  const [githubError, setGithubError] = useState<string | null>(null);
+
   useEffect(() => {
     api
       .appSettings()
@@ -186,6 +203,41 @@ export function SettingsView() {
       await api.saveAppSettings({ auto_open_project: next });
     } catch {
       /* keep the local toggle; the backend error surfaces on the next load */
+    }
+  }
+
+  // Load the stored GitHub config with the app settings on mount.
+  useEffect(() => {
+    api
+      .appSettings()
+      .then((s) => {
+        if (s.github_token) setGithubToken(s.github_token);
+        if (s.github_repo && s.github_repo.trim().includes("/")) {
+          setGithubRepo(s.github_repo.trim());
+        }
+      })
+      .catch(() => {
+        /* backend unreachable — keep the defaults */
+      });
+  }, []);
+
+  async function saveGithub() {
+    if (githubSaving) return;
+    setGithubSaving(true);
+    setGithubError(null);
+    setGithubSaved(false);
+    try {
+      await api.saveAppSettings({
+        auto_open_project: autoLoadProject,
+        github_token: githubToken.trim(),
+        github_repo: githubRepo.trim() || DEFAULT_GITHUB_REPO,
+      });
+      setGithubSaved(true);
+      window.setTimeout(() => setGithubSaved(false), 2500);
+    } catch (e) {
+      setGithubError(errorDetail(e, t("settings.githubSaveError")));
+    } finally {
+      setGithubSaving(false);
     }
   }
 
@@ -270,8 +322,17 @@ export function SettingsView() {
   // Keep the module-level draft in sync so a typed API key etc. survives a
   // pane close/reopen (SettingsView unmounts on right-pane switches).
   useEffect(() => {
-    aiDraftCache = { enabled, provider, apiBase, model, apiKey, mcpPermissions };
-  }, [enabled, provider, apiBase, model, apiKey, mcpPermissions]);
+    aiDraftCache = {
+      enabled,
+      provider,
+      apiBase,
+      model,
+      apiKey,
+      mcpPermissions,
+      redditClientId,
+      redditClientSecret,
+    };
+  }, [enabled, provider, apiBase, model, apiKey, mcpPermissions, redditClientId, redditClientSecret]);
 
   // Model polling: fetch whenever the provider or base URL changes (with the
   // previous list cleared — no leftover models from other providers), and
@@ -323,21 +384,26 @@ export function SettingsView() {
     if (!touchedRef.current) return;
     saveTimer.current = window.setTimeout(() => {
       setSaveError(null);
-      void api
-        .aiSaveSettings({
-          enabled,
-          provider,
-          api_base: apiBase.trim(),
-          model: model.trim(),
-          api_key: apiKey,
-          mcp_permissions: mcpPermissions,
-        })
-        .catch((e) => setSaveError(errorDetail(e, t("settings.aiSaveError"))));
+      // The Reddit API credentials ride the AI-settings request (the
+      // pane's only auto-save mechanism); the backend persists them
+      // separately in the settings JSON. Blank values are left unchanged
+      // server-side, so a fresh mount can never wipe stored credentials.
+      const body = {
+        enabled,
+        provider,
+        api_base: apiBase.trim(),
+        model: model.trim(),
+        api_key: apiKey,
+        mcp_permissions: mcpPermissions,
+        reddit_client_id: redditClientId.trim(),
+        reddit_client_secret: redditClientSecret.trim(),
+      };
+      void api.aiSaveSettings(body).catch((e) => setSaveError(errorDetail(e, t("settings.aiSaveError"))));
     }, 600);
     return () => {
       if (saveTimer.current !== null) window.clearTimeout(saveTimer.current);
     };
-  }, [enabled, provider, apiBase, model, apiKey, mcpPermissions, t]);
+  }, [enabled, provider, apiBase, model, apiKey, mcpPermissions, redditClientId, redditClientSecret, t]);
 
 
   function handleProviderChange(next: string) {
@@ -481,6 +547,32 @@ export function SettingsView() {
           </div>
 
           <div className="mt-3 border-t border-border pt-3">
+            <button
+              type="button"
+              role="switch"
+              aria-checked={autoShowSegmentDetails}
+              aria-label={t("settings.autoShowSegmentDetails")}
+              onClick={() => setAutoShowSegmentDetails(!autoShowSegmentDetails)}
+              className="flex items-center gap-2"
+            >
+              <span
+                className={`relative h-4 w-8 rounded-full transition-colors ${
+                  autoShowSegmentDetails ? "bg-accent" : "bg-border"
+                }`}
+              >
+                <span
+                  className="absolute top-0.5 h-3 w-3 rounded-full bg-white transition-all"
+                  style={{ left: autoShowSegmentDetails ? 18 : 2 }}
+                />
+              </span>
+              <span className="text-xs text-text-primary">{t("settings.autoShowSegmentDetails")}</span>
+            </button>
+            <p className="mt-1 text-xs text-text-secondary">
+              {t("settings.autoShowSegmentDetailsHint")}
+            </p>
+          </div>
+
+          <div className="mt-3 border-t border-border pt-3">
             <A11yControls />
           </div>
         </section>
@@ -619,6 +711,48 @@ export function SettingsView() {
                 </Select>
               </Field>
             </div>
+          </div>
+
+          {/* Reddit API credentials — optional app-only OAuth for the
+              Reddit scraper when anonymous access is blocked */}
+          <div className="mt-3 border-t border-border pt-3">
+            <div className="grid grid-cols-2 gap-3">
+              <Field label={t("settings.redditClientId")}>
+                <Input
+                  type="password"
+                  value={redditClientId}
+                  onChange={(e) => {
+                    markTouched();
+                    setRedditClientId(e.target.value);
+                  }}
+                  placeholder={t("settings.optional")}
+                  className="w-full"
+                />
+              </Field>
+              <Field label={t("settings.redditClientSecret")}>
+                <Input
+                  type="password"
+                  value={redditClientSecret}
+                  onChange={(e) => {
+                    markTouched();
+                    setRedditClientSecret(e.target.value);
+                  }}
+                  placeholder={t("settings.optional")}
+                  className="w-full"
+                />
+              </Field>
+            </div>
+            <p className="mt-1 text-xs text-text-secondary">
+              {t("settings.redditCredentialsHint")}{" "}
+              <a
+                href="https://www.reddit.com/prefs/apps"
+                target="_blank"
+                rel="noreferrer"
+                className="inline-block text-accent underline"
+              >
+                reddit.com/prefs/apps
+              </a>
+            </p>
           </div>
 
           {/* Service status | Semantic index — side by side */}
@@ -875,6 +1009,55 @@ export function SettingsView() {
                 : t("settings.updatesError", { detail: updatesError ?? "" })}
             </p>
           )}
+        </section>
+
+        {/* GitHub (bug reports) */}
+        <section className="p-3">
+          <h2 className="text-sm font-semibold text-text-primary">{t("settings.githubSection")}</h2>
+          <p className="mt-1 text-xs text-text-secondary">{t("settings.githubHint")}</p>
+          <div className="mt-2 flex flex-col gap-3">
+            <Field label={t("settings.githubToken")}>
+              <Input
+                type="password"
+                value={githubToken}
+                onChange={(e) => setGithubToken(e.target.value)}
+                placeholder={t("settings.optional")}
+                autoComplete="off"
+                className="w-full"
+              />
+            </Field>
+            <Field label={t("settings.githubRepo")}>
+              <Input
+                value={githubRepo}
+                onChange={(e) => setGithubRepo(e.target.value)}
+                placeholder="owner/repo"
+                className="w-full"
+              />
+            </Field>
+            <div className="flex items-center gap-2">
+              <Button
+                variant="primary"
+                disabled={githubSaving}
+                icon={
+                  githubSaving ? (
+                    <LoaderCircle size={12} className="animate-spin" aria-hidden />
+                  ) : (
+                    <Check size={12} aria-hidden />
+                  )
+                }
+                onClick={() => void saveGithub()}
+              >
+                {githubSaving ? t("settings.saving") : t("common.save")}
+              </Button>
+              {githubSaved && (
+                <span className="flex items-center gap-1 text-xs text-success" role="status">
+                  <Check size={12} aria-hidden />
+                  {t("settings.saved")}
+                </span>
+              )}
+            </div>
+            {githubError && <p className="text-xs text-danger">{githubError}</p>}
+          </div>
         </section>
 
         {/* R integration */}

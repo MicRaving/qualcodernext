@@ -8,6 +8,7 @@ import { useEffect, useRef, useState } from "react";
 import {
   AudioLines,
   BarChart3,
+  Bug,
   Download,
   Files,
   History,
@@ -42,6 +43,7 @@ import { HistoryView } from "@/features/history/HistoryView";
 import { CreativePanel } from "@/features/creative/CreativePanel";
 import { SettingsView } from "@/features/settings/SettingsView";
 import { AiView } from "@/features/ai/AiView";
+import { BugReportView } from "@/features/bugreport/BugReportView";
 import { api } from "@/lib/api";
 import { useToast } from "@/lib/toast";
 import { useI18n } from "@/lib/i18n";
@@ -577,6 +579,17 @@ export function ProjectShell() {
             })}
           </>
         )}
+        {/* Report a bug: screenshot + GitHub issue composer (works with and
+            without a project — same availability as Settings). */}
+        <button
+          type="button"
+          onClick={() => void useProjectStore.getState().openBugReport()}
+          aria-label={t("nav.bugReport")}
+          title={t("nav.bugReport")}
+          className="rounded-sm px-2 py-1 text-text-secondary hover:bg-surface-higher"
+        >
+          <Bug size={20} aria-hidden />
+        </button>
         {/* Settings is available without a project (theme, AI and
             transcription options are machine-level). */}
         <button
@@ -651,6 +664,7 @@ export function ProjectShell() {
         <DashboardView />
       )}
       </WorkspaceLayout>
+      <BugReportView />
     </>
   );
 }

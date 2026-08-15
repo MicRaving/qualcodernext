@@ -50,6 +50,7 @@
  *  declared in the page head, falling back to UTF-8 with replacement.
  */
 import {
+  Fragment,
   useCallback,
   useEffect,
   useMemo,
@@ -57,15 +58,34 @@ import {
   useState,
   type MouseEvent as ReactMouseEvent,
 } from "react";
-import { CircleAlert, Code, FileText, Globe, LoaderCircle, Tag, Trash2 } from "lucide-react";
+import {
+  Check,
+  CircleAlert,
+  Code,
+  Eye,
+  FileText,
+  Globe,
+  LoaderCircle,
+  Minus,
+  Pencil,
+  Plus,
+  Star,
+  Tag,
+  Trash2,
+  X,
+} from "lucide-react";
 import {
   api,
+  ApiError,
   fetchSourceFile,
+  fetchWithTimeout,
+  initApiBase,
   type Annotation,
   type CodeTreeItem,
   type Coding,
   type Source,
 } from "@/lib/api";
+import { patchCodingWeight } from "@/features/coding/codingApi";
 import {
   MAX_HIGHLIGHTS,
   buildHighlightedHtml,
@@ -89,9 +109,48 @@ import { useProjectStore } from "@/stores/project";
 import {
   Button,
   ErrorBanner,
+  IconButton,
+  Input,
   LoadingState,
   ViewHeader,
 } from "@/components/ui/orchestrator";
+
+/** Fallback color for codings whose code has no stored color. */
+const FALLBACK_CODE_COLOR = "var(--qc-accent)";
+
+/** PATCH a text coding's memo/important with a local fetch, mirroring
+ *  codingApi's pattern — no lib/api.ts additions needed. */
+async function patchHtmlCodingRow(
+  id: number,
+  body: { memo?: string; important?: number },
+): Promise<unknown> {
+  const path = `/codings/text/${id}`;
+  const doFetch = async (): Promise<unknown> => {
+    const base = await initApiBase();
+    const res = await fetchWithTimeout(`${base}${path}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) {
+      let detail: unknown;
+      try {
+        detail = (await res.json()).detail;
+      } catch {
+        /* non-JSON error body */
+      }
+      const suffix = typeof detail === "string" && detail ? `: ${detail}` : "";
+      throw new ApiError(res.status, `API error ${res.status} on ${path}${suffix}`, detail);
+    }
+    return (await res.json()) as unknown;
+  };
+  try {
+    return await doFetch();
+  } catch (err) {
+    if (err instanceof ApiError) throw err;
+    return doFetch();
+  }
+}
 
 /* --------------------------------------------------------- html decoding */
 
@@ -315,6 +374,13 @@ const QC_HIGHLIGHT_SCRIPT = `(function () {
     mark.className = "qc-live-coding";
     if (seg.name) mark.setAttribute("title", seg.name);
     mark.setAttribute("style", styleFor(seg.color));
+    // The owning coding travels with the mark so a click can be forwarded
+    // to the parent (which resolves the full row from its own state).
+    if (seg.ctid !== undefined && seg.ctid !== null) {
+      mark.setAttribute("data-ctid", seg.ctid);
+      mark.setAttribute("data-pos0", seg.pos0 === undefined ? "" : seg.pos0);
+      mark.setAttribute("data-pos1", seg.pos1 === undefined ? "" : seg.pos1);
+    }
     node.parentNode.replaceChild(mark, mid);
     mark.appendChild(mid);
   }
@@ -579,6 +645,29 @@ const QC_HIGHLIGHT_SCRIPT = `(function () {
     postToParent(msg);
   }, true);
 
+  // A click on a coded mark forwards the owning coding to the parent — the
+  // parent opens its segment-details footer (resolved from its own loaded
+  // codings list, never from the frame's claim).
+  document.addEventListener("click", function (e) {
+    var t = e.target;
+    if (!t) return;
+    var mark = null;
+    var el = t.nodeType === 3 ? t.parentNode : t;
+    while (el && el.nodeType === 1 && el !== document.body) {
+      if (el.tagName === "MARK" && el.className === "qc-live-coding") {
+        mark = el;
+        break;
+      }
+      el = el.parentNode;
+    }
+    if (!mark) return;
+    var ctid = parseInt(mark.getAttribute("data-ctid"), 10);
+    var pos0 = parseInt(mark.getAttribute("data-pos0"), 10);
+    var pos1 = parseInt(mark.getAttribute("data-pos1"), 10);
+    if (isNaN(ctid) || isNaN(pos0) || isNaN(pos1)) return;
+    postToParent({ type: "qc:mark-click", ctid: ctid, pos0: pos0, pos1: pos1 });
+  }, true);
+
   window.addEventListener("message", function (e) {
     var d = e.data;
     if (!d || d.type !== "qc:codings" || !Array.isArray(d.codings)) return;
@@ -599,6 +688,11 @@ const QC_HIGHLIGHT_SCRIPT = `(function () {
 function injectScript(html: string): string {
   return injectHighlightScript(html, `<script>${QC_HIGHLIGHT_SCRIPT}</script>`);
 }
+
+/** Highlight payload plus the owning coding's identity — the injected
+ *  script embeds ctid/pos0/pos1 into the marks so a click can be forwarded
+ *  back to the parent (which resolves the full row from its own state). */
+type MarkPayload = QcCodingPayload & { ctid: number; pos0: number; pos1: number };
 
 export function HtmlCoder({ source }: { source: Source }) {
   const { t } = useI18n();
@@ -644,12 +738,24 @@ export function HtmlCoder({ source }: { source: Source }) {
     null,
   );
 
+  /** The webpage-side coding whose details the bottom bar shows — selected
+   *  by clicking a highlight mark (qc:mark-click) or via the context menu's
+   *  "View details" entry. Purely client state, never fetched on open. */
+  const [selectedCtid, setSelectedCtid] = useState<number | null>(null);
+  /** Draft while the footer's memo field is being edited inline (null =
+   *  not editing). */
+  const [memoDraft, setMemoDraft] = useState<string | null>(null);
+
   const activeCodeId = useProjectStore((s) => s.activeCodeId);
+  /** When OFF, creating a coding does NOT auto-select it in the details
+   *  footer (clicking a segment still views it). */
+  const autoShowDetails = useProjectStore((s) => s.autoShowSegmentDetails);
 
   const containerRef = useRef<HTMLDivElement | null>(null);
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
   const frameToolbarRef = useRef<HTMLDivElement | null>(null);
   const ctxMenuRef = useRef<HTMLDivElement | null>(null);
+  const footerRef = useRef<HTMLDivElement | null>(null);
 
   /* ------------------------------------------------------ live highlights */
   // cid -> { name, color } from the flat code tree, used to color the marks
@@ -664,7 +770,7 @@ export function HtmlCoder({ source }: { source: Source }) {
 
   // Latest highlight payload, kept in a ref so the iframe `load` handler can
   // always post the current state (postMessage before load is dropped).
-  const highlightPayloadRef = useRef<QcCodingPayload[]>([]);
+  const highlightPayloadRef = useRef<MarkPayload[]>([]);
 
   // The iframe's text layer rebuilt over the serialized html — the bridge
   // that maps iframe selections (view indices) to source offsets. Script
@@ -701,10 +807,17 @@ export function HtmlCoder({ source }: { source: Source }) {
   // marks (including the pre-computed ones) and re-marks in place, so the
   // webpage keeps its scroll position.
   useEffect(() => {
-    const payload: QcCodingPayload[] = [];
+    const payload: MarkPayload[] = [];
     for (const c of codings) {
       const info = codeInfo.get(c.cid);
-      payload.push({ seltext: c.seltext, color: info?.color ?? null, name: info?.name ?? "" });
+      payload.push({
+        seltext: c.seltext,
+        color: info?.color ?? null,
+        name: info?.name ?? "",
+        ctid: c.ctid,
+        pos0: c.pos0,
+        pos1: c.pos1,
+      });
     }
     highlightPayloadRef.current = payload;
     postCodingsToFrame();
@@ -719,7 +832,7 @@ export function HtmlCoder({ source }: { source: Source }) {
   // including packaged WebView2 runs where the script never fires — every
   // coding change RE-BAKES the marks into the srcDoc, so highlights render
   // with zero script/postMessage dependency.
-  const frozenSrcDocRef = useRef<{ html: string; payload: QcCodingPayload[]; srcDoc: string } | null>(null);
+  const frozenSrcDocRef = useRef<{ html: string; payload: MarkPayload[]; srcDoc: string } | null>(null);
   const liveReadyRef = useRef(false);
   const [srcDoc, setSrcDoc] = useState<string | null>(null);
 
@@ -784,7 +897,7 @@ export function HtmlCoder({ source }: { source: Source }) {
       const sel = frameSel;
       if (!sel) return;
       try {
-        await api.createTextCoding({
+        const created = await api.createTextCoding({
           cid,
           fid: source.id,
           seltext: sel.seltext,
@@ -792,6 +905,14 @@ export function HtmlCoder({ source }: { source: Source }) {
           pos1: sel.pos1,
         });
         await refreshCodings();
+        // Auto-show the freshly created coding in the bottom bar (gated on
+        // the "Auto-show segment details" pref).
+        setMemoDraft(null);
+        if (autoShowDetails) {
+          setSelectedCtid(created.ctid);
+        } else {
+          setSelectedCtid(null);
+        }
       } catch (e) {
         setErrMsg(e instanceof Error ? e.message : t("coder.createError"));
       } finally {
@@ -799,7 +920,7 @@ export function HtmlCoder({ source }: { source: Source }) {
       }
       void refreshCodes().catch(() => undefined);
     },
-    [frameSel, source.id, refreshCodings, refreshCodes, clearFrameSelection, t],
+    [frameSel, source.id, refreshCodings, refreshCodes, clearFrameSelection, t, autoShowDetails],
   );
 
   /** Delete a coding from the webpage's context menu. */
@@ -817,6 +938,90 @@ export function HtmlCoder({ source }: { source: Source }) {
     [refreshCodings, t],
   );
 
+  /* -------------------------------------------- webpage segment details bar */
+
+  /** The footer row — resolved from the LOADED client list, so a row
+   *  deleted elsewhere just closes the bar (never a fetch on open). */
+  const selectedCoding = useMemo(
+    () => (selectedCtid != null ? codings.find((c) => c.ctid === selectedCtid) ?? null : null),
+    [selectedCtid, codings],
+  );
+
+  /** Segment weight (backend rows carry it; 0 = no weight). */
+  const rowWeight = (row: Coding & { weight?: number }): number => row.weight ?? 0;
+
+  /** Stepper update of the selected coding's weight (0-100; 0 = no weight). */
+  function updateSelectedWeight(weight: number) {
+    if (!selectedCoding) return;
+    void (async () => {
+      try {
+        await patchCodingWeight("text", selectedCoding.ctid, weight);
+        await refreshCodings();
+      } catch (e) {
+        setErrMsg(e instanceof Error ? e.message : t("coder.weightError"));
+      }
+    })();
+  }
+
+  /** Open the footer's inline memo editor for the selected coding. */
+  function startEditMemo() {
+    if (!selectedCoding) return;
+    setMemoDraft(selectedCoding.memo ?? "");
+  }
+
+  /** Save the memo draft for the selected coding, then refresh its list. */
+  function saveMemo() {
+    if (memoDraft == null || !selectedCoding) return;
+    const draft = memoDraft;
+    setMemoDraft(null);
+    void (async () => {
+      try {
+        await patchHtmlCodingRow(selectedCoding.ctid, { memo: draft });
+        await refreshCodings();
+      } catch (e) {
+        setErrMsg(e instanceof Error ? e.message : t("htmlCoder.updateError"));
+      }
+    })();
+  }
+
+  /** Toggle the important flag of the selected coding. */
+  function toggleImportant() {
+    if (!selectedCoding) return;
+    const next = selectedCoding.important ? 0 : 1;
+    void (async () => {
+      try {
+        await patchHtmlCodingRow(selectedCoding.ctid, { important: next });
+        await refreshCodings();
+      } catch (e) {
+        setErrMsg(e instanceof Error ? e.message : t("htmlCoder.updateError"));
+      }
+    })();
+  }
+
+  /** Delete the selected coding (with confirm), then refresh. */
+  function deleteSelected() {
+    if (!selectedCoding) return;
+    const code = codeById.get(selectedCoding.cid);
+    if (
+      !window.confirm(
+        t("pdfCoder.removeConfirm", {
+          name: code?.name ?? t("coder.fallbackCodeLower", { id: selectedCoding.cid }),
+        }),
+      )
+    )
+      return;
+    void (async () => {
+      try {
+        await api.deleteTextCoding(selectedCoding.ctid);
+        setSelectedCtid(null);
+        setMemoDraft(null);
+        await refreshCodings();
+      } catch (e) {
+        setErrMsg(e instanceof Error ? e.message : t("coder.removeError"));
+      }
+    })();
+  }
+
   // The frame → parent message router: selection reports, right-click
   // forwarding and click-away signals. Everything is validated by
   // parseFrameMessage (unknown types — incl. the parent→frame `qc:codings` —
@@ -824,6 +1029,22 @@ export function HtmlCoder({ source }: { source: Source }) {
   useEffect(() => {
     const onMessage = (e: MessageEvent) => {
       if (e.source !== iframeRef.current?.contentWindow) return;
+      // A click on a highlight mark inside the frame: select the coding for
+      // the bottom details bar. The message is validated inline (it is not
+      // part of the shared frame protocol) and the footer renders ONLY from
+      // the loaded client list — the row must exist in `codings`, never from
+      // the frame's claim.
+      const raw = e.data as Record<string, unknown> | null;
+      if (raw?.type === "qc:mark-click") {
+        const ctid = typeof raw.ctid === "number" ? raw.ctid : null;
+        if (ctid == null) return;
+        if (!codings.some((c) => c.ctid === ctid)) return;
+        setSelectedCtid(ctid);
+        setMemoDraft(null);
+        setCtxMenu(null);
+        clearFrameSelection();
+        return;
+      }
       const msg = parseFrameMessage(e.data);
       if (!msg) return;
 
@@ -900,8 +1121,12 @@ export function HtmlCoder({ source }: { source: Source }) {
       if (msg.type === "qc:frame-mousedown") {
         // Any click inside the webpage dismisses the context menu. The
         // selection toolbar survives a right-click (right-click preserves
-        // the selection) and is re-anchored by the next qc:selection.
+        // the selection) and is re-anchored by the next qc:selection. The
+        // details footer closes too — a click on a highlight mark re-opens
+        // it via the following qc:mark-click.
         setCtxMenu(null);
+        setSelectedCtid(null);
+        setMemoDraft(null);
         return;
       }
 
@@ -945,7 +1170,8 @@ export function HtmlCoder({ source }: { source: Source }) {
     return () => window.removeEventListener("message", onMessage);
   }, [viewModel, fulltextModel, codings, fulltext, frameSel, clearFrameSelection]);
 
-  // Escape closes the picker, then the context menu and the frame toolbar.
+  // Escape closes the picker, then the context menu, the frame toolbar and
+  // the segment-details footer.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "Escape") return;
@@ -955,6 +1181,8 @@ export function HtmlCoder({ source }: { source: Source }) {
       }
       setCtxMenu(null);
       clearFrameSelection();
+      setSelectedCtid(null);
+      setMemoDraft(null);
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -965,6 +1193,21 @@ export function HtmlCoder({ source }: { source: Source }) {
     const onDown = (e: MouseEvent) => {
       const target = e.target instanceof Node ? e.target : null;
       if (target && ctxMenuRef.current && !ctxMenuRef.current.contains(target)) setCtxMenu(null);
+    };
+    document.addEventListener("mousedown", onDown);
+    return () => document.removeEventListener("mousedown", onDown);
+  }, []);
+
+  // Click-away closes the segment-details footer (the PDF coder pattern).
+  // Clicks INSIDE the iframe never reach the parent document — the frame's
+  // own click handler re-selects a coding or the frame-mousedown signal
+  // dismisses transient UI.
+  useEffect(() => {
+    const onDown = (e: MouseEvent) => {
+      const target = e.target instanceof Node ? e.target : null;
+      if (!target || footerRef.current?.contains(target)) return;
+      setSelectedCtid(null);
+      setMemoDraft(null);
     };
     document.addEventListener("mousedown", onDown);
     return () => document.removeEventListener("mousedown", onDown);
@@ -1036,6 +1279,8 @@ export function HtmlCoder({ source }: { source: Source }) {
     setFulltext(null);
     clearFrameSelection();
     setCtxMenu(null);
+    setSelectedCtid(null);
+    setMemoDraft(null);
     void (async () => {
       try {
         const [cod, anns, flat, src] = await Promise.all([
@@ -1315,19 +1560,36 @@ export function HtmlCoder({ source }: { source: Source }) {
             {ctxMenu.codings.map((row) => {
               const code = codeById.get(row.cid);
               return (
-                <MenuItem
-                  key={row.ctid}
-                  role="menuitem"
-                  onClick={() => void deleteFrameCoding(row)}
-                  className="hover:text-danger"
-                >
-                  <Trash2 size={12} aria-hidden />
-                  <span className="min-w-0 flex-1 truncate">
-                    {t("coder.removeFor", {
-                      name: code?.name ?? t("coder.fallbackCode", { id: row.cid }),
-                    })}
-                  </span>
-                </MenuItem>
+                <Fragment key={row.ctid}>
+                  <MenuItem
+                    role="menuitem"
+                    onClick={() => {
+                      // Open the coding's details in the bottom bar (purely
+                      // client state — the footer resolves the row from the
+                      // loaded codings list).
+                      setSelectedCtid(row.ctid);
+                      setMemoDraft(null);
+                      setCtxMenu(null);
+                    }}
+                  >
+                    <Eye size={12} aria-hidden />
+                    <span className="min-w-0 flex-1 truncate">
+                      {t("htmlCoder.viewDetails")}
+                    </span>
+                  </MenuItem>
+                  <MenuItem
+                    role="menuitem"
+                    onClick={() => void deleteFrameCoding(row)}
+                    className="hover:text-danger"
+                  >
+                    <Trash2 size={12} aria-hidden />
+                    <span className="min-w-0 flex-1 truncate">
+                      {t("coder.removeFor", {
+                        name: code?.name ?? t("coder.fallbackCode", { id: row.cid }),
+                      })}
+                    </span>
+                  </MenuItem>
+                </Fragment>
               );
             })}
             {frameSel && (
@@ -1361,6 +1623,147 @@ export function HtmlCoder({ source }: { source: Source }) {
               </>
             )}
           </Menu>
+        </div>
+      )}
+
+      {/* Segment-details footer for the WEBPAGE side: opened by clicking a
+          highlight mark or the context menu's "View details". Renders only
+          from the loaded client list — never fetches on open. */}
+      {selectedCoding && (
+        <div ref={footerRef} className="shrink-0 border-t border-border bg-surface px-3 py-2">
+          <div className="flex items-center gap-2">
+            <span className="text-xs font-medium text-text-secondary">{t("coder.codingDetails")}</span>
+            <div className="flex-1" />
+            <IconButton
+              label={t("common.closeDetails")}
+              size="sm"
+              onClick={() => {
+                setSelectedCtid(null);
+                setMemoDraft(null);
+              }}
+            >
+              <X size={14} aria-hidden />
+            </IconButton>
+          </div>
+          <ul className="mt-1.5 space-y-1.5">
+            <li className="flex items-center gap-2 rounded-sm border border-border bg-bg px-2 py-1.5 text-sm">
+              <span
+                className="h-3 w-3 shrink-0 rounded-sm border border-border"
+                style={{
+                  backgroundColor: codeById.get(selectedCoding.cid)?.color ?? FALLBACK_CODE_COLOR,
+                }}
+                aria-hidden
+              />
+              <span className="font-medium">
+                {codeById.get(selectedCoding.cid)?.name ??
+                  t("coder.fallbackCode", { id: selectedCoding.cid })}
+              </span>
+              {selectedCoding.seltext && (
+                <span
+                  className="max-w-48 truncate text-xs text-text-secondary"
+                  title={selectedCoding.seltext}
+                >
+                  {selectedCoding.seltext}
+                </span>
+              )}
+
+              {memoDraft != null ? (
+                <div className="flex items-center gap-1">
+                  <Input
+                    value={memoDraft}
+                    placeholder={t("pdfCoder.memoPlaceholder")}
+                    aria-label={t("pdfCoder.memoPlaceholder")}
+                    className="h-6 w-48"
+                    onChange={(e) => setMemoDraft(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") void saveMemo();
+                    }}
+                  />
+                  <Button
+                    variant="primaryCompact"
+                    className="h-6 px-1.5"
+                    icon={<Check size={12} aria-hidden />}
+                    title={t("common.save")}
+                    aria-label={t("common.save")}
+                    onClick={() => void saveMemo()}
+                  />
+                  <Button
+                    variant="secondary"
+                    className="h-6 px-1.5"
+                    icon={<X size={12} aria-hidden />}
+                    title={t("common.cancel")}
+                    aria-label={t("common.cancel")}
+                    onClick={() => setMemoDraft(null)}
+                  />
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  onClick={startEditMemo}
+                  title={t("pdfCoder.editMemo")}
+                  className="flex min-w-0 max-w-64 items-center gap-1 text-left text-xs text-text-secondary hover:text-text-primary"
+                >
+                  {selectedCoding.memo ? (
+                    <span className="truncate">{selectedCoding.memo}</span>
+                  ) : (
+                    <span className="italic">{t("coder.noMemoInline")}</span>
+                  )}
+                  <Pencil size={10} aria-hidden />
+                </button>
+              )}
+
+              <span className="flex items-center gap-1">
+                <span className="text-xs text-text-secondary">{t("coder.weight")}</span>
+                <Button
+                  variant="secondary"
+                  className="h-6 w-6 justify-center px-0"
+                  icon={<Minus size={12} aria-hidden />}
+                  title={t("coder.weightDec")}
+                  aria-label={t("coder.weightDec")}
+                  disabled={rowWeight(selectedCoding) === 0}
+                  onClick={() => updateSelectedWeight(rowWeight(selectedCoding) - 1)}
+                />
+                <span
+                  className="min-w-5 text-center text-xs text-text-secondary"
+                  aria-label={t("coder.weight")}
+                >
+                  {rowWeight(selectedCoding)}
+                </span>
+                <Button
+                  variant="secondary"
+                  className="h-6 w-6 justify-center px-0"
+                  icon={<Plus size={12} aria-hidden />}
+                  title={t("coder.weightInc")}
+                  aria-label={t("coder.weightInc")}
+                  disabled={rowWeight(selectedCoding) >= 100}
+                  onClick={() => updateSelectedWeight(rowWeight(selectedCoding) + 1)}
+                />
+              </span>
+              <IconButton
+                label={t("pdfCoder.importantToggle")}
+                title={t("pdfCoder.importantToggle")}
+                size="sm"
+                className={cn(selectedCoding.important !== 0 && "text-warning")}
+                onClick={toggleImportant}
+              >
+                <Star
+                  size={14}
+                  className={selectedCoding.important !== 0 ? "fill-current" : ""}
+                  aria-hidden
+                />
+              </IconButton>
+              <div className="flex-1" />
+              <IconButton
+                label={t("coder.removeThis")}
+                title={t("coder.removeThis")}
+                size="sm"
+                onClick={deleteSelected}
+                className="hover:text-danger"
+              >
+                <Trash2 size={14} aria-hidden />
+              </IconButton>
+            </li>
+          </ul>
         </div>
       )}
 

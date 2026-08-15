@@ -119,6 +119,36 @@ function SortableTh({
 // is consumed exactly once.
 let pickerOpenedForTick = 0;
 
+// Row context menu geometry. The menu is min-w-40 (160px) plus a 1px border
+// on each side; the items are py-1.5 (12px) plus the text-sm line height
+// (20px); the menu itself adds py-1 (8px) plus the 2px border. These are
+// used to keep the menu fully inside the window: 8px inset on every side,
+// recomputed on open and on window resize while open.
+const MENU_MARGIN = 8;
+const MENU_WIDTH = 160 + 2;
+const MENU_ITEM_HEIGHT = 12 + 20;
+const MENU_BASE_HEIGHT = 8 + 2;
+
+// Clamp the row context menu at (x, y) so it stays fully inside the
+// window. The menu is rendered with translateX(-100%), i.e. its RIGHT edge
+// sits at `left`, so the horizontal clamp keeps that right edge inside the
+// window while the (known, min-)width keeps the left edge on screen. The
+// height is estimated from the item count (capped) and the menu is given a
+// maxHeight + scroll so it can never exceed the window on small screens.
+function clampRowMenu(
+  x: number,
+  y: number,
+  itemCount: number,
+): { left: number; top: number; maxHeight: number } {
+  const iw = window.innerWidth;
+  const ih = window.innerHeight;
+  const left = Math.min(Math.max(x, MENU_WIDTH + MENU_MARGIN), iw - MENU_MARGIN);
+  const natural = itemCount * MENU_ITEM_HEIGHT + MENU_BASE_HEIGHT;
+  const maxHeight = Math.max(2 * MENU_MARGIN, Math.min(natural, ih - 2 * MENU_MARGIN));
+  const top = Math.min(Math.max(y, MENU_MARGIN), ih - MENU_MARGIN - maxHeight);
+  return { left, top, maxHeight };
+}
+
 export function FileManager() {
   const { t } = useI18n();
   const toast = useToast();
@@ -286,11 +316,31 @@ export function FileManager() {
     return () => window.removeEventListener("keydown", onKey);
   }, [menu]);
 
+  // Re-clamp the row actions menu while it is open: the window can resize
+  // underneath a position:fixed menu, so recompute on every resize tick.
+  const [viewportTick, setViewportTick] = useState(0);
+  useEffect(() => {
+    if (!menu) return;
+    const onResize = () => setViewportTick((n) => n + 1);
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, [menu]);
+
   const filtered = useMemo(() => filterSources(sources, fileQuery), [sources, fileQuery]);  const rows = useMemo(
     () => sortSources(filtered, sortKey, sortDir),
     [filtered, sortKey, sortDir],
   );
   const menuRow = menu ? rows.find((r) => r.id === menu.id) : undefined;
+  // Row menu position, re-clamped on every render trigger while open (open
+  // event + viewportTick for window resizes): translateX(-100%) anchors the
+  // menu's right edge at `left`, so clamping keeps both edges in-window.
+  const rowMenuStyle = useMemo(() => {
+    if (!menu || !menuRow) return null;
+    return clampRowMenu(menu.x, menu.y, menuRow.media_type === "text" ? 6 : 5);
+    // viewportTick is an intentional recompute trigger on window resize
+    // (the menu stays open while the window moves under it).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [menu, menuRow, viewportTick]);
 
   // Drop selections for rows that left the filtered list.
   useEffect(() => {
@@ -943,7 +993,7 @@ export function FileManager() {
       </div>
 
       {/* Row actions menu */}
-      {menu && menuRow && (
+      {menu && menuRow && rowMenuStyle && (
         <>
           <div
             className="fixed inset-0 z-30"
@@ -952,8 +1002,11 @@ export function FileManager() {
           />
           <Menu
             position="fixed"
-            className="min-w-40"
-            style={{ left: menu.x, top: menu.y, transform: "translateX(-100%)" }}
+            className="min-w-40 overflow-y-auto"
+            style={{
+              ...rowMenuStyle,
+              transform: "translateX(-100%)",
+            }}
             role="menu"
             aria-label={t("files.actionsTitle")}
           >

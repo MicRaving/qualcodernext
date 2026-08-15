@@ -3,7 +3,7 @@
  * screen readers) and a compact screen-reader toggle. Mounted in the
  * dashboard and in the Settings view (General section).
  */
-import { Accessibility } from "lucide-react";
+import { SlidersHorizontal } from "lucide-react";
 import { useI18n } from "@/lib/i18n";
 import { useProjectStore, type A11yMode } from "@/stores/project";
 import { Select } from "@/components/ui/orchestrator";
@@ -47,7 +47,7 @@ export function A11yControls() {
   return (
     <div className="flex flex-col gap-2">
       <div className="flex items-center gap-2 text-xs font-medium text-text-secondary">
-        <Accessibility size={14} aria-hidden />
+        <SlidersHorizontal size={14} aria-hidden />
         <span>{t("a11y.section")}</span>
       </div>
       <A11yModePicker />

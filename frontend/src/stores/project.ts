@@ -19,6 +19,8 @@ import {
   type SyncStatus,
 } from "@/lib/api";
 import type { SortDir, SortKey } from "@/features/manage/files";
+import { blankScreenshot, captureAppScreenshot } from "@/features/bugreport/capture";
+import { DEFAULT_GITHUB_REPO } from "@/features/bugreport/github";
 
 export type ThemeMode = "light" | "dark";
 
@@ -96,6 +98,26 @@ function initialA11yMode(): A11yMode {
 
 const INITIAL_A11Y_MODE = initialA11yMode();
 applyA11yMode(INITIAL_A11Y_MODE);
+
+/** UI pref: whether creating a coding auto-selects it in the coder's
+ *  segment-details bar (DEFAULT ON). */
+function applyAutoShowSegmentDetails(v: boolean) {
+  if (typeof window !== "undefined") {
+    localStorage.setItem("qc-auto-show-segment-details", v ? "1" : "0");
+  }
+}
+
+function initialAutoShowSegmentDetails(): boolean {
+  if (typeof window !== "undefined") {
+    const saved = localStorage.getItem("qc-auto-show-segment-details");
+    if (saved === "1") return true;
+    if (saved === "0") return false;
+  }
+  return true;
+}
+
+const INITIAL_AUTO_SHOW_SEGMENT_DETAILS = initialAutoShowSegmentDetails();
+applyAutoShowSegmentDetails(INITIAL_AUTO_SHOW_SEGMENT_DETAILS);
 
 export type WorkspaceView =
   | { kind: "dashboard" }
@@ -186,6 +208,10 @@ interface ProjectState {
 
   a11yMode: A11yMode;
   setA11yMode: (mode: A11yMode) => void;
+
+  /** Auto-select a freshly created coding in the segment-details bar. */
+  autoShowSegmentDetails: boolean;
+  setAutoShowSegmentDetails: (v: boolean) => void;
 
   /** Code the user picked in the left sidebar; used as the target code for
    *  selections/rects across coders (and highlighted in the sidebar). */
@@ -376,11 +402,86 @@ interface ProjectState {
    *  segment's codings are loaded). */
   gotoSegment: { ctid: number | null; pos0: number | null; pos1: number | null } | null;
   setGotoSegment: (goto: { ctid: number | null; pos0: number | null; pos1: number | null } | null) => void;
+
+  // --- Bug report (screenshot + GitHub issue composer) ----------------
+
+  bugReport: BugReportState;
+  /** Open the composer: gathers the last action (newest audit row + current
+   *  view), the last error, the GitHub config and the screenshot, then shows
+   *  the modal. The screenshot is captured BEFORE the modal opens so the
+   *  composer never appears in its own picture. */
+  openBugReport: () => Promise<void>;
+  closeBugReport: () => void;
+  updateBugReport: (patch: Partial<BugReportState>) => void;
+  /** Lightweight in-session recorder for the last user action (view
+   *  changes); the newest audit row is fetched when the report opens. */
+  recordLastAction: (action: string) => void;
+  /** Last uncaught error (window error / unhandledrejection listeners
+   *  installed below feed this). */
+  setLastError: (error: string | null) => void;
+}
+
+/** The bug-report composer state (screenshot + draft + GitHub config). */
+export interface BugReportState {
+  open: boolean;
+  /** PNG data-URL of the RAW screenshot (without paint marks). */
+  rawScreenshot: string | null;
+  /** True when the capture failed and the fallback blank canvas was used. */
+  captureFailed: boolean;
+  /** Last uncaught runtime error ("" / null when none). */
+  lastError: string | null;
+  /** Last action label (view or newest audit row), shown in the env block. */
+  lastAction: string | null;
+  title: string;
+  body: string;
+  labels: string[];
+  assignee: string;
+  milestone: string;
+  /** GitHub integration config read from the app settings on open. */
+  githubToken: string;
+  githubRepo: string;
 }
 
 /** Monotonic guard for the inspector detail fetches (only the LATEST
  *  selection may write the result — see selectCode/selectFile). */
 let inspectorSelectSeq = 0;
+
+/** Human-readable label of the current view (last-action recorder). */
+function viewLabelOf(view: WorkspaceView): string {
+  switch (view.kind) {
+    case "coding":
+      return `View: coding (source ${view.sourceId})`;
+    case "dashboard":
+      return "View: dashboard";
+    default:
+      return `View: ${view.kind}`;
+  }
+}
+
+/** Normalize an uncaught error (event reason, Error, string…) to text. */
+function errorTextOf(e: unknown): string {
+  if (e instanceof Error) return e.message || e.name;
+  if (typeof e === "string") return e;
+  if (e && typeof e === "object" && "message" in e && typeof e.message === "string") {
+    return e.message;
+  }
+  try {
+    return JSON.stringify(e);
+  } catch {
+    return String(e);
+  }
+}
+
+// In-session last-error recorder: uncaught errors and rejected promises feed
+// the bug report so the composer can show what actually went wrong.
+if (typeof window !== "undefined") {
+  window.addEventListener("error", (e) => {
+    useProjectStore.getState().setLastError(errorTextOf(e.error) || e.message || "Runtime error");
+  });
+  window.addEventListener("unhandledrejection", (e) => {
+    useProjectStore.getState().setLastError(errorTextOf(e.reason));
+  });
+}
 
 export const useProjectStore = create<ProjectState>((set, get) => ({
   projectOpen: false,
@@ -411,6 +512,12 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   setA11yMode: (mode) => {
     applyA11yMode(mode);
     set({ a11yMode: mode });
+  },
+
+  autoShowSegmentDetails: INITIAL_AUTO_SHOW_SEGMENT_DETAILS,
+  setAutoShowSegmentDetails: (v) => {
+    applyAutoShowSegmentDetails(v);
+    set({ autoShowSegmentDetails: v });
   },
 
   activeCodeId: null,
@@ -989,5 +1096,88 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
         inspectorError: e instanceof Error ? e.message : "Failed to load file details",
       });
     }
+  },
+
+  bugReport: {
+    open: false,
+    rawScreenshot: null,
+    captureFailed: false,
+    lastError: null,
+    lastAction: null,
+    title: "",
+    body: "",
+    labels: ["bug"],
+    assignee: "",
+    milestone: "",
+    githubToken: "",
+    githubRepo: DEFAULT_GITHUB_REPO,
+  },
+  closeBugReport: () => set((s) => ({ bugReport: { ...s.bugReport, open: false } })),
+  updateBugReport: (patch) => set((s) => ({ bugReport: { ...s.bugReport, ...patch } })),
+  recordLastAction: (action) => {
+    if (!action) return;
+    set((s) => ({ bugReport: { ...s.bugReport, lastAction: action } }));
+  },
+  setLastError: (error) => set((s) => ({ bugReport: { ...s.bugReport, lastError: error } })),
+  openBugReport: async () => {
+    const store = useProjectStore.getState();
+    // 1. Last action: the current view, upgraded to the newest audit row
+    //    when one exists (that is the last thing the app persisted).
+    let lastAction = viewLabelOf(store.view);
+    try {
+      const { rows } = await api.audit({ limit: 1 });
+      const row = rows[0];
+      if (row) {
+        lastAction = row.action + (row.entity ? ` (${row.entity})` : "");
+      }
+    } catch {
+      /* backend unreachable — the view label stays */
+    }
+    // 2. Last error: the in-session uncaught error, else the store's error
+    //    slot (set by failed actions).
+    const lastError = store.bugReport.lastError ?? store.error;
+    // 3. GitHub config from the app settings.
+    let githubToken = store.bugReport.githubToken;
+    let githubRepo = store.bugReport.githubRepo;
+    try {
+      const s = await api.appSettings();
+      githubToken = s.github_token ?? "";
+      githubRepo =
+        s.github_repo && s.github_repo.trim().includes("/")
+          ? s.github_repo.trim()
+          : DEFAULT_GITHUB_REPO;
+    } catch {
+      /* keep the stored defaults */
+    }
+    // 4. Screenshot of the app view (BEFORE the modal opens — the composer
+    //    must never appear in its own picture). A failed capture (tainted
+    //    canvas, html2canvas crash) falls back to a blank canvas with a note.
+    let rawScreenshot: string | null = null;
+    let captureFailed = false;
+    try {
+      const shot = await captureAppScreenshot();
+      rawScreenshot = shot.dataUrl;
+    } catch (e) {
+      console.warn("bugreport capture failed:", e instanceof Error ? `${e.message}\n${e.stack}` : e);
+      captureFailed = true;
+      try {
+        const shot = await blankScreenshot("Screenshot unavailable");
+        rawScreenshot = shot.dataUrl;
+      } catch {
+        rawScreenshot = null;
+      }
+    }
+    set({
+      bugReport: {
+        ...store.bugReport,
+        open: true,
+        rawScreenshot,
+        captureFailed,
+        lastAction,
+        lastError,
+        githubToken,
+        githubRepo,
+      },
+    });
   },
 }));

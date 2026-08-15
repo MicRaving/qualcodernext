@@ -241,6 +241,9 @@ export function PdfCoder({ source }: { source: Source }) {
   const storeCodeTree = useProjectStore((s) => s.codeTree);
   const activeCodeId = useProjectStore((s) => s.activeCodeId);
   const hiddenCodes = useProjectStore((s) => s.hiddenCodes);
+  /** When OFF, creating a coding does NOT auto-select it in the details
+   *  footer (clicking a segment still views it). */
+  const autoShowDetails = useProjectStore((s) => s.autoShowSegmentDetails);
 
   const [pdfVisible, setPdfVisible] = useState(true);
   const [plainVisible, setPlainVisible] = useState(false);
@@ -770,12 +773,13 @@ export function PdfCoder({ source }: { source: Source }) {
           // Auto-show the freshly created coding: append it idempotently by
           // ctid (a re-render or racing refresh can never re-append), then
           // select it — the footer renders from this client list, never
-          // from the fresh object.
+          // from the fresh object. The auto-select is gated on the
+          // "Auto-show segment details" pref.
           setTextCodings((cs) =>
             cs.some((c) => c.ctid === created.ctid) ? cs : [...cs, created],
           );
           setSelectedImid(null);
-          setSelectedTextCtid(created.ctid);
+          if (autoShowDetails) setSelectedTextCtid(created.ctid);
           setEditDraft(null);
           setFooterError(null);
           // Flash its overlay and scroll the page it sits on into view.
@@ -788,7 +792,7 @@ export function PdfCoder({ source }: { source: Source }) {
         }
       })();
     },
-    [source.id, t, refreshTextCodings, flashTextCoding],
+    [source.id, t, refreshTextCodings, flashTextCoding, autoShowDetails],
   );
 
   /** Code the pending drag rectangle with the given code id. */
@@ -813,11 +817,12 @@ export function PdfCoder({ source }: { source: Source }) {
           // background refresh below reconciles with the backend, so a
           // failed refresh can never block the footer. The append is
           // idempotent by imid: a re-render or a racing refresh can never
-          // duplicate the row.
+          // duplicate the row. The auto-select is gated on the
+          // "Auto-show segment details" pref.
           setCodings((cs) =>
             cs.some((c) => c.imid === created.imid) ? cs : [...cs, created],
           );
-          setSelectedImid(created.imid);
+          if (autoShowDetails) setSelectedImid(created.imid);
           setSelectedTextCtid(null);
           setEditDraft(null);
           setFooterError(null);
@@ -830,7 +835,7 @@ export function PdfCoder({ source }: { source: Source }) {
       })();
       void refreshCodes().catch(() => undefined);
     },
-    [scale, source.id, refreshCodings, refreshCodes, t],
+    [scale, source.id, refreshCodings, refreshCodes, t, autoShowDetails],
   );
 
   const finishDrag = useCallback(() => {

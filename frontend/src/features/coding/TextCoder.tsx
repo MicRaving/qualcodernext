@@ -179,6 +179,8 @@ export function TextCoder({
   const storeCodeTree = useProjectStore((s) => s.codeTree);
   const activeCodeId = useProjectStore((s) => s.activeCodeId);
   const hiddenCodes = useProjectStore((s) => s.hiddenCodes);
+  /** When OFF, creating a coding does NOT auto-select it in the details bar. */
+  const autoShowDetails = useProjectStore((s) => s.autoShowSegmentDetails);
 
   const [source, setSource] = useState<Source | null>(null);
   const [localCodings, setLocalCodings] = useState<Coding[]>([]);
@@ -671,8 +673,15 @@ export function TextCoder({
   /* ----------------------------------------------------------- coding flow */
 
   /** Select the details for a freshly created coding: locate the rendered
-   *  segment covering its span and show it in the footer. */
+   *  segment covering its span and show it in the footer. Gated on the
+   *  "Auto-show segment details" pref — when OFF, creating a coding does
+   *  not open the bar (clicking a segment still views it). */
   function selectCreatedSegment(created: Coding, next: Coding[]) {
+    if (!autoShowDetails) {
+      setSelectedSeg(null);
+      setSelectedAnnSeg(null);
+      return;
+    }
     const seg = buildRenderedSegments(text, next, colorByCid).find((s) =>
       s.ctids.includes(created.ctid),
     );

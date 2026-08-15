@@ -148,6 +148,9 @@ export function UrlImportDialog({ onClose }: Props) {
           </Select>
         </Field>
         <p className="text-xs text-text-secondary">{t("files.urlImportHint")}</p>
+        {mode === "youtube" && (
+          <p className="text-xs text-text-secondary">{t("files.urlImportHintYoutube")}</p>
+        )}
         {error && <ErrorBanner onClose={() => setError(null)}>{error}</ErrorBanner>}
         <div className="flex justify-end gap-2 pt-1">
           <Button variant="secondary" onClick={onClose} disabled={busy}>

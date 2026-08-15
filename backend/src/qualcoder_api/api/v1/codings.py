@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
+from sqlalchemy.exc import IntegrityError
 
 from qualcoder_api.api.v1.deps import DbDep, ServiceDep
 from qualcoder_api.core.models import AVCoding, Coding, ImageCoding
@@ -72,7 +73,19 @@ async def create_text_coding(req: TextCodingCreate, db: DbDep) -> Coding:
         raise HTTPException(status_code=422, detail="pos1 must be greater than pos0")
     payload = req.model_dump()
     payload["owner"] = resolve_owner(payload["owner"])
-    coding = await CodingRepository(db).add_text_coding(**payload)
+    try:
+        coding = await CodingRepository(db).add_text_coding(**payload)
+    except IntegrityError:
+        # code_text carries the unique constraint (cid, fid, pos0, pos1,
+        # owner) — a repeated insert of the same segment (e.g. a stray
+        # create fired by a coder on a view click) is a client bug, not a
+        # server error. Roll the failed transaction back so the session
+        # stays usable, and answer a clean 409 instead of an IntegrityError
+        # 500 with a traceback.
+        await db.rollback()
+        raise HTTPException(
+            status_code=409, detail="This segment is already coded with this code"
+        ) from None
     await audit.record(
         db, user=payload["owner"], action="coding.create", entity="code_text",
         entity_id=coding.ctid, source_id=req.fid,

@@ -17,16 +17,29 @@ import {
   Minus,
   Music,
   Pause,
+  Pencil,
   Play,
   Plus,
   Sparkles,
+  Star,
   StickyNote,
   Tag,
   Trash2,
   Video,
   X,
 } from "lucide-react";
-import { api, initApiBase, invalidateApiBase, sourceFileUrl, type AVCoding, type CodeTreeItem, type Coding, type Source } from "@/lib/api";
+import {
+  api,
+  ApiError,
+  fetchWithTimeout,
+  initApiBase,
+  invalidateApiBase,
+  sourceFileUrl,
+  type AVCoding,
+  type CodeTreeItem,
+  type Coding,
+  type Source,
+} from "@/lib/api";
 import { patchCodingWeight } from "@/features/coding/codingApi";
 import { CodePicker, type PickedCode } from "@/features/coding/CodePicker";
 import { AutocodeDialog } from "@/features/coding/AutocodeDialog";
@@ -69,12 +82,49 @@ function transcriptTimestamp(ms: number): string {
   return `[${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}]`;
 }
 
+/** PATCH a transcript text coding's memo/important with a local fetch,
+ *  mirroring codingApi's pattern — no lib/api.ts additions needed. */
+async function patchTextCodingRow(
+  id: number,
+  body: { memo?: string; important?: number },
+): Promise<unknown> {
+  const path = `/codings/text/${id}`;
+  const doFetch = async (): Promise<unknown> => {
+    const base = await initApiBase();
+    const res = await fetchWithTimeout(`${base}${path}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) {
+      let detail: unknown;
+      try {
+        detail = (await res.json()).detail;
+      } catch {
+        /* non-JSON error body */
+      }
+      const suffix = typeof detail === "string" && detail ? `: ${detail}` : "";
+      throw new ApiError(res.status, `API error ${res.status} on ${path}${suffix}`, detail);
+    }
+    return (await res.json()) as unknown;
+  };
+  try {
+    return await doFetch();
+  } catch (err) {
+    if (err instanceof ApiError) throw err;
+    return doFetch();
+  }
+}
+
 export function AvCoder({ source }: { source: Source }) {
   const { t } = useI18n();
   const storeCodeTree = useProjectStore((s) => s.codeTree);
   const [transcribeOpen, setTranscribeOpen] = useState(false);
   const activeCodeId = useProjectStore((s) => s.activeCodeId);
   const hiddenCodes = useProjectStore((s) => s.hiddenCodes);
+  /** When OFF, creating a coding does NOT auto-select it in the details
+   *  footer (clicking a segment still views it). */
+  const autoShowDetails = useProjectStore((s) => s.autoShowSegmentDetails);
   const mediaRef = useRef<HTMLVideoElement & HTMLAudioElement>(null);
   const timelineRef = useRef<HTMLDivElement>(null);
 
@@ -121,6 +171,12 @@ export function AvCoder({ source }: { source: Source }) {
   const [pickerOpen, setPickerOpen] = useState(false);
   const [pendingStart, setPendingStart] = useState<number | null>(null);
   const [selected, setSelected] = useState<AVCoding | null>(null);
+  /** The transcript text coding whose details the footer shows (click a
+   *  coded transcript segment). */
+  const [selectedText, setSelectedText] = useState<Coding | null>(null);
+  /** Draft while the footer's memo field is being edited inline (null =
+   *  not editing). */
+  const [memoDraft, setMemoDraft] = useState<string | null>(null);
   const [transcript, setTranscript] = useState<Source | null>(null);
   const [playbackRate, setPlaybackRate] = useState(1);
   const [videoVisible, setVideoVisible] = useState(true);
@@ -388,7 +444,7 @@ export function AvCoder({ source }: { source: Source }) {
     try {
       const pos0 = renderedToRaw(transcriptRaw, crAt, sel.start);
       const pos1 = renderedToRaw(transcriptRaw, crAt, sel.end);
-      await api.createTextCoding({
+      const created = await api.createTextCoding({
         cid,
         fid: transcriptId,
         seltext: transcriptRaw.slice(pos0, pos1),
@@ -396,7 +452,17 @@ export function AvCoder({ source }: { source: Source }) {
         pos1,
       });
       await useProjectStore.getState().refreshProject();
-      await loadTranscriptCodings();
+      const next = await loadTranscriptCodings();
+      // Auto-show the freshly created coding (gated on the
+      // "Auto-show segment details" pref).
+      if (autoShowDetails) {
+        setSelected(null);
+        setSelectedText(next.find((c) => c.ctid === created.ctid) ?? null);
+        setMemoDraft(null);
+      } else {
+        setSelectedText(null);
+        setMemoDraft(null);
+      }
     } catch (e) {
       setTError(e instanceof Error ? e.message : t("coder.createError"));
     }
@@ -414,7 +480,7 @@ export function AvCoder({ source }: { source: Source }) {
       const res = await api.createCode(name, { catid: tInVivoCat });
       const pos0 = renderedToRaw(transcriptRaw, crAt, sel.start);
       const pos1 = renderedToRaw(transcriptRaw, crAt, sel.end);
-      await api.createTextCoding({
+      const created = await api.createTextCoding({
         cid: res.cid,
         fid: transcriptId,
         seltext: transcriptRaw.slice(pos0, pos1),
@@ -424,7 +490,17 @@ export function AvCoder({ source }: { source: Source }) {
       setTSel(null);
       setTInVivoOpen(false);
       await useProjectStore.getState().refreshProject();
-      await loadTranscriptCodings();
+      const next = await loadTranscriptCodings();
+      // Auto-show the freshly created coding (gated on the
+      // "Auto-show segment details" pref).
+      if (autoShowDetails) {
+        setSelected(null);
+        setSelectedText(next.find((c) => c.ctid === created.ctid) ?? null);
+        setMemoDraft(null);
+      } else {
+        setSelectedText(null);
+        setMemoDraft(null);
+      }
     } catch (e) {
       setTError(e instanceof Error ? e.message : t("coder.inVivoCreateError"));
     } finally {
@@ -502,8 +578,16 @@ export function AvCoder({ source }: { source: Source }) {
       out.push(
         <span
           key={c.ctid}
-          className="rounded-sm"
+          className="cursor-pointer rounded-sm qc-seg"
           style={{ backgroundColor: codeTint(color ?? "var(--qc-accent)") }}
+          onClick={() => {
+            // A click on a coded transcript segment opens its details in
+            // the bottom footer (pure client state — no fetch).
+            setSelected(null);
+            setSelectedText(c);
+            setMemoDraft(null);
+            setTSel(null);
+          }}
         >
           {text.slice(s, e)}
         </span>,
@@ -618,10 +702,10 @@ export function AvCoder({ source }: { source: Source }) {
   // --- transcript codings (highlight the already coded text) ---
   const [transcriptCodings, setTranscriptCodings] = useState<Coding[]>([]);
 
-  const loadTranscriptCodings = useCallback(async () => {
+  const loadTranscriptCodings = useCallback(async (): Promise<Coding[]> => {
     if (transcriptId == null) {
       setTranscriptCodings([]);
-      return;
+      return [];
     }
     try {
       const codings = await api.sourceCoding(transcriptId);
@@ -629,9 +713,12 @@ export function AvCoder({ source }: { source: Source }) {
       // in rendered space (their seltext then contains text from the
       // following line); normalize every coding to raw space so the
       // highlights land where they were marked.
-      setTranscriptCodings(codings.map((c) => normalizeCodingPositions(transcriptRaw, crAt, c)));
+      const next = codings.map((c) => normalizeCodingPositions(transcriptRaw, crAt, c));
+      setTranscriptCodings(next);
+      return next;
     } catch {
       setTranscriptCodings([]);
+      return [];
     }
   }, [transcriptId, transcriptRaw, crAt]);
 
@@ -1131,8 +1218,15 @@ export function AvCoder({ source }: { source: Source }) {
       });
       setPendingStart(null);
       const fresh = await load();
-      // Show the details of the freshly assigned segment automatically.
-      setSelected(fresh.find((c) => c.avid === created.avid) ?? null);
+      // Show the details of the freshly assigned segment automatically
+      // (gated on the "Auto-show segment details" pref).
+      if (autoShowDetails) {
+        setSelected(fresh.find((c) => c.avid === created.avid) ?? null);
+      } else {
+        setSelected(null);
+      }
+      setSelectedText(null);
+      setMemoDraft(null);
     } catch (e) {
       setError(e instanceof Error ? e.message : t("coder.createError"));
     }
@@ -1160,8 +1254,8 @@ export function AvCoder({ source }: { source: Source }) {
   }
 
   /** Segment weight (backend rows carry it; 0 = no weight). */
-  const avWeight = (coding: AVCoding): number =>
-    (coding as AVCoding & { weight?: number }).weight ?? 0;
+  const avWeight = (coding: AVCoding | Coding): number =>
+    (coding as (AVCoding | Coding) & { weight?: number }).weight ?? 0;
 
   /** Stepper update of a time-range coding's weight (0-100; 0 = no weight). */
   function updateCodingWeight(coding: AVCoding, weight: number) {
@@ -1193,6 +1287,91 @@ export function AvCoder({ source }: { source: Source }) {
       setError(e instanceof Error ? e.message : t("coder.deleteSegmentError"));
     }
   }
+
+  /* --------------------------------------- transcript coding details row */
+
+  /** Stepper update of a transcript coding's weight (0-100; 0 = no weight). */
+  function updateTranscriptWeight(row: Coding, weight: number) {
+    void (async () => {
+      try {
+        await patchCodingWeight("text", row.ctid, weight);
+        await loadTranscriptCodings();
+      } catch (e) {
+        setTError(e instanceof Error ? e.message : t("coder.weightError"));
+      }
+    })();
+  }
+
+  /** Open the footer's inline memo editor for the selected transcript coding. */
+  function startEditTranscriptMemo() {
+    if (!selectedText) return;
+    setMemoDraft(selectedText.memo ?? "");
+  }
+
+  /** Save the memo draft of the selected transcript coding, then refresh. */
+  function saveTranscriptMemo() {
+    if (memoDraft == null || !selectedText) return;
+    const draft = memoDraft;
+    setMemoDraft(null);
+    void (async () => {
+      try {
+        await patchTextCodingRow(selectedText.ctid, { memo: draft });
+        await loadTranscriptCodings();
+      } catch (e) {
+        setTError(e instanceof Error ? e.message : t("htmlCoder.updateError"));
+      }
+    })();
+  }
+
+  /** Toggle the important flag of the selected transcript coding. */
+  function toggleTranscriptImportant() {
+    if (!selectedText) return;
+    const next = selectedText.important ? 0 : 1;
+    void (async () => {
+      try {
+        await patchTextCodingRow(selectedText.ctid, { important: next });
+        await loadTranscriptCodings();
+      } catch (e) {
+        setTError(e instanceof Error ? e.message : t("htmlCoder.updateError"));
+      }
+    })();
+  }
+
+  /** Delete a transcript text coding (the timeline/AV codings are removed
+   *  via handleDelete). */
+  function handleTranscriptDelete(row: Coding) {
+    if (
+      !window.confirm(
+        t("avCoder.deleteConfirm", {
+          name: nameByCid.get(row.cid) ?? t("coder.plainCode"),
+        }),
+      )
+    )
+      return;
+    void (async () => {
+      try {
+        await api.deleteTextCoding(row.ctid);
+        setSelectedText(null);
+        setMemoDraft(null);
+        await loadTranscriptCodings();
+      } catch (e) {
+        setTError(e instanceof Error ? e.message : t("coder.removeError"));
+      }
+    })();
+  }
+
+  // Escape closes the details footer (timeline segment or transcript coding).
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      if (selected == null && selectedText == null) return;
+      setSelected(null);
+      setSelectedText(null);
+      setMemoDraft(null);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  });
 
   if (loading) {
     return <LoadingState>{t("avCoder.loading")}</LoadingState>;
@@ -1351,6 +1530,8 @@ export function AvCoder({ source }: { source: Source }) {
                     e.stopPropagation();
                     seekToMs(coding.pos0);
                     setSelected(coding);
+                    setSelectedText(null);
+                    setMemoDraft(null);
                   }}
                   title={`${nameByCid.get(coding.cid) ?? t("coder.plainCode")} · ${formatTime(coding.pos0)} – ${formatTime(coding.pos1)}`}
                   className={`absolute top-0 h-full cursor-pointer border qc-seg ${
@@ -1763,56 +1944,180 @@ export function AvCoder({ source }: { source: Source }) {
       {mediaError && <ErrorBanner>{mediaError}</ErrorBanner>}
       {error && <ErrorBanner>{error}</ErrorBanner>}
 
-      {/* Details panel */}
-      {selected && (
-        <div className="flex shrink-0 items-center gap-3 border-b border-border bg-surface px-3 py-2">
-          <span
-            className="h-3 w-3 shrink-0 rounded-sm border border-border"
-            style={{ backgroundColor: codeColor(selected) }}
-            aria-hidden
-          />
-          <span className="truncate text-sm font-medium text-text-primary" title={selected.date}>
-            {nameByCid.get(selected.cid) ?? t("coder.fallbackCodePlain", { id: selected.cid })}
-          </span>
-          <span className="font-mono text-xs text-text-secondary">
-            {formatTime(selected.pos0)} – {formatTime(selected.pos1)}
-          </span>
-          <span className="truncate text-xs text-text-secondary">{selected.memo || t("common.noMemo")}</span>
-          <span className="flex items-center gap-1">
-            <span className="text-xs text-text-secondary">{t("coder.weight")}</span>
-            <Button
-              variant="secondary"
-              className="h-6 w-6 justify-center px-0"
-              icon={<Minus size={12} aria-hidden />}
-              title={t("coder.weightDec")}
-              aria-label={t("coder.weightDec")}
-              disabled={avWeight(selected) === 0}
-              onClick={() => updateCodingWeight(selected, avWeight(selected) - 1)}
-            />
-            <span className="min-w-5 text-center text-xs text-text-secondary" aria-label={t("coder.weight")}>
-              {avWeight(selected)}
-            </span>
-            <Button
-              variant="secondary"
-              className="h-6 w-6 justify-center px-0"
-              icon={<Plus size={12} aria-hidden />}
-              title={t("coder.weightInc")}
-              aria-label={t("coder.weightInc")}
-              disabled={avWeight(selected) >= 100}
-              onClick={() => updateCodingWeight(selected, avWeight(selected) + 1)}
-            />
-          </span>
-          <div className="flex-1" />
-          <Button
-            variant="danger"
-            icon={<Trash2 size={12} aria-hidden />}
-            onClick={() => void handleDelete(selected)}
-          >
-            {t("common.delete")}
-          </Button>
-          <Button variant="secondary" onClick={() => setSelected(null)}>
-            {t("common.close")}
-          </Button>
+      {/* Details panel: a timeline AVCoding or a transcript text coding
+          (clicked `.qc-seg` in the transcript panel). Renders purely from
+          client state — nothing is fetched on open. */}
+      {(selected || selectedText) && (
+        <div className="flex shrink-0 flex-wrap items-center gap-3 border-b border-border bg-surface px-3 py-2">
+          {selected && (
+            <>
+              <span
+                className="h-3 w-3 shrink-0 rounded-sm border border-border"
+                style={{ backgroundColor: codeColor(selected) }}
+                aria-hidden
+              />
+              <span className="truncate text-sm font-medium text-text-primary" title={selected.date}>
+                {nameByCid.get(selected.cid) ?? t("coder.fallbackCodePlain", { id: selected.cid })}
+              </span>
+              <span className="font-mono text-xs text-text-secondary">
+                {formatTime(selected.pos0)} – {formatTime(selected.pos1)}
+              </span>
+              <span className="truncate text-xs text-text-secondary">{selected.memo || t("common.noMemo")}</span>
+              <span className="flex items-center gap-1">
+                <span className="text-xs text-text-secondary">{t("coder.weight")}</span>
+                <Button
+                  variant="secondary"
+                  className="h-6 w-6 justify-center px-0"
+                  icon={<Minus size={12} aria-hidden />}
+                  title={t("coder.weightDec")}
+                  aria-label={t("coder.weightDec")}
+                  disabled={avWeight(selected) === 0}
+                  onClick={() => updateCodingWeight(selected, avWeight(selected) - 1)}
+                />
+                <span className="min-w-5 text-center text-xs text-text-secondary" aria-label={t("coder.weight")}>
+                  {avWeight(selected)}
+                </span>
+                <Button
+                  variant="secondary"
+                  className="h-6 w-6 justify-center px-0"
+                  icon={<Plus size={12} aria-hidden />}
+                  title={t("coder.weightInc")}
+                  aria-label={t("coder.weightInc")}
+                  disabled={avWeight(selected) >= 100}
+                  onClick={() => updateCodingWeight(selected, avWeight(selected) + 1)}
+                />
+              </span>
+              <div className="flex-1" />
+              <Button
+                variant="danger"
+                icon={<Trash2 size={12} aria-hidden />}
+                onClick={() => void handleDelete(selected)}
+              >
+                {t("common.delete")}
+              </Button>
+              <Button variant="secondary" onClick={() => setSelected(null)}>
+                {t("common.close")}
+              </Button>
+            </>
+          )}
+          {!selected && selectedText && (
+            <>
+              <span
+                className="h-3 w-3 shrink-0 rounded-sm border border-border"
+                style={{ backgroundColor: colorByCid.get(selectedText.cid) ?? "var(--qc-accent)" }}
+                aria-hidden
+              />
+              <span className="truncate text-sm font-medium text-text-primary" title={selectedText.date}>
+                {nameByCid.get(selectedText.cid) ?? t("coder.fallbackCode", { id: selectedText.cid })}
+              </span>
+              {selectedText.seltext && (
+                <span
+                  className="max-w-56 truncate text-xs text-text-secondary"
+                  title={selectedText.seltext}
+                >
+                  {selectedText.seltext}
+                </span>
+              )}
+              {memoDraft != null ? (
+                <div className="flex items-center gap-1">
+                  <Input
+                    value={memoDraft}
+                    placeholder={t("pdfCoder.memoPlaceholder")}
+                    aria-label={t("pdfCoder.memoPlaceholder")}
+                    className="h-6 w-48"
+                    onChange={(e) => setMemoDraft(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") void saveTranscriptMemo();
+                    }}
+                  />
+                  <Button
+                    variant="primaryCompact"
+                    className="h-6 px-1.5"
+                    icon={<Check size={12} aria-hidden />}
+                    title={t("common.save")}
+                    aria-label={t("common.save")}
+                    onClick={() => void saveTranscriptMemo()}
+                  />
+                  <Button
+                    variant="secondary"
+                    className="h-6 px-1.5"
+                    icon={<X size={12} aria-hidden />}
+                    title={t("common.cancel")}
+                    aria-label={t("common.cancel")}
+                    onClick={() => setMemoDraft(null)}
+                  />
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  onClick={startEditTranscriptMemo}
+                  title={t("pdfCoder.editMemo")}
+                  className="flex min-w-0 max-w-64 items-center gap-1 text-left text-xs text-text-secondary hover:text-text-primary"
+                >
+                  {selectedText.memo ? (
+                    <span className="truncate">{selectedText.memo}</span>
+                  ) : (
+                    <span className="italic">{t("coder.noMemoInline")}</span>
+                  )}
+                  <Pencil size={10} aria-hidden />
+                </button>
+              )}
+              <span className="flex items-center gap-1">
+                <span className="text-xs text-text-secondary">{t("coder.weight")}</span>
+                <Button
+                  variant="secondary"
+                  className="h-6 w-6 justify-center px-0"
+                  icon={<Minus size={12} aria-hidden />}
+                  title={t("coder.weightDec")}
+                  aria-label={t("coder.weightDec")}
+                  disabled={avWeight(selectedText) === 0}
+                  onClick={() => updateTranscriptWeight(selectedText, avWeight(selectedText) - 1)}
+                />
+                <span className="min-w-5 text-center text-xs text-text-secondary" aria-label={t("coder.weight")}>
+                  {avWeight(selectedText)}
+                </span>
+                <Button
+                  variant="secondary"
+                  className="h-6 w-6 justify-center px-0"
+                  icon={<Plus size={12} aria-hidden />}
+                  title={t("coder.weightInc")}
+                  aria-label={t("coder.weightInc")}
+                  disabled={avWeight(selectedText) >= 100}
+                  onClick={() => updateTranscriptWeight(selectedText, avWeight(selectedText) + 1)}
+                />
+              </span>
+              <IconButton
+                label={t("pdfCoder.importantToggle")}
+                title={t("pdfCoder.importantToggle")}
+                size="sm"
+                className={cn(selectedText.important !== 0 && "text-warning")}
+                onClick={toggleTranscriptImportant}
+              >
+                <Star
+                  size={14}
+                  className={selectedText.important !== 0 ? "fill-current" : ""}
+                  aria-hidden
+                />
+              </IconButton>
+              <div className="flex-1" />
+              <Button
+                variant="danger"
+                icon={<Trash2 size={12} aria-hidden />}
+                onClick={() => void handleTranscriptDelete(selectedText)}
+              >
+                {t("common.delete")}
+              </Button>
+              <Button
+                variant="secondary"
+                onClick={() => {
+                  setSelectedText(null);
+                  setMemoDraft(null);
+                }}
+              >
+                {t("common.close")}
+              </Button>
+            </>
+          )}
         </div>
       )}
 

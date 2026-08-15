@@ -56,6 +56,9 @@ export function ImageCoder({ source }: { source: Source }) {
   const { t } = useI18n();
   const activeCodeId = useProjectStore((s) => s.activeCodeId);
   const hiddenCodes = useProjectStore((s) => s.hiddenCodes);
+  /** When OFF, creating a coding does NOT auto-select it in the details
+   *  panel (clicking a region still views it). */
+  const autoShowDetails = useProjectStore((s) => s.autoShowSegmentDetails);
   const [codings, setCodings] = useState<ImageCoding[]>([]);
   const [codes, setCodes] = useState<CodeTreeItem[]>([]);
   const [loading, setLoading] = useState(true);
@@ -193,15 +196,21 @@ export function ImageCoder({ source }: { source: Source }) {
         setPendingRect(null);
         const fresh = await load();
         setEditDraft(null);
-        // Show the details of the freshly assigned region automatically.
-        setSelected(fresh.find((c) => c.imid === created.imid) ?? null);
+        // Show the details of the freshly assigned region automatically
+        // (gated on the "Auto-show segment details" pref — when OFF the
+        // bar stays closed; clicking a region still views it).
+        if (autoShowDetails) {
+          setSelected(fresh.find((c) => c.imid === created.imid) ?? null);
+        } else {
+          setSelected(null);
+        }
       } catch (e) {
         setError(e instanceof Error ? e.message : t("coder.createError"));
       } finally {
         setSaving(false);
       }
     },
-    [source.id, load, t],
+    [source.id, load, t, autoShowDetails],
   );
 
   // Clicking a code in the left sidebar assigns it to the pending rectangle.

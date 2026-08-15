@@ -281,6 +281,42 @@ export interface OpenProjectResult {
 export interface AppSettings {
   /** Packaged app: auto-open the most recent project on start (default on). */
   auto_open_project: boolean;
+  /** GitHub token for the bug report (submitted issues / attachments).
+   *  The backend settings model only knows auto_open_project — the GitHub
+   *  fields travel in the same payload and are mirrored to localStorage
+   *  (the backend drops unknown keys, so they would not survive a reload
+   *  otherwise). */
+  github_token?: string;
+  /** Target repository as "owner/repo" for the bug report. */
+  github_repo?: string;
+}
+
+/** localStorage mirror of the GitHub bug-report settings (see AppSettings). */
+const GITHUB_SETTINGS_KEY = "qc-github-settings";
+
+function githubLocalSettings(): { github_token: string; github_repo: string } {
+  if (typeof window === "undefined") return { github_token: "", github_repo: "" };
+  try {
+    const raw = window.localStorage.getItem(GITHUB_SETTINGS_KEY);
+    if (!raw) return { github_token: "", github_repo: "" };
+    const data = JSON.parse(raw) as { github_token?: unknown; github_repo?: unknown };
+    return {
+      github_token: typeof data.github_token === "string" ? data.github_token : "",
+      github_repo: typeof data.github_repo === "string" ? data.github_repo : "",
+    };
+  } catch {
+    return { github_token: "", github_repo: "" };
+  }
+}
+
+function storeGithubLocalSettings(patch: { github_token?: string; github_repo?: string }): void {
+  if (typeof window === "undefined") return;
+  const next = { ...githubLocalSettings(), ...patch };
+  try {
+    window.localStorage.setItem(GITHUB_SETTINGS_KEY, JSON.stringify(next));
+  } catch {
+    /* storage unavailable — the GitHub fields just stay session-only */
+  }
 }
 
 export interface Source {
@@ -1767,12 +1803,23 @@ export const api = {
 
   // --- App settings -----------------------------------------------------
 
-  appSettings: () => request<AppSettings>("/app/settings"),
-  saveAppSettings: (body: AppSettings) =>
-    request<AppSettings>("/app/settings", {
+  appSettings: async () => {
+    const base = await request<AppSettings>("/app/settings");
+    return { ...base, ...githubLocalSettings() };
+  },
+  saveAppSettings: async (body: AppSettings) => {
+    // Only mirror the GitHub fields when the caller actually sent them —
+    // settings saves that only touch auto_open_project must not wipe them.
+    const patch: { github_token?: string; github_repo?: string } = {};
+    if (body.github_token !== undefined) patch.github_token = body.github_token;
+    if (body.github_repo !== undefined) patch.github_repo = body.github_repo;
+    if (Object.keys(patch).length > 0) storeGithubLocalSettings(patch);
+    const base = await request<AppSettings>("/app/settings", {
       method: "PUT",
       body: JSON.stringify(body),
-    }),
+    });
+    return { ...base, ...patch };
+  },
 
   // --- App updates -----------------------------------------------------
 

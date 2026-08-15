@@ -3,6 +3,9 @@ duplicate detection and audit."""
 
 from __future__ import annotations
 
+import base64
+import csv
+import io
 import json
 import sqlite3
 import subprocess
@@ -15,6 +18,7 @@ from httpx import ASGITransport, AsyncClient
 
 from qualcoder_api.api.v1.router import router as v1_router
 from qualcoder_api.api.v1.scrape import router as scrape_router
+from qualcoder_api.core.enums import MediaType
 from qualcoder_api.services import scrape_service
 from qualcoder_api.services.scrape_service import ScrapedContent, ScrapeError
 
@@ -162,14 +166,14 @@ def make_youtube_info(**overrides) -> dict:
 
 
 def youtube_comment_table(text: str) -> list[list[str]]:
-    """Rows after the ``author\tlikes\tdate\tcomment`` header line.
+    """Rows after the ``author,likes,date,comment`` header line.
 
-    Returns ``[]`` when the text has no header row.
+    Returns ``[]`` when the text has no header row (the caption block).
     """
-    lines = text.splitlines()
-    for i, line in enumerate(lines):
-        if line == "author\tlikes\tdate\tcomment":
-            return [row.split("\t") for row in lines[i + 1 :]]
+    rows = list(csv.reader(io.StringIO(text)))
+    for i, row in enumerate(rows):
+        if row == ["author", "likes", "date", "comment"]:
+            return rows[i + 1 :]
     return []
 
 
@@ -236,7 +240,7 @@ def test_reddit_parse_builds_indented_thread():
 def test_reddit_json_suffix_appended_and_query_kept():
     seen: list[str] = []
 
-    def fake_fetch(url: str, timeout: int = 45) -> bytes:
+    def fake_fetch(url: str, **kwargs) -> bytes:
         seen.append(url)
         return reddit_payload()
 
@@ -279,7 +283,7 @@ def test_reddit_host_variants_normalize_to_www(url, expected):
     """old/np/m/new/bare reddit hosts all fetch through www.reddit.com."""
     seen: list[str] = []
 
-    def fake_fetch(fetched: str, timeout: int = 45) -> bytes:
+    def fake_fetch(fetched: str, **kwargs) -> bytes:
         seen.append(fetched)
         return reddit_payload()
 
@@ -293,7 +297,7 @@ def test_reddit_host_variants_normalize_to_www(url, expected):
 def test_reddit_slug_form_keeps_sort_param():
     seen: list[str] = []
 
-    def fake_fetch(fetched: str, timeout: int = 45) -> bytes:
+    def fake_fetch(fetched: str, **kwargs) -> bytes:
         seen.append(fetched)
         return reddit_payload()
 
@@ -359,22 +363,329 @@ def test_reddit_accepts_single_listing_object():
     assert "Comments" not in text
 
 
-def test_reddit_429_maps_to_rate_limit_message():
-    err = ScrapeError("server returned HTTP 429 for https://www.reddit.com/...", code=429)
+def test_reddit_429_retries_after_retry_after_then_succeeds():
+    """A 429 with a Retry-After header sleeps for the header's seconds and
+    retries once; the retry succeeding means the scrape succeeds."""
+    err = ScrapeError(
+        "server returned HTTP 429 for https://www.reddit.com/...",
+        code=429,
+        headers={"Retry-After": "2"},
+    )
+    seen: list[str] = []
+
+    def fake_fetch(url: str, **kwargs) -> bytes:
+        seen.append(url)
+        if len(seen) == 1:
+            raise err
+        return reddit_payload()
+
     with (
+        patch("qualcoder_api.services.scrape_service.time.sleep") as sleep,
+        patch("qualcoder_api.services.scrape_service.fetch_url", side_effect=fake_fetch),
+    ):
+        content = scrape_service.scrape_reddit("https://www.reddit.com/r/Test/comments/abc123/")
+
+    sleep.assert_called_once_with(2)
+    assert seen == [
+        "https://www.reddit.com/r/Test/comments/abc123.json",
+        "https://www.reddit.com/r/Test/comments/abc123.json",
+    ]
+    assert content.mode == "reddit"
+    assert "u/alice: Top level comment." in content.data.decode("utf-8")
+
+
+def test_reddit_429_retries_once_then_raises_rate_limit_error():
+    """A second 429 after the Retry-After retry surfaces a clear
+    rate-limit error (no further retries, no host fallback)."""
+    err = ScrapeError(
+        "server returned HTTP 429 for https://www.reddit.com/...",
+        code=429,
+        headers={"Retry-After": "3"},
+    )
+    with (
+        patch("qualcoder_api.services.scrape_service.time.sleep") as sleep,
         patch("qualcoder_api.services.scrape_service.fetch_url", side_effect=err),
         pytest.raises(ScrapeError, match="rate-limited"),
     ):
         scrape_service.scrape_reddit("https://www.reddit.com/r/Test/comments/abc123/")
+    sleep.assert_called_once_with(3)
 
 
-def test_reddit_403_maps_to_private_or_blocked_message():
-    err = ScrapeError("server returned HTTP 403 for https://www.reddit.com/...", code=403)
+def test_reddit_429_without_retry_after_uses_default_delay():
+    err = ScrapeError("server returned HTTP 429 for https://www.reddit.com/...", code=429)
     with (
+        patch("qualcoder_api.services.scrape_service.time.sleep") as sleep,
         patch("qualcoder_api.services.scrape_service.fetch_url", side_effect=err),
-        pytest.raises(ScrapeError, match="private or blocked"),
+        pytest.raises(ScrapeError, match="rate-limited"),
     ):
         scrape_service.scrape_reddit("https://www.reddit.com/r/Test/comments/abc123/")
+    sleep.assert_called_once_with(60)
+
+
+def test_reddit_403_tries_old_reddit_then_mentions_oauth():
+    """A 403 (Reddit's network-policy block) falls back to old.reddit.com;
+    when both hosts are blocked the error mentions the optional OAuth
+    credentials instead of the old "private or blocked" message."""
+    err = ScrapeError("server returned HTTP 403 for https://www.reddit.com/...", code=403)
+    seen: list[str] = []
+
+    def fake_fetch(url: str, **kwargs) -> bytes:
+        seen.append(url)
+        raise err
+
+    with (
+        patch("qualcoder_api.services.scrape_service.fetch_url", side_effect=fake_fetch),
+        pytest.raises(ScrapeError, match="configure Reddit API credentials in Settings"),
+    ):
+        scrape_service.scrape_reddit("https://www.reddit.com/r/Test/comments/abc123/")
+    assert seen == [
+        "https://www.reddit.com/r/Test/comments/abc123.json",
+        "https://old.reddit.com/r/Test/comments/abc123.json",
+    ]
+
+
+def test_reddit_403_on_www_recovers_on_old_reddit():
+    """When www blocks the request but old.reddit.com answers, the scrape
+    succeeds through the fallback host."""
+    seen: list[str] = []
+
+    def fake_fetch(url: str, **kwargs) -> bytes:
+        seen.append(url)
+        if "old.reddit.com" in url:
+            return reddit_payload()
+        raise ScrapeError("server returned HTTP 403 for " + url, code=403)
+
+    with patch("qualcoder_api.services.scrape_service.fetch_url", side_effect=fake_fetch):
+        content = scrape_service.scrape_reddit("https://www.reddit.com/r/Test/comments/abc123/")
+
+    assert seen == [
+        "https://www.reddit.com/r/Test/comments/abc123.json",
+        "https://old.reddit.com/r/Test/comments/abc123.json",
+    ]
+    assert content.mode == "reddit"
+
+
+def test_reddit_anonymous_fetch_uses_unique_user_agent():
+    """The anonymous path must send the descriptive Reddit User-Agent, not
+    the browser-spoofing default — Reddit blocks generic UAs."""
+    calls: list[dict] = []
+
+    def fake_fetch(url: str, **kwargs) -> bytes:
+        calls.append({"url": url, **kwargs})
+        return reddit_payload()
+
+    with patch("qualcoder_api.services.scrape_service.fetch_url", side_effect=fake_fetch):
+        scrape_service.scrape_reddit("https://www.reddit.com/r/Test/comments/abc123/")
+
+    assert calls[0]["user_agent"] == scrape_service.REDDIT_USER_AGENT
+    assert calls[0]["user_agent"] != scrape_service.USER_AGENT
+
+
+# ----------------------------------------------------------------------
+# Reddit — app-only OAuth (client_credentials)
+# ----------------------------------------------------------------------
+
+REDDIT_TOKEN_RESPONSE = {
+    "access_token": "tok-123",
+    "token_type": "bearer",
+    "expires_in": 3600,
+    "scope": "read",
+}
+
+REDDIT_CREDENTIALS = {"client_id": "qc-cid", "client_secret": "qc-secret"}
+
+
+def test_reddit_oauth_path_fetches_token_then_oauth_listing():
+    """Configured credentials: the app-only token is fetched with HTTP
+    Basic auth (client_id:secret) + the form-encoded client_credentials
+    grant, then the listing comes from oauth.reddit.com with the Bearer
+    token — the payload parsing is identical to the anonymous path."""
+    calls: list[tuple[str, dict]] = []
+
+    def fake_fetch(url: str, **kwargs) -> bytes:
+        calls.append((url, kwargs))
+        if url == scrape_service._REDDIT_TOKEN_URL:
+            return json.dumps(REDDIT_TOKEN_RESPONSE).encode("utf-8")
+        return reddit_payload()
+
+    with (
+        patch(
+            "qualcoder_api.services.user_settings.get_reddit_credentials",
+            return_value=REDDIT_CREDENTIALS,
+        ),
+        patch("qualcoder_api.services.scrape_service.fetch_url", side_effect=fake_fetch),
+    ):
+        content = scrape_service.scrape_reddit("https://www.reddit.com/r/Test/comments/abc123/")
+
+    token_url, token_kw = calls[0]
+    assert token_url == "https://www.reddit.com/api/v1/access_token"
+    assert token_kw["method"] == "POST"
+    assert token_kw["data"] == b"grant_type=client_credentials"
+    assert token_kw["user_agent"] == scrape_service.REDDIT_USER_AGENT
+    expected_basic = "Basic " + base64.b64encode(b"qc-cid:qc-secret").decode("ascii")
+    assert token_kw["extra_headers"]["Authorization"] == expected_basic
+    assert token_kw["extra_headers"]["Content-Type"] == "application/x-www-form-urlencoded"
+
+    listing_url, listing_kw = calls[1]
+    assert listing_url == "https://oauth.reddit.com/r/Test/comments/abc123"
+    assert listing_kw["extra_headers"]["Authorization"] == "Bearer tok-123"
+
+    assert content.mode == "reddit"
+    text = content.data.decode("utf-8")
+    assert "My Reddit Thread" in text
+    assert "u/alice: Top level comment." in text
+
+
+def test_reddit_oauth_token_http_error_mentions_credentials():
+    """A 401/400/403 from the token endpoint is a credential problem — the
+    error points at the Settings instead of the raw HTTP status."""
+    for code in (400, 401, 403):
+        err = ScrapeError(
+            f"server returned HTTP {code} for {scrape_service._REDDIT_TOKEN_URL}", code=code
+        )
+        with (
+            patch(
+                "qualcoder_api.services.user_settings.get_reddit_credentials",
+                return_value=REDDIT_CREDENTIALS,
+            ),
+            patch("qualcoder_api.services.scrape_service.fetch_url", side_effect=err),
+            pytest.raises(ScrapeError, match="rejected the API credentials"),
+        ):
+            scrape_service.scrape_reddit("https://www.reddit.com/r/Test/comments/abc123/")
+
+
+def test_reddit_oauth_token_without_access_token_raises_clear_error():
+    """A 200 without an access_token (invalid_grant etc.) is mapped to the
+    same clear credential error."""
+    with (
+        patch(
+            "qualcoder_api.services.user_settings.get_reddit_credentials",
+            return_value=REDDIT_CREDENTIALS,
+        ),
+        patch(
+            "qualcoder_api.services.scrape_service.fetch_url",
+            return_value=json.dumps({"error": "invalid_grant"}).encode("utf-8"),
+        ),
+        pytest.raises(ScrapeError, match="rejected the API credentials"),
+    ):
+        scrape_service.scrape_reddit("https://www.reddit.com/r/Test/comments/abc123/")
+
+
+def test_reddit_oauth_token_non_json_raises_clear_error():
+    with (
+        patch(
+            "qualcoder_api.services.user_settings.get_reddit_credentials",
+            return_value=REDDIT_CREDENTIALS,
+        ),
+        patch("qualcoder_api.services.scrape_service.fetch_url", return_value=b"<html>"),
+        pytest.raises(ScrapeError, match="token response is not JSON"),
+    ):
+        scrape_service.scrape_reddit("https://www.reddit.com/r/Test/comments/abc123/")
+
+
+def test_reddit_oauth_listing_403_mentions_scope_or_private():
+    """A 403 on the OAuth listing itself is not the anonymous block — it
+    points at the token scope or a private subreddit."""
+    err = ScrapeError("server returned HTTP 403 for https://oauth.reddit.com/...", code=403)
+    token_ok = json.dumps(REDDIT_TOKEN_RESPONSE).encode("utf-8")
+
+    def fake_fetch(url: str, **kwargs) -> bytes:
+        if url == scrape_service._REDDIT_TOKEN_URL:
+            return token_ok
+        raise err
+
+    with (
+        patch(
+            "qualcoder_api.services.user_settings.get_reddit_credentials",
+            return_value=REDDIT_CREDENTIALS,
+        ),
+        patch("qualcoder_api.services.scrape_service.fetch_url", side_effect=fake_fetch),
+        pytest.raises(ScrapeError, match="read scope"),
+    ):
+        scrape_service.scrape_reddit("https://www.reddit.com/r/Test/comments/abc123/")
+
+
+def test_reddit_without_credentials_uses_anonymous_only():
+    """Unconfigured settings: the scraper never touches the token endpoint
+    or oauth.reddit.com — it goes straight at the anonymous .json URL."""
+    seen: list[str] = []
+
+    def fake_fetch(url: str, **kwargs) -> bytes:
+        seen.append(url)
+        return reddit_payload()
+
+    with (
+        patch(
+            "qualcoder_api.services.user_settings.get_reddit_credentials",
+            return_value={"client_id": "", "client_secret": ""},
+        ),
+        patch("qualcoder_api.services.scrape_service.fetch_url", side_effect=fake_fetch),
+    ):
+        content = scrape_service.scrape_reddit("https://www.reddit.com/r/Test/comments/abc123/")
+
+    assert seen == ["https://www.reddit.com/r/Test/comments/abc123.json"]
+    assert content.mode == "reddit"
+
+
+def test_reddit_partial_credentials_still_anonymous():
+    """Only one of the two values set = not configured: anonymous path."""
+    seen: list[str] = []
+
+    def fake_fetch(url: str, **kwargs) -> bytes:
+        seen.append(url)
+        return reddit_payload()
+
+    with (
+        patch(
+            "qualcoder_api.services.user_settings.get_reddit_credentials",
+            return_value={"client_id": "only-an-id", "client_secret": ""},
+        ),
+        patch("qualcoder_api.services.scrape_service.fetch_url", side_effect=fake_fetch),
+    ):
+        scrape_service.scrape_reddit("https://www.reddit.com/r/Test/comments/abc123/")
+
+    assert seen == ["https://www.reddit.com/r/Test/comments/abc123.json"]
+
+
+def test_reddit_credentials_settings_roundtrip(tmp_path, monkeypatch):
+    """The settings JSON stores the two credential keys; blanks are stored
+    as-is (blank client ID = anonymous fallback)."""
+    from qualcoder_api.services import user_settings
+
+    monkeypatch.setattr(user_settings, "SETTINGS_FILE", tmp_path / "settings.json")
+    assert user_settings.get_reddit_credentials() == {"client_id": "", "client_secret": ""}
+
+    user_settings.save_reddit_credentials({"client_id": " a ", "client_secret": " b "})
+    assert user_settings.get_reddit_credentials() == {"client_id": "a", "client_secret": "b"}
+
+    user_settings.save_reddit_credentials({"client_id": "", "client_secret": ""})
+    assert user_settings.get_reddit_credentials() == {"client_id": "", "client_secret": ""}
+
+
+def test_save_ai_settings_bridges_reddit_credentials(tmp_path, monkeypatch):
+    """The settings pane saves the Reddit credentials through the AI
+    settings save (its only auto-save mechanism). Blank values keep the
+    stored ones — the pane never reads them back, so a bare mount (or an
+    unrelated AI edit) can never wipe saved credentials."""
+    from qualcoder_api.services import user_settings
+
+    monkeypatch.setattr(user_settings, "SETTINGS_FILE", tmp_path / "settings.json")
+    ai = dict(user_settings.AI_DEFAULTS)
+    ai["reddit_client_id"] = "cid"
+    ai["reddit_client_secret"] = "secret"
+    user_settings.save_ai_settings(ai)
+    assert user_settings.get_reddit_credentials() == {"client_id": "cid", "client_secret": "secret"}
+
+    user_settings.save_ai_settings(dict(user_settings.AI_DEFAULTS))
+    assert user_settings.get_reddit_credentials() == {"client_id": "cid", "client_secret": "secret"}
+
+    ai = dict(user_settings.AI_DEFAULTS)
+    ai["reddit_client_secret"] = "new-secret"
+    user_settings.save_ai_settings(ai)
+    assert user_settings.get_reddit_credentials() == {
+        "client_id": "cid",
+        "client_secret": "new-secret",
+    }
 
 
 def test_reddit_json_suffix_handles_trailing_slash_after_json():
@@ -430,7 +741,7 @@ def test_article_empty_page_raises():
 
 def test_youtube_extracts_comments_instead_of_captions():
     """The subprocess path requests comments and renders ONLY the comment
-    table — no title/uploader/duration/description block, no captions."""
+    CSV — no title/uploader/duration/description block, no captions."""
     info = make_youtube_info(
         comments=[
             {
@@ -466,19 +777,20 @@ def test_youtube_extracts_comments_instead_of_captions():
     assert commands[0][-2:] == ["--", "https://www.youtube.com/watch?v=abc"]
     fetch.assert_not_called()  # captions are dropped when comments exist
     assert content.mode == "youtube"
-    assert content.filename == "Demo Video.txt"
+    assert content.filename == "Demo Video.csv"
     text = content.data.decode("utf-8")
-    # The source is ONLY the comment table: the header row comes first and
-    # the title/uploader/duration/description block is gone.
-    assert text.startswith("author\tlikes\tdate\tcomment")
+    # The source is ONLY the comment table: the CSV header row comes first
+    # and the title/uploader/duration/description block is gone.
+    assert text.startswith("author,likes,date,comment")
     assert "Demo Video" not in text
     assert "Uploader: Demo Channel" not in text
     assert "Duration:" not in text
     assert "A description." not in text
-    # One tab-separated row per comment: author \t likes \t date \t comment
-    assert "alice\t12 likes\t2023-11-14 22:13\tLoved it" in text
-    assert "→ bob\t3 likes\t2023-11-14 22:15\tMe too" in text
-    assert "unknown\t-\t-\tNo author, no meta" in text
+    # One CSV row per comment: author,likes,date,comment (commas in the
+    # comment cell force RFC-4180 quoting).
+    assert "alice,12 likes,2023-11-14 22:13,Loved it" in text
+    assert "→ bob,3 likes,2023-11-14 22:15,Me too" in text
+    assert 'unknown,-,-,"No author, no meta"' in text
     for row in youtube_comment_table(text):
         assert len(row) == 4
     assert "Captions" not in text
@@ -544,10 +856,10 @@ def test_youtube_nested_replies_keep_four_fields_with_author_prefix():
     ]
 
 
-def test_comment_row_field_count_check_normalizes_stray_cells():
-    """The field_count guard rebuilds any row that is not exactly 4 fields."""
+def test_comment_row_normalizes_stray_tabs_and_newlines():
+    """Every cell is normalized so one comment always stays a single row."""
     row = scrape_service._comment_row("a\tb", "1", "x", "text\nmore")
-    assert row.split("\t") == ["a b", "1", "x", "text more"]
+    assert row == ("a b", "1", "x", "text more")
 
 
 def test_youtube_subprocess_parses_playlist_wrapper():
@@ -567,8 +879,9 @@ def test_youtube_subprocess_parses_playlist_wrapper():
 def test_youtube_captions_shown_with_note_when_comments_requested_but_missing():
     """Comments were requested and came back empty: captions are NOT
     substituted silently — the transcript is led by a visible
-    ``# Comments unavailable ...`` note so the missing columns are
-    explained. No title/uploader/duration/description block either."""
+    ``# Comments unavailable ...`` note row (single-cell CSV rows, no
+    column header) so the missing columns are explained. No
+    title/uploader/duration/description block either."""
     info = make_youtube_info(comments=[])
     with (
         patch("qualcoder_api.services.scrape_service.subprocess.run", return_value=yt_completed(info)),
@@ -577,18 +890,20 @@ def test_youtube_captions_shown_with_note_when_comments_requested_but_missing():
         content = scrape_service.scrape_youtube("https://www.youtube.com/watch?v=abc")
 
     text = content.data.decode("utf-8")
-    assert text.startswith("# Comments unavailable (the video has no comments) — captions shown below")
-    assert "[00:01] Hello caption text" in text
-    assert "[00:03] Second line" in text
+    assert text == (
+        "# Comments unavailable (the video has no comments) — captions shown below,,,\r\n"
+        "[00:01] Hello caption text,,,\r\n"
+        "[00:03] Second line,,,\r\n"
+    )
     assert "Demo Video" not in text
     assert "Uploader:" not in text
     assert "A description." not in text
-    assert "author\tlikes\tdate\tcomment" not in text
+    assert "author,likes,date,comment" not in text
 
 
 def test_youtube_without_comments_or_captions_reports_no_comments():
     """No comments + no captions still prints the header row and a
-    ``-\t-\t-\tNo comments`` placeholder row — and nothing else."""
+    ``-,-,-,No comments`` placeholder row — and nothing else."""
     info = make_youtube_info(subtitles={}, automatic_captions={}, comments=[])
     with (
         patch("qualcoder_api.services.scrape_service.subprocess.run", return_value=yt_completed(info)),
@@ -597,8 +912,9 @@ def test_youtube_without_comments_or_captions_reports_no_comments():
         content = scrape_service.scrape_youtube("https://www.youtube.com/watch?v=abc")
 
     fetch.assert_not_called()
+    assert content.filename == "Demo Video.csv"
     text = content.data.decode("utf-8")
-    assert text == "author\tlikes\tdate\tcomment\n-\t-\t-\tNo comments"
+    assert text == "author,likes,date,comment\r\n-,-,-,No comments\r\n"
     assert "Demo Video" not in text
     assert "A description." not in text
     assert "Captions" not in text
@@ -607,7 +923,7 @@ def test_youtube_without_comments_or_captions_reports_no_comments():
 
 def test_youtube_notes_when_comment_extraction_unsupported():
     """Old yt-dlp: no ``--write-comments`` flag, no captions — the source
-    keeps the header row plus a ``-\t-\t-\t<note>`` row explaining that the
+    keeps the header row plus a ``-,-,-,<note>`` row explaining that the
     installed yt-dlp cannot extract comments (never a bare ``No comments``)."""
     info = make_youtube_info()
     with (
@@ -621,9 +937,9 @@ def test_youtube_notes_when_comment_extraction_unsupported():
     fetch.assert_not_called()
     text = content.data.decode("utf-8")
     assert text == (
-        "author\tlikes\tdate\tcomment\n"
-        "-\t-\t-\tComments could not be retrieved (the installed yt-dlp version "
-        "does not support comment extraction — 2021.12.17 or newer is required)"
+        "author,likes,date,comment\r\n"
+        "-,-,-,Comments could not be retrieved (the installed yt-dlp version "
+        "does not support comment extraction — 2021.12.17 or newer is required)\r\n"
     )
     assert "Demo Video" not in text
     assert "u/viewer1" not in text
@@ -644,7 +960,7 @@ def test_youtube_caption_fetch_failure_keeps_no_comments_row():
         content = scrape_service.scrape_youtube("https://www.youtube.com/watch?v=abc")
 
     text = content.data.decode("utf-8")
-    assert text == "author\tlikes\tdate\tcomment\n-\t-\t-\tNo comments"
+    assert text == "author,likes,date,comment\r\n-,-,-,No comments\r\n"
     assert "Demo Video" not in text
     assert "Captions" not in text
 
@@ -670,13 +986,13 @@ def test_youtube_subprocess_abort_retries_without_comments_with_note():
     assert "--write-comments" not in commands[1]
     text = content.data.decode("utf-8")
     assert "Demo Video" not in text
-    assert text.startswith("# Comments unavailable (extraction aborted) — captions shown below")
+    assert text.startswith("# Comments unavailable (extraction aborted) — captions shown below,,,")
     assert "[00:01] Hello caption text" in text
 
 
 def test_youtube_abort_without_captions_keeps_header_and_abort_note():
     """Abort retry succeeds but no captions exist: the output keeps the
-    column header plus a ``-\t-\t-\t<note>`` row explaining the aborted
+    column header plus a ``-,-,-,<note>`` row explaining the aborted
     comments — never a silent bare ``No comments`` row."""
     abort = yt_completed({}, returncode=1, stderr="ERROR: Interrupted by user\n")
     ok_without_comments = yt_completed(
@@ -695,9 +1011,9 @@ def test_youtube_abort_without_captions_keeps_header_and_abort_note():
     fetch.assert_not_called()
     text = content.data.decode("utf-8")
     assert text == (
-        "author\tlikes\tdate\tcomment\n"
-        "-\t-\t-\tComments could not be retrieved (extraction aborted) — "
-        "the video may have comments disabled or be very large"
+        "author,likes,date,comment\r\n"
+        "-,-,-,Comments could not be retrieved (extraction aborted) — "
+        "the video may have comments disabled or be very large\r\n"
     )
 
 
@@ -745,7 +1061,7 @@ def test_youtube_timeout_with_comments_requested_keeps_header_and_note_row():
     """subprocess.run raises TimeoutExpired (it killed the child already)
     while comments were requested: the scrape must NOT raise or silently
     fall back to captions — the output keeps the column header plus a
-    ``-\t-\t-\t<note>`` row explaining the missing columns."""
+    ``-,-,-,<note>`` CSV row explaining the missing columns."""
     with (
         patch.object(scrape_service, "_YT_TIMEOUT_SECONDS", 0.2),
         patch(
@@ -758,12 +1074,18 @@ def test_youtube_timeout_with_comments_requested_keeps_header_and_note_row():
 
     assert "--write-comments" in record_yt_calls(run)[0]
     fetch.assert_not_called()  # no info dict came back — captions are untouchable
+    assert content.filename == "youtube-video.csv"
     text = content.data.decode("utf-8")
     assert text == (
-        "author\tlikes\tdate\tcomment\n"
-        "-\t-\t-\tComments could not be retrieved (extraction timed out) — "
-        "the video may have comments disabled or be very large"
+        "author,likes,date,comment\r\n"
+        "-,-,-,Comments could not be retrieved (extraction timed out) — "
+        "the video may have comments disabled or be very large\r\n"
     )
+    # The note is a real CSV row: four cells that round-trip through csv.reader.
+    assert youtube_comment_table(text) == [
+        ["-", "-", "-", "Comments could not be retrieved (extraction timed out) — "
+         "the video may have comments disabled or be very large"]
+    ]
 
 
 def test_youtube_timeout_without_comments_requested_raises_friendly_error():
@@ -785,6 +1107,238 @@ def test_yt_timeout_seconds_matches_frontend_dialog_wait():
     """The backend extraction timeout must match the frontend dialog's 240s
     wait so real comment extractions on large threads can complete."""
     assert scrape_service._YT_TIMEOUT_SECONDS == 240
+
+
+# ----------------------------------------------------------------------
+# YouTube — structured import (cases + attributes + coded comment sources)
+# ----------------------------------------------------------------------
+
+STRUCTURED_COMMENTS = [
+    {
+        "id": "1",
+        "author": "alice",
+        "text": "Loved it",
+        "timestamp": 1700000000,
+        "like_count": 12,
+        "replies": [
+            {
+                "id": "2",
+                "author": "bob",
+                "text": "Me too",
+                "timestamp": 1700000100,
+                "like_count": 3,
+                "replies": [],
+            }
+        ],
+    },
+    {"id": "3", "text": "No author,\nno\tmeta"},
+]
+
+
+def make_yt_comment(index: int) -> dict:
+    """One flat-layout comment with deterministic author/text/likes/date."""
+    return {
+        "id": str(index),
+        "author": f"user{index}",
+        "text": f"Comment {index} text",
+        "timestamp": 1700000000 + index,
+        "like_count": index * 10,
+    }
+
+
+def open_project_factory(target) -> tuple:
+    """(session_factory, project_path) of the project the client opened."""
+    from qualcoder_api.main import service
+
+    assert service.session_factory is not None
+    return service.session_factory, str(target)
+
+
+async def test_youtube_structured_import_creates_cases_attributes_and_codings(scrape_client):
+    """POST /scrape/import with a YouTube URL imports every comment as a
+    CASE with author/likes/date attributes and a CODED comment source —
+    the CSV contract columns become real fields, not a text file."""
+    client, target = scrape_client
+    info = make_youtube_info(comments=STRUCTURED_COMMENTS)
+    with (
+        patch("qualcoder_api.services.scrape_service.subprocess.run", return_value=yt_completed(info)) as run,
+        patch("qualcoder_api.services.scrape_service.fetch_url") as fetch,
+    ):
+        res = await client.post(
+            "/api/v1/scrape/import", json={"url": "https://www.youtube.com/watch?v=abc"}
+        )
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert "--write-comments" in record_yt_calls(run)[0]
+    fetch.assert_not_called()  # captions are never fetched while comments exist
+    assert body["mode"] == "youtube-structured"
+    assert body["name"] == "Demo Video.csv"
+    assert body["text_length"] == 0  # the comments live as data, not file text
+
+    with sqlite3.connect(str(target / "data.qda")) as conn:
+        # One case per comment (replies included), named after the video.
+        names = sorted(r[0] for r in conn.execute("SELECT name FROM cases"))
+        assert names == [
+            "Demo Video — Comment 1",
+            "Demo Video — Comment 2",
+            "Demo Video — Comment 3",
+        ]
+        # Attribute types: author/likes/date (case scope, text).
+        assert {
+            r[0]: (r[1], r[2])
+            for r in conn.execute("SELECT name, caseOrFile, valuetype FROM attribute_type")
+        } == {
+            "author": ("case", "text"),
+            "likes": ("case", "text"),
+            "date": ("case", "text"),
+        }
+        # Attribute values per case (replies keep the ``→ `` prefix).
+        attrs = {
+            (r[0], r[1]): r[2]
+            for r in conn.execute(
+                "SELECT a.name, c.name, a.value FROM attribute a "
+                "JOIN cases c ON c.caseid = a.id WHERE a.attr_type = 'case'"
+            )
+        }
+        assert attrs == {
+            ("author", "Demo Video — Comment 1"): "alice",
+            ("likes", "Demo Video — Comment 1"): "12 likes",
+            ("date", "Demo Video — Comment 1"): "2023-11-14 22:13",
+            ("author", "Demo Video — Comment 2"): "→ bob",
+            ("likes", "Demo Video — Comment 2"): "3 likes",
+            ("date", "Demo Video — Comment 2"): "2023-11-14 22:15",
+            ("author", "Demo Video — Comment 3"): "unknown",
+            ("likes", "Demo Video — Comment 3"): "-",
+            ("date", "Demo Video — Comment 3"): "-",
+        }
+        # One analyzable text source per comment, coded with the column
+        # name as the code (the survey core names codes after columns).
+        # The API's file-import pipeline also registers the empty
+        # ``Demo Video.csv`` row — the comments themselves never travel
+        # as file text.
+        assert sorted(r[0] for r in conn.execute("SELECT name FROM source")) == [
+            "Demo Video — Comment 1_comment",
+            "Demo Video — Comment 2_comment",
+            "Demo Video — Comment 3_comment",
+            "Demo Video.csv",
+        ]
+        fulltext = dict(conn.execute("SELECT name, fulltext FROM source"))
+        assert fulltext["Demo Video — Comment 1_comment"] == "Loved it"
+        assert fulltext["Demo Video — Comment 2_comment"] == "Me too"
+        assert fulltext["Demo Video — Comment 3_comment"] == "No author, no meta"
+        assert fulltext["Demo Video.csv"] == ""
+        assert [(r[0], r[1]) for r in conn.execute("SELECT name, color FROM code_name")] == [
+            ("comment", "#B8B8B8")
+        ]
+        assert conn.execute("SELECT COUNT(*) FROM code_text").fetchone()[0] == 3
+        codings = {
+            seltext: (fid, cid)
+            for fid, cid, seltext in conn.execute("SELECT fid, cid, seltext FROM code_text")
+        }
+        assert set(codings) == {"Loved it", "Me too", "No author, no meta"}
+        assert conn.execute("SELECT COUNT(*) FROM case_text").fetchone()[0] == 3
+        # The audit records the structured outcome with the counts.
+        rows = conn.execute(
+            "SELECT detail FROM audit_log WHERE action = 'scrape.import'"
+        ).fetchall()
+        details = [json.loads(r[0]) for r in rows]
+        assert any(
+            d.get("mode") == "youtube-structured" and d.get("cases") == 3
+            and d.get("qualitative_files") == 3 and d.get("qualitative_codings") == 3
+            for d in details
+        )
+        assert any(d.get("mode") == "youtube-structured" for d in details)
+
+
+def test_youtube_structured_cap_notes_first_n_of_total(scrape_client):
+    """Only the first _YT_COMMENT_CAP comments are imported; the result
+    dict and the audit note say ``first n of N comments imported``."""
+    _, target = scrape_client
+    info = make_youtube_info(comments=[make_yt_comment(i) for i in range(5)])
+    with (
+        patch.object(scrape_service, "_YT_COMMENT_CAP", 2),
+        patch("qualcoder_api.services.scrape_service.subprocess.run", return_value=yt_completed(info)),
+    ):
+        content = scrape_service.scrape_youtube(
+            "https://www.youtube.com/watch?v=abc",
+            session_factory=open_project_factory(target)[0],
+            project_path=open_project_factory(target)[1],
+        )
+
+    assert content.mode == "youtube-structured"
+    assert content.data == b""  # no comment text travels as a file
+    result = content.structured
+    assert result["mode"] == "youtube-structured"
+    assert result["cases"] == 2
+    assert result["comments_total"] == 5
+    assert result["comments_imported"] == 2
+    assert result["note"] == "first 2 of 5 comments imported"
+    assert result["attribute_types"] == 3
+    with sqlite3.connect(str(target / "data.qda")) as conn:
+        assert conn.execute("SELECT COUNT(*) FROM cases").fetchone()[0] == 2
+        assert conn.execute("SELECT COUNT(*) FROM source").fetchone()[0] == 2
+        assert conn.execute("SELECT COUNT(*) FROM code_text").fetchone()[0] == 2
+        # The audit carries the result dict including the cap note.
+        rows = conn.execute(
+            "SELECT detail FROM audit_log WHERE action = 'scrape.import'"
+        ).fetchall()
+    details = [json.loads(r[0]) for r in rows]
+    assert any(d.get("note") == "first 2 of 5 comments imported" for d in details)
+
+
+def test_youtube_structured_falls_back_to_csv_when_no_comments(scrape_client):
+    """A video with no comments keeps the captions-with-note CSV and the
+    result dict marks the fallback — no cases are created."""
+    _, target = scrape_client
+    info = make_youtube_info(comments=[])
+    with (
+        patch("qualcoder_api.services.scrape_service.subprocess.run", return_value=yt_completed(info)),
+        patch("qualcoder_api.services.scrape_service.fetch_url", return_value=VTT_CAPTIONS),
+    ):
+        content = scrape_service.scrape_youtube(
+            "https://www.youtube.com/watch?v=abc",
+            session_factory=open_project_factory(target)[0],
+            project_path=open_project_factory(target)[1],
+        )
+
+    assert content.mode == "youtube"
+    assert content.structured == {"mode": "youtube", "fallback": "the video has no comments"}
+    text = content.data.decode("utf-8")
+    assert text.startswith("# Comments unavailable (the video has no comments) — captions shown below,,,")
+    assert "[00:01] Hello caption text" in text
+    with sqlite3.connect(str(target / "data.qda")) as conn:
+        assert conn.execute("SELECT COUNT(*) FROM cases").fetchone()[0] == 0
+        assert conn.execute("SELECT COUNT(*) FROM source").fetchone()[0] == 0
+
+
+def test_youtube_structured_failure_falls_back_to_csv(scrape_client):
+    """A failing row import must not lose the comments: the comment table
+    stays the CSV text source and the result marks the fallback."""
+    _, target = scrape_client
+    info = make_youtube_info(comments=STRUCTURED_COMMENTS)
+    with (
+        patch("qualcoder_api.services.scrape_service.subprocess.run", return_value=yt_completed(info)),
+        patch(
+            "qualcoder_api.interchange.importers._import_survey_rows",
+            side_effect=ValueError("boom"),
+        ),
+    ):
+        content = scrape_service.scrape_youtube(
+            "https://www.youtube.com/watch?v=abc",
+            session_factory=open_project_factory(target)[0],
+            project_path=open_project_factory(target)[1],
+        )
+
+    assert content.mode == "youtube"
+    assert content.structured["mode"] == "youtube"
+    assert content.structured["fallback"].startswith("structured import failed")
+    text = content.data.decode("utf-8")
+    assert text.startswith("author,likes,date,comment")
+    assert "alice,12 likes,2023-11-14 22:13,Loved it" in text
+    assert "→ bob,3 likes,2023-11-14 22:15,Me too" in text
+    assert 'unknown,-,-,"No author, no meta"' in text
+    with sqlite3.connect(str(target / "data.qda")) as conn:
+        assert conn.execute("SELECT COUNT(*) FROM cases").fetchone()[0] == 0
 
 
 # ----------------------------------------------------------------------
@@ -886,9 +1440,9 @@ def test_youtube_fallback_hang_with_comments_requested_keeps_header_and_note_row
 
     text = content.data.decode("utf-8")
     assert text == (
-        "author\tlikes\tdate\tcomment\n"
-        "-\t-\t-\tComments could not be retrieved (extraction timed out) — "
-        "the video may have comments disabled or be very large"
+        "author,likes,date,comment\r\n"
+        "-,-,-,Comments could not be retrieved (extraction timed out) — "
+        "the video may have comments disabled or be very large\r\n"
     )
 
 
@@ -938,7 +1492,7 @@ def test_yt_extract_subprocess_refuses_frozen_build(monkeypatch):
 
 def test_frozen_build_skips_subprocess_and_runs_in_process_with_getcomments(monkeypatch):
     """Frozen builds run yt-dlp IN-PROCESS with ``getcomments``; the
-    subprocess is never attempted and the four-column table renders."""
+    subprocess is never attempted and the four-column CSV renders."""
     created: list[FakeYoutubeDL] = []
 
     def factory(options=None):
@@ -960,9 +1514,9 @@ def test_frozen_build_skips_subprocess_and_runs_in_process_with_getcomments(monk
     assert len(created) == 1
     assert created[0].options.get("getcomments") is True
     text = content.data.decode("utf-8")
-    assert text.startswith("author\tlikes\tdate\tcomment")
-    assert "viewer1\t-\t-\tGreat video" in text
-    assert "→ viewer2\t-\t-\tAgreed" in text
+    assert text.startswith("author,likes,date,comment")
+    assert "viewer1,-,-,Great video" in text
+    assert "→ viewer2,-,-,Agreed" in text
 
 
 def test_frozen_build_never_attempts_subprocess_even_if_flag_wrong(monkeypatch):
@@ -984,8 +1538,8 @@ def test_frozen_build_never_attempts_subprocess_even_if_flag_wrong(monkeypatch):
         content = scrape_service.scrape_youtube("https://www.youtube.com/watch?v=abc")
 
     text = content.data.decode("utf-8")
-    assert "viewer1\t-\t-\tGreat video" in text
-    assert "→ viewer2\t-\t-\tAgreed" in text
+    assert "viewer1,-,-,Great video" in text
+    assert "→ viewer2,-,-,Agreed" in text
 
 
 def test_yt_dlp_extract_marks_comments_requested():
@@ -1005,26 +1559,60 @@ def test_yt_dlp_extract_marks_comments_requested():
     assert result["_qc_comments_requested"] is False
 
 
-def test_comment_row_exact_string_with_likes_and_date():
-    """The machine-readable row contract, verbatim: author, likes, date and
-    text joined by tabs — nothing padded or aligned."""
+def test_comment_row_exact_cells_with_likes_and_date():
+    """The machine-readable row contract, verbatim: the four normalized
+    cells (author, likes, date, text) — nothing padded or aligned."""
     assert scrape_service._comment_row("alice", "12 likes", "2023-11-14 22:13", "Loved it") == (
-        "alice\t12 likes\t2023-11-14 22:13\tLoved it"
+        ("alice", "12 likes", "2023-11-14 22:13", "Loved it")
     )
 
 
-def test_comment_row_exact_string_reply_prefix():
+def test_comment_row_exact_cells_reply_prefix():
     """A reply carries the ``→ `` nesting prefix in the author column only."""
     assert scrape_service._comment_row("→ bob", "3 likes", "2023-11-14 22:15", "Me too") == (
-        "→ bob\t3 likes\t2023-11-14 22:15\tMe too"
+        ("→ bob", "3 likes", "2023-11-14 22:15", "Me too")
     )
+
+
+def test_youtube_csv_quotes_commas_and_quotes_and_normalizes_newlines():
+    """RFC-4180 quoting: cells containing commas or quotes are quoted with
+    embedded quotes doubled; tabs/newlines collapse to spaces so one
+    comment stays one row. The rendered file round-trips through
+    ``csv.reader`` with exactly four cells per row."""
+    info = make_youtube_info(
+        comments=[
+            {"id": "1", "author": "alice", "text": 'He said "hi", then left'},
+            {"id": "2", "author": "bob", "text": "multi\nline\ttab"},
+        ]
+    )
+    with patch("qualcoder_api.services.scrape_service.subprocess.run", return_value=yt_completed(info)):
+        content = scrape_service.scrape_youtube("https://www.youtube.com/watch?v=abc")
+
+    assert content.filename == "Demo Video.csv"
+    text = content.data.decode("utf-8")
+    assert text.startswith("author,likes,date,comment\r\n")
+    assert 'alice,-,-,"He said ""hi"", then left"' in text
+    assert "bob,-,-,multi line tab" in text
+    rows = youtube_comment_table(text)
+    assert rows == [
+        ["alice", "-", "-", 'He said "hi", then left'],
+        ["bob", "-", "-", "multi line tab"],
+    ]
+
+
+def test_youtube_csv_classifies_as_text_source():
+    """The saved ``.csv`` is a text source: detect_media_type maps ``.csv``
+    to TEXT, so the file flows through the normal text-import pipeline."""
+    from qualcoder_api.services.import_service import detect_media_type
+
+    assert detect_media_type("Demo Video.csv") == MediaType.TEXT
 
 
 def test_youtube_fallback_integration_renders_four_column_table():
     """The in-process fallback (the packaged-build path) renders the exact
-    tab-separated comment table end to end: header first, one row per
-    comment, replies prefixed, likes/dates formatted, captions never
-    fetched while comments exist."""
+    CSV comment table end to end: header first, one row per comment,
+    replies prefixed, likes/dates formatted, captions never fetched while
+    comments exist."""
     info = make_youtube_info(
         comments=[
             {
@@ -1058,12 +1646,13 @@ def test_youtube_fallback_integration_renders_four_column_table():
         content = scrape_service.scrape_youtube("https://www.youtube.com/watch?v=abc")
 
     fetch.assert_not_called()  # captions never replace a comment list
+    assert content.filename == "Demo Video.csv"
     text = content.data.decode("utf-8")
     assert text == (
-        "author\tlikes\tdate\tcomment\n"
-        "alice\t12 likes\t2023-11-14 22:13\tLoved it\n"
-        "→ bob\t3 likes\t2023-11-14 22:15\tMe too\n"
-        "unknown\t-\t-\tNo author, no meta"
+        "author,likes,date,comment\r\n"
+        "alice,12 likes,2023-11-14 22:13,Loved it\r\n"
+        "→ bob,3 likes,2023-11-14 22:15,Me too\r\n"
+        'unknown,-,-,"No author, no meta"\r\n'
     )
     for row in youtube_comment_table(text):
         assert len(row) == 4
@@ -1071,7 +1660,7 @@ def test_youtube_fallback_integration_renders_four_column_table():
 
 def test_youtube_captions_never_replace_extracted_comments():
     """Even when caption tracks exist, a non-empty comment list always
-    wins: the four-column table renders and captions are not fetched."""
+    wins: the four-column CSV renders and captions are not fetched."""
     info = make_youtube_info()  # default: comments present + en captions
     with (
         patch.object(scrape_service, "_YT_SUBPROCESS_ENABLED", False),
@@ -1085,9 +1674,9 @@ def test_youtube_captions_never_replace_extracted_comments():
 
     fetch.assert_not_called()
     text = content.data.decode("utf-8")
-    assert text.startswith("author\tlikes\tdate\tcomment")
+    assert text.startswith("author,likes,date,comment")
     assert "Hello caption text" not in text
-    assert "viewer1\t-\t-\tGreat video" in text
+    assert "viewer1,-,-,Great video" in text
 
 
 # ----------------------------------------------------------------------
