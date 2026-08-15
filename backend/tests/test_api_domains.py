@@ -306,9 +306,9 @@ async def test_pdf_text_locate_fuzzy_anchor(project_client):
     assert r.json()["confidence"] == "normalized"
 
 
-async def test_pdf_text_locate_unanchorable_page_still_422(project_client):
-    """A page with no extractable text cannot anchor anything — the fuzzy
-    fallback has nothing to work with and the request still 422s."""
+async def test_pdf_text_locate_blank_page_specific_422(project_client):
+    """A page with no extractable text (e.g. a scanned image) 422s with a
+    message explaining WHY and pointing at the rectangle region tool."""
     import fitz
 
     client, _ = project_client
@@ -327,12 +327,16 @@ async def test_pdf_text_locate_unanchorable_page_still_422(project_client):
     assert res.status_code == 200, res.text
     sid = res.json()["id"]
 
-    # Blank page 1: nothing to anchor on.
+    # Blank page 1: no text to anchor on, so a specific message is returned.
     r = await client.post(
         f"/api/v1/sources/{sid}/pdf-text-locate",
         json={"page": 1, "text": "anything at all"},
     )
     assert r.status_code == 422
+    assert r.json()["detail"] == (
+        "This PDF page has no extractable text (it may be a scanned image) — "
+        "use the rectangle region tool to code it instead."
+    )
 
     # Page 2 still locates normally (offsets include the blank page's zero
     # length, so the result stays consistent).
@@ -342,6 +346,125 @@ async def test_pdf_text_locate_unanchorable_page_still_422(project_client):
     )
     assert r.status_code == 200, r.text
     assert r.json()["confidence"] == "exact"
+
+
+async def test_pdf_text_locate_run_anchor_dropped_leading_text(project_client):
+    """A selection whose leading word was dropped from the extraction still
+    maps: the run anchor finds the longest run of the selection's words in
+    the fulltext and pulls the span back over the missing word."""
+    import fitz
+
+    client, _ = project_client
+
+    doc = fitz.open()
+    page = doc.new_page()
+    page.insert_text((72, 100), "brown fox jumps over the lazy dog")
+    pdf_bytes = doc.tobytes()
+
+    res = await client.post(
+        "/api/v1/sources/import",
+        files={"file": ("dropped.pdf", pdf_bytes, "application/pdf")},
+    )
+    assert res.status_code == 200, res.text
+    sid = res.json()["id"]
+
+    # "quick" never made it into the extraction; the run "brown fox jumps"
+    # anchors and the span is pulled back to cover the missing word.
+    r = await client.post(
+        f"/api/v1/sources/{sid}/pdf-text-locate",
+        json={"page": 1, "text": "quick brown fox jumps"},
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["confidence"] == "fuzzy"
+    assert body["pos0"] == 0
+    assert body["seltext"] == "brown fox jumps over the"
+
+
+async def test_pdf_text_locate_run_anchor_reordered_words(project_client):
+    """A page whose extraction reordered the words relative to the
+    selection still anchors on the longest run nearest the expected offset,
+    with the span extended to cover the whole selection."""
+    import fitz
+
+    client, _ = project_client
+
+    doc = fitz.open()
+    page = doc.new_page()
+    page.insert_text((72, 100), "gamma delta alpha beta")
+    pdf_bytes = doc.tobytes()
+
+    res = await client.post(
+        "/api/v1/sources/import",
+        files={"file": ("reordered.pdf", pdf_bytes, "application/pdf")},
+    )
+    assert res.status_code == 200, res.text
+    sid = res.json()["id"]
+
+    r = await client.post(
+        f"/api/v1/sources/{sid}/pdf-text-locate",
+        json={"page": 1, "text": "alpha beta gamma delta"},
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["confidence"] == "fuzzy"
+    assert body["seltext"] == "gamma delta alpha beta"
+
+
+async def test_pdf_text_locate_min_run_fallback(project_client):
+    """A 2-word run anchors only when the surrounding text resembles the
+    selection; when it does not, the page is genuinely unanchorable and the
+    request 422s with the actionable message."""
+    import fitz
+
+    client, _ = project_client
+
+    doc = fitz.open()
+    page = doc.new_page()
+    page.insert_text((72, 100), "ipsum dolor")
+    pdf_bytes = doc.tobytes()
+
+    res = await client.post(
+        "/api/v1/sources/import",
+        files={"file": ("minrun.pdf", pdf_bytes, "application/pdf")},
+    )
+    assert res.status_code == 200, res.text
+    sid = res.json()["id"]
+
+    # 2-word run ("ipsum dolor") whose context matches the selection: accepted.
+    r = await client.post(
+        f"/api/v1/sources/{sid}/pdf-text-locate",
+        json={"page": 1, "text": "lorem ipsum dolor"},
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["confidence"] == "fuzzy"
+    assert body["seltext"] == "ipsum dolor"
+
+    doc2 = fitz.open()
+    page2 = doc2.new_page()
+    page2.insert_text((72, 100), "do re")
+    pdf_bytes2 = doc2.tobytes()
+
+    res2 = await client.post(
+        "/api/v1/sources/import",
+        files={"file": ("minrun2.pdf", pdf_bytes2, "application/pdf")},
+    )
+    assert res2.status_code == 200, res2.text
+    sid2 = res2.json()["id"]
+
+    # The 2-word run "do re" resembles the 7-word selection too poorly, and
+    # nothing else can anchor it -> 422 with the actionable message.
+    r2 = await client.post(
+        f"/api/v1/sources/{sid2}/pdf-text-locate",
+        json={"page": 1, "text": "mi fa so la ti do re"},
+    )
+    assert r2.status_code == 422
+    assert r2.json()["detail"] == (
+        "Could not map the selection to the document text — the PDF's text "
+        "layer differs from the extracted text; try selecting a shorter "
+        "phrase or use the rectangle region tool."
+    )
 
 
 async def test_source_crud_via_api(project_client):

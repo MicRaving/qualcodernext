@@ -64,16 +64,21 @@ const DRAG_MIN_SIZE = 5;
 
 /** Download a source's PDF bytes for pdf.js.
  *
- * `fetchSourceFile` builds the URL from the RESOLVED base — the App boot
- * gate holds the UI until `initApiBase()` settles, and on a transport
- * failure (backend still booting / restarted on an ephemeral port) the
- * helper drops the cached base, re-resolves it and retries once — so a
- * stale base can never surface as a spurious "Failed to fetch". HTTP
- * errors stay definitive. */
+ *  `fetchSourceFile` builds the URL from the RESOLVED base — the App boot
+ *  gate holds the UI until `initApiBase()` settles, and on a transport
+ *  failure (backend still booting / restarted on an ephemeral port) the
+ *  helper drops the cached base, re-resolves it and retries once — so a
+ *  stale base can never surface as a spurious "Failed to fetch". HTTP
+ *  errors become `ApiError`s carrying the backend's JSON `detail`, so the
+ *  document pane shows the real message. */
 async function fetchPdfBytes(sourceId: number): Promise<ArrayBuffer> {
   const res = await fetchSourceFile(sourceId);
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
   return res.arrayBuffer();
+}
+
+/** Error → display message with a non-Error fallback. */
+function errorMessage(err: unknown, fallback: string): string {
+  return err instanceof Error && err.message ? err.message : fallback;
 }
 
 interface PageSize {
@@ -217,6 +222,11 @@ export function PdfCoder({ source }: { source: Source }) {
   const [pickerOpen, setPickerOpen] = useState(false);
   const [selectedImid, setSelectedImid] = useState<number | null>(null);
   const [editDraft, setEditDraft] = useState<RectDraft | null>(null);
+  /** Inline error line inside the details footer: a background refresh of
+   *  the codings failed while a segment is selected — the footer keeps
+   *  showing the client-side data instead of vanishing or toasting a bare
+   *  "Failed to fetch". */
+  const [footerError, setFooterError] = useState<string | null>(null);
   /** Freshly created text coding flashed on its matched overlay (~2s). */
   const [flashTextCtid, setFlashTextCtid] = useState<number | null>(null);
   const flashTextTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -273,6 +283,7 @@ export function PdfCoder({ source }: { source: Source }) {
     let cancelled = false;
     setLoading(true);
     setLoadError(null);
+    setFooterError(null);
     setCodings([]);
     setAnnotations([]);
     setCodes([]);
@@ -282,17 +293,33 @@ export function PdfCoder({ source }: { source: Source }) {
     setCurrentPage(1);
     void (async () => {
       try {
-        const [cod, textCod, anns, flat] = await Promise.all([
+        // imageCodings is the critical fetch — without it the page shows no
+        // overlays at all. The companions (plain-text codings, annotations,
+        // code tree) degrade gracefully: their failure must not replace the
+        // whole view with an error screen (a codes-tree 500, e.g. from a
+        // project with category/code id collisions, used to kill the PDF).
+        const [cod, textCod, anns, flat] = await Promise.allSettled([
           api.imageCodings(source.id),
           api.sourceCoding(source.id),
           api.fileAnnotations(source.id),
           api.codesFlat(),
         ]);
         if (cancelled) return;
-        setCodings(cod);
-        setTextCodings(textCod);
-        setAnnotations(anns);
-        setCodes(flat);
+        if (cod.status === "fulfilled") {
+          setCodings(cod.value);
+        } else {
+          setLoadError(errorMessage(cod.reason, t("coder.loadCodingsError")));
+          return;
+        }
+        setTextCodings(textCod.status === "fulfilled" ? textCod.value : []);
+        setAnnotations(anns.status === "fulfilled" ? anns.value : []);
+        setCodes(flat.status === "fulfilled" ? flat.value : []);
+        if (textCod.status === "rejected" || anns.status === "rejected" || flat.status === "rejected") {
+          const reason = [textCod, anns, flat].find((r) => r.status === "rejected");
+          if (reason && reason.status === "rejected") {
+            setFooterError(errorMessage(reason.reason, t("coder.loadCodingsError")));
+          }
+        }
       } catch (e) {
         if (!cancelled) setLoadError(e instanceof Error ? e.message : t("coder.loadCodingsError"));
       } finally {
@@ -489,16 +516,36 @@ export function PdfCoder({ source }: { source: Source }) {
 
   /* ------------------------------------------------------------- actions */
 
+  /** Background refresh of the region codings. On failure the current
+   *  (client-side) list is kept — the details footer of a selected segment
+   *  stays usable — and the error is surfaced inline in the footer. Never
+   *  throws, so background callers cannot produce unhandled rejections or
+   *  a bare "Failed to fetch" toast. */
   const refreshCodings = useCallback(async () => {
-    setCodings(await api.imageCodings(source.id));
-  }, [source.id]);
+    try {
+      setCodings(await api.imageCodings(source.id));
+      setFooterError(null);
+    } catch (e) {
+      console.warn("[pdf coder] codings refresh failed:", e);
+      setFooterError(errorMessage(e, t("coder.loadCodingsError")));
+    }
+  }, [source.id, t]);
 
   const refreshTextCodings = useCallback(async () => {
-    setTextCodings(await api.sourceCoding(source.id));
+    try {
+      setTextCodings(await api.sourceCoding(source.id));
+    } catch (e) {
+      console.warn("[pdf coder] text codings refresh failed:", e);
+    }
   }, [source.id]);
 
   const refreshCodes = useCallback(async () => {
-    setCodes(await api.codesFlat());
+    try {
+      setCodes(await api.codesFlat());
+    } catch (e) {
+      // Fallback names/colors stay; the footer renders from client state.
+      console.warn("[pdf coder] codes refresh failed:", e);
+    }
   }, []);
 
   /** Flash a freshly created text coding's overlay and scroll its page into
@@ -655,10 +702,14 @@ export function PdfCoder({ source }: { source: Source }) {
             owner: "default",
             pdf_page: pending.pageNumber,
           });
-          await refreshCodings();
-          // Auto-show the details of the freshly created region coding.
+          // Render the details footer IMMEDIATELY from client state — the
+          // background refresh below reconciles with the backend, so a
+          // failed refresh can never block the footer.
+          setCodings((cs) => [...cs, created]);
           setSelectedImid(created.imid);
           setEditDraft(null);
+          setFooterError(null);
+          await refreshCodings();
         } catch (e) {
           setErrMsg(e instanceof Error ? e.message : t("coder.createError"));
         } finally {
@@ -1032,8 +1083,11 @@ export function PdfCoder({ source }: { source: Source }) {
                       title={overlayTitle(o)}
                       onMouseDown={(e) => e.stopPropagation()}
                       onClick={() => {
+                        // Purely client-side: the footer renders from the
+                        // loaded codings — no fetch blocks this click.
                         setEditDraft(null);
                         setSelectedImid(o.key);
+                        setFooterError(null);
                       }}
                     />
                   ))}
@@ -1155,6 +1209,12 @@ export function PdfCoder({ source }: { source: Source }) {
 
       {selectedCoding && (
         <div className="shrink-0 border-t border-border bg-surface px-3 py-2">
+          {footerError && (
+            <p className="mb-1.5 flex items-center gap-1.5 text-xs text-warning">
+              <CircleAlert size={12} aria-hidden />
+              {footerError}
+            </p>
+          )}
           <div className="flex items-center gap-2">
             <span className="text-xs font-medium text-text-secondary">{t("coder.codingDetails")}</span>
             <div className="flex-1" />

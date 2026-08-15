@@ -16,13 +16,17 @@ Modes:
   tabs/newlines inside a cell collapse to spaces; missing likes/dates
   render as ``-``. The source contains ONLY the comments table — no
   title/uploader/duration/description header block. Comments are the
-  primary content; caption tracks are fetched ONLY as a last resort when
-  a video has no comments (e.g. disabled) and the transcript text then
-  replaces the table (still no header block). A video with neither
-  comments nor captions keeps the header row and a ``-\t-\t-\tNo
-  comments`` row. If the installed yt-dlp predates comment extraction
-  (2021.12.17) the same header + ``No comments`` row is printed and
-  captions are not fetched either.
+  primary content; caption tracks are NEVER substituted silently. When a
+  video provably has no comments the table keeps the header row and a
+  ``-\t-\t-\tNo comments`` row. When comments were REQUESTED but could
+  not be retrieved (extraction timed out or aborted, or an empty comment
+  list) and no captions exist, the same header row is kept with a
+  ``-\t-\t-\t<note>`` row explaining the missing columns; when caption
+  text exists it is shown instead of the table, led by a visible
+  ``# Comments unavailable (<reason>) — captions shown below`` line. If
+  the installed yt-dlp predates comment extraction (2021.12.17) the
+  header + ``-\t-\t-\t<note>`` row is printed and captions are not
+  fetched either.
 - ``article`` — page fetched with urllib, cleaned with trafilatura
   (falling back to the project's own ``html_to_text``).
 - ``html``    — offline snapshot: the page HTML with same-origin
@@ -590,7 +594,10 @@ def _youtube_comments(info: dict) -> list[str]:
 
 
 #: Hard cap for a single yt-dlp extraction — it can hang on flaky networks.
-_YT_TIMEOUT_SECONDS = 90
+#: Matches the frontend dialog's 240s wait so a real comment extraction on a
+#: large thread can finish; the per-call executor already prevents wedging,
+#: so a long extraction only costs this call.
+_YT_TIMEOUT_SECONDS = 240
 #: Shown when yt-dlp signals an internal abort (never a "real" failure).
 _YT_ABORT_MESSAGE = (
     "YouTube extraction was interrupted — try again, or import the "
@@ -600,6 +607,28 @@ _YT_TIMEOUT_MESSAGE = (
     f"YouTube extraction timed out after {_YT_TIMEOUT_SECONDS} seconds — "
     "try again, or import the video page as 'Article' mode instead"
 )
+#: Notes used when comments were REQUESTED but did not come back — the
+#: output must explain the missing columns, never silently substitute
+#: captions. Without captions the note becomes the ``-\t-\t-\t<note>`` row
+#: under the table header; with captions it leads as a ``#`` note line.
+_YT_COMMENTS_TIMEOUT_NOTE = (
+    "Comments could not be retrieved (extraction timed out) — the "
+    "video may have comments disabled or be very large"
+)
+_YT_COMMENTS_ABORT_NOTE = (
+    "Comments could not be retrieved (extraction aborted) — the "
+    "video may have comments disabled or be very large"
+)
+_YT_COMMENTS_UNSUPPORTED_NOTE = (
+    "Comments could not be retrieved (the installed yt-dlp version "
+    "does not support comment extraction — 2021.12.17 or newer is required)"
+)
+#: ``<reason>`` in the ``# Comments unavailable (<reason>) — captions shown
+#: below`` line when caption text is shown instead of the table.
+_YT_COMMENTS_CAPTION_REASONS = {
+    "aborted": "extraction aborted",
+    "empty": "the video has no comments",
+}
 #: Markers some platforms report through ``DownloadError`` when yt-dlp
 #: aborts (e.g. "signal aborted without reason") instead of raising.
 _YT_ABORT_MARKERS = ("signal aborted", "aborted", "interrupted")
@@ -631,6 +660,10 @@ _YT_SUBPROCESS_ENABLED = _yt_subprocess_enabled()
 
 class _YouTubeAbortError(ScrapeError):
     """yt-dlp's internal abort signal surfaced as a retryable error."""
+
+
+class _YouTubeTimeoutError(ScrapeError):
+    """yt-dlp exceeded the extraction timeout (fatal for this call)."""
 
 
 def _is_yt_abort(err: BaseException) -> bool:
@@ -734,7 +767,7 @@ def _yt_extract_subprocess(url: str, getcomments: bool) -> dict:
             creationflags=creationflags,
         )
     except subprocess.TimeoutExpired as err:
-        raise ScrapeError(_YT_TIMEOUT_MESSAGE) from err
+        raise _YouTubeTimeoutError(_YT_TIMEOUT_MESSAGE) from err
     if completed.returncode == 0:
         return _yt_parse_dump(completed.stdout)
     detail = _yt_subprocess_error(completed.stderr)
@@ -848,7 +881,7 @@ def _yt_extract_fallback(url: str, getcomments: bool) -> dict:
         try:
             return asyncio.run(_guarded())
         except TimeoutError as err:
-            raise ScrapeError(_YT_TIMEOUT_MESSAGE) from err
+            raise _YouTubeTimeoutError(_YT_TIMEOUT_MESSAGE) from err
 
     try:
         asyncio.get_running_loop()
@@ -860,7 +893,7 @@ def _yt_extract_fallback(url: str, getcomments: bool) -> dict:
         try:
             return future.result(timeout=_YT_TIMEOUT_SECONDS + 15)
         except TimeoutError as err:
-            raise ScrapeError(_YT_TIMEOUT_MESSAGE) from err
+            raise _YouTubeTimeoutError(_YT_TIMEOUT_MESSAGE) from err
 
 
 def _yt_dlp_extract(url: str, getcomments: bool) -> dict:
@@ -873,6 +906,10 @@ def _yt_dlp_extract(url: str, getcomments: bool) -> dict:
     with its abort + timeout guards instead. The returned info dict carries
     a ``_qc_comments_requested`` marker so the caller can prove whether
     comments were actually requested before choosing a caption fallback.
+    The marker records the LAST call's flag: when ``scrape_youtube`` retries
+    an abort without comments, the retried info says False even though the
+    original request asked for comments — the caller keeps that intent
+    separately.
     """
     if _YT_SUBPROCESS_ENABLED and not getattr(sys, "frozen", False):
         try:
@@ -889,52 +926,74 @@ def _yt_dlp_extract(url: str, getcomments: bool) -> dict:
 
 
 def scrape_youtube(url: str) -> ScrapedContent:
-    """Extract the comment thread (captions only as a last-resort fallback).
+    """Extract the comment thread (captions only ever shown WITH a note).
 
     The source contains ONLY the comments table: the
     ``author\tlikes\tdate\tcomment`` header row followed by one
     tab-separated row per comment — never a title/uploader/duration/
-    description block. Caption transcript text replaces the table ONLY
-    when a video has no comments (e.g. disabled) — still with no header
-    block. A video with neither comments nor captions keeps the header
-    row plus a ``-\t-\t-\tNo comments`` row. When the installed yt-dlp
-    cannot extract comments (``_YT_DLP_COMMENTS_SUPPORTED`` False) the
-    same header + ``No comments`` row is printed and captions are not
-    fetched either.
+    description block. When comments were requested but could not be
+    retrieved, captions are NEVER substituted silently:
+
+    - extraction timed out or aborted and no captions exist — the header
+      row plus a ``-\t-\t-\t<note>`` row that explains why the columns are
+      missing;
+    - caption text exists — a visible ``# Comments unavailable (<reason>)
+      — captions shown below`` line followed by the transcript;
+    - a video that provably has no comments (and no captions) keeps the
+      header row plus the ``-\t-\t-\tNo comments`` row;
+    - the installed yt-dlp cannot extract comments (before 2021.12.17) —
+      the header row plus a ``-\t-\t-\t<note>`` row; captions are not
+      fetched either.
 
     Extraction runs in a SEPARATE yt-dlp subprocess (the in-process path
     is the PyInstaller-frozen fallback only), so yt-dlp's internal abort
     signal can never propagate into the backend process. The first abort
     is retried once WITHOUT ``--write-comments`` so the import survives
-    and falls back to captions or the ``No comments`` row; a second abort
-    — or a timeout — surfaces a friendly error. Captions are NEVER fetched
-    when a comment list exists: the ``_qc_comments_requested`` marker on
-    the extracted info makes the "comments are provably absent" decision
-    explicit.
+    with an explanatory note; a second abort — or a timeout when comments
+    were not requested — surfaces a friendly error. A timeout when
+    comments WERE requested keeps the header row plus the ``-\t-\t-\t
+    <note>`` row (no info dict came back, so captions cannot be fetched
+    either).
     """
     getcomments = _YT_DLP_COMMENTS_SUPPORTED
+    comments_failure: str | None = None
     try:
         info = _yt_dlp_extract(url, getcomments)
     except _YouTubeAbortError:
         if not getcomments:
             raise
         # Comment extraction can abort on very large threads — retry once
-        # with metadata only; the normal flow then falls back to captions
-        # or the ``No comments`` row.
+        # with metadata only. Comments were still requested, so the output
+        # below must explain their absence; captions are never substituted
+        # silently.
         logger.warning(
             "YouTube comment extraction aborted for %s — retrying without comments", url
         )
+        comments_failure = "aborted"
         info = _yt_dlp_extract(url, False)
+    except _YouTubeTimeoutError:
+        if not getcomments:
+            raise
+        # The comment extraction exceeded the timeout and no info dict came
+        # back, so captions cannot be fetched either: keep the table header
+        # and explain the missing columns instead of failing or substituting
+        # captions silently.
+        logger.warning("YouTube comment extraction timed out for %s", url)
+        text = f"{_COMMENT_HEADER}\n-\t-\t-\t{_YT_COMMENTS_TIMEOUT_NOTE}"
+        return ScrapedContent(
+            filename=f"{sanitize_name('', 'youtube-video')}.txt",
+            data=text.encode("utf-8"),
+            mode="youtube",
+        )
     if not isinstance(info, dict):
         raise ScrapeError("YouTube returned no metadata")
 
     title = (info.get("title") or "").strip() or "youtube-video"
 
-    # The caption fallback may replace the table ONLY when the extraction
-    # provably produced no comments: either comments were requested and
-    # came back empty, or the extraction ran without them (the abort retry
-    # / an old yt-dlp). A non-empty comment list always wins over captions.
-    comments_requested = bool(info.get("_qc_comments_requested"))
+    # Comments were requested either way — the original call, or the abort
+    # retry that ran metadata-only (its marker reads False): a missing
+    # comment list must always be explained in the output.
+    comments_requested = getcomments or bool(info.get("_qc_comments_requested"))
     lines = [_COMMENT_HEADER]
     comment_lines = _youtube_comments(info) if comments_requested else []
     if comment_lines:
@@ -943,13 +1002,18 @@ def scrape_youtube(url: str) -> ScrapedContent:
         logger.warning("YouTube comments unavailable for %s", url)
         caption_text = _youtube_captions(info)
         if caption_text:
-            logger.info("YouTube comments unavailable; falling back to captions for %s", url)
-            lines = [caption_text]
+            reason = _YT_COMMENTS_CAPTION_REASONS[comments_failure or "empty"]
+            lines = [
+                f"# Comments unavailable ({reason}) — captions shown below",
+                caption_text,
+            ]
+        elif comments_failure:
+            lines.append("-\t-\t-\t" + _YT_COMMENTS_ABORT_NOTE)
         else:
             lines.append("-\t-\t-\tNo comments")
     else:
         logger.warning("YouTube comment extraction unsupported for %s", url)
-        lines.append("-\t-\t-\tNo comments")
+        lines.append("-\t-\t-\t" + _YT_COMMENTS_UNSUPPORTED_NOTE)
 
     text = "\n".join(lines).strip()
     if not text:

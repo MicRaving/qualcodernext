@@ -597,6 +597,8 @@ export const en: Record<string, string> = {
   "htmlCoder.loadingWebpage": "Loading webpage…",
   "htmlCoder.webpageLoadError": "Could not load the saved webpage",
   "htmlCoder.noSnapshot": "No snapshot available — re-import the page as HTML",
+  "htmlCoder.selectionActions": "Webpage selection actions",
+  "htmlCoder.contextMenu": "Webpage actions",
 
   // image coder
   "imageCoder.loading": "Loading image codings…",

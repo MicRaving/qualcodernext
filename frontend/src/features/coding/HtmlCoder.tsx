@@ -5,14 +5,22 @@
  * pattern (two independent always-visible toggle panes with a draggable
  * divider).
  *
- *  Coding happens on the PLAIN TEXT side (html sources are media_type
- *  "text", so TextCoder codes them as text); the WEBPAGE side mirrors the
- *  codings LIVE: coded segments are highlighted in the rendered page. The
- *  highlights are BULLETPROOF: the parent PRE-COMPUTES the `<mark>` elements
- *  into the srcDoc HTML (buildHighlightedHtml — same matching the iframe
- *  script uses), so they render with zero script/postMessage dependency,
- *  and the injected script keeps only the live-update layer (re-marks on
- *  `qc:codings` postMessages, replacing the baked marks in place).
+ *  Coding works on BOTH sides. The PLAIN TEXT side codes the extracted text
+ *  (html sources are media_type "text", so TextCoder codes them as text);
+ *  the WEBPAGE side mirrors those codings LIVE (coded segments are
+ *  highlighted in the rendered page) AND lets the user code by selecting
+ *  text directly on the rendered page: the injected script reports
+ *  selections and right-clicks (`qc:selection` / `qc:contextmenu`), the
+ *  parent maps them through `buildViewModel` and `locateInFulltext` into
+ *  fulltext offsets and shows a floating toolbar / the app's context menu —
+ *  the browser's menu inside the frame never appears.
+ *
+ *  The highlights are BULLETPROOF: the parent PRE-COMPUTES the `<mark>`
+ *  elements into the srcDoc HTML (buildHighlightedHtml — same matching the
+ *  iframe script uses), so they render with zero script/postMessage
+ *  dependency, and the injected script keeps only the live-update layer
+ *  (re-marks on `qc:codings` postMessages, replacing the baked marks in
+ *  place).
  *
  *  Matching reality: the backend's text extraction decodes entities, collapses
  *  spaces and inserts newlines at block tags, so a segment's `seltext` almost
@@ -26,7 +34,7 @@
  *  exactly the code the iframe runs. `buildViewModel` in the same module
  *  rebuilds that collapsed layer over the SERIALIZED html — with per-char
  *  source spans — which is what lets the parent bake the marks before the
- *  iframe loads.
+ *  iframe loads and map webpage selections back to the source.
  *
  *  SECURITY: enabling `allow-scripts` would execute the page's own inline
  *  scripts too, so the srcDoc is sanitized first — all `<script>` blocks
@@ -49,7 +57,7 @@ import {
   useState,
   type MouseEvent as ReactMouseEvent,
 } from "react";
-import { CircleAlert, FileText, Globe, LoaderCircle } from "lucide-react";
+import { CircleAlert, Code, FileText, Globe, LoaderCircle, Tag, Trash2 } from "lucide-react";
 import {
   api,
   fetchSourceFile,
@@ -61,15 +69,29 @@ import {
 import {
   MAX_HIGHLIGHTS,
   buildHighlightedHtml,
+  buildViewModel,
+  codingsOverlappingRange,
   injectHighlightScript,
+  locateInFulltext,
+  mapViewRangeToSource,
+  parseFrameMessage,
   qcFindMatches,
   stripPageScripts,
   type QcCodingPayload,
 } from "@/features/coding/htmlHighlight";
+import { CodePicker } from "@/features/coding/CodePicker";
 import { TextCoder } from "@/features/coding/TextCoder";
 import { cn } from "@/lib/utils";
 import { useI18n } from "@/lib/i18n";
-import { Button, ErrorBanner, LoadingState, ViewHeader } from "@/components/ui/orchestrator";
+import { cls } from "@/components/ui/tokens";
+import { Menu, MenuItem } from "@/components/ui/orchestrator";
+import { useProjectStore } from "@/stores/project";
+import {
+  Button,
+  ErrorBanner,
+  LoadingState,
+  ViewHeader,
+} from "@/components/ui/orchestrator";
 
 /* --------------------------------------------------------- html decoding */
 
@@ -366,6 +388,197 @@ const QC_HIGHLIGHT_SCRIPT = `(function () {
     return e.origin === window.origin || e.origin === "null";
   }
 
+  /* ------ selection + right-click bridge: the page reports to the parent -- */
+  /* The parent maps the collapsed-view indices onto its own ViewModel (the   */
+  /* identical text layer built over the serialized html), so the user can    */
+  /* code directly on the rendered page and right-click for the app's menu.   */
+
+  var lastMouseX = 0;
+  var lastMouseY = 0;
+  var lastPostedKey = "";
+
+  function postToParent(msg) {
+    if (window.parent && window.parent !== window) {
+      window.parent.postMessage(msg, "*");
+    }
+  }
+
+  function textLength(node) {
+    if (node.nodeType === Node.TEXT_NODE) return node.nodeValue.length;
+    var kids = node.childNodes;
+    var total = 0;
+    for (var i = 0; i < kids.length; i++) total += textLength(kids[i]);
+    return total;
+  }
+
+  function startPoint(node) {
+    if (node.nodeType === Node.TEXT_NODE) return { node: node, offset: 0 };
+    var kids = node.childNodes;
+    if (!kids.length) return null;
+    return startPoint(kids[0]);
+  }
+
+  function endPoint(node) {
+    if (node.nodeType === Node.TEXT_NODE) {
+      return { node: node, offset: node.nodeValue.length };
+    }
+    var kids = node.childNodes;
+    if (!kids.length) return null;
+    return endPoint(kids[kids.length - 1]);
+  }
+
+  // A DOM selection boundary (container, offset) — element offsets are child
+  // indexes — resolved to the (text node, raw offset) it actually falls in.
+  function boundaryPoint(container, offset) {
+    if (container.nodeType === Node.TEXT_NODE) return { node: container, offset: offset };
+    var kids = container.childNodes;
+    if (!kids.length) return null;
+    if (offset >= kids.length) return endPoint(kids[kids.length - 1]);
+    if (offset <= 0) return startPoint(kids[0]);
+    return endPoint(kids[offset - 1]);
+  }
+
+  // The view-index interval [first, lastExclusive) contributed by one node.
+  function nodeViewRange(model, ni) {
+    var first = -1;
+    var last = -1;
+    for (var i = 0; i < model.chars.length; i += 2) {
+      if (model.chars[i] === ni) {
+        if (first < 0) first = i / 2;
+        last = i / 2 + 1;
+      }
+    }
+    return first < 0 ? null : [first, last];
+  }
+
+  // The view index of the first view char of node 'ni' at raw offset >=
+  // 'offset' — one past the last view char strictly before the boundary,
+  // which is the correct collapsed index for BOTH selection edges.
+  function boundaryViewIndex(model, ni, offset) {
+    var range = nodeViewRange(model, ni);
+    if (!range) return null;
+    var lo = range[0];
+    var hi = range[1];
+    while (lo < hi) {
+      var mid = (lo + hi) >> 1;
+      if (model.chars[mid * 2 + 1] >= offset) hi = mid;
+      else lo = mid + 1;
+    }
+    return lo;
+  }
+
+  // The current DOM selection as a [startView, endView) range over the
+  // collapsed view text, or null when collapsed/empty/outside the body or
+  // anchored in excluded content (code/pre/…) that contributes no view text.
+  function selectionViewRange(model) {
+    var sel = window.getSelection();
+    if (!sel || sel.rangeCount === 0 || sel.isCollapsed) return null;
+    var range = sel.getRangeAt(0);
+    if (!document.body ||
+        !document.body.contains(range.startContainer) ||
+        !document.body.contains(range.endContainer)) return null;
+    var sp = boundaryPoint(range.startContainer, range.startOffset);
+    var ep = boundaryPoint(range.endContainer, range.endOffset);
+    if (!sp || !ep) return null;
+    var si = model.nodes.indexOf(sp.node);
+    var ei = model.nodes.indexOf(ep.node);
+    if (si < 0 || ei < 0) return null;
+    var s = boundaryViewIndex(model, si, sp.offset);
+    var e = boundaryViewIndex(model, ei, ep.offset);
+    if (s === null || e === null) return null;
+    var a = Math.min(s, e);
+    var b = Math.max(s, e);
+    if (b <= a) return null;
+    return { start: a, end: b };
+  }
+
+  // The collapsed-view index of the char under a document point — the
+  // right-click target, so the parent can find the coding under the cursor.
+  function viewIndexAtPoint(model, x, y) {
+    var point = null;
+    if (document.caretRangeFromPoint) {
+      point = document.caretRangeFromPoint(x, y);
+    } else if (document.caretPositionFromPoint) {
+      var p = document.caretPositionFromPoint(x, y);
+      if (p) point = { startContainer: p.offsetNode, startOffset: p.offset };
+    }
+    if (!point || !point.startContainer || !point.startContainer.parentNode) return null;
+    var bp = boundaryPoint(point.startContainer, point.startOffset);
+    if (!bp) return null;
+    var ni = model.nodes.indexOf(bp.node);
+    if (ni < 0) return null;
+    return boundaryViewIndex(model, ni, bp.offset);
+  }
+
+  var reportScheduled = false;
+  function reportSelection() {
+    reportScheduled = false;
+    var model = buildModel();
+    var vr = model ? selectionViewRange(model) : null;
+    if (vr) {
+      var key = vr.start + ":" + vr.end;
+      if (key === lastPostedKey) return;
+      var text = model.text.slice(vr.start, vr.end);
+      var rect = null;
+      try {
+        var rangeRect = window.getSelection().getRangeAt(0).getBoundingClientRect();
+        if (rangeRect && (rangeRect.width > 0 || rangeRect.height > 0)) {
+          rect = { left: rangeRect.left, top: rangeRect.top, bottom: rangeRect.bottom };
+        }
+      } catch (err) {
+        /* collapsed/empty selection — no rect to anchor the toolbar */
+      }
+      lastPostedKey = key;
+      postToParent({
+        type: "qc:selection",
+        startView: vr.start,
+        endView: vr.end,
+        text: text,
+        rect: rect,
+        mouseX: lastMouseX,
+        mouseY: lastMouseY,
+      });
+      return;
+    }
+    if (lastPostedKey !== "") {
+      lastPostedKey = "";
+      postToParent({ type: "qc:selection-cleared" });
+    }
+  }
+
+  function scheduleReport() {
+    if (reportScheduled) return;
+    reportScheduled = true;
+    setTimeout(reportSelection, 30);
+  }
+
+  document.addEventListener("mousedown", function (e) {
+    lastMouseX = e.clientX;
+    lastMouseY = e.clientY;
+    // Any click inside the frame dismisses the parent's menus; a new drag
+    // re-shows the selection toolbar on the following mouseup.
+    postToParent({ type: "qc:frame-mousedown" });
+  }, true);
+
+  document.addEventListener("mouseup", function (e) {
+    lastMouseX = e.clientX;
+    lastMouseY = e.clientY;
+    scheduleReport();
+  }, true);
+
+  document.addEventListener("selectionchange", scheduleReport, true);
+
+  document.addEventListener("contextmenu", function (e) {
+    if (!document.body || !document.body.contains(e.target)) return;
+    // The browser's menu must never show — the parent renders its own at the
+    // same screen position.
+    e.preventDefault();
+    var model = buildModel();
+    var msg = { type: "qc:contextmenu", x: e.clientX, y: e.clientY, viewIndex: null };
+    if (model) msg.viewIndex = viewIndexAtPoint(model, e.clientX, e.clientY);
+    postToParent(msg);
+  }, true);
+
   window.addEventListener("message", function (e) {
     var d = e.data;
     if (!d || d.type !== "qc:codings" || !Array.isArray(d.codings)) return;
@@ -409,8 +622,34 @@ export function HtmlCoder({ source }: { source: Source }) {
   const [reloadTick, setReloadTick] = useState(0);
   const [errMsg, setErrMsg] = useState<string | null>(null);
 
+  /** The backend's extracted plain text — the coding surface positions are
+   *  anchored in it, so the iframe selections must be validated against it. */
+  const [fulltext, setFulltext] = useState<string | null>(null);
+
+  /* ------------------------------------------- frame selection + context ui */
+  /** A pending coding selection made on the RENDERED webpage (source offsets
+   *  + the view-text slice the highlight pipeline matches against). */
+  const [frameSel, setFrameSel] = useState<{
+    pos0: number;
+    pos1: number;
+    seltext: string;
+  } | null>(null);
+  /** Screen position of the floating coding toolbar (viewport coords). */
+  const [frameSelPos, setFrameSelPos] = useState<{ left: number; top: number } | null>(null);
+  /** Code-picker for selections made on the rendered webpage. */
+  const [pickerOpen, setPickerOpen] = useState(false);
+  /** The app's context menu for a right-click inside the webpage, with the
+   *  codings the click landed on (empty = selection-only actions). */
+  const [ctxMenu, setCtxMenu] = useState<{ left: number; top: number; codings: Coding[] } | null>(
+    null,
+  );
+
+  const activeCodeId = useProjectStore((s) => s.activeCodeId);
+
   const containerRef = useRef<HTMLDivElement | null>(null);
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
+  const frameToolbarRef = useRef<HTMLDivElement | null>(null);
+  const ctxMenuRef = useRef<HTMLDivElement | null>(null);
 
   /* ------------------------------------------------------ live highlights */
   // cid -> { name, color } from the flat code tree, used to color the marks
@@ -426,6 +665,30 @@ export function HtmlCoder({ source }: { source: Source }) {
   // Latest highlight payload, kept in a ref so the iframe `load` handler can
   // always post the current state (postMessage before load is dropped).
   const highlightPayloadRef = useRef<QcCodingPayload[]>([]);
+
+  // The iframe's text layer rebuilt over the serialized html — the bridge
+  // that maps iframe selections (view indices) to source offsets. Script
+  // stripping only removes content that is invisible to the view model, so
+  // the UNSTRIPPED html yields the identical text.
+  const viewModel = useMemo(() => (html != null ? buildViewModel(html) : null), [html]);
+
+  // The backend's extraction rebuilt as a collapsed layer — the anchor that
+  // locates webpage selections in the fulltext the plain-text pane codes
+  // against (positions differ from source offsets: the extraction inserts
+  // "\n" at block tags, so selections are LOCATED, not mapped 1:1).
+  const fulltextModel = useMemo(
+    () => (fulltext != null ? buildViewModel(fulltext) : null),
+    [fulltext],
+  );
+
+  // cid -> { name, color } for the toolbar/menu labels.
+  const codeById = useMemo(() => {
+    const m = new Map<number, CodeTreeItem>();
+    for (const c of codes) {
+      if (c.kind === "code") m.set(c.id, c);
+    }
+    return m;
+  }, [codes]);
 
   const postCodingsToFrame = useCallback(() => {
     const frame = iframeRef.current;
@@ -475,6 +738,11 @@ export function HtmlCoder({ source }: { source: Source }) {
     const doc = injectScript(buildHighlightedHtml(stripPageScripts(html), payload));
     frozenSrcDocRef.current = { html, payload, srcDoc: doc };
     setSrcDoc(doc);
+    // The old document (and its selection) is being replaced — drop any
+    // pending iframe selection and menu, they belong to the dead frame.
+    setFrameSel(null);
+    setFrameSelPos(null);
+    setCtxMenu(null);
   }, [html, codings, codeInfo]);
 
   // The iframe's script posts `qc:highlight-ready` right after registering
@@ -490,6 +758,242 @@ export function HtmlCoder({ source }: { source: Source }) {
     window.addEventListener("message", onMessage);
     return () => window.removeEventListener("message", onMessage);
   }, []);
+
+  /* ------------------------------------------------- frame selection coding */
+
+  const refreshCodings = useCallback(async () => {
+    setCodings(await api.sourceCoding(source.id));
+  }, [source.id]);
+
+  const refreshAnnotations = useCallback(async () => {
+    setAnnotations(await api.fileAnnotations(source.id));
+  }, [source.id]);
+
+  const refreshCodes = useCallback(async () => {
+    setCodes(await api.codesFlat());
+  }, []);
+
+  const clearFrameSelection = useCallback(() => {
+    setFrameSel(null);
+    setFrameSelPos(null);
+  }, []);
+
+  /** Code the pending webpage selection with the given code id. */
+  const codeFrameSelection = useCallback(
+    async (cid: number) => {
+      const sel = frameSel;
+      if (!sel) return;
+      try {
+        await api.createTextCoding({
+          cid,
+          fid: source.id,
+          seltext: sel.seltext,
+          pos0: sel.pos0,
+          pos1: sel.pos1,
+        });
+        await refreshCodings();
+      } catch (e) {
+        setErrMsg(e instanceof Error ? e.message : t("coder.createError"));
+      } finally {
+        clearFrameSelection();
+      }
+      void refreshCodes().catch(() => undefined);
+    },
+    [frameSel, source.id, refreshCodings, refreshCodes, clearFrameSelection, t],
+  );
+
+  /** Delete a coding from the webpage's context menu. */
+  const deleteFrameCoding = useCallback(
+    async (row: Coding) => {
+      try {
+        await api.deleteTextCoding(row.ctid);
+        await refreshCodings();
+      } catch (e) {
+        setErrMsg(e instanceof Error ? e.message : t("coder.removeError"));
+      } finally {
+        setCtxMenu(null);
+      }
+    },
+    [refreshCodings, t],
+  );
+
+  // The frame → parent message router: selection reports, right-click
+  // forwarding and click-away signals. Everything is validated by
+  // parseFrameMessage (unknown types — incl. the parent→frame `qc:codings` —
+  // are ignored), and only messages from the CURRENT iframe count.
+  useEffect(() => {
+    const onMessage = (e: MessageEvent) => {
+      if (e.source !== iframeRef.current?.contentWindow) return;
+      const msg = parseFrameMessage(e.data);
+      if (!msg) return;
+
+      if (msg.type === "qc:selection") {
+        if (!viewModel) {
+          clearFrameSelection();
+          return;
+        }
+        const mapped = mapViewRangeToSource(viewModel, msg.startView, msg.endView);
+        if (!mapped) {
+          clearFrameSelection();
+          return;
+        }
+        // The frame's own text layer must agree with the parent's model —
+        // view indices only line up when both sides built the same layer.
+        if (
+          msg.text &&
+          msg.text.replace(/[\s\u00A0\uFEFF]+/g, "") !== mapped.seltext.replace(/[\s\u00A0\uFEFF]+/g, "")
+        ) {
+          clearFrameSelection();
+          return;
+        }
+        // Locate the selected text in the extracted fulltext (the plain-text
+        // coding surface). The extraction inserts "\n" at block tags, so
+        // source offsets and fulltext offsets differ — the exact source
+        // range is used as the hint that picks the right occurrence.
+        const ftModel = fulltextModel;
+        if (!ftModel) {
+          clearFrameSelection();
+          return;
+        }
+        const located = locateInFulltext(fulltext ?? "", ftModel, mapped.seltext, mapped.pos0);
+        if (!located || located.pos1 <= located.pos0) {
+          clearFrameSelection();
+          return;
+        }
+        const frame = iframeRef.current;
+        const iframeRect = frame?.getBoundingClientRect();
+        if (!iframeRect) {
+          clearFrameSelection();
+          return;
+        }
+        let left: number | null = null;
+        let top: number | null = null;
+        if (msg.rect) {
+          left = iframeRect.left + msg.rect.left;
+          top = iframeRect.top + msg.rect.bottom + 6;
+        } else if (msg.mouseX > 0 || msg.mouseY > 0) {
+          left = iframeRect.left + msg.mouseX;
+          top = iframeRect.top + msg.mouseY + 12;
+        }
+        if (left == null || top == null) {
+          clearFrameSelection();
+          return;
+        }
+        setCtxMenu(null);
+        setFrameSel({
+          pos0: located.pos0,
+          pos1: located.pos1,
+          seltext: located.seltext,
+        });
+        setFrameSelPos({
+          left: Math.max(8, Math.min(left, window.innerWidth - 320)),
+          top: Math.max(8, Math.min(top, window.innerHeight - 64)),
+        });
+        return;
+      }
+
+      if (msg.type === "qc:selection-cleared") {
+        clearFrameSelection();
+        return;
+      }
+
+      if (msg.type === "qc:frame-mousedown") {
+        // Any click inside the webpage dismisses the context menu. The
+        // selection toolbar survives a right-click (right-click preserves
+        // the selection) and is re-anchored by the next qc:selection.
+        setCtxMenu(null);
+        return;
+      }
+
+      if (msg.type === "qc:contextmenu") {
+        const frame = iframeRef.current;
+        const iframeRect = frame?.getBoundingClientRect();
+        if (!iframeRect) {
+          setCtxMenu(null);
+          return;
+        }
+        // Codings under the cursor: map the view index to its source span,
+        // locate it in the fulltext (fulltext positions are what codings
+        // carry) and find the codings overlapping it.
+        let covering: Coding[] = [];
+        if (msg.viewIndex != null && viewModel && fulltextModel) {
+          const mapped = mapViewRangeToSource(viewModel, msg.viewIndex, msg.viewIndex + 1);
+          if (mapped && mapped.pos1 > mapped.pos0) {
+            const located = locateInFulltext(
+              fulltext ?? "",
+              fulltextModel,
+              mapped.seltext,
+              mapped.pos0,
+            );
+            if (located && located.pos1 > located.pos0) {
+              covering = codingsOverlappingRange(codings, located.pos0, located.pos1);
+            }
+          }
+        }
+        if (covering.length === 0 && frameSel == null) {
+          setCtxMenu(null);
+          return;
+        }
+        setCtxMenu({
+          left: Math.max(4, Math.min(iframeRect.left + msg.x, window.innerWidth - 260)),
+          top: Math.max(4, Math.min(iframeRect.top + msg.y, window.innerHeight - 220)),
+          codings: covering,
+        });
+      }
+    };
+    window.addEventListener("message", onMessage);
+    return () => window.removeEventListener("message", onMessage);
+  }, [viewModel, fulltextModel, codings, fulltext, frameSel, clearFrameSelection]);
+
+  // Escape closes the picker, then the context menu and the frame toolbar.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      if (pickerOpen) {
+        setPickerOpen(false);
+        return;
+      }
+      setCtxMenu(null);
+      clearFrameSelection();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  });
+
+  // Clicks outside the context menu (in the parent document) close it.
+  useEffect(() => {
+    const onDown = (e: MouseEvent) => {
+      const target = e.target instanceof Node ? e.target : null;
+      if (target && ctxMenuRef.current && !ctxMenuRef.current.contains(target)) setCtxMenu(null);
+    };
+    document.addEventListener("mousedown", onDown);
+    return () => document.removeEventListener("mousedown", onDown);
+  }, []);
+
+  // Scrolling the webpage pane detaches the fixed overlays — drop them.
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const onScroll = () => {
+      setFrameSelPos(null);
+      setCtxMenu(null);
+    };
+    el.addEventListener("scroll", onScroll, { passive: true });
+    return () => el.removeEventListener("scroll", onScroll);
+  }, []);
+
+  // A code clicked in the left sidebar codes the pending webpage selection.
+  useEffect(() => {
+    const onAssign = (e: Event) => {
+      const cid = (e as CustomEvent<{ cid: number }>).detail?.cid;
+      if (typeof cid !== "number") return;
+      setPickerOpen(false);
+      setCtxMenu(null);
+      void codeFrameSelection(cid);
+    };
+    window.addEventListener("qc:assign-code", onAssign);
+    return () => window.removeEventListener("qc:assign-code", onAssign);
+  }, [codeFrameSelection]);
 
   /* ------------------------------------------------------- split resize */
 
@@ -529,17 +1033,24 @@ export function HtmlCoder({ source }: { source: Source }) {
     setCodings([]);
     setAnnotations([]);
     setCodes([]);
+    setFulltext(null);
+    clearFrameSelection();
+    setCtxMenu(null);
     void (async () => {
       try {
-        const [cod, anns, flat] = await Promise.all([
+        const [cod, anns, flat, src] = await Promise.all([
           api.sourceCoding(source.id),
           api.fileAnnotations(source.id),
           api.codesFlat(),
+          api.getSource(source.id),
         ]);
         if (cancelled) return;
         setCodings(cod);
         setAnnotations(anns);
         setCodes(flat);
+        // The extraction the plain-text pane codes against — the anchor for
+        // validating webpage selections (the prop may already carry it).
+        setFulltext(src.fulltext ?? source.fulltext ?? null);
       } catch (e) {
         if (!cancelled) setLoadError(e instanceof Error ? e.message : t("htmlCoder.loadCodingsError"));
       } finally {
@@ -549,7 +1060,7 @@ export function HtmlCoder({ source }: { source: Source }) {
     return () => {
       cancelled = true;
     };
-  }, [source.id, reloadTick, t]);
+  }, [source.id, source.fulltext, reloadTick, t, clearFrameSelection]);
 
   // Fetch the raw .html file through the file-serving endpoint. When it is
   // unavailable (article-only import or a broken link) the webpage pane
@@ -583,18 +1094,6 @@ export function HtmlCoder({ source }: { source: Source }) {
       cancelled = true;
     };
   }, [source.id, htmlReloadTick, t]);
-
-  const refreshCodings = useCallback(async () => {
-    setCodings(await api.sourceCoding(source.id));
-  }, [source.id]);
-
-  const refreshAnnotations = useCallback(async () => {
-    setAnnotations(await api.fileAnnotations(source.id));
-  }, [source.id]);
-
-  const refreshCodes = useCallback(async () => {
-    setCodes(await api.codesFlat());
-  }, []);
 
   // History undo/redo: reload codings/annotations when the audit log reverts
   // a change (the shell only refreshes project metadata).
@@ -757,6 +1256,123 @@ export function HtmlCoder({ source }: { source: Source }) {
           </div>
         )}
       </div>
+
+      {/* Floating coding toolbar for selections made on the RENDERED webpage.
+          Mirrors the plain-text pane's selection toolbar; the primary button
+          codes with the active code (or opens the picker when none). */}
+      {frameSelPos && frameSel && (
+        <div
+          ref={frameToolbarRef}
+          className="fixed z-40"
+          style={{ left: frameSelPos.left, top: frameSelPos.top }}
+        >
+          <div
+            className={`flex items-center gap-1 p-1 ${cls.popup}`}
+            role="toolbar"
+            aria-label={t("htmlCoder.selectionActions")}
+          >
+            <Button
+              variant="primary"
+              icon={<Code size={12} aria-hidden />}
+              className="max-w-56"
+              onClick={() => {
+                if (activeCodeId != null) void codeFrameSelection(activeCodeId);
+                else setPickerOpen(true);
+              }}
+              title={
+                activeCodeId != null
+                  ? t("coder.codeWithActive", { name: codeById.get(activeCodeId)?.name ?? "" })
+                  : t("coder.codeAction")
+              }
+            >
+              <span className="truncate">
+                {activeCodeId != null
+                  ? codeById.get(activeCodeId)?.name ?? t("coder.codeAction")
+                  : t("coder.codeAction")}
+              </span>
+            </Button>
+            <Button
+              variant="secondary"
+              icon={<Tag size={12} aria-hidden />}
+              onClick={() => setPickerOpen(true)}
+              title={t("coder.pickCode")}
+            >
+              {t("coder.pickCode")}
+            </Button>
+          </div>
+        </div>
+      )}
+
+      {/* The app's context menu for right-clicks inside the webpage (the
+          frame's script forwards the event; the browser menu never shows). */}
+      {ctxMenu && (
+        <div
+          ref={ctxMenuRef}
+          className="fixed z-40"
+          style={{ left: ctxMenu.left, top: ctxMenu.top }}
+        >
+          <Menu role="menu" className="min-w-44" aria-label={t("htmlCoder.contextMenu")}>
+            {ctxMenu.codings.map((row) => {
+              const code = codeById.get(row.cid);
+              return (
+                <MenuItem
+                  key={row.ctid}
+                  role="menuitem"
+                  onClick={() => void deleteFrameCoding(row)}
+                  className="hover:text-danger"
+                >
+                  <Trash2 size={12} aria-hidden />
+                  <span className="min-w-0 flex-1 truncate">
+                    {t("coder.removeFor", {
+                      name: code?.name ?? t("coder.fallbackCode", { id: row.cid }),
+                    })}
+                  </span>
+                </MenuItem>
+              );
+            })}
+            {frameSel && (
+              <>
+                <MenuItem
+                  role="menuitem"
+                  onClick={() => {
+                    const cid = activeCodeId;
+                    setCtxMenu(null);
+                    if (cid != null) void codeFrameSelection(cid);
+                    else setPickerOpen(true);
+                  }}
+                >
+                  <Code size={12} aria-hidden />
+                  <span className="min-w-0 flex-1 truncate">
+                    {activeCodeId != null
+                      ? t("coder.codeWithActive", { name: codeById.get(activeCodeId)?.name ?? "" })
+                      : t("coder.codeAction")}
+                  </span>
+                </MenuItem>
+                <MenuItem
+                  role="menuitem"
+                  onClick={() => {
+                    setCtxMenu(null);
+                    setPickerOpen(true);
+                  }}
+                >
+                  <Tag size={12} aria-hidden />
+                  <span className="min-w-0 flex-1 truncate">{t("coder.pickCode")}</span>
+                </MenuItem>
+              </>
+            )}
+          </Menu>
+        </div>
+      )}
+
+      <CodePicker
+        open={pickerOpen}
+        codes={codes}
+        onClose={() => setPickerOpen(false)}
+        onPick={(picked) => {
+          setPickerOpen(false);
+          void codeFrameSelection(picked.cid);
+        }}
+      />
     </div>
   );
 }

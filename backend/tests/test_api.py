@@ -23,6 +23,51 @@ async def test_health(client):
     assert body["version"] == "0.2.0"
 
 
+async def test_unhandled_exception_500_has_cors_headers_and_json_body():
+    """An unhandled backend exception must reach the client as a readable
+    JSON 500 WITH CORS headers.
+
+    Starlette's ServerErrorMiddleware handles unhandled exceptions outside
+    the CORSMiddleware, so the plain 500 it produces lacks the CORS headers
+    and the frontend browser masks it as "Failed to fetch". The catch-all
+    handler must echo the allowed origin itself.
+    """
+    from qualcoder_api.main import app
+
+    async def _boom(request) -> None:
+        raise RuntimeError("boom-test")
+
+    app.router.add_route("/api/v1/probe-raise", _boom, methods=["GET"])
+
+    transport = ASGITransport(app=app, raise_app_exceptions=False)
+    async with AsyncClient(transport=transport, base_url="http://test") as c:
+        # Packaged webview origin: CORS header echoed, JSON body readable.
+        res = await c.get(
+            "/api/v1/probe-raise", headers={"Origin": "http://tauri.localhost"}
+        )
+        assert res.status_code == 500
+        assert res.headers["access-control-allow-origin"] == "http://tauri.localhost"
+        assert res.headers["vary"] == "Origin"
+        body = res.json()
+        assert "detail" in body
+        assert body["detail"].startswith("internal error: RuntimeError")
+        assert "boom-test" in body["detail"]
+
+        # Dev origin works too.
+        res = await c.get(
+            "/api/v1/probe-raise", headers={"Origin": "http://localhost:5173"}
+        )
+        assert res.status_code == 500
+        assert res.headers["access-control-allow-origin"] == "http://localhost:5173"
+
+        # A non-browser call (no Origin header) gets no CORS header, exactly
+        # like CORSMiddleware's behavior on normal responses.
+        res = await c.get("/api/v1/probe-raise")
+        assert res.status_code == 500
+        assert "access-control-allow-origin" not in res.headers
+        assert res.json()["detail"].startswith("internal error:")
+
+
 async def test_create_then_summary(client, tmp_path, app_version):
     target = tmp_path / "api.qda"
     res = await client.post(

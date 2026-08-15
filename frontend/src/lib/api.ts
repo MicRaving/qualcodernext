@@ -69,6 +69,43 @@ export class ApiError extends Error {
   }
 }
 
+/** Path portion of a Response URL ("" when unavailable). */
+function urlPathOf(res: Response): string {
+  try {
+    return new URL(res.url).pathname;
+  } catch {
+    return "";
+  }
+}
+
+/** Build an ApiError from a non-ok Response, reading the backend's JSON
+ *  `detail` (FastAPI) so the real message — never a bare "Failed to
+ *  fetch" — reaches the UI. */
+async function apiErrorFrom(res: Response): Promise<ApiError> {
+  let detail: unknown;
+  try {
+    detail = (await res.json()).detail;
+  } catch {
+    /* non-JSON error body */
+  }
+  const where = urlPathOf(res) || "request";
+  const suffix =
+    typeof detail === "string"
+      ? `: ${detail}`
+      : detail !== undefined
+        ? `: ${JSON.stringify(detail)}`
+        : "";
+  return new ApiError(res.status, `API error ${res.status} on ${where}${suffix}`, detail);
+}
+
+/** Transport-level failures (TypeError "Failed to fetch", abort) are the
+ *  only errors worth retrying after re-resolving the API base. HTTP error
+ *  responses are definitive — their bodies are parsed into ApiError. */
+function isNetworkError(e: unknown): boolean {
+  if (e instanceof TypeError) return true;
+  return e instanceof DOMException && e.name === "AbortError";
+}
+
 /** Fetch with an AbortController timeout (no request ever hangs forever). */
 export function fetchWithTimeout(
   url: string,
@@ -87,8 +124,10 @@ export function fetchWithTimeout(
  *  resolveBase()` — cheap once the App boot gate settled) and a
  *  transport-level failure (backend still booting, restarted on a new
  *  ephemeral port…) drops the cached base, re-resolves it afresh and
- *  retries exactly once — mirroring `request()`. HTTP error responses are
- *  NOT retried: the caller inspects `res.ok` and treats them as definitive. */
+ *  retries exactly once — mirroring `request()`. A non-ok HTTP response
+ *  becomes an `ApiError` carrying the backend's JSON `detail` (FastAPI 500s
+ *  were previously masked as bare "Failed to fetch" when CORS headers were
+ *  missing). */
 async function fetchSourceBytes(
   buildUrl: (base: string) => string,
   timeoutMs: number,
@@ -96,20 +135,35 @@ async function fetchSourceBytes(
   const attempt = async (): Promise<Response> => {
     const base = await resolveBase();
     resolvedBase = base;
-    return fetchWithTimeout(buildUrl(base), undefined, timeoutMs);
+    const res = await fetchWithTimeout(buildUrl(base), undefined, timeoutMs);
+    if (!res.ok) throw await apiErrorFrom(res);
+    return res;
   };
   try {
     return await attempt();
-  } catch {
+  } catch (err) {
+    if (err instanceof ApiError) throw err;
     basePromise = null;
     resolvedBase = null;
     await new Promise((r) => setTimeout(r, 1000));
-    return attempt();
+    try {
+      return await attempt();
+    } catch (retryErr) {
+      if (retryErr instanceof ApiError) throw retryErr;
+      if (isNetworkError(retryErr)) {
+        throw new ApiError(
+          0,
+          `Backend unreachable — ${retryErr instanceof Error ? retryErr.message : "network error"}`,
+        );
+      }
+      throw retryErr;
+    }
   }
 }
 
 /** Raw bytes of a source file (PDF pages, HTML snapshots, full images).
- *  Returns the Response — the caller checks `res.ok` and consumes the body. */
+ *  Resolves to the Response on success; a non-ok HTTP response throws an
+ *  `ApiError` whose message carries the backend's `detail`. */
 export function fetchSourceFile(sourceId: number, timeoutMs = 60_000): Promise<Response> {
   return fetchSourceBytes((base) => `${base}/sources/${sourceId}/file`, timeoutMs);
 }
@@ -135,39 +189,43 @@ export function invalidateApiBase(): void {
 }
 
 async function request<T>(path: string, init?: RequestInit, timeoutMs = 15_000): Promise<T> {
-  const doFetch = async (): Promise<Response> => {
+  const parse = async (res: Response): Promise<T> => {
+    if (!res.ok) throw await apiErrorFrom(res);
+    if (res.status === 204) return undefined as T;
+    return (await res.json()) as T;
+  };
+  const attempt = async (): Promise<T> => {
     const base = await resolveBase();
     resolvedBase = base;
-    return fetchWithTimeout(`${base}${path}`, {
+    const res = await fetchWithTimeout(`${base}${path}`, {
       headers: { "Content-Type": "application/json" },
       ...init,
     }, timeoutMs);
+    return parse(res);
   };
   try {
-    const res = await doFetch();
-    if (!res.ok) {
-      let detail: unknown;
-      try {
-        detail = (await res.json()).detail;
-      } catch {
-        /* non-JSON error body */
-      }
-      const suffix = typeof detail === "string" && detail ? `: ${detail}` : "";
-      throw new ApiError(res.status, `API error ${res.status} on ${path}${suffix}`, detail);
-    }
-    if (res.status === 204) return undefined as T;
-    return (await res.json()) as T;
+    return await attempt();
   } catch (err) {
-    if (err instanceof ApiError) throw err;
+    if (!isNetworkError(err)) throw err;
     // Network-level failure (the packaged backend died or its port changed,
     // the dev backend was restarted…): drop the cached base URL, resolve it
     // afresh and retry exactly once before giving up.
     basePromise = null;
     resolvedBase = null;
-    const res = await doFetch();
-    if (!res.ok) throw new ApiError(res.status, `API error ${res.status} on ${path}`);
-    if (res.status === 204) return undefined as T;
-    return (await res.json()) as T;
+    try {
+      return await attempt();
+    } catch (retryErr) {
+      if (retryErr instanceof ApiError) throw retryErr;
+      if (isNetworkError(retryErr)) {
+        // Both attempts failed at the transport level — never surface the
+        // raw "Failed to fetch" (it reads as a broken app); say what happened.
+        throw new ApiError(
+          0,
+          `Backend unreachable — ${retryErr instanceof Error ? retryErr.message : "network error"}`,
+        );
+      }
+      throw retryErr;
+    }
   }
 }
 
@@ -1727,7 +1785,7 @@ export const api = {
 };
 
 async function handleJson<T>(res: Response): Promise<T> {
-  if (!res.ok) throw new ApiError(res.status, `API error ${res.status}`);
+  if (!res.ok) throw await apiErrorFrom(res);
   return (await res.json()) as T;
 }
 

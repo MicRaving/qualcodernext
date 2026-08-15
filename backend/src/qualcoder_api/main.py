@@ -10,8 +10,9 @@ import contextlib as _contextlib
 import logging
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from qualcoder_api.api.v1.router import router as v1_router
 from qualcoder_api.services import sync, user_settings
@@ -20,6 +21,46 @@ from qualcoder_api.services.project_service import ProjectService
 logger = logging.getLogger(__name__)
 
 service = ProjectService()
+
+#: Origins the CORSMiddleware allows. The catch-all 500 handler mirrors
+#: this list so its responses carry the same CORS headers.
+ALLOWED_ORIGINS = [
+    "http://localhost:5173",
+    # Tauri 2 serves the bundled frontend from http://tauri.localhost
+    # (Tauri 1 used tauri://localhost) — both must be allowed or every
+    # API call from the packaged app is CORS-blocked.
+    "http://tauri.localhost",
+    "tauri://localhost",
+]
+
+
+def _cors_headers(request: Request) -> dict[str, str]:
+    """Echo the CORS headers CORSMiddleware would add on a normal response.
+
+    Starlette's ServerErrorMiddleware sits OUTSIDE the CORSMiddleware, so
+    the 500 it produces for an unhandled exception never flows through the
+    CORS middleware's header injection. The browser then cannot read the
+    JSON error body and reports a bare "Failed to fetch" — which looks like
+    a network failure instead of the real backend error.
+    """
+    origin = request.headers.get("origin")
+    if origin in ALLOWED_ORIGINS:
+        return {"Access-Control-Allow-Origin": origin, "Vary": "Origin"}
+    return {}
+
+
+def _unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+    """Catch-all for any unhandled exception: a readable JSON 500 instead
+    of the plain-text default — with CORS headers so the packaged webview
+    can actually read it (see ``_cors_headers``). The exception type and a
+    sanitized (truncated, single-line) message keep the body debuggable
+    without leaking full tracebacks to the client."""
+    logger.exception("unhandled exception on %s %s", request.method, request.url.path)
+    message = str(exc).strip().replace("\n", " ")[:500]
+    detail = f"internal error: {type(exc).__name__}"
+    if message:
+        detail += f": {message}"
+    return JSONResponse(status_code=500, content={"detail": detail}, headers=_cors_headers(request))
 
 
 async def _sync_loop() -> None:
@@ -60,17 +101,11 @@ def create_app() -> FastAPI:
     )
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=[
-            "http://localhost:5173",
-            # Tauri 2 serves the bundled frontend from http://tauri.localhost
-            # (Tauri 1 used tauri://localhost) — both must be allowed or every
-            # API call from the packaged app is CORS-blocked.
-            "http://tauri.localhost",
-            "tauri://localhost",
-        ],
+        allow_origins=ALLOWED_ORIGINS,
         allow_methods=["*"],
         allow_headers=["*"],
     )
+    app.add_exception_handler(Exception, _unhandled_exception_handler)
     app.include_router(v1_router, prefix="/api/v1")
     return app
 

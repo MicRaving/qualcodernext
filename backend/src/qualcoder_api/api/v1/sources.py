@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import bisect
 import logging
 import os
 import re
@@ -513,16 +514,211 @@ def _page_anchor(fulltext: str, page_text: str, expected: int) -> int | None:
     return best_pos - first_match.start()
 
 
+#: A run of at least this many consecutive selection words found verbatim in
+#: the fulltext is accepted as an anchor on its own.
+_MIN_RUN_WORDS = 3
+
+#: Shorter runs are accepted only when the surrounding fulltext window
+#: resembles the rest of the selection at least this well (difflib ratio).
+_MIN_RUN_SIMILARITY = 0.6
+
+
+def _best_run(
+    fulltext: str,
+    sel_words_norm: list[str],
+    expected: int | None,
+    window: int | None,
+) -> tuple[int, int, int, int] | None:
+    """Find the longest run of consecutive selection words that appears as
+    consecutive words inside the fulltext.
+
+    ``sel_words_norm`` is the selection's normalized word list; the run may
+    start anywhere in the selection. Returns ``(abs_lo, abs_hi, run_len,
+    sel_index)`` — the run's absolute span, how many selection words it
+    covers, and the selection word index it starts at.
+
+    Only words within ``window`` characters around ``expected`` are
+    considered (``window=None`` searches the whole text). Among runs of
+    equal length the one nearest ``expected`` wins. None when no run exists.
+    """
+    tokens = list(re.finditer(r"\S+", fulltext))
+    n = len(tokens)
+    if n == 0 or not sel_words_norm:
+        return None
+    lo, hi = 0, n
+    if expected is not None and window is not None:
+        starts = [t.start() for t in tokens]
+        lo = bisect.bisect_left(starts, max(0, expected - window))
+        hi = bisect.bisect_right(starts, min(len(fulltext), expected + window))
+    token_norms = [_normalize_text(t.group(0)) for t in tokens]
+    occurrences: dict[str, list[int]] = {}
+    for i in range(lo, hi):
+        occurrences.setdefault(token_norms[i], []).append(i)
+    m = len(sel_words_norm)
+    best: tuple[int, int, int, int] | None = None
+    best_dist = 1 << 62
+    for j in range(m):
+        for k in occurrences.get(sel_words_norm[j], ()):
+            run = 0
+            while (
+                j + run < m
+                and k + run < hi
+                and token_norms[k + run] == sel_words_norm[j + run]
+            ):
+                run += 1
+            if run == 0:
+                continue
+            dist = abs(tokens[k].start() - expected) if expected is not None else 0
+            if best is None or run > best[2] or (run == best[2] and dist < best_dist):
+                best = (tokens[k].start(), tokens[k + run - 1].end(), run, j)
+                best_dist = dist
+    return best
+
+
+def _similarity_with_context(
+    fulltext: str, sel_words_norm: list[str], run_span: tuple[int, int]
+) -> float:
+    """How well the fulltext window of the same word count as the selection,
+    centered on the matched run, resembles the selection. Each selection
+    word may consume the region word most similar to it (difflib ratio >
+    0.6); the score is the fraction of the selection's normalized length
+    covered by matched words. Order-tolerant, so reordered text still scores
+    well where a sequence matcher would not.
+    """
+    from difflib import SequenceMatcher
+
+    m = len(sel_words_norm)
+    if m == 0:
+        return 0.0
+    words = list(re.finditer(r"\S+", fulltext))
+    start_i: int | None = None
+    end_i: int | None = None
+    for i, w in enumerate(words):
+        if w.start() < run_span[1] and w.end() > run_span[0]:
+            if start_i is None:
+                start_i = i
+            end_i = i
+    if start_i is None:
+        return 0.0
+    assert end_i is not None
+    run_words = end_i - start_i + 1
+    left_pad = max(0, (m - run_words) // 2)
+    wl = max(0, start_i - left_pad)
+    wr = min(len(words), wl + m)
+    wl = max(0, wr - m)
+    region: list[str | None] = [
+        _normalize_text(words[i].group(0)) for i in range(wl, wr)
+    ]
+    total = sum(len(w) for w in sel_words_norm)
+    if total == 0:
+        return 0.0
+    matched = 0
+    for sw in sorted(sel_words_norm, key=len, reverse=True):
+        best_i = -1
+        best_ratio = 0.6
+        for i, rw in enumerate(region):
+            if rw is None:
+                continue
+            ratio = SequenceMatcher(None, sw, rw).ratio()
+            if ratio > best_ratio:
+                best_ratio = ratio
+                best_i = i
+        if best_i >= 0:
+            region[best_i] = None
+            matched += len(sw)
+    return matched / total
+
+
+def _span_for_selection(
+    fulltext: str,
+    sel_words_norm: list[str],
+    run_span: tuple[int, int],
+    sel_index: int,
+) -> tuple[int, int]:
+    """Map the matched run's absolute span back onto the whole selection:
+    pull ``pos0`` back past the selection words the run is missing at the
+    start, then extend ``pos1`` until the span covers roughly the
+    selection's normalized length (clamping at the text bounds)."""
+    pos0, pos1 = run_span
+    if sel_index > 0:
+        wanted = len(" ".join(sel_words_norm[:sel_index]))
+        acc = 0
+        while pos0 > 0 and acc < wanted:
+            while pos0 > 0 and fulltext[pos0 - 1].isspace():
+                pos0 -= 1
+            end = pos0
+            while pos0 > 0 and not fulltext[pos0 - 1].isspace():
+                pos0 -= 1
+            acc += len(_normalize_text(fulltext[pos0:end])) + 1
+    target = len(" ".join(sel_words_norm))
+    if target > 0:
+        cur = len(_normalize_text(fulltext[pos0:pos1]))
+        while pos1 < len(fulltext) and cur < target:
+            nxt = pos1
+            while nxt < len(fulltext) and fulltext[nxt].isspace():
+                nxt += 1
+            if nxt >= len(fulltext):
+                break
+            wstart = nxt
+            while nxt < len(fulltext) and not fulltext[nxt].isspace():
+                nxt += 1
+            pos1 = nxt
+            cur += len(_normalize_text(fulltext[wstart:nxt])) + 1
+    return pos0, pos1
+
+
+def _run_locate(
+    page_text: str, sel: str, fulltext: str, expected: int
+) -> tuple[int, int] | None:
+    """Run-based anchor: find the longest contiguous run of the selection's
+    words directly inside the fulltext — first within a generous window
+    around the page's expected offset, then anywhere in the text (preferring
+    the match nearest the expected offset) — and map it back to a span
+    covering the whole selection.
+
+    A run of at least ``_MIN_RUN_WORDS`` words is accepted outright; a
+    2-word run only when the surrounding fulltext window resembles the
+    selection well enough (``_MIN_RUN_SIMILARITY``). This anchors pages
+    whose extraction reordered or dropped the leading text, which the
+    page-first-word anchor cannot.
+    """
+    sel_words_norm = [_normalize_text(w) for w in re.findall(r"\S+", sel)]
+    if not sel_words_norm:
+        return None
+    window = max(4 * len(page_text), 8192)
+    for search_window in (window, None):
+        run = _best_run(fulltext, sel_words_norm, expected, search_window)
+        if run is None:
+            continue
+        abs_lo, abs_hi, run_len, sel_index = run
+        if run_len >= _MIN_RUN_WORDS or (
+            run_len == 2
+            and _similarity_with_context(fulltext, sel_words_norm, (abs_lo, abs_hi))
+            >= _MIN_RUN_SIMILARITY
+        ):
+            return _span_for_selection(
+                fulltext, sel_words_norm, (abs_lo, abs_hi), sel_index
+            )
+    return None
+
+
 def _fuzzy_locate(
     page_text: str, sel: str, fulltext: str, expected: int
 ) -> tuple[int, int, str] | None:
-    """Positional best-effort fallback: fuzzy-match the selection's words
-    inside the page text and anchor the page via its first word's position
-    in the fulltext; when that cannot anchor, fuzzy-match inside a window of
-    the fulltext around the expected page offset instead."""
+    """Best-effort positional fallbacks: first the run-based anchor (see
+    :func:`_run_locate`) that maps the longest run of the selection's words
+    directly in the fulltext; when that finds nothing, the historical
+    approach of fuzzy-matching the selection inside the page text anchored
+    on the page's first word's position in the fulltext; finally a fuzzy
+    match inside a window of the fulltext around the expected page offset."""
     sel_words = re.findall(r"\S+", sel)
     if not sel_words:
         return None
+    run_span = _run_locate(page_text, sel, fulltext, expected)
+    if run_span is not None:
+        pos0, pos1 = run_span
+        if 0 <= pos0 < pos1 <= len(fulltext):
+            return pos0, pos1, "fuzzy"
     max_mismatch = max(1, len(sel_words) // 4)
     rel = _fuzzy_span(page_text, sel, max_mismatch)
     anchor = _page_anchor(fulltext, page_text, expected)
@@ -552,10 +748,13 @@ def _locate(
     2. word-sequence match (whitespace-insensitive);
     3. normalized match (case, whitespace, ligatures, soft hyphens,
        line-break hyphens);
-    4. positional fuzzy estimate anchored on the page's first word.
+    4. run-based anchor: the longest run of the selection's words found
+       directly in the fulltext (tolerates reordered or dropped leading
+       text);
+    5. positional fuzzy estimate anchored on the page's first word.
 
-    Only returns None when nothing can be anchored at all (e.g. the page has
-    no extractable text).
+    Only returns None when nothing can be anchored at all (e.g. the page
+    has no extractable text).
     """
     idx = page_text.find(sel)
     if idx >= 0:
@@ -569,6 +768,18 @@ def _locate(
     return _fuzzy_locate(page_text, sel, fulltext, expected)
 
 
+_MSG_BLANK_PAGE = (
+    "This PDF page has no extractable text (it may be a scanned image) — "
+    "use the rectangle region tool to code it instead."
+)
+
+_MSG_UNANCHORABLE = (
+    "Could not map the selection to the document text — the PDF's text "
+    "layer differs from the extracted text; try selecting a shorter phrase "
+    "or use the rectangle region tool."
+)
+
+
 @router.post("/{source_id}/pdf-text-locate", response_model=PdfTextLocateResponse)
 async def pdf_text_locate(
     source_id: int, req: PdfTextLocateRequest, db: DbDep, svc: ServiceDep
@@ -580,9 +791,11 @@ async def pdf_text_locate(
     spaces/newlines); pdf.js's rendered text differs from PyMuPDF's
     extraction in whitespace, case, ligature glyphs and hyphenation, so the
     mapping walks a fallback chain (see :func:`_locate`) from the exact
-    substring over normalized matching to a positional fuzzy estimate. The
-    returned span always slices the fulltext exactly, so coded text equals
-    the plain-text mode's slice.
+    substring over normalized matching to a run-based anchor in the
+    fulltext. The returned span always slices the fulltext exactly, so coded
+    text equals the plain-text mode's slice. Pages without extractable text
+    (scanned images) and selections that cannot be anchored at all 422 with
+    messages explaining what to do instead.
     """
     import asyncio
 
@@ -607,13 +820,13 @@ async def pdf_text_locate(
                 raise HTTPException(status_code=422, detail="page out of range")
             page_texts = [page.get_text() for page in doc]
         page_text = page_texts[req.page - 1]
+        if not page_text.strip():
+            raise HTTPException(status_code=422, detail=_MSG_BLANK_PAGE)
         fulltext = "".join(page_texts)
         expected = sum(len(t) for t in page_texts[: req.page - 1])
         found = _locate(page_text, req.text, fulltext, expected)
         if found is None:
-            raise HTTPException(
-                status_code=422, detail="selection not found in the page text"
-            )
+            raise HTTPException(status_code=422, detail=_MSG_UNANCHORABLE)
         pos0, pos1, confidence = found
         return PdfTextLocateResponse(
             pos0=pos0,

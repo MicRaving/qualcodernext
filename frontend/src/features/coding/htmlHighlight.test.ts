@@ -4,14 +4,20 @@ import {
   buildHighlightedHtml,
   buildHighlights,
   buildViewModel,
+  codingsOverlappingRange,
   collapseWhitespace,
   decodeHtmlEntities,
   htmlToViewText,
   injectHighlightScript,
+  locateInFulltext,
+  mapViewRangeToSource,
   markStyleFor,
+  parseFrameMessage,
   qcFindMatches,
   stripPageScripts,
+  viewTextMatchesFulltext,
   type QcCodingPayload,
+  type QcSelectionMessage,
 } from "@/features/coding/htmlHighlight";
 
 const SCRIPT = "<script>QC</script>";
@@ -466,5 +472,216 @@ describe("buildHighlightedHtml", () => {
     const bakedView = buildViewModel(baked);
     expect(bakedView.text).toBe(model.text);
     expect(countMarks(baked)).toBeGreaterThan(0);
+  });
+});
+
+describe("mapViewRangeToSource", () => {
+  it("maps a within-node selection 1:1 to source offsets", () => {
+    const m = buildViewModel("<p>Hello world</p>");
+    // "Hello world" lives at source [3,14); "world" = view indices [6,11).
+    expect(mapViewRangeToSource(m, 6, 11)).toEqual({ pos0: 9, pos1: 14, seltext: "world" });
+    expect(mapViewRangeToSource(m, 0, 5)).toEqual({ pos0: 3, pos1: 8, seltext: "Hello" });
+  });
+
+  it("maps across text nodes (inter-tag whitespace is dropped in the view)", () => {
+    const m = buildViewModel("<p>Hello</p>\n<p>world</p>");
+    // view = "Helloworld"; "Hello" = [0,5) -> source [3,8).
+    expect(mapViewRangeToSource(m, 0, 5)).toEqual({ pos0: 3, pos1: 8, seltext: "Hello" });
+    // The full selection spans both <p>s — the source range includes the
+    // closing/opening tags between the words.
+    expect(mapViewRangeToSource(m, 0, 10)).toEqual({ pos0: 3, pos1: 21, seltext: "Helloworld" });
+  });
+
+  it("maps an entity char to the whole entity source span", () => {
+    const m = buildViewModel("<p>Tom &amp; Jerry</p>");
+    // view = "Tom & Jerry"; the '&' is view index 4 -> the whole "&amp;".
+    expect(mapViewRangeToSource(m, 4, 5)).toEqual({ pos0: 7, pos1: 12, seltext: "&" });
+  });
+
+  it("maps a collapsed whitespace run to the full source run", () => {
+    const m = buildViewModel("<p>a  b</p>");
+    // view = "a b" — the space covers source [4,6) (both raw spaces).
+    expect(mapViewRangeToSource(m, 1, 2)).toEqual({ pos0: 4, pos1: 6, seltext: " " });
+    expect(mapViewRangeToSource(m, 0, 3)).toEqual({ pos0: 3, pos1: 7, seltext: "a b" });
+  });
+
+  it("clamps out-of-range indices and rejects empty selections", () => {
+    const m = buildViewModel("<p>abc</p>");
+    expect(mapViewRangeToSource(m, 2, 20)).toEqual({ pos0: 5, pos1: 6, seltext: "c" });
+    expect(mapViewRangeToSource(m, 5, 5)).toBeNull();
+    expect(mapViewRangeToSource(m, 3, 3)).toBeNull();
+    expect(mapViewRangeToSource(m, 4, 2)).toBeNull(); // start beyond end
+  });
+
+  it("never maps into code/pre content (absent from the model)", () => {
+    const m = buildViewModel("<p>keep</p><pre>raw</pre>");
+    expect(m.text).toBe("keep");
+    expect(mapViewRangeToSource(m, 0, 4)).toEqual({ pos0: 3, pos1: 7, seltext: "keep" });
+    expect(mapViewRangeToSource(m, 4, 10)).toBeNull();
+  });
+});
+
+describe("viewTextMatchesFulltext", () => {
+  it("matches modulo whitespace and block newlines", () => {
+    expect(viewTextMatchesFulltext("Helloworld", "Hello\nworld")).toBe(true);
+    expect(viewTextMatchesFulltext("Hello world", "Hello   world")).toBe(true);
+    expect(viewTextMatchesFulltext("Tom & Jerry", "Tom & Jerry")).toBe(true);
+    expect(viewTextMatchesFulltext("a b", "a\u00A0b")).toBe(true);
+  });
+
+  it("rejects different text and empty selections", () => {
+    expect(viewTextMatchesFulltext("Hello world", "Hello there")).toBe(false);
+    expect(viewTextMatchesFulltext("alpha", "aleph")).toBe(false);
+    expect(viewTextMatchesFulltext(" ", " ")).toBe(false);
+    expect(viewTextMatchesFulltext("", "")).toBe(false);
+  });
+});
+
+describe("locateInFulltext", () => {
+  const modelOf = (fulltext: string) => buildViewModel(fulltext);
+
+  it("locates a view slice in the fulltext and returns the raw slice", () => {
+    const ft = "Probe\nProbe page\nThe quick brown fox jumps over the lazy dog.\n\nAnother line.";
+    const hit = locateInFulltext(ft, modelOf(ft), "own fox jumps over the lazy dog.", 52);
+    expect(hit).not.toBeNull();
+    // "own" starts inside "brown": raw "The quick brown" -> 'o' at 29.
+    expect(hit!.pos0).toBe(29);
+    expect(hit!.pos1).toBe(61);
+    expect(hit!.seltext).toBe("own fox jumps over the lazy dog.");
+  });
+
+  it("matches across the block newlines the extraction inserts", () => {
+    const ft = "Hello\nworld\nmore text";
+    const hit = locateInFulltext(ft, modelOf(ft), "Helloworld", 0);
+    expect(hit).toEqual({ pos0: 0, pos1: 11, seltext: "Hello\nworld" });
+  });
+
+  it("handles the full pipeline drift (title/headings shift source vs fulltext)", () => {
+    // The backend's extraction includes the title and inserts "\n" at block
+    // tags, so source offsets drift; the locate must still find the text the
+    // view selection covers and return FULLTEXT positions.
+    const html =
+      "<title>Probe</title><body><h1>Probe page</h1>" +
+      "<p>The quick brown fox jumps over the lazy dog.</p>" +
+      "<p>Another line of research text to select.</p></body>";
+    const fulltext =
+      "Probe\nProbe page\nThe quick brown fox jumps over the lazy dog.\n\n" +
+      "Another line of research text to select.\n";
+    const view = buildViewModel(html);
+    // View text: "Probe pageThe quick brown fox jumps over the lazy dog.…" —
+    // "own fox jumps over the lazy dog." starts at view index 22 (the 'o' of
+    // "brown", one text node so the inner spaces are preserved).
+    const mapped = mapViewRangeToSource(view, 22, 54);
+    expect(mapped).not.toBeNull();
+    expect(mapped!.seltext).toBe("own fox jumps over the lazy dog.");
+    const hit = locateInFulltext(fulltext, modelOf(fulltext), mapped!.seltext, mapped!.pos0);
+    expect(hit).not.toBeNull();
+    expect(hit!.pos0).toBe(29);
+    expect(hit!.pos1).toBe(61);
+    expect(hit!.seltext).toBe("own fox jumps over the lazy dog.");
+    expect(viewTextMatchesFulltext(mapped!.seltext, hit!.seltext)).toBe(true);
+  });
+
+  it("uses the source hint to disambiguate repeated text", () => {
+    const ft = "cat and dog. also a cat and dog.";
+    const m = modelOf(ft);
+    const near = locateInFulltext(ft, m, "dog.", 24);
+    expect(near!.pos0).toBe(28);
+    expect(near!.seltext).toBe("dog.");
+    const far = locateInFulltext(ft, m, "dog.", 4);
+    expect(far!.pos0).toBe(8);
+    expect(far!.seltext).toBe("dog.");
+  });
+
+  it("is whitespace-insensitive on both sides", () => {
+    const ft = "alpha\n\n beta   gamma";
+    const hit = locateInFulltext(ft, modelOf(ft), "beta gamma", 0);
+    expect(hit).not.toBeNull();
+    expect(hit!.seltext).toBe("beta   gamma");
+  });
+
+  it("returns null for missing or empty selections", () => {
+    const ft = "nothing here at all";
+    const m = modelOf(ft);
+    expect(locateInFulltext(ft, m, "not present", 0)).toBeNull();
+    expect(locateInFulltext(ft, m, "   ", 0)).toBeNull();
+    expect(locateInFulltext(ft, m, "", 0)).toBeNull();
+    expect(locateInFulltext(ft, m, "nothing here at all and then some", 0)).toBeNull();
+  });
+});
+
+describe("codingsOverlappingRange", () => {
+  it("finds the codings whose spans overlap the given source range", () => {
+    const codings = [
+      { ctid: 1, pos0: 0, pos1: 10 },
+      { ctid: 2, pos0: 12, pos1: 20 },
+      { ctid: 3, pos0: 10, pos1: 11 },
+    ];
+    expect(codingsOverlappingRange(codings, 9, 11).map((c) => c.ctid)).toEqual([1, 3]);
+    expect(codingsOverlappingRange(codings, 11, 12)).toEqual([]);
+    expect(codingsOverlappingRange(codings, 0, 1).map((c) => c.ctid)).toEqual([1]);
+  });
+});
+
+describe("parseFrameMessage", () => {
+  it("parses a qc:selection payload with rect", () => {
+    expect(
+      parseFrameMessage({
+        type: "qc:selection",
+        startView: 3,
+        endView: 9,
+        text: "abc",
+        rect: { left: 1, top: 2, bottom: 3 },
+        mouseX: 5,
+        mouseY: 6,
+      }),
+    ).toEqual({
+      type: "qc:selection",
+      startView: 3,
+      endView: 9,
+      text: "abc",
+      rect: { left: 1, top: 2, bottom: 3 },
+      mouseX: 5,
+      mouseY: 6,
+    });
+  });
+
+  it("accepts a missing rect / mouse (defaults to null / 0)", () => {
+    const msg = parseFrameMessage({ type: "qc:selection", startView: 0, endView: 1, text: "x" });
+    expect(msg).not.toBeNull();
+    expect((msg as QcSelectionMessage).rect).toBeNull();
+    expect((msg as QcSelectionMessage).mouseX).toBe(0);
+  });
+
+  it("parses the contextmenu payload (view index optional)", () => {
+    expect(
+      parseFrameMessage({ type: "qc:contextmenu", x: 10, y: 20, viewIndex: 7 }),
+    ).toEqual({ type: "qc:contextmenu", x: 10, y: 20, viewIndex: 7 });
+    expect(parseFrameMessage({ type: "qc:contextmenu", x: 1, y: 2 })).toEqual({
+      type: "qc:contextmenu",
+      x: 1,
+      y: 2,
+      viewIndex: null,
+    });
+  });
+
+  it("parses the clear and mousedown signals", () => {
+    expect(parseFrameMessage({ type: "qc:selection-cleared" })).toEqual({
+      type: "qc:selection-cleared",
+    });
+    expect(parseFrameMessage({ type: "qc:frame-mousedown" })).toEqual({
+      type: "qc:frame-mousedown",
+    });
+  });
+
+  it("rejects unknown types and malformed payloads (qc:codings never routes)", () => {
+    expect(parseFrameMessage({ type: "qc:codings", codings: [] })).toBeNull();
+    expect(parseFrameMessage({ type: "qc:selection", startView: "x", endView: 1, text: "t" })).toBeNull();
+    expect(parseFrameMessage({ type: "qc:selection", startView: 0, endView: 1 })).toBeNull();
+    expect(parseFrameMessage({ type: "qc:contextmenu", x: "a", y: 1 })).toBeNull();
+    expect(parseFrameMessage({ type: "qc:contextmenu", x: NaN, y: 1 })).toBeNull();
+    expect(parseFrameMessage(null)).toBeNull();
+    expect(parseFrameMessage("hi")).toBeNull();
+    expect(parseFrameMessage({ type: "qc:highlight-ready" })).toBeNull();
   });
 });

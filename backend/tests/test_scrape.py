@@ -564,9 +564,11 @@ def test_youtube_subprocess_parses_playlist_wrapper():
     assert "[00:01] Hello caption text" in content.data.decode("utf-8")
 
 
-def test_youtube_falls_back_to_captions_when_comments_missing():
-    """No comments + captions: the transcript text replaces the table —
-    still no title/uploader/duration/description block."""
+def test_youtube_captions_shown_with_note_when_comments_requested_but_missing():
+    """Comments were requested and came back empty: captions are NOT
+    substituted silently — the transcript is led by a visible
+    ``# Comments unavailable ...`` note so the missing columns are
+    explained. No title/uploader/duration/description block either."""
     info = make_youtube_info(comments=[])
     with (
         patch("qualcoder_api.services.scrape_service.subprocess.run", return_value=yt_completed(info)),
@@ -575,9 +577,9 @@ def test_youtube_falls_back_to_captions_when_comments_missing():
         content = scrape_service.scrape_youtube("https://www.youtube.com/watch?v=abc")
 
     text = content.data.decode("utf-8")
+    assert text.startswith("# Comments unavailable (the video has no comments) — captions shown below")
     assert "[00:01] Hello caption text" in text
     assert "[00:03] Second line" in text
-    assert "Comments" not in text
     assert "Demo Video" not in text
     assert "Uploader:" not in text
     assert "A description." not in text
@@ -603,9 +605,10 @@ def test_youtube_without_comments_or_captions_reports_no_comments():
     assert youtube_comment_table(text) == [["-", "-", "-", "No comments"]]
 
 
-def test_youtube_reports_when_comment_extraction_unsupported():
-    """Old yt-dlp: no ``--write-comments`` flag, no captions — the source is
-    just the header row + the ``No comments`` row."""
+def test_youtube_notes_when_comment_extraction_unsupported():
+    """Old yt-dlp: no ``--write-comments`` flag, no captions — the source
+    keeps the header row plus a ``-\t-\t-\t<note>`` row explaining that the
+    installed yt-dlp cannot extract comments (never a bare ``No comments``)."""
     info = make_youtube_info()
     with (
         patch.object(scrape_service, "_YT_DLP_COMMENTS_SUPPORTED", False),
@@ -617,7 +620,11 @@ def test_youtube_reports_when_comment_extraction_unsupported():
     assert "--write-comments" not in record_yt_calls(run)[0]
     fetch.assert_not_called()
     text = content.data.decode("utf-8")
-    assert text == "author\tlikes\tdate\tcomment\n-\t-\t-\tNo comments"
+    assert text == (
+        "author\tlikes\tdate\tcomment\n"
+        "-\t-\t-\tComments could not be retrieved (the installed yt-dlp version "
+        "does not support comment extraction — 2021.12.17 or newer is required)"
+    )
     assert "Demo Video" not in text
     assert "u/viewer1" not in text
     assert "Captions" not in text
@@ -642,9 +649,10 @@ def test_youtube_caption_fetch_failure_keeps_no_comments_row():
     assert "Captions" not in text
 
 
-def test_youtube_subprocess_abort_retries_without_comments():
+def test_youtube_subprocess_abort_retries_without_comments_with_note():
     """An aborting subprocess (exit 1 + 'Interrupted by user') is retried once
-    without --write-comments; the import then falls back to captions."""
+    without --write-comments; captions are then shown WITH a visible note
+    explaining the abort — never silently."""
     abort = yt_completed({}, returncode=1, stderr="ERROR: Interrupted by user\n")
     ok_without_comments = yt_completed(make_youtube_info(comments=[]))
     with (
@@ -662,8 +670,35 @@ def test_youtube_subprocess_abort_retries_without_comments():
     assert "--write-comments" not in commands[1]
     text = content.data.decode("utf-8")
     assert "Demo Video" not in text
+    assert text.startswith("# Comments unavailable (extraction aborted) — captions shown below")
     assert "[00:01] Hello caption text" in text
-    assert "Comments" not in text
+
+
+def test_youtube_abort_without_captions_keeps_header_and_abort_note():
+    """Abort retry succeeds but no captions exist: the output keeps the
+    column header plus a ``-\t-\t-\t<note>`` row explaining the aborted
+    comments — never a silent bare ``No comments`` row."""
+    abort = yt_completed({}, returncode=1, stderr="ERROR: Interrupted by user\n")
+    ok_without_comments = yt_completed(
+        make_youtube_info(subtitles={}, automatic_captions={}, comments=[])
+    )
+    with (
+        patch(
+            "qualcoder_api.services.scrape_service.subprocess.run",
+            side_effect=[abort, ok_without_comments],
+        ) as run,
+        patch("qualcoder_api.services.scrape_service.fetch_url") as fetch,
+    ):
+        content = scrape_service.scrape_youtube("https://www.youtube.com/watch?v=abc")
+
+    assert len(record_yt_calls(run)) == 2
+    fetch.assert_not_called()
+    text = content.data.decode("utf-8")
+    assert text == (
+        "author\tlikes\tdate\tcomment\n"
+        "-\t-\t-\tComments could not be retrieved (extraction aborted) — "
+        "the video may have comments disabled or be very large"
+    )
 
 
 def test_youtube_subprocess_abort_without_retry_maps_to_friendly_error():
@@ -706,10 +741,36 @@ def test_youtube_subprocess_garbage_stdout_maps_to_no_metadata():
         scrape_service.scrape_youtube("https://www.youtube.com/watch?v=abc")
 
 
-def test_youtube_subprocess_timeout_kills_and_raises_friendly_error():
-    """subprocess.run raises TimeoutExpired (it killed the child already);
-    the scrape surfaces the friendly timeout error."""
+def test_youtube_timeout_with_comments_requested_keeps_header_and_note_row():
+    """subprocess.run raises TimeoutExpired (it killed the child already)
+    while comments were requested: the scrape must NOT raise or silently
+    fall back to captions — the output keeps the column header plus a
+    ``-\t-\t-\t<note>`` row explaining the missing columns."""
     with (
+        patch.object(scrape_service, "_YT_TIMEOUT_SECONDS", 0.2),
+        patch(
+            "qualcoder_api.services.scrape_service.subprocess.run",
+            side_effect=subprocess.TimeoutExpired(["python", "-m", "yt_dlp"], 0.2),
+        ) as run,
+        patch("qualcoder_api.services.scrape_service.fetch_url") as fetch,
+    ):
+        content = scrape_service.scrape_youtube("https://www.youtube.com/watch?v=abc")
+
+    assert "--write-comments" in record_yt_calls(run)[0]
+    fetch.assert_not_called()  # no info dict came back — captions are untouchable
+    text = content.data.decode("utf-8")
+    assert text == (
+        "author\tlikes\tdate\tcomment\n"
+        "-\t-\t-\tComments could not be retrieved (extraction timed out) — "
+        "the video may have comments disabled or be very large"
+    )
+
+
+def test_youtube_timeout_without_comments_requested_raises_friendly_error():
+    """Only when comments were NOT requested (old yt-dlp) does the timeout
+    surface as the friendly error."""
+    with (
+        patch.object(scrape_service, "_YT_DLP_COMMENTS_SUPPORTED", False),
         patch.object(scrape_service, "_YT_TIMEOUT_SECONDS", 0.2),
         patch(
             "qualcoder_api.services.scrape_service.subprocess.run",
@@ -718,6 +779,12 @@ def test_youtube_subprocess_timeout_kills_and_raises_friendly_error():
         pytest.raises(ScrapeError, match="timed out"),
     ):
         scrape_service.scrape_youtube("https://www.youtube.com/watch?v=abc")
+
+
+def test_yt_timeout_seconds_matches_frontend_dialog_wait():
+    """The backend extraction timeout must match the frontend dialog's 240s
+    wait so real comment extractions on large threads can complete."""
+    assert scrape_service._YT_TIMEOUT_SECONDS == 240
 
 
 # ----------------------------------------------------------------------
@@ -764,7 +831,8 @@ def test_youtube_fallback_abort_string_in_download_error_maps_to_friendly_error(
 
 def test_youtube_fallback_abort_during_comments_retries_without_getcomments():
     """The fallback retries an abort on the comment-extracting call once with
-    metadata only; the import then falls back to captions instead of failing."""
+    metadata only; captions are then shown WITH a visible note — never
+    silently."""
     created: list[FakeYoutubeDL] = []
 
     def factory(options=None):
@@ -791,12 +859,14 @@ def test_youtube_fallback_abort_during_comments_retries_without_getcomments():
     assert created[1].options.get("getcomments") is not True
     text = content.data.decode("utf-8")
     assert "Demo Video" not in text
+    assert text.startswith("# Comments unavailable (extraction aborted) — captions shown below")
     assert "[00:01] Hello caption text" in text
-    assert "Comments" not in text
 
 
-def test_youtube_fallback_hang_times_out_with_friendly_error():
-    """A hanging fallback extractor surfaces the friendly timeout error."""
+def test_youtube_fallback_hang_with_comments_requested_keeps_header_and_note_row():
+    """A hanging fallback extractor (frozen build) with comments requested:
+    the output keeps the column header plus the timeout note row instead of
+    raising or substituting captions."""
     import time
 
     class SlowYoutubeDL(FakeYoutubeDL):
@@ -811,9 +881,15 @@ def test_youtube_fallback_hang_times_out_with_friendly_error():
             "qualcoder_api.services.scrape_service.yt_dlp.YoutubeDL",
             return_value=SlowYoutubeDL(info=make_youtube_info()),
         ),
-        pytest.raises(ScrapeError, match="timed out"),
     ):
-        scrape_service.scrape_youtube("https://www.youtube.com/watch?v=abc")
+        content = scrape_service.scrape_youtube("https://www.youtube.com/watch?v=abc")
+
+    text = content.data.decode("utf-8")
+    assert text == (
+        "author\tlikes\tdate\tcomment\n"
+        "-\t-\t-\tComments could not be retrieved (extraction timed out) — "
+        "the video may have comments disabled or be very large"
+    )
 
 
 def test_youtube_fallback_runs_when_subprocess_cannot_start():

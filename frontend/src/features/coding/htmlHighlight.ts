@@ -732,6 +732,235 @@ export function buildViewModel(html: string): ViewModel {
   return { text: joined, charSpans, stripped, strippedToText };
 }
 
+/* ------------------------------------------------- selection → source mapping */
+
+/** A view-text range mapped back into the source HTML. */
+export interface ViewSourceRange {
+  /** Source start offset (inclusive). */
+  pos0: number;
+  /** Source end offset (exclusive). */
+  pos1: number;
+  /** The view-text slice the range covers — exactly what the highlight
+   *  matching pipeline matches against, so this is the seltext to store. */
+  seltext: string;
+}
+
+/**
+ * Map a selection over the collapsed view text ([start, end) view indices,
+ * as reported by the iframe's own DOM walk) back into absolute source
+ * offsets of the serialized HTML. Out-of-range indices are clamped; empty
+ * selections return null. Per-view chars carry their source spans (a decoded
+ * entity spans its whole source range, a collapsed whitespace run its whole
+ * run), so the mapped [pos0, pos1) is the exact source of the view slice.
+ */
+export function mapViewRangeToSource(
+  model: ViewModel,
+  start: number,
+  end: number,
+): ViewSourceRange | null {
+  const s = Math.max(0, Math.min(start, model.text.length));
+  const e = Math.max(s, Math.min(end, model.text.length));
+  if (e <= s) return null;
+  const first = model.charSpans[s];
+  const last = model.charSpans[e - 1];
+  if (first.length === 0 || last.length === 0) return null;
+  // Spans are emitted in source order, so the extremes are well-defined.
+  const pos0 = first[0][0];
+  const pos1 = last[last.length - 1][1];
+  if (pos1 <= pos0) return null;
+  return { pos0, pos1, seltext: model.text.slice(s, e) };
+}
+
+/** Remove all whitespace (incl. NBSP/BOM) — the approximate-equality basis. */
+function stripWs(text: string): string {
+  return text.replace(/[\s\u00A0\uFEFF]+/g, "");
+}
+
+/**
+ * Approximate check that a view-text slice (what the user selected on the
+ * rendered page) corresponds to a slice of the backend's extracted fulltext
+ * (what the plain-text pane codes against). The two may differ only in
+ * whitespace: the fulltext collapses runs and inserts "\n" at block tags,
+ * while the view text collapses runs and joins blocks without whitespace.
+ */
+export function viewTextMatchesFulltext(viewText: string, fulltextSlice: string): boolean {
+  const a = stripWs(viewText);
+  const b = stripWs(fulltextSlice);
+  return a.length > 0 && a === b;
+}
+
+/** A selected range located in the extracted fulltext. */
+export interface FulltextRange {
+  /** Fulltext start offset (inclusive). */
+  pos0: number;
+  /** Fulltext end offset (exclusive). */
+  pos1: number;
+  /** The exact fulltext slice — what the plain-text pane renders. */
+  seltext: string;
+}
+
+/**
+ * Locate a selection made on the RENDERED page in the backend's extracted
+ * fulltext. The view-text slice (from the iframe) and the fulltext differ in
+ * whitespace only — the extraction inserts "\n" at block tags (shifting
+ * positions!) and the view collapses/joins differently — so the slice is
+ * found whitespace-insensitively on the fulltext's collapsed layer
+ * (`model` = `buildViewModel(fulltext)`).
+ *
+ * When the stripped slice occurs several times, the occurrence whose source
+ * offset (`srcHintPos0`, the exact source range the selection maps to) is
+ * CLOSEST wins: the extraction maps source offsets monotonically, so the
+ * correct occurrence sits near the source position. For typical multi-word
+ * selections the closest occurrence is the selected one; single-word picks
+ * may anchor on a different but textually identical instance.
+ *
+ * Returns null only when the slice is not in the fulltext at all (or empty)
+ * — the guard that stops a selection from being coded.
+ */
+export function locateInFulltext(
+  fulltext: string,
+  model: ViewModel,
+  viewSlice: string,
+  srcHintPos0: number,
+): FulltextRange | null {
+  const selStrip = stripWs(viewSlice);
+  if (!selStrip || selStrip.length > model.stripped.length) return null;
+  let best: FulltextRange | null = null;
+  let bestDist = Infinity;
+  let scanned = 0;
+  let from = 0;
+  while (scanned < 100) {
+    const si = model.stripped.indexOf(selStrip, from);
+    if (si < 0) break;
+    scanned++;
+    from = si + selStrip.length;
+    const lastStripped = si + selStrip.length - 1;
+    if (lastStripped >= model.strippedToText.length) break;
+    const c0 = model.strippedToText[si];
+    const c1 = model.strippedToText[lastStripped] + 1;
+    const firstSpans = model.charSpans[c0];
+    const lastSpans = model.charSpans[c1 - 1];
+    if (firstSpans.length === 0 || lastSpans.length === 0) continue;
+    const p0 = firstSpans[0][0];
+    const p1 = lastSpans[lastSpans.length - 1][1];
+    const dist = Math.abs(p0 - srcHintPos0);
+    if (dist < bestDist) {
+      bestDist = dist;
+      best = { pos0: p0, pos1: p1, seltext: fulltext.slice(p0, p1) };
+    }
+  }
+  return best;
+}
+
+/**
+ * The codings whose [pos0, pos1) spans overlap [pos0, pos1) — used to find
+ * the segment(s) under a right-click on the rendered page.
+ */
+export function codingsOverlappingRange<T extends { pos0: number; pos1: number }>(
+  codings: T[],
+  pos0: number,
+  pos1: number,
+): T[] {
+  return codings.filter((c) => c.pos0 < pos1 && c.pos1 > pos0);
+}
+
+/* ------------------------------------------------- frame ↔ parent protocol */
+
+/**
+ * The messages the injected iframe script sends to the parent. The script
+ * recomputes its DOM text model on demand (the parent builds the identical
+ * `ViewModel` over the serialized html), so the view indices in these
+ * messages map 1:1 onto the parent's model.
+ */
+export interface QcSelectionMessage {
+  type: "qc:selection";
+  /** Collapsed-view range of the selection (half-open). */
+  startView: number;
+  endView: number;
+  /** The view-text slice the selection covers. */
+  text: string;
+  /** The selection's bounding box in the iframe's viewport, when visible. */
+  rect: { left: number; top: number; bottom: number } | null;
+  /** Last mouse-down/up position in the iframe (toolbar fallback anchor). */
+  mouseX: number;
+  mouseY: number;
+}
+
+export interface QcSelectionClearedMessage {
+  type: "qc:selection-cleared";
+}
+
+export interface QcContextMenuMessage {
+  type: "qc:contextmenu";
+  /** Cursor position in the iframe's viewport. */
+  x: number;
+  y: number;
+  /** Collapsed-view index of the char under the cursor, when over text. */
+  viewIndex: number | null;
+}
+
+export interface QcFrameMousedownMessage {
+  type: "qc:frame-mousedown";
+}
+
+export type QcFrameMessage =
+  | QcSelectionMessage
+  | QcSelectionClearedMessage
+  | QcContextMenuMessage
+  | QcFrameMousedownMessage;
+
+function finiteNumber(v: unknown): number | null {
+  return typeof v === "number" && Number.isFinite(v) ? v : null;
+}
+
+/**
+ * Validate + shape a frame→parent message. Unknown types (in particular the
+ * parent→frame `qc:codings`, which the frame also echoes back into any other
+ * listener) and malformed payloads are rejected — the parent's listener must
+ * ignore everything it does not understand.
+ */
+export function parseFrameMessage(data: unknown): QcFrameMessage | null {
+  if (typeof data !== "object" || data === null) return null;
+  const d = data as Record<string, unknown>;
+  switch (d.type) {
+    case "qc:selection": {
+      const startView = finiteNumber(d.startView);
+      const endView = finiteNumber(d.endView);
+      if (startView === null || endView === null || typeof d.text !== "string") return null;
+      let rect: QcSelectionMessage["rect"] = null;
+      if (typeof d.rect === "object" && d.rect !== null) {
+        const r = d.rect as Record<string, unknown>;
+        rect = {
+          left: finiteNumber(r.left) ?? 0,
+          top: finiteNumber(r.top) ?? 0,
+          bottom: finiteNumber(r.bottom) ?? 0,
+        };
+      }
+      return {
+        type: "qc:selection",
+        startView,
+        endView,
+        text: d.text,
+        rect,
+        mouseX: finiteNumber(d.mouseX) ?? 0,
+        mouseY: finiteNumber(d.mouseY) ?? 0,
+      };
+    }
+    case "qc:selection-cleared":
+      return { type: "qc:selection-cleared" };
+    case "qc:contextmenu": {
+      const x = finiteNumber(d.x);
+      const y = finiteNumber(d.y);
+      if (x === null || y === null) return null;
+      return { type: "qc:contextmenu", x, y, viewIndex: finiteNumber(d.viewIndex) };
+    }
+    case "qc:frame-mousedown":
+      return { type: "qc:frame-mousedown" };
+    default:
+      return null;
+  }
+}
+
 /**
  * The inline style for a highlight mark — byte-identical to the injected
  * script's styleFor() (same accent fallback), so baked and live marks look
