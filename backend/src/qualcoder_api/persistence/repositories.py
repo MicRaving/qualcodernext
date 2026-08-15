@@ -414,7 +414,42 @@ class SourceRepository:
         return source
 
     async def delete_source(self, source_id: int) -> None:
-        """Delete a source and all its codings/annotations/case links."""
+        """Delete a source and all its codings/annotations/case links.
+
+        Audio/video sources link a transcript companion through ``av_text_id``;
+        the companion is deleted with the same cascade so it is never left
+        orphaned. Companions themselves never link onward (their
+        ``av_text_id`` is NULL), so the chain is at most one hop — the
+        ``seen`` set still guards pathological pointer cycles (recursion
+        guard). The whole cascade runs in one transaction.
+        """
+        pending = [source_id]
+        seen: set[int] = set()
+        while pending:
+            current = pending.pop()
+            if current in seen:
+                continue
+            seen.add(current)
+            link_row = (
+                await self.session.execute(
+                    select(tables.source.c.av_text_id).where(tables.source.c.id == current)
+                )
+            ).first()
+            companion_id = (
+                int(link_row[0]) if link_row is not None and link_row[0] is not None else None
+            )
+            await self._delete_source_row(current)
+            if companion_id is not None:
+                pending.append(companion_id)
+        await self.session.commit()
+
+    async def _delete_source_row(self, source_id: int) -> None:
+        """Delete ONE source row plus its codings/annotations/case links.
+
+        Shared by the media source and its transcript companion; sync
+        deletes are captured for both. Committed by the caller so the whole
+        cascade is atomic.
+        """
         from qualcoder_api.services import sync
 
         async def _grab(table, col) -> list[dict]:
@@ -453,7 +488,6 @@ class SourceRepository:
             await sync.capture_delete(
                 self.session, entity="source", pk_name="id", pk_value=source_id, row=row
             )
-        await self.session.commit()
 
 
 class CodeRepository:

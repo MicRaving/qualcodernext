@@ -217,6 +217,80 @@ async def test_source_crud_via_api(project_client):
     assert (await client.get(f"/api/v1/sources/{sid}")).status_code == 404
 
 
+async def test_delete_media_source_deletes_transcript_companion(project_client):
+    """Deleting an audio/video source also deletes its transcript companion
+    (``av_text_id``) — including the companion's own codings — and the audit
+    records both deletes."""
+    client, _ = project_client
+    media = (
+        await client.post(
+            "/api/v1/sources/import", files={"file": ("talk.mp3", b"ID3fake", "audio/mpeg")}
+        )
+    ).json()
+    media_id = media["id"]
+    companion_id = media["av_text_id"]
+    assert companion_id is not None
+
+    # Add a coding to the transcript so the companion has data to cascade.
+    code = (
+        await client.post("/api/v1/codes", json={"name": "theme", "owner": "tester"})
+    ).json()
+    coding = await client.post(
+        "/api/v1/codings/text",
+        json={"cid": code["cid"], "fid": companion_id, "seltext": "hello",
+              "pos0": 0, "pos1": 5, "owner": "tester"},
+    )
+    assert coding.status_code == 201, coding.text
+
+    assert (await client.delete(f"/api/v1/sources/{media_id}")).status_code == 204
+
+    # Both the media source and the companion are gone.
+    assert (await client.get(f"/api/v1/sources/{media_id}")).status_code == 404
+    assert (await client.get(f"/api/v1/sources/{companion_id}")).status_code == 404
+
+    # The companion's codings are gone with it.
+    codings = (await client.get(f"/api/v1/codings/text/{companion_id}")).json()
+    assert codings == []
+
+    # Audit records both deletes.
+    rows = (await client.get("/api/v1/audit", params={"action": "source.delete"})).json()["rows"]
+    ids = [r["entity_id"] for r in rows]
+    assert media_id in ids
+    assert companion_id in ids
+    companion_row = next(r for r in rows if r["entity_id"] == companion_id)
+    assert companion_row["source_id"] == media_id
+    assert companion_row["detail"]["row"]["name"] == "talk.mp3.txt"
+
+
+async def test_delete_media_source_without_transcript(project_client, tmp_path):
+    """A media file whose companion was already removed deletes plainly —
+    no orphan cleanup step and exactly one audit row."""
+    import sqlite3
+
+    client, target = project_client
+    media = (
+        await client.post(
+            "/api/v1/sources/import", files={"file": ("clip.mp4", b"\x00" * 64, "video/mp4")}
+        )
+    ).json()
+    media_id = media["id"]
+    companion_id = media["av_text_id"]
+    assert companion_id is not None
+
+    # Simulate a project without a transcript: drop the companion and clear
+    # the link (as DELETE /sources/{id}/transcript leaves it).
+    with sqlite3.connect(str(target / "data.qda")) as conn:
+        conn.execute("DELETE FROM source WHERE id = ?", (companion_id,))
+        conn.execute("UPDATE source SET av_text_id = NULL WHERE id = ?", (media_id,))
+        conn.commit()
+
+    assert (await client.delete(f"/api/v1/sources/{media_id}")).status_code == 204
+    assert (await client.get(f"/api/v1/sources/{media_id}")).status_code == 404
+
+    rows = (await client.get("/api/v1/audit", params={"action": "source.delete"})).json()["rows"]
+    assert [r["entity_id"] for r in rows] == [media_id]
+
+
 async def test_import_creates_attribute_placeholders(project_client):
     client, _ = project_client
     await client.post(

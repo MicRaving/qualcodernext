@@ -224,6 +224,7 @@ export const de: Record<string, string> = {
   "history.action.source.replace": "Textdatei ersetzt",
   "history.undo": "Rückgängig",
   "history.undoTitle": "Diese Änderung zurücknehmen",
+  "history.undoRowTitle": "Nimmt diese Aktion zurück",
   "history.redo": "Wiederholen",
   "history.redoTitle": "Die letzte rückgängig gemachte Änderung erneut anwenden",
   "history.undoError": "Änderung konnte nicht zurückgenommen werden",

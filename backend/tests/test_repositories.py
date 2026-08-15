@@ -122,6 +122,43 @@ async def test_source_delete_cascades_codings(session):
     assert await coding_repo.list_text_codings_for_file(src.id) == []
 
 
+async def test_source_delete_cascades_transcript_companion(session):
+    """Deleting a media source deletes its transcript companion (av_text_id)
+    and the companion's codings; the reverse (companion without a link) does
+    not recurse back."""
+    sr = SourceRepository(session)
+    media = await sr.add_source(name="clip.mp4", mediapath="video:clip.mp4")
+    companion = await sr.add_source(name="clip.mp4.txt", mediapath=None, fulltext="")
+    await sr.update_source(media.id, av_text_id=companion.id)
+
+    cr = CodeRepository(session)
+    code = await cr.add_code(name="c1", owner="alice")
+    coding_repo = CodingRepository(session)
+    await coding_repo.add_text_coding(
+        cid=code.cid, fid=companion.id, seltext="hello", pos0=0, pos1=5, owner="alice"
+    )
+
+    await sr.delete_source(media.id)
+    assert await sr.get_source(media.id) is None
+    assert await sr.get_source(companion.id) is None
+    assert await coding_repo.list_text_codings_for_file(companion.id) == []
+
+
+async def test_source_delete_companion_without_media(session):
+    """Deleting a companion directly (media's av_text_id cleared first) leaves
+    the media source intact — no recursion back into the media row."""
+    sr = SourceRepository(session)
+    media = await sr.add_source(name="clip.mp4", mediapath="video:clip.mp4")
+    companion = await sr.add_source(name="clip.mp4.txt", mediapath=None, fulltext="")
+    await sr.update_source(media.id, av_text_id=companion.id)
+    await sr.update_source(media.id, av_text_id=None)
+
+    await sr.delete_source(companion.id)
+    assert await sr.get_source(companion.id) is None
+    assert await sr.get_source(media.id) is not None
+    assert (await sr.get_source(media.id)).av_text_id is None
+
+
 async def test_code_and_category_crud(session):
     cr = CodeRepository(session)
     cat = await cr.add_category(name="Theme", owner="alice")

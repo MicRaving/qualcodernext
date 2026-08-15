@@ -8,19 +8,20 @@ placeholders and the source row behave exactly like any other file import.
 Modes:
 - ``reddit``  — anonymous ``.json`` API: submission selftext + flattened
   comment tree (indented by depth, authors prefixed ``u/<author>:``).
-- ``youtube`` — yt-dlp metadata (title/uploader/duration/description) and
-  the comment thread as tab-separated rows (``author\tlikes\tdate\tcomment``,
-  one row per comment; replies are their own rows with a ``→ `` nesting
-  prefix in the author column only). The tab layout is the machine-readable
-  contract: every row after the header has exactly four fields, cells are
-  never padded or aligned, and tabs/newlines inside a cell collapse to
-  spaces; missing likes/dates render as ``-``. Comments are the primary
-  content; caption tracks are fetched ONLY as a fallback when a video has
-  no comments (e.g. disabled) — when comments exist, captions are dropped
-  entirely. A video with neither comments nor captions still prints the
-  ``Comments`` heading, the header row and a ``-\t-\t-\tNo comments`` row.
-  If the installed yt-dlp predates comment extraction (2021.12.17) the
-  output is header + description only, with a note in the text, and
+- ``youtube`` — the comment thread as tab-separated rows
+  (``author\tlikes\tdate\tcomment``, one row per comment; replies are
+  their own rows with a ``→ `` nesting prefix in the author column only).
+  The tab layout is the machine-readable contract: every row after the
+  header has exactly four fields, cells are never padded or aligned, and
+  tabs/newlines inside a cell collapse to spaces; missing likes/dates
+  render as ``-``. The source contains ONLY the comments table — no
+  title/uploader/duration/description header block. Comments are the
+  primary content; caption tracks are fetched ONLY as a last resort when
+  a video has no comments (e.g. disabled) and the transcript text then
+  replaces the table (still no header block). A video with neither
+  comments nor captions keeps the header row and a ``-\t-\t-\tNo
+  comments`` row. If the installed yt-dlp predates comment extraction
+  (2021.12.17) the same header + ``No comments`` row is printed and
   captions are not fetched either.
 - ``article`` — page fetched with urllib, cleaned with trafilatura
   (falling back to the project's own ``html_to_text``).
@@ -381,8 +382,8 @@ def _yt_dlp_comments_supported() -> bool:
     return tuple(parts[:3]) >= _YT_DLP_COMMENTS_MIN_VERSION
 
 
-#: When False, ``getcomments`` is not requested and the scraper falls back
-#: to caption-free header + description (with a note in the output text).
+#: When False, ``--write-comments`` is not requested and the scraper
+#: reports the ``No comments`` row (captions are not fetched either).
 _YT_DLP_COMMENTS_SUPPORTED = _yt_dlp_comments_supported()
 
 
@@ -626,9 +627,10 @@ def _yt_cli_command(url: str, getcomments: bool) -> list[str]:
 
     ``--dump-single-json`` prints the sanitized info dict as JSON on
     stdout; ``--no-progress`` keeps progress bars out of stderr. Comments
-    are included ONLY when ``--getcomments`` is passed (the CLI defaults
-    it to False). The URL is isolated behind ``--`` so it can never be
-    parsed as an option.
+    are included ONLY when ``--write-comments`` is passed (the CLI
+    defaults it to False; ``--getcomments`` is NOT a valid flag — optparse
+    rejects it as "no such option" and the subprocess dies). The URL is
+    isolated behind ``--`` so it can never be parsed as an option.
     """
     command = [
         sys.executable,
@@ -643,7 +645,7 @@ def _yt_cli_command(url: str, getcomments: bool) -> list[str]:
         "30",
     ]
     if getcomments:
-        command.append("--getcomments")
+        command.append("--write-comments")
     command.extend(["--", url])
     return command
 
@@ -823,19 +825,24 @@ def _yt_dlp_extract(url: str, getcomments: bool) -> dict:
 
 
 def scrape_youtube(url: str) -> ScrapedContent:
-    """Extract video metadata and the comment thread (captions only as fallback).
+    """Extract the comment thread (captions only as a last-resort fallback).
 
-    Comments are the primary content: when the video has any, captions are
-    dropped entirely. Caption text is fetched only when comments are
-    unavailable (e.g. disabled). When the installed yt-dlp cannot extract
-    comments (``_YT_DLP_COMMENTS_SUPPORTED`` False), the output is header
-    + description only, with a note, and captions are not fetched either.
+    The source contains ONLY the comments table: the
+    ``author\tlikes\tdate\tcomment`` header row followed by one
+    tab-separated row per comment — never a title/uploader/duration/
+    description block. Caption transcript text replaces the table ONLY
+    when a video has no comments (e.g. disabled) — still with no header
+    block. A video with neither comments nor captions keeps the header
+    row plus a ``-\t-\t-\tNo comments`` row. When the installed yt-dlp
+    cannot extract comments (``_YT_DLP_COMMENTS_SUPPORTED`` False) the
+    same header + ``No comments`` row is printed and captions are not
+    fetched either.
 
     Extraction runs in a SEPARATE yt-dlp subprocess (the in-process path
     is the PyInstaller-frozen fallback only), so yt-dlp's internal abort
     signal can never propagate into the backend process. The first abort
-    is retried once WITHOUT ``getcomments`` so the metadata survives and
-    the import falls back to captions or the plain header; a second abort
+    is retried once WITHOUT ``--write-comments`` so the import survives
+    and falls back to captions or the ``No comments`` row; a second abort
     — or a timeout — surfaces a friendly error.
     """
     getcomments = _YT_DLP_COMMENTS_SUPPORTED
@@ -846,7 +853,7 @@ def scrape_youtube(url: str) -> ScrapedContent:
             raise
         # Comment extraction can abort on very large threads — retry once
         # with metadata only; the normal flow then falls back to captions
-        # or the plain header.
+        # or the ``No comments`` row.
         logger.warning(
             "YouTube comment extraction aborted for %s — retrying without comments", url
         )
@@ -855,51 +862,23 @@ def scrape_youtube(url: str) -> ScrapedContent:
         raise ScrapeError("YouTube returned no metadata")
 
     title = (info.get("title") or "").strip() or "youtube-video"
-    uploader = (info.get("uploader") or info.get("channel") or "").strip()
-    duration = info.get("duration")
-    description = (info.get("description") or "").strip()
 
-    lines = [title]
-    if uploader:
-        lines.append(f"Uploader: {uploader}")
-    if duration:
-        lines.append(f"Duration: {_format_duration(duration)}")
-    lines.append(f"URL: {url}")
-    if description:
-        lines.append("")
-        lines.append(description)
-
+    lines = [_COMMENT_HEADER]
     if _YT_DLP_COMMENTS_SUPPORTED:
         comment_lines = _youtube_comments(info)
         if comment_lines:
-            lines.append("")
-            lines.append("Comments")
-            lines.append(_COMMENT_HEADER)
             lines.extend(comment_lines)
         else:
             caption_text = _youtube_captions(info)
             if caption_text:
                 logger.info("YouTube comments unavailable; falling back to captions for %s", url)
-                lines.append("")
-                lines.append("Captions")
-                lines.append("")
-                lines.append(caption_text)
+                lines = [caption_text]
             else:
                 logger.warning("YouTube comments unavailable for %s", url)
-                # Keep the tabular contract intact even when there is
-                # nothing to report: heading + header + a placeholder row.
-                lines.append("")
-                lines.append("Comments")
-                lines.append(_COMMENT_HEADER)
                 lines.append("-\t-\t-\tNo comments")
     else:
-        note = (
-            "Note: comments are unavailable — the installed yt-dlp "
-            "version cannot extract comments."
-        )
-        logger.warning("YouTube comment extraction unsupported: %s (%s)", note, url)
-        lines.append("")
-        lines.append(note)
+        logger.warning("YouTube comment extraction unsupported for %s", url)
+        lines.append("-\t-\t-\tNo comments")
 
     text = "\n".join(lines).strip()
     if not text:

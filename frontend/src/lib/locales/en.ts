@@ -216,6 +216,7 @@ export const en: Record<string, string> = {
   "history.action.interchange.import": "Interchange import",
   "history.undo": "Undo",
   "history.undoTitle": "Revert this change",
+  "history.undoRowTitle": "Undoes this action",
   "history.redo": "Redo",
   "history.redoTitle": "Re-apply the last undone change",
   "history.undoError": "Could not undo this change",

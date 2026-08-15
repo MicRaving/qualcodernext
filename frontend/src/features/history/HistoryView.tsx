@@ -22,18 +22,17 @@ import {
 
 const PAGE_SIZE = 100;
 
-/** Actions the backend can invert (undo/redo) from their audit detail. */
-const UNDOABLE = new Set([
-  "coding.create",
-  "coding.delete",
-  "annotation.create",
-  "annotation.delete",
-  "source.edit",
-  "code.rename",
-  "code.create",
-  "code.delete",
-  "case.create",
-  "journal.create",
+/**
+ * Actions the backend deliberately refuses to invert (it raises a clear
+ * per-action message for these). Everything else shows the undo button and
+ * lets the backend decide — the backend's message surfaces when an action
+ * turns out to be non-invertible after all.
+ */
+const KNOWN_UNSUPPORTED = new Set([
+  "interchange.import",
+  "scrape.import",
+  "project.compact",
+  "r_script.prepare_report",
 ]);
 
 function actionLabel(action: string, t: (key: string) => string): string {
@@ -270,10 +269,10 @@ export function HistoryView() {
                       {detail && <span className="truncate text-text-secondary/80">{detail}</span>}
                     </div>
                   </button>
-                  {UNDOABLE.has(r.action) && (
+                  {!KNOWN_UNSUPPORTED.has(r.action) && (
                     <IconButton
-                      label={t("history.undoTitle")}
-                      title={t("history.undoTitle")}
+                      label={t("history.undoRowTitle")}
+                      title={t("history.undoRowTitle")}
                       size="row"
                       className="mt-0.5"
                       onClick={() => void handleUndo(r)}

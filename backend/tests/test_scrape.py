@@ -162,14 +162,14 @@ def make_youtube_info(**overrides) -> dict:
 
 
 def youtube_comment_table(text: str) -> list[list[str]]:
-    """Rows under the ``Comments`` heading split on ``\t`` (header excluded).
+    """Rows after the ``author\tlikes\tdate\tcomment`` header line.
 
-    Returns ``[]`` when the text has no heading + header pair.
+    Returns ``[]`` when the text has no header row.
     """
     lines = text.splitlines()
     for i, line in enumerate(lines):
-        if line == "Comments" and i + 1 < len(lines) and lines[i + 1] == "author\tlikes\tdate\tcomment":
-            return [row.split("\t") for row in lines[i + 2 :]]
+        if line == "author\tlikes\tdate\tcomment":
+            return [row.split("\t") for row in lines[i + 1 :]]
     return []
 
 
@@ -429,7 +429,8 @@ def test_article_empty_page_raises():
 # ----------------------------------------------------------------------
 
 def test_youtube_extracts_comments_instead_of_captions():
-    """The subprocess path requests comments and renders them (no captions)."""
+    """The subprocess path requests comments and renders ONLY the comment
+    table — no title/uploader/duration/description block, no captions."""
     info = make_youtube_info(
         comments=[
             {
@@ -460,20 +461,21 @@ def test_youtube_extracts_comments_instead_of_captions():
 
     commands = record_yt_calls(run)
     assert len(commands) == 1
-    assert "--getcomments" in commands[0]
+    assert "--write-comments" in commands[0]
     assert "--dump-single-json" in commands[0]
     assert commands[0][-2:] == ["--", "https://www.youtube.com/watch?v=abc"]
     fetch.assert_not_called()  # captions are dropped when comments exist
     assert content.mode == "youtube"
     assert content.filename == "Demo Video.txt"
     text = content.data.decode("utf-8")
-    assert "Demo Video" in text
-    assert "Uploader: Demo Channel" in text
-    assert "Duration: 1:23" in text
-    assert "A description." in text
-    # A column header row, then one tab-separated row per comment:
-    # author \t likes \t date \t comment
-    assert "author\tlikes\tdate\tcomment" in text
+    # The source is ONLY the comment table: the header row comes first and
+    # the title/uploader/duration/description block is gone.
+    assert text.startswith("author\tlikes\tdate\tcomment")
+    assert "Demo Video" not in text
+    assert "Uploader: Demo Channel" not in text
+    assert "Duration:" not in text
+    assert "A description." not in text
+    # One tab-separated row per comment: author \t likes \t date \t comment
     assert "alice\t12 likes\t2023-11-14 22:13\tLoved it" in text
     assert "→ bob\t3 likes\t2023-11-14 22:15\tMe too" in text
     assert "unknown\t-\t-\tNo author, no meta" in text
@@ -558,10 +560,13 @@ def test_youtube_subprocess_parses_playlist_wrapper():
     ):
         content = scrape_service.scrape_youtube("https://www.youtube.com/watch?v=abc")
 
-    assert "Demo Video" in content.data.decode("utf-8")
+    assert content.mode == "youtube"
+    assert "[00:01] Hello caption text" in content.data.decode("utf-8")
 
 
 def test_youtube_falls_back_to_captions_when_comments_missing():
+    """No comments + captions: the transcript text replaces the table —
+    still no title/uploader/duration/description block."""
     info = make_youtube_info(comments=[])
     with (
         patch("qualcoder_api.services.scrape_service.subprocess.run", return_value=yt_completed(info)),
@@ -573,11 +578,15 @@ def test_youtube_falls_back_to_captions_when_comments_missing():
     assert "[00:01] Hello caption text" in text
     assert "[00:03] Second line" in text
     assert "Comments" not in text
+    assert "Demo Video" not in text
+    assert "Uploader:" not in text
+    assert "A description." not in text
+    assert "author\tlikes\tdate\tcomment" not in text
 
 
 def test_youtube_without_comments_or_captions_reports_no_comments():
-    """No comments + no captions still prints the heading, the header row
-    and a ``-\t-\t-\tNo comments`` placeholder row."""
+    """No comments + no captions still prints the header row and a
+    ``-\t-\t-\tNo comments`` placeholder row — and nothing else."""
     info = make_youtube_info(subtitles={}, automatic_captions={}, comments=[])
     with (
         patch("qualcoder_api.services.scrape_service.subprocess.run", return_value=yt_completed(info)),
@@ -587,15 +596,16 @@ def test_youtube_without_comments_or_captions_reports_no_comments():
 
     fetch.assert_not_called()
     text = content.data.decode("utf-8")
-    assert "Demo Video" in text
-    assert "A description." in text
+    assert text == "author\tlikes\tdate\tcomment\n-\t-\t-\tNo comments"
+    assert "Demo Video" not in text
+    assert "A description." not in text
     assert "Captions" not in text
-    assert "author\tlikes\tdate\tcomment" in text
-    assert "-\t-\t-\tNo comments" in text
     assert youtube_comment_table(text) == [["-", "-", "-", "No comments"]]
 
 
 def test_youtube_reports_when_comment_extraction_unsupported():
+    """Old yt-dlp: no ``--write-comments`` flag, no captions — the source is
+    just the header row + the ``No comments`` row."""
     info = make_youtube_info()
     with (
         patch.object(scrape_service, "_YT_DLP_COMMENTS_SUPPORTED", False),
@@ -604,16 +614,18 @@ def test_youtube_reports_when_comment_extraction_unsupported():
     ):
         content = scrape_service.scrape_youtube("https://www.youtube.com/watch?v=abc")
 
-    assert "--getcomments" not in record_yt_calls(run)[0]
+    assert "--write-comments" not in record_yt_calls(run)[0]
     fetch.assert_not_called()
     text = content.data.decode("utf-8")
-    assert "Demo Video" in text
+    assert text == "author\tlikes\tdate\tcomment\n-\t-\t-\tNo comments"
+    assert "Demo Video" not in text
     assert "u/viewer1" not in text
     assert "Captions" not in text
-    assert "cannot extract comments" in text
 
 
-def test_youtube_caption_fetch_failure_keeps_header():
+def test_youtube_caption_fetch_failure_keeps_no_comments_row():
+    """A failing caption fetch must not break the import — the table keeps
+    the header row + the ``No comments`` row."""
     info = make_youtube_info(comments=[])
     with (
         patch("qualcoder_api.services.scrape_service.subprocess.run", return_value=yt_completed(info)),
@@ -625,13 +637,14 @@ def test_youtube_caption_fetch_failure_keeps_header():
         content = scrape_service.scrape_youtube("https://www.youtube.com/watch?v=abc")
 
     text = content.data.decode("utf-8")
-    assert "Demo Video" in text
+    assert text == "author\tlikes\tdate\tcomment\n-\t-\t-\tNo comments"
+    assert "Demo Video" not in text
     assert "Captions" not in text
 
 
 def test_youtube_subprocess_abort_retries_without_comments():
     """An aborting subprocess (exit 1 + 'Interrupted by user') is retried once
-    without --getcomments; the import then falls back to captions."""
+    without --write-comments; the import then falls back to captions."""
     abort = yt_completed({}, returncode=1, stderr="ERROR: Interrupted by user\n")
     ok_without_comments = yt_completed(make_youtube_info(comments=[]))
     with (
@@ -645,10 +658,10 @@ def test_youtube_subprocess_abort_retries_without_comments():
 
     commands = record_yt_calls(run)
     assert len(commands) == 2
-    assert "--getcomments" in commands[0]
-    assert "--getcomments" not in commands[1]
+    assert "--write-comments" in commands[0]
+    assert "--write-comments" not in commands[1]
     text = content.data.decode("utf-8")
-    assert "Demo Video" in text
+    assert "Demo Video" not in text
     assert "[00:01] Hello caption text" in text
     assert "Comments" not in text
 
@@ -777,7 +790,7 @@ def test_youtube_fallback_abort_during_comments_retries_without_getcomments():
     assert created[0].options.get("getcomments") is True
     assert created[1].options.get("getcomments") is not True
     text = content.data.decode("utf-8")
-    assert "Demo Video" in text
+    assert "Demo Video" not in text
     assert "[00:01] Hello caption text" in text
     assert "Comments" not in text
 
@@ -814,7 +827,8 @@ def test_youtube_fallback_runs_when_subprocess_cannot_start():
     ):
         content = scrape_service.scrape_youtube("https://www.youtube.com/watch?v=abc")
 
-    assert "Demo Video" in content.data.decode("utf-8")
+    assert "Demo Video" not in content.data.decode("utf-8")
+    assert "[00:01] Hello caption text" in content.data.decode("utf-8")
 
 
 def test_youtube_subprocess_not_used_in_frozen_builds():
