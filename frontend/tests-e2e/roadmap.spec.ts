@@ -195,7 +195,7 @@ test("reports registry lists the roadmap reports and navigates to them", async (
 test("QTT ribbon nav, worksheet creation and note entry", async ({ page }) => {
   await ensureProjectOpen(page);
 
-  await page.getByRole("button", { name: "QTT", exact: true }).click();
+  await page.getByRole("button", { name: "Crafter", exact: true }).click();
   await expect(page.getByText("No worksheets yet. Add one to collect insights.")).toBeVisible({
     timeout: 10_000,
   });

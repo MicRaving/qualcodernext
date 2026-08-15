@@ -162,7 +162,9 @@ doc.save(r"${pdfPath}")
   await expect(page.getByText("The quick brown fox jumps over the lazy dog.")).toBeVisible({
     timeout: 20_000,
   });
-  const seg = page.locator(".qc-seg").first();
+  // The marked segment lives in the plain-text pane (the PDF pane's
+  // overlays also carry the .qc-seg class but are empty) — scope by text.
+  const seg = page.locator(".qc-seg", { hasText: "The quick brown fox jumps over the lazy dog." }).first();
   await expect(seg).toBeVisible({ timeout: 15_000 });
   await expect(seg).toContainText("The quick brown fox jumps over the lazy dog.");
 

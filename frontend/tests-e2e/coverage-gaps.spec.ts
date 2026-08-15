@@ -261,7 +261,7 @@ test("send-to-QTT from the text coder selection toolbar", async ({ page }) => {
   await ensureProjectOpen(page);
 
   // Create a worksheet to send into.
-  await page.getByRole("button", { name: "QTT", exact: true }).click();
+  await page.getByRole("button", { name: "Crafter", exact: true }).click();
   await expect(page.getByText("No worksheets yet. Add one to collect insights.")).toBeVisible({
     timeout: 10_000,
   });
@@ -277,7 +277,7 @@ test("send-to-QTT from the text coder selection toolbar", async ({ page }) => {
   await selectFirstLine(page, "Gamma one two three.");
   const toolbar = page.getByRole("toolbar", { name: "Text selection actions" });
   await expect(toolbar).toBeVisible({ timeout: 10_000 });
-  await toolbar.getByRole("button", { name: "Send to QTT" }).click();
+  await toolbar.getByRole("button", { name: "Send to Crafter" }).click();
   const menu = page.getByRole("menu", { name: "Send to worksheet" });
   await expect(menu).toBeVisible({ timeout: 10_000 });
   await menu.getByRole("menuitem", { name: "Evidence" }).click();
@@ -287,7 +287,7 @@ test("send-to-QTT from the text coder selection toolbar", async ({ page }) => {
 
   // The worksheet now holds the segment item: the UI renders the quote (the
   // paragraph line-clamps, so match the prefix) and the source chip…
-  await page.getByRole("button", { name: "QTT", exact: true }).click();
+  await page.getByRole("button", { name: "Crafter", exact: true }).click();
   await page.getByRole("button", { name: "Evidence" }).click();
   await expect(page.getByRole("button", { name: "gaps_b.txt", exact: true })).toBeVisible({
     timeout: 15_000,

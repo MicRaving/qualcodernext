@@ -597,9 +597,6 @@ export const en: Record<string, string> = {
   "htmlCoder.loadingWebpage": "Loading webpage…",
   "htmlCoder.webpageLoadError": "Could not load the saved webpage",
   "htmlCoder.noSnapshot": "No snapshot available — re-import the page as HTML",
-  "htmlCoder.downloadPdf": "Save as PDF",
-  "htmlCoder.downloadPdfHint": "Export the page as a PDF document",
-  "htmlCoder.downloadError": "PDF export failed",
 
   // image coder
   "imageCoder.loading": "Loading image codings…",

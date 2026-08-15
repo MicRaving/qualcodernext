@@ -42,12 +42,11 @@ import {
   useState,
   type MouseEvent as ReactMouseEvent,
 } from "react";
-import { CircleAlert, Download, FileText, Globe, LoaderCircle } from "lucide-react";
+import { CircleAlert, FileText, Globe, LoaderCircle } from "lucide-react";
 import {
   api,
   fetchWithTimeout,
   sourceFileUrl,
-  sourcePdfUrl,
   type Annotation,
   type CodeTreeItem,
   type Coding,
@@ -362,7 +361,6 @@ export function HtmlCoder({ source }: { source: Source }) {
   /** The raw captured HTML, loaded through the file-serving endpoint. */
   const [html, setHtml] = useState<string | null>(null);
   const [htmlLoading, setHtmlLoading] = useState(false);
-  const [htmlError, setHtmlError] = useState<string | null>(null);
   const [htmlReloadTick, setHtmlReloadTick] = useState(0);
 
   const [codings, setCodings] = useState<Coding[]>([]);
@@ -372,8 +370,6 @@ export function HtmlCoder({ source }: { source: Source }) {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [reloadTick, setReloadTick] = useState(0);
   const [errMsg, setErrMsg] = useState<string | null>(null);
-
-  const [downloading, setDownloading] = useState(false);
 
   const containerRef = useRef<HTMLDivElement | null>(null);
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
@@ -482,7 +478,6 @@ export function HtmlCoder({ source }: { source: Source }) {
   useEffect(() => {
     let cancelled = false;
     setHtmlLoading(true);
-    setHtmlError(null);
     void (async () => {
       try {
         const res = await fetchWithTimeout(sourceFileUrl(source.id), undefined, 60_000);
@@ -495,7 +490,7 @@ export function HtmlCoder({ source }: { source: Source }) {
       } catch (e) {
         if (!cancelled) {
           setHtml(null);
-          setHtmlError(e instanceof Error ? e.message : t("htmlCoder.webpageLoadError"));
+          console.warn("[html coder] snapshot load failed:", e);
         }
       } finally {
         if (!cancelled) setHtmlLoading(false);
@@ -540,33 +535,6 @@ export function HtmlCoder({ source }: { source: Source }) {
     if (!next.webpage && !next.plain) next.webpage = true;
     setWebpageVisible(next.webpage);
     setPlainVisible(next.plain);
-  }
-
-  /** "Save as PDF": export the captured page through the backend's HTML ->
-   *  PDF endpoint and download the bytes (mirrors the downloadCsv blob
-   *  pattern — works for any locale / backend origin). */
-  function downloadPdf() {
-    setDownloading(true);
-    setErrMsg(null);
-    void (async () => {
-      try {
-        const res = await fetchWithTimeout(sourcePdfUrl(source.id), undefined, 120_000);
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const blob = await res.blob();
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement("a");
-        a.href = url;
-        a.download = `${source.name.replace(/\.html?$/i, "")}.pdf`;
-        document.body.appendChild(a);
-        a.click();
-        a.remove();
-        URL.revokeObjectURL(url);
-      } catch (e) {
-        setErrMsg(e instanceof Error ? e.message : t("htmlCoder.downloadError"));
-      } finally {
-        setDownloading(false);
-      }
-    })();
   }
 
   /* ------------------------------------------------------------ rendering */
@@ -625,24 +593,6 @@ export function HtmlCoder({ source }: { source: Source }) {
                 icon={<Globe size={12} aria-hidden />}
               >
                 {t("htmlCoder.webpage")}
-              </Button>
-
-              <div className="mx-1 h-4 w-px bg-border" aria-hidden />
-              <Button
-                variant="secondary"
-                className="h-7"
-                icon={
-                  downloading ? (
-                    <LoaderCircle size={12} className="animate-spin" aria-hidden />
-                  ) : (
-                    <Download size={12} aria-hidden />
-                  )
-                }
-                onClick={downloadPdf}
-                disabled={htmlError != null || downloading}
-                title={t("htmlCoder.downloadPdfHint")}
-              >
-                {t("htmlCoder.downloadPdf")}
               </Button>
             </div>
           </>

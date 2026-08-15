@@ -194,7 +194,7 @@ test("history undo removes a coding and redo re-applies it", async ({ page }) =>
     (r) => r.request().method() === "POST" && r.url().includes("/audit/undo"),
     { timeout: 15_000 },
   );
-  await page.getByRole("button", { name: "Revert this change" }).first().click();
+  await page.getByRole("button", { name: "Undoes this action" }).first().click();
   await undoSent;
   await expect(page.getByText(/deleted code_text #\d+/).first()).toBeVisible({
     timeout: 10_000,

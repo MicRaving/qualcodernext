@@ -632,9 +632,6 @@ export const de: Record<string, string> = {
   "htmlCoder.loadingWebpage": "Webseite wird geladen …",
   "htmlCoder.webpageLoadError": "Die gespeicherte Webseite konnte nicht geladen werden",
   "htmlCoder.noSnapshot": "Kein Schnappschuss verfügbar – Seite erneut als HTML importieren",
-  "htmlCoder.downloadPdf": "Als PDF speichern",
-  "htmlCoder.downloadPdfHint": "Die Seite als PDF-Dokument exportieren",
-  "htmlCoder.downloadError": "PDF-Export fehlgeschlagen",
 
   // image coder
   "imageCoder.loading": "Bild-Codierungen werden geladen …",
