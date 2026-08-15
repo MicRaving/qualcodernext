@@ -586,6 +586,10 @@ export const en: Record<string, string> = {
   "pdfCoder.pageLabel": "Page {page}",
   "pdfCoder.codedOn": "Coded on {date}",
   "pdfCoder.removeConfirm": "Remove the coding for {name}?",
+  "pdfCoder.editMemo": "Edit memo",
+  "pdfCoder.memoPlaceholder": "Memo…",
+  "pdfCoder.importantToggle": "Mark as important",
+  "pdfCoder.updateError": "Could not update the coding",
 
   // html coder (webpage snapshots)
   "htmlCoder.loading": "Loading codings…",

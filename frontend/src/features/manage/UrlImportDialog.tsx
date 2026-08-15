@@ -4,15 +4,15 @@
  * or a PDF rendering of a page. The backend fetches and parses the URL;
  * this dialog only submits it.
  */
-import { useState, type FormEvent } from "react";
+import { useRef, useState, type FormEvent } from "react";
 import { Globe, LoaderCircle } from "lucide-react";
 import { ApiError, fetchWithTimeout, initApiBase } from "@/lib/api";
 import { Button, ErrorBanner, Field, Input, Modal, Select } from "@/components/ui/orchestrator";
 import { useI18n } from "@/lib/i18n";
 import { useToast } from "@/lib/toast";
 import { useProjectStore } from "@/stores/project";
-
-export type ScrapeMode = "reddit" | "youtube" | "article" | "html" | "pdf";
+import { detectModeFromUrl, type ScrapeMode } from "@/features/manage/urlImportMode";
+export type { ScrapeMode } from "@/features/manage/urlImportMode";
 
 interface ScrapeResult {
   source_id: number;
@@ -30,6 +30,7 @@ const MODE_OPTIONS: { value: ScrapeMode; labelKey: string }[] = [
 ];
 
 // The last explicit choice is kept across dialog opens (default: Article).
+// Auto-selection from the URL never writes to it — only manual changes do.
 let lastMode: ScrapeMode = "article";
 
 /**
@@ -75,8 +76,18 @@ export function UrlImportDialog({ onClose }: Props) {
   const [mode, setMode] = useState<ScrapeMode>(() => lastMode);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Once the user picks a mode by hand, the URL stops overriding it.
+  const manualModeRef = useRef(false);
+
+  function handleUrlChange(value: string) {
+    setUrl(value);
+    if (manualModeRef.current) return;
+    const detected = detectModeFromUrl(value);
+    if (detected) setMode(detected);
+  }
 
   function handleModeChange(value: ScrapeMode) {
+    manualModeRef.current = true;
     lastMode = value;
     setMode(value);
   }
@@ -117,7 +128,7 @@ export function UrlImportDialog({ onClose }: Props) {
           <Input
             type="url"
             value={url}
-            onChange={(e) => setUrl(e.target.value)}
+            onChange={(e) => handleUrlChange(e.target.value)}
             placeholder={t("files.urlImportUrlPlaceholder")}
             className="w-full"
             autoFocus

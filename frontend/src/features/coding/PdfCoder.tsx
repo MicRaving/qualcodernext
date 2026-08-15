@@ -15,6 +15,7 @@ import {
 import * as pdfjsLib from "pdfjs-dist";
 import type { PDFDocumentProxy, RenderTask } from "pdfjs-dist";
 import {
+  Check,
   ChevronLeft,
   ChevronRight,
   CircleAlert,
@@ -25,11 +26,23 @@ import {
   Pencil,
   Plus,
   Sparkles,
+  Star,
   Rows3,
   Trash2,
   X,
 } from "lucide-react";
-import { api, fetchSourceFile, type Annotation, type CodeTreeItem, type Coding, type ImageCoding, type Source } from "@/lib/api";
+import {
+  ApiError,
+  api,
+  fetchSourceFile,
+  fetchWithTimeout,
+  initApiBase,
+  type Annotation,
+  type CodeTreeItem,
+  type Coding,
+  type ImageCoding,
+  type Source,
+} from "@/lib/api";
 import { patchCodingWeight } from "@/features/coding/codingApi";
 import { CodePicker, type PickedCode } from "@/features/coding/CodePicker";
 import { AutocodeDialog } from "@/features/coding/AutocodeDialog";
@@ -81,6 +94,41 @@ function errorMessage(err: unknown, fallback: string): string {
   return err instanceof Error && err.message ? err.message : fallback;
 }
 
+/** PATCH a segment row's memo/important (text or image) with a local fetch,
+ *  mirroring codingApi's pattern — no lib/api.ts additions needed. */
+async function patchCodingRow(
+  kind: "text" | "image",
+  id: number,
+  body: { memo?: string; important?: number },
+): Promise<unknown> {
+  const path = kind === "text" ? `/codings/text/${id}` : `/codings/image/${id}`;
+  const doFetch = async (): Promise<unknown> => {
+    const base = await initApiBase();
+    const res = await fetchWithTimeout(`${base}${path}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) {
+      let detail: unknown;
+      try {
+        detail = (await res.json()).detail;
+      } catch {
+        /* non-JSON error body */
+      }
+      const suffix = typeof detail === "string" && detail ? `: ${detail}` : "";
+      throw new ApiError(res.status, `API error ${res.status} on ${path}${suffix}`, detail);
+    }
+    return (await res.json()) as unknown;
+  };
+  try {
+    return await doFetch();
+  } catch (err) {
+    if (err instanceof ApiError) throw err;
+    return doFetch();
+  }
+}
+
 interface PageSize {
   width: number;
   height: number;
@@ -100,6 +148,13 @@ interface TextItemData {
 type PendingAction =
   | { kind: "region"; pageNumber: number; rect: NormalizedRect }
   | { kind: "text"; pos0: number; pos1: number; seltext: string };
+
+/** The row shown in the details footer: either a page region or a text
+ *  segment, always resolved from the LOADED client lists (never from a
+ *  freshly created object). */
+type FooterRow =
+  | { kind: "image"; coding: ImageCoding }
+  | { kind: "text"; coding: Coding };
 
 /** String draft of a region's geometry (+ page) while the inline editor
  *  is open. Coordinates are in PDF units; the page is pdf_page-aware. */
@@ -221,7 +276,11 @@ export function PdfCoder({ source }: { source: Source }) {
   const [pendingRect, setPendingRect] = useState<{ pageNumber: number; rect: NormalizedRect } | null>(null);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [selectedImid, setSelectedImid] = useState<number | null>(null);
+  const [selectedTextCtid, setSelectedTextCtid] = useState<number | null>(null);
   const [editDraft, setEditDraft] = useState<RectDraft | null>(null);
+  /** Draft while the footer's memo field is being edited inline (null =
+   *  not editing). */
+  const [memoDraft, setMemoDraft] = useState<string | null>(null);
   /** Inline error line inside the details footer: a background refresh of
    *  the codings failed while a segment is selected — the footer keeps
    *  showing the client-side data instead of vanishing or toasting a bare
@@ -232,6 +291,7 @@ export function PdfCoder({ source }: { source: Source }) {
   const flashTextTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const containerRef = useRef<HTMLDivElement | null>(null);
+  const footerRef = useRef<HTMLDivElement | null>(null);
   const canvasRefs = useRef(new Map<number, HTMLCanvasElement>());
   const dragRef = useRef(drag);
   const pendingRectRef = useRef(pendingRect);
@@ -287,7 +347,7 @@ export function PdfCoder({ source }: { source: Source }) {
     setCodings([]);
     setAnnotations([]);
     setCodes([]);
-    setSelectedImid(null);
+    clearSelection();
     setPendingRect(null);
     setPickerOpen(false);
     setCurrentPage(1);
@@ -489,6 +549,23 @@ export function PdfCoder({ source }: { source: Source }) {
     [selectedImid, codings],
   );
 
+  const selectedTextCoding = useMemo(
+    () =>
+      selectedTextCtid != null
+        ? textCodings.find((c) => c.ctid === selectedTextCtid) ?? null
+        : null,
+    [selectedTextCtid, textCodings],
+  );
+
+  /** The details footer renders ONLY from the loaded client lists — the
+   *  selected row must exist in them, so a row deleted elsewhere just
+   *  closes the footer. */
+  const footerRow = useMemo<FooterRow | null>(() => {
+    if (selectedCoding) return { kind: "image", coding: selectedCoding };
+    if (selectedTextCoding) return { kind: "text", coding: selectedTextCoding };
+    return null;
+  }, [selectedCoding, selectedTextCoding]);
+
   /** Text codings mapped back onto their pages' pdf.js items (best-effort
    *  word matching) so they show as overlays in the rendered view. */
   const textOverlays = useMemo(() => {
@@ -513,6 +590,18 @@ export function PdfCoder({ source }: { source: Source }) {
     }
     return out;
   }, [textCodings, textItems, colorByCid]);
+
+  /** Best-effort page number of a text coding (the page whose items
+   *  matched its text); used for the footer's page label. */
+  const pageByTextCtid = useMemo(() => {
+    const m = new Map<number, number>();
+    for (const [page, list] of textOverlays) {
+      for (const ov of list) {
+        if (!m.has(ov.ctid)) m.set(ov.ctid, page);
+      }
+    }
+    return m;
+  }, [textOverlays]);
 
   /* ------------------------------------------------------------- actions */
 
@@ -593,6 +682,15 @@ export function PdfCoder({ source }: { source: Source }) {
     return Math.min(Math.max(1, p), Math.max(1, numPages));
   }
 
+  /** Close the details footer (pure client state — nothing is fetched or
+   *  written). */
+  function clearSelection() {
+    setSelectedImid(null);
+    setSelectedTextCtid(null);
+    setEditDraft(null);
+    setMemoDraft(null);
+  }
+
   function setCanvasRef(pageNumber: number, el: HTMLCanvasElement | null) {
     if (el) canvasRefs.current.set(pageNumber, el);
     else canvasRefs.current.delete(pageNumber);
@@ -632,8 +730,7 @@ export function PdfCoder({ source }: { source: Source }) {
   function onPageMouseDown(e: ReactMouseEvent<HTMLDivElement>, pageNumber: number) {
     if (e.button !== 0) return;
     e.preventDefault();
-    setSelectedImid(null);
-    setEditDraft(null);
+    clearSelection();
     setPendingRect(null);
     pendingActionRef.current = null;
     const pt = pagePointFromEvent(e);
@@ -670,10 +767,20 @@ export function PdfCoder({ source }: { source: Source }) {
             pos1: pending.pos1,
             owner: "default",
           });
-          await refreshTextCodings();
-          // Auto-show the freshly created coding: flash its overlay and
-          // scroll the page it sits on into view.
+          // Auto-show the freshly created coding: append it idempotently by
+          // ctid (a re-render or racing refresh can never re-append), then
+          // select it — the footer renders from this client list, never
+          // from the fresh object.
+          setTextCodings((cs) =>
+            cs.some((c) => c.ctid === created.ctid) ? cs : [...cs, created],
+          );
+          setSelectedImid(null);
+          setSelectedTextCtid(created.ctid);
+          setEditDraft(null);
+          setFooterError(null);
+          // Flash its overlay and scroll the page it sits on into view.
           flashTextCoding(created);
+          await refreshTextCodings();
         } catch (e) {
           setErrMsg(e instanceof Error ? e.message : t("coder.createError"));
         } finally {
@@ -704,9 +811,14 @@ export function PdfCoder({ source }: { source: Source }) {
           });
           // Render the details footer IMMEDIATELY from client state — the
           // background refresh below reconciles with the backend, so a
-          // failed refresh can never block the footer.
-          setCodings((cs) => [...cs, created]);
+          // failed refresh can never block the footer. The append is
+          // idempotent by imid: a re-render or a racing refresh can never
+          // duplicate the row.
+          setCodings((cs) =>
+            cs.some((c) => c.imid === created.imid) ? cs : [...cs, created],
+          );
           setSelectedImid(created.imid);
+          setSelectedTextCtid(null);
           setEditDraft(null);
           setFooterError(null);
           await refreshCodings();
@@ -727,7 +839,25 @@ export function PdfCoder({ source }: { source: Source }) {
     setDrag(null);
     dragRef.current = null;
     if (d.mode === "text") {
+      const rect = clampRect(d.start, d.current);
       const covered = coveredTextItems(textItems.get(d.pageNumber) ?? [], scale, d.start, d.current);
+      const isClick = rect.x2 - rect.x1 < DRAG_MIN_SIZE && rect.y2 - rect.y1 < DRAG_MIN_SIZE;
+      if (isClick) {
+        // A click is a VIEW gesture, never a create: if it lands on an
+        // existing text coding, select it for the footer (pure client
+        // state); otherwise do nothing. Before this guard, a click on a
+        // text overlay fell straight through into the coding-create flow
+        // and re-inserted an already-coded span (unique-constraint 500).
+        const hit = (textOverlays.get(d.pageNumber) ?? []).find((ov) =>
+          ov.items.some((it) => covered.includes(it)),
+        );
+        if (hit) {
+          clearSelection();
+          setSelectedTextCtid(hit.ctid);
+          setFooterError(null);
+        }
+        return;
+      }
       const text = buildSelectionText(covered);
       if (!text.trim()) return;
       void (async () => {
@@ -764,7 +894,7 @@ export function PdfCoder({ source }: { source: Source }) {
         setPickerOpen(true);
       }
     }
-  }, [activeCodeId, codePendingRect, codePendingText, source.id, t, scale, textItems]);
+  }, [activeCodeId, codePendingRect, codePendingText, source.id, t, scale, textItems, textOverlays]);
 
   // Clicking a code in the left sidebar assigns it to the pending action.
   useEffect(() => {
@@ -799,14 +929,26 @@ export function PdfCoder({ source }: { source: Source }) {
         return;
       }
       setDrag(null);
+      clearSelection();
       setPendingRect(null);
-      setSelectedImid(null);
-      setEditDraft(null);
       pendingActionRef.current = null;
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [pickerOpen]);
+
+  // Click-away closes the details footer. Overlay mousedowns stop
+  // propagation, so a click that SELECTS a segment never reaches this
+  // handler; any other mousedown (page, bars, dialogs) dismisses it.
+  useEffect(() => {
+    const onDown = (e: MouseEvent) => {
+      const target = e.target instanceof Node ? e.target : null;
+      if (!target || footerRef.current?.contains(target)) return;
+      clearSelection();
+    };
+    document.addEventListener("mousedown", onDown);
+    return () => document.removeEventListener("mousedown", onDown);
+  }, []);
 
   function handlePickCode(picked: PickedCode) {
     setPickerOpen(false);
@@ -817,15 +959,22 @@ export function PdfCoder({ source }: { source: Source }) {
     }
   }
 
-  function deleteCoding(row: ImageCoding) {
-    const code = codeById.get(row.cid);
-    if (!window.confirm(t("pdfCoder.removeConfirm", { name: code?.name ?? t("coder.fallbackCodeLower", { id: row.cid }) }))) return;
+  function deleteRow(row: FooterRow) {
+    const code = codeById.get(row.coding.cid);
+    if (!window.confirm(t("pdfCoder.removeConfirm", { name: code?.name ?? t("coder.fallbackCodeLower", { id: row.coding.cid }) }))) return;
     void (async () => {
       try {
-        await api.deleteImageCoding(row.imid);
-        setSelectedImid(null);
-        setEditDraft(null);
-        await refreshCodings();
+        if (row.kind === "image") {
+          await api.deleteImageCoding(row.coding.imid);
+        } else {
+          await api.deleteTextCoding(row.coding.ctid);
+        }
+        clearSelection();
+        if (row.kind === "image") {
+          await refreshCodings();
+        } else {
+          await refreshTextCodings();
+        }
       } catch (e) {
         setErrMsg(e instanceof Error ? e.message : t("coder.removeError"));
       }
@@ -833,17 +982,67 @@ export function PdfCoder({ source }: { source: Source }) {
   }
 
   /** Segment weight (backend rows carry it; 0 = no weight). */
-  const imageWeight = (row: ImageCoding): number =>
-    (row as ImageCoding & { weight?: number }).weight ?? 0;
+  const rowWeight = (row: FooterRow): number =>
+    (row.coding as FooterRow["coding"] & { weight?: number }).weight ?? 0;
 
-  /** Stepper update of a coded region's weight (0-100; 0 = no weight). */
-  function updateCodingWeight(row: ImageCoding, weight: number) {
+  /** Stepper update of a segment's weight (0-100; 0 = no weight). */
+  function updateRowWeight(row: FooterRow, weight: number) {
     void (async () => {
       try {
-        await patchCodingWeight("image", row.imid, weight);
-        await refreshCodings();
+        if (row.kind === "image") {
+          await patchCodingWeight("image", row.coding.imid, weight);
+          await refreshCodings();
+        } else {
+          await patchCodingWeight("text", row.coding.ctid, weight);
+          await refreshTextCodings();
+        }
       } catch (e) {
         setErrMsg(e instanceof Error ? e.message : t("coder.weightError"));
+      }
+    })();
+  }
+
+  /** Open the footer's inline memo editor for the selected row. */
+  function startEditMemo() {
+    if (!footerRow) return;
+    setMemoDraft(footerRow.coding.memo ?? "");
+  }
+
+  /** Save the memo draft for the selected row, then refresh its list. */
+  function saveMemo() {
+    if (memoDraft == null || !footerRow) return;
+    const draft = memoDraft;
+    setMemoDraft(null);
+    void (async () => {
+      try {
+        if (footerRow.kind === "image") {
+          await patchCodingRow("image", footerRow.coding.imid, { memo: draft });
+          await refreshCodings();
+        } else {
+          await patchCodingRow("text", footerRow.coding.ctid, { memo: draft });
+          await refreshTextCodings();
+        }
+      } catch (e) {
+        setErrMsg(e instanceof Error ? e.message : t("pdfCoder.updateError"));
+      }
+    })();
+  }
+
+  /** Toggle the important flag of the selected row. */
+  function toggleImportant() {
+    if (!footerRow) return;
+    const next = footerRow.coding.important ? 0 : 1;
+    void (async () => {
+      try {
+        if (footerRow.kind === "image") {
+          await patchCodingRow("image", footerRow.coding.imid, { important: next });
+          await refreshCodings();
+        } else {
+          await patchCodingRow("text", footerRow.coding.ctid, { important: next });
+          await refreshTextCodings();
+        }
+      } catch (e) {
+        setErrMsg(e instanceof Error ? e.message : t("pdfCoder.updateError"));
       }
     })();
   }
@@ -1084,8 +1283,9 @@ export function PdfCoder({ source }: { source: Source }) {
                       onMouseDown={(e) => e.stopPropagation()}
                       onClick={() => {
                         // Purely client-side: the footer renders from the
-                        // loaded codings — no fetch blocks this click.
-                        setEditDraft(null);
+                        // loaded codings — no fetch and no create happen on
+                        // a view click.
+                        clearSelection();
                         setSelectedImid(o.key);
                         setFooterError(null);
                       }}
@@ -1207,8 +1407,8 @@ export function PdfCoder({ source }: { source: Source }) {
         )}
       </div>
 
-      {selectedCoding && (
-        <div className="shrink-0 border-t border-border bg-surface px-3 py-2">
+      {footerRow && (
+        <div ref={footerRef} className="shrink-0 border-t border-border bg-surface px-3 py-2">
           {footerError && (
             <p className="mb-1.5 flex items-center gap-1.5 text-xs text-warning">
               <CircleAlert size={12} aria-hidden />
@@ -1218,14 +1418,7 @@ export function PdfCoder({ source }: { source: Source }) {
           <div className="flex items-center gap-2">
             <span className="text-xs font-medium text-text-secondary">{t("coder.codingDetails")}</span>
             <div className="flex-1" />
-            <IconButton
-              label={t("common.closeDetails")}
-              size="sm"
-              onClick={() => {
-                setSelectedImid(null);
-                setEditDraft(null);
-              }}
-            >
+            <IconButton label={t("common.closeDetails")} size="sm" onClick={clearSelection}>
               <X size={14} aria-hidden />
             </IconButton>
           </div>
@@ -1234,23 +1427,76 @@ export function PdfCoder({ source }: { source: Source }) {
               <span
                 className="h-3 w-3 shrink-0 rounded-sm border border-border"
                 style={{
-                  backgroundColor: codeById.get(selectedCoding.cid)?.color ?? DEFAULT_CODING_COLOR,
+                  backgroundColor: codeById.get(footerRow.coding.cid)?.color ?? DEFAULT_CODING_COLOR,
                 }}
                 aria-hidden
               />
               <span className="font-medium">
-                {codeById.get(selectedCoding.cid)?.name ?? t("coder.fallbackCode", { id: selectedCoding.cid })}
+                {codeById.get(footerRow.coding.cid)?.name ?? t("coder.fallbackCode", { id: footerRow.coding.cid })}
               </span>
-              {selectedCoding.memo && (
-                <span className="truncate text-xs text-text-secondary">{selectedCoding.memo}</span>
+              {footerRow.kind === "text" && footerRow.coding.seltext && (
+                <span className="max-w-48 truncate text-xs text-text-secondary" title={footerRow.coding.seltext}>
+                  {footerRow.coding.seltext}
+                </span>
               )}
               <span
                 className="text-xs text-text-secondary"
-                title={selectedCoding.date ? t("pdfCoder.codedOn", { date: selectedCoding.date }) : undefined}
-                aria-label={selectedCoding.date ? t("pdfCoder.codedOn", { date: selectedCoding.date }) : undefined}
+                title={footerRow.coding.date ? t("pdfCoder.codedOn", { date: footerRow.coding.date }) : undefined}
+                aria-label={footerRow.coding.date ? t("pdfCoder.codedOn", { date: footerRow.coding.date }) : undefined}
               >
-                {t("pdfCoder.pageLabel", { page: selectedCoding.pdf_page ?? "?" })}
+                {t("pdfCoder.pageLabel", {
+                  page:
+                    footerRow.kind === "image"
+                      ? footerRow.coding.pdf_page ?? "?"
+                      : pageByTextCtid.get(footerRow.coding.ctid) ?? "?",
+                })}
               </span>
+
+              {memoDraft != null ? (
+                <div className="flex items-center gap-1">
+                  <Input
+                    value={memoDraft}
+                    placeholder={t("pdfCoder.memoPlaceholder")}
+                    aria-label={t("pdfCoder.memoPlaceholder")}
+                    className="h-6 w-48"
+                    onChange={(e) => setMemoDraft(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") void saveMemo();
+                    }}
+                  />
+                  <Button
+                    variant="primaryCompact"
+                    className="h-6 px-1.5"
+                    icon={<Check size={12} aria-hidden />}
+                    title={t("common.save")}
+                    aria-label={t("common.save")}
+                    onClick={() => void saveMemo()}
+                  />
+                  <Button
+                    variant="secondary"
+                    className="h-6 px-1.5"
+                    icon={<X size={12} aria-hidden />}
+                    title={t("common.cancel")}
+                    aria-label={t("common.cancel")}
+                    onClick={() => setMemoDraft(null)}
+                  />
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  onClick={startEditMemo}
+                  title={t("pdfCoder.editMemo")}
+                  className="flex min-w-0 max-w-64 items-center gap-1 text-left text-xs text-text-secondary hover:text-text-primary"
+                >
+                  {footerRow.coding.memo ? (
+                    <span className="truncate">{footerRow.coding.memo}</span>
+                  ) : (
+                    <span className="italic">{t("coder.noMemoInline")}</span>
+                  )}
+                  <Pencil size={10} aria-hidden />
+                </button>
+              )}
+
               <span className="flex items-center gap-1">
                 <span className="text-xs text-text-secondary">{t("coder.weight")}</span>
                 <Button
@@ -1259,14 +1505,14 @@ export function PdfCoder({ source }: { source: Source }) {
                   icon={<Minus size={12} aria-hidden />}
                   title={t("coder.weightDec")}
                   aria-label={t("coder.weightDec")}
-                  disabled={imageWeight(selectedCoding) === 0}
-                  onClick={() => updateCodingWeight(selectedCoding, imageWeight(selectedCoding) - 1)}
+                  disabled={rowWeight(footerRow) === 0}
+                  onClick={() => updateRowWeight(footerRow, rowWeight(footerRow) - 1)}
                 />
                 <span
                   className="min-w-5 text-center text-xs text-text-secondary"
                   aria-label={t("coder.weight")}
                 >
-                  {imageWeight(selectedCoding)}
+                  {rowWeight(footerRow)}
                 </span>
                 <Button
                   variant="secondary"
@@ -1274,17 +1520,30 @@ export function PdfCoder({ source }: { source: Source }) {
                   icon={<Plus size={12} aria-hidden />}
                   title={t("coder.weightInc")}
                   aria-label={t("coder.weightInc")}
-                  disabled={imageWeight(selectedCoding) >= 100}
-                  onClick={() => updateCodingWeight(selectedCoding, imageWeight(selectedCoding) + 1)}
+                  disabled={rowWeight(footerRow) >= 100}
+                  onClick={() => updateRowWeight(footerRow, rowWeight(footerRow) + 1)}
                 />
               </span>
+              <IconButton
+                label={t("pdfCoder.importantToggle")}
+                title={t("pdfCoder.importantToggle")}
+                size="sm"
+                className={cn(footerRow.coding.important !== 0 && "text-warning")}
+                onClick={toggleImportant}
+              >
+                <Star
+                  size={14}
+                  className={footerRow.coding.important !== 0 ? "fill-current" : ""}
+                  aria-hidden
+                />
+              </IconButton>
               <div className="flex-1" />
-              {!editDraft && (
+              {footerRow.kind === "image" && !editDraft && (
                 <IconButton
                   label={t("pdfCoder.editRegion")}
                   title={t("pdfCoder.editRegion")}
                   size="sm"
-                  onClick={() => startEditGeometry(selectedCoding)}
+                  onClick={() => startEditGeometry(footerRow.coding)}
                 >
                   <Pencil size={14} aria-hidden />
                 </IconButton>
@@ -1293,7 +1552,7 @@ export function PdfCoder({ source }: { source: Source }) {
                 label={t("coder.removeThis")}
                 title={t("coder.removeThis")}
                 size="sm"
-                onClick={() => deleteCoding(selectedCoding)}
+                onClick={() => deleteRow(footerRow)}
                 className="hover:text-danger"
               >
                 <Trash2 size={14} aria-hidden />
@@ -1342,7 +1601,13 @@ export function PdfCoder({ source }: { source: Source }) {
       <CodePicker
         open={pickerOpen}
         codes={storeCodeTree}
-        onClose={() => setPickerOpen(false)}
+        onClose={() => {
+          setPickerOpen(false);
+          // Closing without a pick drops the pending action, so a later
+          // sidebar code click (active-code change) can never fire a
+          // stale create.
+          pendingActionRef.current = null;
+        }}
         onPick={handlePickCode}
       />
 

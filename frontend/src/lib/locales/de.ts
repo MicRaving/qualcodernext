@@ -620,6 +620,10 @@ export const de: Record<string, string> = {
   "pdfCoder.pageLabel": "Seite {page}",
   "pdfCoder.codedOn": "Codiert am {date}",
   "pdfCoder.removeConfirm": "Codierung für {name} entfernen?",
+  "pdfCoder.editMemo": "Memo bearbeiten",
+  "pdfCoder.memoPlaceholder": "Memo …",
+  "pdfCoder.importantToggle": "Als wichtig markieren",
+  "pdfCoder.updateError": "Codierung konnte nicht aktualisiert werden",
   "pdfCoder.editRegion": "Region bearbeiten",
 
   // html coder (Webseiten-Schnappschüsse)
