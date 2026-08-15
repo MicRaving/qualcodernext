@@ -61,6 +61,7 @@ import {
   type SortKey,
 } from "@/features/manage/files";
 import { ROW_HEIGHT, visibleRange } from "@/features/manage/virtual";
+import { extendRangeSelection } from "@/features/manage/selection";
 import { UrlImportDialog } from "@/features/manage/UrlImportDialog";
 import { canTranscribeSource, hasRealTranscript } from "@/lib/media";
 
@@ -128,8 +129,14 @@ export function FileManager() {
 
   const fileQuery = useProjectStore((s) => s.fileQuery);
   const setFileQuery = useProjectStore((s) => s.setFileQuery);
-  const [sortKey, setSortKey] = useState<SortKey>("name");
-  const [sortDir, setSortDir] = useState<SortDir>("asc");
+  // Sort column/direction and the active saved filter live in the store so
+  // they survive view switches and remounts for the app session (they are
+  // never persisted to disk).
+  const filesUi = useProjectStore((s) => s.filesUi);
+  const setFilesUi = useProjectStore((s) => s.setFilesUi);
+  const sortKey = filesUi.sortKey;
+  const sortDir = filesUi.sortDir;
+  const activeFilter = filesUi.activeFilter;
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [skipped, setSkipped] = useState<string[]>([]);
@@ -139,7 +146,6 @@ export function FileManager() {
   const [linkModal, setLinkModal] = useState(false);
   const [badLinks, setBadLinks] = useState<BadLink[]>([]);
   const [filters, setFilters] = useState<FileFilter[]>([]);
-  const [activeFilter, setActiveFilter] = useState<number | "">("");
   const [batchTranscribe, setBatchTranscribe] = useState<number[] | null>(null);
   const [batchAutocode, setBatchAutocode] = useState<number[] | null>(null);
   const [deleting, setDeleting] = useState<{ done: number; total: number } | null>(null);
@@ -217,7 +223,7 @@ export function FileManager() {
     if (!window.confirm(t("files.filtersDeleteConfirm", { name: f.name }))) return;
     try {
       await api.deleteFileFilter(f.filterid);
-      setActiveFilter("");
+      setFilesUi({ activeFilter: "" });
       setFileQuery("");
       await loadFilters();
     } catch (e) {
@@ -315,6 +321,27 @@ export function FileManager() {
     });
   }
 
+  // Row ids in the VISIBLE order (the current sort/filter order) — the
+  // frame shift-range selection operates on.
+  const visibleIds = useMemo(() => rows.map((r) => r.id), [rows]);
+
+  // Index of the last DIRECTLY-clicked row (a plain click). Shift-clicks
+  // extend the range from this anchor and never move it — the range follows
+  // the anchor, not the last shift-click.
+  const anchorIndexRef = useRef<number | null>(null);
+
+  // Shift-click at `index` in the visible order: select (or toggle) every
+  // row from the anchor to the current one. The mode follows the clicked
+  // row's state — clicking an unselected row extends by SELECTING the range
+  // (add), clicking an already-selected row extends by toggling it (so a
+  // shift-click on a checked row deselects the range).
+  function extendSelectionTo(index: number) {
+    setSelected((prev) => {
+      const add = !prev.has(rows[index].id);
+      return extendRangeSelection(anchorIndexRef.current, index, prev, visibleIds, add);
+    });
+  }
+
   // Measure the scroll viewport so the visible row window tracks its size.
   useEffect(() => {
     const el = scrollRef.current;
@@ -332,10 +359,9 @@ export function FileManager() {
 
   function toggleSort(key: SortKey) {
     if (key === sortKey) {
-      setSortDir((d) => (d === "asc" ? "desc" : "asc"));
+      setFilesUi({ sortDir: sortDir === "asc" ? "desc" : "asc" });
     } else {
-      setSortKey(key);
-      setSortDir("asc");
+      setFilesUi({ sortKey: key, sortDir: "asc" });
     }
   }
 
@@ -606,7 +632,7 @@ export function FileManager() {
               value={activeFilter}
               onChange={(e) => {
                 const id = e.target.value === "" ? "" : Number(e.target.value);
-                setActiveFilter(id);
+                setFilesUi({ activeFilter: id });
                 const f = filters.find((x) => x.filterid === id);
                 if (f) applyFilter(f);
               }}
@@ -846,25 +872,44 @@ export function FileManager() {
                     <td colSpan={5} className="p-0" style={{ height: start * ROW_HEIGHT }} />
                   </tr>
                 )}
-                {rows.slice(start, end).map((row) => (
-                  <tr
-                    key={row.id}
-                    onClick={() => setView({ kind: "coding", sourceId: row.id })}
-                    onContextMenu={(e) => openMenuAt(e, row)}
-                    style={{ height: ROW_HEIGHT }}
-                    className="cursor-pointer hover:bg-surface-higher"
-                  >
-                    <td className="w-8 border-b border-border px-1 text-center">
-                      <input
-                        type="checkbox"
-                        checked={selected.has(row.id)}
-                        onChange={() => toggleSelected(row.id)}
-                        onClick={(e) => e.stopPropagation()}
-                        className={"h-3.5 w-3.5 shrink-0 cursor-pointer rounded-sm border border-border accent-[var(--qc-accent)]"}
-                        aria-label={t("files.selectRow", { name: row.name })}
-                        title={t("files.selectRow", { name: row.name })}
-                      />
-                    </td>
+                {rows.slice(start, end).map((row, i) => {
+                  const rowIndex = start + i;
+                  return (
+                    <tr
+                      key={row.id}
+                      onClick={(e) => {
+                        if (e.shiftKey) {
+                          extendSelectionTo(rowIndex);
+                          return;
+                        }
+                        setView({ kind: "coding", sourceId: row.id });
+                      }}
+                      onContextMenu={(e) => openMenuAt(e, row)}
+                      style={{ height: ROW_HEIGHT }}
+                      className="cursor-pointer hover:bg-surface-higher"
+                    >
+                      <td className="w-8 border-b border-border px-1 text-center">
+                        <input
+                          type="checkbox"
+                          checked={selected.has(row.id)}
+                          onChange={() => {
+                            toggleSelected(row.id);
+                            anchorIndexRef.current = rowIndex;
+                          }}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            if (e.shiftKey) {
+                              // Suppress the native toggle: the range
+                              // selection below is the only effect.
+                              e.preventDefault();
+                              extendSelectionTo(rowIndex);
+                            }
+                          }}
+                          className={"h-3.5 w-3.5 shrink-0 cursor-pointer rounded-sm border border-border accent-[var(--qc-accent)]"}
+                          aria-label={t("files.selectRow", { name: row.name })}
+                          title={t("files.selectRow", { name: row.name })}
+                        />
+                      </td>
                     <td className="max-w-64 border-b border-border px-3 py-2">
                       <span className="flex items-center gap-2">
                         {fileIcon(row.media_type)}
@@ -884,7 +929,8 @@ export function FileManager() {
                       {row.memo || <span className="italic">—</span>}
                     </td>
                   </tr>
-                ))}
+                  );
+                })}
                 {end < rows.length && (
                   <tr aria-hidden>
                     <td colSpan={5} className="p-0" style={{ height: (rows.length - end) * ROW_HEIGHT }} />

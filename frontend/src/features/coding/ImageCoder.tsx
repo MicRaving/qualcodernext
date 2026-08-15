@@ -7,7 +7,7 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { LoaderCircle, Minus, Pencil, Plus, Trash2, ZoomIn, ZoomOut } from "lucide-react";
-import { api, sourceFileUrl, type CodeTreeItem, type ImageCoding, type Source } from "@/lib/api";
+import { api, fetchSourceFile, type CodeTreeItem, type ImageCoding, type Source } from "@/lib/api";
 import { CodePicker, type PickedCode } from "@/features/coding/CodePicker";
 import { patchCodingWeight } from "@/features/coding/codingApi";
 import { codeTint } from "@/features/coding/tint";
@@ -69,6 +69,7 @@ export function ImageCoder({ source }: { source: Source }) {
   const [selected, setSelected] = useState<ImageCoding | null>(null);
   const [editDraft, setEditDraft] = useState<RectDraft | null>(null);
   const [saving, setSaving] = useState(false);
+  const [imgSrc, setImgSrc] = useState<string | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const imageWrapRef = useRef<HTMLDivElement | null>(null);
   const pendingRectRef = useRef<RectState | null>(null);
@@ -109,6 +110,33 @@ export function ImageCoder({ source }: { source: Source }) {
   useEffect(() => {
     void load();
   }, [load]);
+
+  // Fetch the full-resolution image through the shared base-resolving
+  // helper (the raw URL builders are the sync dev fallback until the App
+  // boot gate settles) and hand it to <img> as a blob URL. A transport
+  // failure re-resolves the base and retries once inside the helper.
+  useEffect(() => {
+    let cancelled = false;
+    let objectUrl: string | null = null;
+    setImgSrc(null);
+    setImageLoaded(false);
+    void (async () => {
+      try {
+        const res = await fetchSourceFile(source.id);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const blob = await res.blob();
+        if (cancelled) return;
+        objectUrl = URL.createObjectURL(blob);
+        setImgSrc(objectUrl);
+      } catch (e) {
+        if (!cancelled) setError(e instanceof Error ? e.message : t("imageCoder.loadFileError"));
+      }
+    })();
+    return () => {
+      cancelled = true;
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [source.id, t]);
 
   const codeColor = (coding: ImageCoding) => colorByCid.get(coding.cid) ?? "rgba(0,0,0,0.15)";
 
@@ -359,7 +387,7 @@ export function ImageCoder({ source }: { source: Source }) {
           onMouseDown={handleMouseDown}
         >
           <img
-            src={sourceFileUrl(source.id)}
+            src={imgSrc ?? undefined}
             alt={source.name}
             draggable={false}
             onDragStart={(e) => e.preventDefault()}

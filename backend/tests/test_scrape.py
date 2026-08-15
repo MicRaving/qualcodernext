@@ -838,6 +838,182 @@ def test_youtube_subprocess_not_used_in_frozen_builds():
     assert hasattr(scrape_service, "_yt_cli_command")
 
 
+def test_frozen_build_disables_subprocess_path(monkeypatch):
+    """``sys.frozen`` truthy (a PyInstaller build) must disable the
+    subprocess path: ``sys.executable`` there is the app exe
+    (``qualcoder-backend.exe``), not a Python interpreter."""
+    assert scrape_service._yt_subprocess_enabled() is True  # dev/tests run unfrozen
+    monkeypatch.setattr(scrape_service.sys, "frozen", True, raising=False)
+    assert scrape_service._yt_subprocess_enabled() is False
+    monkeypatch.setattr(scrape_service.sys, "frozen", False)
+    assert scrape_service._yt_subprocess_enabled() is True
+    # The module constant is derived from the very same check.
+    assert scrape_service._YT_SUBPROCESS_ENABLED is True
+
+
+def test_yt_extract_subprocess_refuses_frozen_build(monkeypatch):
+    """The subprocess entry point itself refuses to run when frozen — a
+    misroute degrades to the in-process fallback via the OSError handler
+    instead of launching ``qualcoder-backend.exe -m yt_dlp``."""
+    monkeypatch.setattr(scrape_service.sys, "frozen", True, raising=False)
+    with pytest.raises(OSError, match="frozen"):
+        scrape_service._yt_extract_subprocess("https://www.youtube.com/watch?v=abc", True)
+
+
+def test_frozen_build_skips_subprocess_and_runs_in_process_with_getcomments(monkeypatch):
+    """Frozen builds run yt-dlp IN-PROCESS with ``getcomments``; the
+    subprocess is never attempted and the four-column table renders."""
+    created: list[FakeYoutubeDL] = []
+
+    def factory(options=None):
+        ydl = FakeYoutubeDL(options=options, info=make_youtube_info())
+        created.append(ydl)
+        return ydl
+
+    monkeypatch.setattr(scrape_service.sys, "frozen", True, raising=False)
+    with (
+        patch.object(scrape_service, "_YT_SUBPROCESS_ENABLED", False),
+        patch(
+            "qualcoder_api.services.scrape_service.subprocess.run",
+            side_effect=AssertionError("subprocess must not run in a frozen build"),
+        ),
+        patch("qualcoder_api.services.scrape_service.yt_dlp.YoutubeDL", side_effect=factory),
+    ):
+        content = scrape_service.scrape_youtube("https://www.youtube.com/watch?v=abc")
+
+    assert len(created) == 1
+    assert created[0].options.get("getcomments") is True
+    text = content.data.decode("utf-8")
+    assert text.startswith("author\tlikes\tdate\tcomment")
+    assert "viewer1\t-\t-\tGreat video" in text
+    assert "→ viewer2\t-\t-\tAgreed" in text
+
+
+def test_frozen_build_never_attempts_subprocess_even_if_flag_wrong(monkeypatch):
+    """Defense in depth: even if ``_YT_SUBPROCESS_ENABLED`` were forced on,
+    the in-function frozen re-check must skip straight to the in-process
+    path — the subprocess command could never work in a frozen build."""
+    monkeypatch.setattr(scrape_service.sys, "frozen", True, raising=False)
+    with (
+        patch.object(scrape_service, "_YT_SUBPROCESS_ENABLED", True),
+        patch(
+            "qualcoder_api.services.scrape_service.subprocess.run",
+            side_effect=AssertionError("subprocess attempted in frozen build"),
+        ),
+        patch(
+            "qualcoder_api.services.scrape_service.yt_dlp.YoutubeDL",
+            return_value=FakeYoutubeDL(info=make_youtube_info()),
+        ),
+    ):
+        content = scrape_service.scrape_youtube("https://www.youtube.com/watch?v=abc")
+
+    text = content.data.decode("utf-8")
+    assert "viewer1\t-\t-\tGreat video" in text
+    assert "→ viewer2\t-\t-\tAgreed" in text
+
+
+def test_yt_dlp_extract_marks_comments_requested():
+    """The info dict carries the ``_qc_comments_requested`` marker so the
+    caption fallback can only replace the table when comments are provably
+    absent."""
+    info = make_youtube_info()
+    with patch(
+        "qualcoder_api.services.scrape_service.subprocess.run", return_value=yt_completed(info)
+    ):
+        result = scrape_service._yt_dlp_extract("https://www.youtube.com/watch?v=abc", True)
+    assert result["_qc_comments_requested"] is True
+    with patch(
+        "qualcoder_api.services.scrape_service.subprocess.run", return_value=yt_completed(info)
+    ):
+        result = scrape_service._yt_dlp_extract("https://www.youtube.com/watch?v=abc", False)
+    assert result["_qc_comments_requested"] is False
+
+
+def test_comment_row_exact_string_with_likes_and_date():
+    """The machine-readable row contract, verbatim: author, likes, date and
+    text joined by tabs — nothing padded or aligned."""
+    assert scrape_service._comment_row("alice", "12 likes", "2023-11-14 22:13", "Loved it") == (
+        "alice\t12 likes\t2023-11-14 22:13\tLoved it"
+    )
+
+
+def test_comment_row_exact_string_reply_prefix():
+    """A reply carries the ``→ `` nesting prefix in the author column only."""
+    assert scrape_service._comment_row("→ bob", "3 likes", "2023-11-14 22:15", "Me too") == (
+        "→ bob\t3 likes\t2023-11-14 22:15\tMe too"
+    )
+
+
+def test_youtube_fallback_integration_renders_four_column_table():
+    """The in-process fallback (the packaged-build path) renders the exact
+    tab-separated comment table end to end: header first, one row per
+    comment, replies prefixed, likes/dates formatted, captions never
+    fetched while comments exist."""
+    info = make_youtube_info(
+        comments=[
+            {
+                "id": "1",
+                "author": "alice",
+                "text": "Loved it",
+                "timestamp": 1700000000,
+                "like_count": 12,
+                "replies": [
+                    {
+                        "id": "2",
+                        "author": "bob",
+                        "text": "Me too",
+                        "timestamp": 1700000100,
+                        "like_count": 3,
+                        "replies": [],
+                    }
+                ],
+            },
+            {"id": "3", "text": "No author,\nno\tmeta"},
+        ]
+    )
+    with (
+        patch.object(scrape_service, "_YT_SUBPROCESS_ENABLED", False),
+        patch(
+            "qualcoder_api.services.scrape_service.yt_dlp.YoutubeDL",
+            return_value=FakeYoutubeDL(info=info),
+        ),
+        patch("qualcoder_api.services.scrape_service.fetch_url") as fetch,
+    ):
+        content = scrape_service.scrape_youtube("https://www.youtube.com/watch?v=abc")
+
+    fetch.assert_not_called()  # captions never replace a comment list
+    text = content.data.decode("utf-8")
+    assert text == (
+        "author\tlikes\tdate\tcomment\n"
+        "alice\t12 likes\t2023-11-14 22:13\tLoved it\n"
+        "→ bob\t3 likes\t2023-11-14 22:15\tMe too\n"
+        "unknown\t-\t-\tNo author, no meta"
+    )
+    for row in youtube_comment_table(text):
+        assert len(row) == 4
+
+
+def test_youtube_captions_never_replace_extracted_comments():
+    """Even when caption tracks exist, a non-empty comment list always
+    wins: the four-column table renders and captions are not fetched."""
+    info = make_youtube_info()  # default: comments present + en captions
+    with (
+        patch.object(scrape_service, "_YT_SUBPROCESS_ENABLED", False),
+        patch(
+            "qualcoder_api.services.scrape_service.yt_dlp.YoutubeDL",
+            return_value=FakeYoutubeDL(info=info),
+        ),
+        patch("qualcoder_api.services.scrape_service.fetch_url") as fetch,
+    ):
+        content = scrape_service.scrape_youtube("https://www.youtube.com/watch?v=abc")
+
+    fetch.assert_not_called()
+    text = content.data.decode("utf-8")
+    assert text.startswith("author\tlikes\tdate\tcomment")
+    assert "Hello caption text" not in text
+    assert "viewer1\t-\t-\tGreat video" in text
+
+
 # ----------------------------------------------------------------------
 # Raw HTML capture (offline snapshot)
 # ----------------------------------------------------------------------

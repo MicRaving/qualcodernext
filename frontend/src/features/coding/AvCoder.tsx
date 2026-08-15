@@ -26,7 +26,7 @@ import {
   Video,
   X,
 } from "lucide-react";
-import { api, sourceFileUrl, type AVCoding, type CodeTreeItem, type Coding, type Source } from "@/lib/api";
+import { api, initApiBase, invalidateApiBase, sourceFileUrl, type AVCoding, type CodeTreeItem, type Coding, type Source } from "@/lib/api";
 import { patchCodingWeight } from "@/features/coding/codingApi";
 import { CodePicker, type PickedCode } from "@/features/coding/CodePicker";
 import { AutocodeDialog } from "@/features/coding/AutocodeDialog";
@@ -108,6 +108,14 @@ export function AvCoder({ source }: { source: Source }) {
   const seekAtRef = useRef(0);
   const [playing, setPlaying] = useState(false);
   const [mediaError, setMediaError] = useState<string | null>(null);
+  // The media element needs a streaming URL (a fetched blob would load the
+  // whole file and lose Range support), so the src is built from
+  // sourceFileUrl() — correct because the App boot gate holds the whole UI
+  // until initApiBase() settles. If the element still errors (backend
+  // restarted on a new ephemeral port) the base is invalidated and
+  // re-resolved once before the real error surfaces.
+  const [mediaSrc, setMediaSrc] = useState(() => sourceFileUrl(source.id));
+  const mediaRetriedRef = useRef(false);
 
   const [startMark, setStartMark] = useState<number | null>(null);
   const [pickerOpen, setPickerOpen] = useState(false);
@@ -679,7 +687,18 @@ export function AvCoder({ source }: { source: Source }) {
     const onPlay = () => setPlaying(true);
     const onPause = () => setPlaying(false);
     const onEnded = () => setPlaying(false);
-    const onError = () => setMediaError(t("avCoder.loadFileError"));
+    const onError = () => {
+      // A stale base (backend restarted on a new ephemeral port) surfaces
+      // as a media load error — invalidate + re-resolve the base and
+      // rebuild the src once before giving up with the real error message.
+      if (!mediaRetriedRef.current) {
+        mediaRetriedRef.current = true;
+        invalidateApiBase();
+        void initApiBase().then(() => setMediaSrc(sourceFileUrl(source.id)));
+        return;
+      }
+      setMediaError(t("avCoder.loadFileError"));
+    };
 
     el.addEventListener("loadedmetadata", onLoaded);
     el.addEventListener("timeupdate", onTime);
@@ -695,7 +714,7 @@ export function AvCoder({ source }: { source: Source }) {
       el.removeEventListener("ended", onEnded);
       el.removeEventListener("error", onError);
     };
-  }, [loading, t]);
+  }, [loading, source.id, t]);
 
   function togglePlay() {
     const el = mediaRef.current;
@@ -1701,7 +1720,7 @@ export function AvCoder({ source }: { source: Source }) {
               {isVideo ? (
                 <video
                   ref={mediaRef}
-                  src={sourceFileUrl(source.id)}
+                  src={mediaSrc}
                   preload="metadata"
                   aria-label={source.name}
                   style={videoVisible ? { height: videoH } : undefined}
@@ -1716,7 +1735,7 @@ export function AvCoder({ source }: { source: Source }) {
                   </div>
                 </div>
               )}
-              {!isVideo && <audio ref={mediaRef} src={sourceFileUrl(source.id)} preload="metadata" className="hidden" />}
+              {!isVideo && <audio ref={mediaRef} src={mediaSrc} preload="metadata" className="hidden" />}
             </div>
             {/* Draggable divider: resize the video / transcript split */}
             {isVideo && videoVisible && (

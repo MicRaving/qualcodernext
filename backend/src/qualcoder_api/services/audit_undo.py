@@ -28,6 +28,19 @@ class UnsupportedAction(Exception):
     pass
 
 
+#: Rows recorded before the undo service captured enough detail (legacy
+#: projects) cannot be inverted automatically. Keep this message stable —
+#: tests and the frontend rely on it.
+MISSING_DATA_MESSAGE = (
+    "This action was recorded before its undo data was available — it "
+    "cannot be undone automatically; delete/adjust the affected rows manually."
+)
+
+
+def _missing_data() -> UnsupportedAction:
+    return UnsupportedAction(MISSING_DATA_MESSAGE)
+
+
 def _detail(row: dict) -> dict:
     d = row.get("detail")
     if isinstance(d, str):
@@ -40,7 +53,7 @@ def _detail(row: dict) -> dict:
 
 def _ensure(detail: dict, key: str):
     if detail.get(key) is None:
-        raise UnsupportedAction(f"missing detail field {key}")
+        raise _missing_data()
     return detail[key]
 
 
@@ -109,11 +122,12 @@ async def _restore_row(session: AsyncSession, table: str, pk: str, row_dict: dic
 
 async def _revert_coding(session: AsyncSession, row: dict, *, undo: bool) -> str:
     """Coding create/delete pairs: invert insert↔delete using the full row."""
-    action = row["action"]
-    entity = row["entity"]
+    action = row.get("action") or ""
     detail = _detail(row)
-    table = entity  # code_text / code_image / code_av
-    pk = {"code_text": "ctid", "code_image": "imid", "code_av": "avid"}[table]
+    table = row.get("entity") or ""  # code_text / code_image / code_av
+    pk = {"code_text": "ctid", "code_image": "imid", "code_av": "avid"}.get(table)
+    if pk is None:
+        raise _missing_data()
     row_id = _ensure(detail, pk)
     if (action == "coding.create") == undo:
         await _delete_by_id(session, table, pk, row_id)
@@ -129,28 +143,33 @@ async def _revert_coding(session: AsyncSession, row: dict, *, undo: bool) -> str
 
 async def _revert_coding_update(session: AsyncSession, row: dict, *, undo: bool) -> str:
     """coding.update (text/image/AV): restore the full pre-update row."""
-    entity = row["entity"]  # code_text / code_image / code_av
+    entity = row.get("entity") or ""  # code_text / code_image / code_av
     detail = _detail(row)
-    pk = {"code_text": "ctid", "code_image": "imid", "code_av": "avid"}[entity]
+    pk = {"code_text": "ctid", "code_image": "imid", "code_av": "avid"}.get(entity)
+    if pk is None:
+        raise _missing_data()
     target = detail.get("before") if undo else detail.get("after")
     if not isinstance(target, dict):
-        raise UnsupportedAction("missing before/after row")
+        raise _missing_data()
     row_id = target.get(pk)
     if row_id is None:
-        raise UnsupportedAction(f"missing {pk}")
+        raise _missing_data()
     await _update_row(session, entity, pk, row_id, target)
     await _sync_capture(session, entity, "update", pk, row_id)
     return f"restored {entity} #{row_id}"
 
 
 async def _revert_annotation(session: AsyncSession, row: dict, *, undo: bool) -> str:
-    action = row["action"]
+    action = row.get("action") or ""
     detail = _detail(row)
     anid = _ensure(detail, "anid")
     if (action == "annotation.create") == undo:
         await _delete_by_id(session, "annotation", "anid", anid)
         return f"deleted annotation #{anid}"
-    await _insert_row(session, "annotation", detail)
+    try:
+        await _insert_row(session, "annotation", detail)
+    except Exception as err:
+        raise UnsupportedAction(f"cannot restore annotation #{anid}: {err}") from err
     await _sync_capture(session, "annotation", "insert", "anid", anid)
     return f"restored annotation #{anid}"
 
@@ -163,11 +182,14 @@ async def _revert_edit(session: AsyncSession, row: dict, *, undo: bool) -> str:
     detail = _detail(row)
     fid = detail.get("fid") or row.get("source_id")
     if fid is None:
-        raise UnsupportedAction("missing fid")
+        raise _missing_data()
     target = detail.get("before") if undo else detail.get("after")
     if target is None:
-        raise UnsupportedAction("missing before/after text")
-    result = await commit_edit(session, fid=fid, new_text=target, owner=row.get("user") or "default")
+        raise _missing_data()
+    try:
+        result = await commit_edit(session, fid=fid, new_text=target, owner=row.get("user") or "default")
+    except ValueError as err:
+        raise UnsupportedAction(f"cannot apply the edit undo: {err}") from err
     return f"restored text of source #{fid} ({result.get('updated', {})} shifts)"
 
 
@@ -186,7 +208,7 @@ async def _revert_rename(session: AsyncSession, row: dict, *, undo: bool) -> str
         return f"restored code #{cid}"
     name = detail.get("old_name") if undo else detail.get("new_name")
     if not name:
-        raise UnsupportedAction("missing name")
+        raise _missing_data()
     await session.execute(
         update(tables.code_name).where(tables.code_name.c.cid == cid).values(name=name)
     )
@@ -217,7 +239,7 @@ async def _revert_code_create(session: AsyncSession, row: dict, *, undo: bool) -
 
 async def _revert_entity_create(session: AsyncSession, row: dict, *, undo: bool) -> str:
     """case.create / journal.create."""
-    action = row["action"]
+    action = row.get("action") or ""
     detail = _detail(row)
     if action == "case.create":
         table, pk = "cases", "caseid"
@@ -244,7 +266,7 @@ async def _revert_entity_create(session: AsyncSession, row: dict, *, undo: bool)
 async def _revert_entity_delete(session: AsyncSession, row: dict, *, undo: bool) -> str:
     """case.delete / journal.delete: re-insert the row (undo) or delete it
     again (redo, mirroring the repository's delete path)."""
-    action = row["action"]
+    action = row.get("action") or ""
     detail = _detail(row)
     if action == "case.delete":
         table, pk = "cases", "caseid"
@@ -254,7 +276,7 @@ async def _revert_entity_delete(session: AsyncSession, row: dict, *, undo: bool)
         raise UnsupportedAction(f"no undo for {action}")
     row_id = row.get("entity_id")
     if not row_id:
-        raise UnsupportedAction("missing entity id")
+        raise _missing_data()
     if not undo:
         if table == "cases":
             await session.execute(text("DELETE FROM case_text WHERE caseid = :v"), {"v": row_id})
@@ -266,7 +288,7 @@ async def _revert_entity_delete(session: AsyncSession, row: dict, *, undo: bool)
         return f"deleted {table} #{row_id}"
     row_dict = detail.get("row") or detail
     if not isinstance(row_dict, dict) or not row_dict.get(pk):
-        raise UnsupportedAction(f"missing {table} row")
+        raise _missing_data()
     try:
         await _insert_row(session, table, row_dict)
     except Exception as err:
@@ -278,7 +300,7 @@ async def _revert_entity_delete(session: AsyncSession, row: dict, *, undo: bool)
 async def _revert_update(session: AsyncSession, row: dict, *, undo: bool) -> str:
     """annotation.update / journal.update / case.update: restore the
     pre-edit values recorded in the detail."""
-    action = row["action"]
+    action = row.get("action") or ""
     detail = _detail(row)
     if action == "annotation.update":
         anid = _ensure(detail, "anid")
@@ -325,12 +347,27 @@ async def _revert_source_update(session: AsyncSession, row: dict, *, undo: bool)
     detail = _detail(row)
     source_id = row.get("entity_id") or row.get("source_id")
     if not source_id:
-        raise UnsupportedAction("missing source id")
-    name = detail.get("before_name") if undo else detail.get("after_name")
-    memo = detail.get("before_memo") if undo else detail.get("after_memo")
+        raise _missing_data()
+    # Only restore the fields the audit row actually recorded — a legacy
+    # row without before/after values must not overwrite columns with NULL.
+    sets = []
+    params: dict = {"id": source_id}
+    for detail_key, column in (("before_name", "name"), ("before_memo", "memo")):
+        if undo:
+            value = detail.get(detail_key)
+            if value is not None:
+                sets.append(f"{column} = :{column}")
+                params[column] = value
+    for detail_key, column in (("after_name", "name"), ("after_memo", "memo")):
+        if not undo:
+            value = detail.get(detail_key)
+            if value is not None:
+                sets.append(f"{column} = :{column}")
+                params[column] = value
+    if not sets:
+        raise _missing_data()
     await session.execute(
-        text("UPDATE source SET name = :n, memo = :m WHERE id = :id"),
-        {"n": name, "m": memo, "id": source_id},
+        text(f"UPDATE source SET {', '.join(sets)} WHERE id = :id"), params
     )
     await _sync_capture(session, "source", "update", "id", source_id)
     return f"source #{source_id} {'restored' if undo else 're-applied'}"
@@ -353,7 +390,7 @@ async def _revert_code_delete(session: AsyncSession, row: dict, *, undo: bool) -
 async def _revert_source_import(session: AsyncSession, row: dict, *, undo: bool) -> str:
     source_id = row.get("entity_id")
     if not source_id:
-        raise UnsupportedAction("missing source id")
+        raise _missing_data()
     if undo:
         # Remove the source AND everything attached to it (codings,
         # annotations, case links) so the undo does not orphan rows.
@@ -377,45 +414,43 @@ async def _revert_transcript(session: AsyncSession, row: dict, *, undo: bool) ->
     are invertible: undo of create removes the companion, undo of delete
     re-inserts it and re-links the media source.
     """
-    action = row["action"]
+    action = row.get("action") or ""
     detail = _detail(row)
     trans_id = row.get("entity_id")
     media_id = row.get("source_id")
     if not trans_id or not media_id:
-        raise UnsupportedAction("missing transcript ids")
+        raise _missing_data()
     companion = detail.get("companion") or detail.get("row")
-    if action == "transcript.create":
-        if undo:
-            await session.execute(
-                text("UPDATE source SET av_text_id = NULL WHERE id = :v"), {"v": media_id}
-            )
-            await _delete_by_id(session, "source", "id", trans_id)
-            return f"deleted transcript #{trans_id}"
+
+    async def _restore_companion() -> str:
         if not isinstance(companion, dict):
-            raise UnsupportedAction("missing companion row")
-        await _insert_row(session, "source", companion)
+            raise _missing_data()
+        try:
+            await _insert_row(session, "source", companion)
+        except Exception as err:
+            raise UnsupportedAction(f"cannot restore transcript #{trans_id}: {err}") from err
         await _sync_capture(session, "source", "insert", "id", trans_id)
         await session.execute(
             text("UPDATE source SET av_text_id = :t WHERE id = :v"),
             {"t": trans_id, "v": media_id},
         )
         return f"restored transcript #{trans_id}"
-    if action == "transcript.delete":
-        if undo:
-            if not isinstance(companion, dict):
-                raise UnsupportedAction("missing companion row")
-            await _insert_row(session, "source", companion)
-            await _sync_capture(session, "source", "insert", "id", trans_id)
-            await session.execute(
-                text("UPDATE source SET av_text_id = :t WHERE id = :v"),
-                {"t": trans_id, "v": media_id},
-            )
-            return f"restored transcript #{trans_id}"
+
+    async def _remove_companion() -> str:
         await session.execute(
             text("UPDATE source SET av_text_id = NULL WHERE id = :v"), {"v": media_id}
         )
         await _delete_by_id(session, "source", "id", trans_id)
         return f"deleted transcript #{trans_id}"
+
+    if action == "transcript.create":
+        if undo:
+            return await _remove_companion()
+        return await _restore_companion()
+    if action == "transcript.delete":
+        if undo:
+            return await _restore_companion()
+        return await _remove_companion()
     raise UnsupportedAction(f"no undo for {action}")
 
 
@@ -428,12 +463,12 @@ async def _revert_code_tree_move(session: AsyncSession, row: dict, *, undo: bool
     detail = _detail(row)
     cid = row.get("entity_id") or detail.get("cid")
     if not cid:
-        raise UnsupportedAction("missing cid")
+        raise _missing_data()
     before = detail.get("before")
     after = detail.get("after")
     target = before if undo else after
     if not isinstance(target, dict):
-        raise UnsupportedAction("missing before/after row")
+        raise _missing_data()
     await _update_row(session, "code_name", "cid", cid, {f: target.get(f) for f in _TREE_FIELDS})
     await _sync_capture(session, "code_name", "update", "cid", cid)
     return f"code #{cid} tree position {'restored' if undo else 're-applied'}"
@@ -444,12 +479,12 @@ async def _revert_category_tree_move(session: AsyncSession, row: dict, *, undo: 
     detail = _detail(row)
     catid = row.get("entity_id")
     if not catid:
-        raise UnsupportedAction("missing catid")
+        raise _missing_data()
     before = detail.get("before")
     after = detail.get("after")
     target = before if undo else after
     if not isinstance(target, dict):
-        raise UnsupportedAction("missing before/after row")
+        raise _missing_data()
     await _update_row(session, "code_cat", "catid", catid, {f: target.get(f) for f in _TREE_FIELDS})
     await _sync_capture(session, "code_cat", "update", "catid", catid)
     return f"category #{catid} tree position {'restored' if undo else 're-applied'}"
@@ -462,7 +497,7 @@ def _coding_table_for(row: dict) -> tuple[str, str]:
         return "code_av", "avid"
     if "imid" in row:
         return "code_image", "imid"
-    raise UnsupportedAction("coding row carries no primary key")
+    raise _missing_data()
 
 
 async def _revert_code_merge(session: AsyncSession, row: dict, *, undo: bool) -> str:
@@ -471,11 +506,13 @@ async def _revert_code_merge(session: AsyncSession, row: dict, *, undo: bool) ->
     detail = _detail(row)
     from_cid = _ensure(detail, "from_cid")
     target_cid = row.get("entity_id") or detail.get("target_cid")
+    if not target_cid:
+        raise _missing_data()
     from_code = detail.get("from_code")
     from_rows = detail.get("from_rows") or []
     subcodes = detail.get("subcodes") or []
     if not isinstance(from_code, dict):
-        raise UnsupportedAction("missing from_code row")
+        raise _missing_data()
     if undo:
         try:
             await _insert_row(session, "code_name", from_code)
@@ -537,7 +574,7 @@ async def _revert_category_create(session: AsyncSession, row: dict, *, undo: boo
     detail = _detail(row)
     catid = row.get("entity_id")
     if not catid:
-        raise UnsupportedAction("missing catid")
+        raise _missing_data()
     if undo:
         # Mirror delete_category: orphans are reassigned to the root.
         await session.execute(
@@ -550,7 +587,7 @@ async def _revert_category_create(session: AsyncSession, row: dict, *, undo: boo
         return f"deleted category #{catid}"
     row_dict = detail.get("row") or detail
     if not isinstance(row_dict, dict) or not row_dict.get("catid"):
-        raise UnsupportedAction("missing category row")
+        raise _missing_data()
     await _insert_row(session, "code_cat", row_dict)
     await _sync_capture(session, "code_cat", "insert", "catid", catid)
     return f"restored category #{catid}"
@@ -560,11 +597,11 @@ async def _revert_category_delete(session: AsyncSession, row: dict, *, undo: boo
     detail = _detail(row)
     catid = row.get("entity_id")
     if not catid:
-        raise UnsupportedAction("missing catid")
+        raise _missing_data()
     if undo:
         row_dict = detail.get("row") or detail
         if not isinstance(row_dict, dict) or not row_dict.get("catid"):
-            raise UnsupportedAction("missing category row")
+            raise _missing_data()
         try:
             await _insert_row(session, "code_cat", row_dict)
         except Exception as err:
@@ -586,10 +623,10 @@ async def _revert_category_rename(session: AsyncSession, row: dict, *, undo: boo
     detail = _detail(row)
     catid = row.get("entity_id")
     if not catid:
-        raise UnsupportedAction("missing catid")
+        raise _missing_data()
     name = detail.get("old_name") if undo else detail.get("new_name")
     if not name:
-        raise UnsupportedAction("missing name")
+        raise _missing_data()
     await session.execute(
         text("UPDATE code_cat SET name = :n WHERE catid = :id"), {"n": name, "id": catid}
     )
@@ -603,12 +640,14 @@ async def _revert_category_merge(session: AsyncSession, row: dict, *, undo: bool
     detail = _detail(row)
     from_catid = _ensure(detail, "from_catid")
     target_catid = row.get("entity_id") or detail.get("target_catid")
+    if not target_catid:
+        raise _missing_data()
     from_category = detail.get("from_category")
     codes = detail.get("codes") or []
     subcats = detail.get("subcats") or []
     if undo:
         if not isinstance(from_category, dict):
-            raise UnsupportedAction("missing from_category row")
+            raise _missing_data()
         try:
             await _insert_row(session, "code_cat", from_category)
         except Exception as err:
@@ -658,7 +697,7 @@ async def _revert_category_merge(session: AsyncSession, row: dict, *, undo: bool
 async def _revert_case_link(session: AsyncSession, row: dict, *, undo: bool) -> str:
     """case.link_file / case.link_span / case.unlink_file: invert the
     case_text insert/delete using the captured rows."""
-    action = row["action"]
+    action = row.get("action") or ""
     detail = _detail(row)
     if action == "case.unlink_file":
         rows = detail.get("rows") or []
@@ -676,24 +715,27 @@ async def _revert_case_link(session: AsyncSession, row: dict, *, undo: bool) -> 
     row_dict = detail.get("row") or {}
     row_id = row.get("entity_id") or row_dict.get("id")
     if not row_id:
-        raise UnsupportedAction("missing case_text id")
+        raise _missing_data()
     if undo:
         await _delete_by_id(session, "case_text", "id", row_id)
         return f"deleted case_text #{row_id}"
     if not isinstance(row_dict, dict) or not row_dict.get("id"):
-        raise UnsupportedAction("missing case_text row")
-    await _insert_row(session, "case_text", row_dict)
+        raise _missing_data()
+    try:
+        await _insert_row(session, "case_text", row_dict)
+    except Exception as err:
+        raise UnsupportedAction(f"cannot restore case_text #{row_id}: {err}") from err
     await _sync_capture(session, "case_text", "insert", "id", row_id)
     return f"restored case_text #{row_id}"
 
 
 async def _revert_attribute_type(session: AsyncSession, row: dict, *, undo: bool) -> str:
     """attribute.create / attribute.delete (attribute_type rows)."""
-    action = row["action"]
+    action = row.get("action") or ""
     detail = _detail(row)
     name = detail.get("name")
     if not name:
-        raise UnsupportedAction("missing attribute type name")
+        raise _missing_data()
     row_dict = detail.get("row") or detail
     if action == "attribute.create":
         if undo:
@@ -702,14 +744,14 @@ async def _revert_attribute_type(session: AsyncSession, row: dict, *, undo: bool
             await _delete_by_id(session, "attribute_type", "name", name)
             return f"deleted attribute type {name!r}"
         if not isinstance(row_dict, dict) or not row_dict.get("name"):
-            raise UnsupportedAction("missing attribute type row")
+            raise _missing_data()
         await _insert_row(session, "attribute_type", row_dict)
         await _sync_capture(session, "attribute_type", "insert", "name", name)
         return f"restored attribute type {name!r}"
     if action == "attribute.delete":
         if undo:
             if not isinstance(row_dict, dict) or not row_dict.get("name"):
-                raise UnsupportedAction("missing attribute type row")
+                raise _missing_data()
             try:
                 await _insert_row(session, "attribute_type", row_dict)
             except Exception as err:
@@ -730,31 +772,38 @@ async def _revert_attribute_set(session: AsyncSession, row: dict, *, undo: bool)
     before = detail.get("before")
     after = detail.get("after")
     if not isinstance(after, dict) or not after.get("attrid"):
-        raise UnsupportedAction("missing attribute row")
+        raise _missing_data()
+
+    async def _insert_guarded(values: dict, what: str) -> None:
+        try:
+            await _insert_row(session, "attribute", values)
+        except Exception as err:
+            raise UnsupportedAction(f"cannot restore {what}: {err}") from err
+
     if undo:
         await _delete_by_id(session, "attribute", "attrid", after["attrid"])
         if isinstance(before, dict) and before.get("attrid"):
-            await _insert_row(session, "attribute", before)
+            await _insert_guarded(before, "attribute value")
         return "attribute value restored"
     if isinstance(before, dict) and before.get("attrid"):
         await _delete_by_id(session, "attribute", "attrid", before["attrid"])
-    await _insert_row(session, "attribute", after)
+    await _insert_guarded(after, "attribute value")
     return "attribute value re-applied"
 
 
 async def _revert_link(session: AsyncSession, row: dict, *, undo: bool) -> str:
     """link.create / link.delete: invert the link insert/delete."""
-    action = row["action"]
+    action = row.get("action") or ""
     detail = _detail(row)
     row_dict = detail.get("row") or detail
     link_id = row.get("entity_id") or row_dict.get("id")
     if not link_id:
-        raise UnsupportedAction("missing link id")
+        raise _missing_data()
     if (action == "link.create") == undo:
         await _delete_by_id(session, "link", "id", link_id)
         return f"deleted link #{link_id}"
     if not isinstance(row_dict, dict) or not row_dict.get("id"):
-        raise UnsupportedAction("missing link row")
+        raise _missing_data()
     try:
         await _insert_row(session, "link", row_dict)
     except Exception as err:
@@ -765,15 +814,15 @@ async def _revert_link(session: AsyncSession, row: dict, *, undo: bool) -> str:
 
 async def _revert_comment(session: AsyncSession, row: dict, *, undo: bool) -> str:
     """comment.create / comment.update / comment.delete."""
-    action = row["action"]
+    action = row.get("action") or ""
     detail = _detail(row)
     comment_id = row.get("entity_id")
     if not comment_id:
-        raise UnsupportedAction("missing comment id")
+        raise _missing_data()
     if action == "comment.update":
         body = detail.get("old_body") if undo else detail.get("new_body")
         if body is None:
-            raise UnsupportedAction("missing comment body")
+            raise _missing_data()
         await session.execute(
             text("UPDATE comment SET body = :b WHERE id = :id"),
             {"b": body, "id": comment_id},
@@ -785,7 +834,7 @@ async def _revert_comment(session: AsyncSession, row: dict, *, undo: bool) -> st
         await _delete_by_id(session, "comment", "id", comment_id)
         return f"deleted comment #{comment_id}"
     if not isinstance(row_dict, dict) or not row_dict.get("id"):
-        raise UnsupportedAction("missing comment row")
+        raise _missing_data()
     try:
         await _insert_row(session, "comment", row_dict)
     except Exception as err:
@@ -796,15 +845,15 @@ async def _revert_comment(session: AsyncSession, row: dict, *, undo: bool) -> st
 
 async def _revert_creative(session: AsyncSession, row: dict, *, undo: bool) -> str:
     """creative.create / creative.update / creative.delete."""
-    action = row["action"]
+    action = row.get("action") or ""
     detail = _detail(row)
     item_id = row.get("entity_id")
     if not item_id:
-        raise UnsupportedAction("missing creative item id")
+        raise _missing_data()
     if action == "creative.update":
         before = detail.get("before")
         if not isinstance(before, dict):
-            raise UnsupportedAction("missing before row")
+            raise _missing_data()
         if undo:
             await _update_row(session, "creative_item", "id", item_id, before)
         else:
@@ -817,7 +866,7 @@ async def _revert_creative(session: AsyncSession, row: dict, *, undo: bool) -> s
         await _delete_by_id(session, "creative_item", "id", item_id)
         return f"deleted creative item #{item_id}"
     if not isinstance(row_dict, dict) or not row_dict.get("id"):
-        raise UnsupportedAction("missing creative item row")
+        raise _missing_data()
     try:
         await _insert_row(session, "creative_item", row_dict)
     except Exception as err:
@@ -834,21 +883,24 @@ async def _revert_creative_promote(session: AsyncSession, row: dict, *, undo: bo
     coding = detail.get("coding")
     cid = (code or {}).get("cid") or detail.get("cid")
     if not cid:
-        raise UnsupportedAction("missing promoted code id")
+        raise _missing_data()
     if undo:
         await _delete_by_id(session, "code_name", "cid", cid)
         if isinstance(coding, dict) and coding.get("ctid"):
             await _delete_by_id(session, "code_text", "ctid", coding["ctid"])
         return f"deleted code #{cid} and its coding"
     if not isinstance(code, dict) or not code.get("cid"):
-        raise UnsupportedAction("missing promoted code row")
+        raise _missing_data()
     try:
         await _insert_row(session, "code_name", code)
     except Exception as err:
         raise UnsupportedAction(f"cannot restore code #{cid}: {err}") from err
     await _sync_capture(session, "code_name", "insert", "cid", cid)
     if isinstance(coding, dict) and coding.get("ctid"):
-        await _insert_row(session, "code_text", coding)
+        try:
+            await _insert_row(session, "code_text", coding)
+        except Exception as err:
+            raise UnsupportedAction(f"cannot restore the coding of code #{cid}: {err}") from err
         await _sync_capture(session, "code_text", "insert", "ctid", coding["ctid"])
     return f"restored code #{cid} and its coding"
 
@@ -880,11 +932,11 @@ async def _revert_source_delete(session: AsyncSession, row: dict, *, undo: bool)
     detail = _detail(row)
     source_id = row.get("entity_id")
     if not source_id:
-        raise UnsupportedAction("missing source id")
+        raise _missing_data()
     if undo:
         source_row = detail.get("row")
         if not isinstance(source_row, dict) or not source_row.get("id"):
-            raise UnsupportedAction("missing source row")
+            raise _missing_data()
         try:
             await _insert_row(session, "source", source_row)
         except Exception as err:
@@ -935,7 +987,7 @@ async def _revert_source_link_fix(session: AsyncSession, row: dict, *, undo: boo
     if detail.get("bulk"):
         triples = detail.get("rows") or []
         if not triples:
-            raise UnsupportedAction("bulk link rename recorded no per-source rows")
+            raise _missing_data()
         for sid, old, new in triples:
             target = old if undo else new
             await session.execute(
@@ -945,11 +997,11 @@ async def _revert_source_link_fix(session: AsyncSession, row: dict, *, undo: boo
         return f"{'restored' if undo else 're-applied'} {len(triples)} mediapath(s)"
     source_id = row.get("entity_id")
     if not source_id:
-        raise UnsupportedAction("missing source id")
+        raise _missing_data()
     old = detail.get("old")
     new = detail.get("new")
     if old is None or new is None:
-        raise UnsupportedAction("missing mediapath before/after")
+        raise _missing_data()
     await session.execute(
         text("UPDATE source SET mediapath = :mp WHERE id = :v"),
         {"mp": old if undo else new, "v": source_id},
@@ -965,14 +1017,14 @@ async def _revert_source_replace(session: AsyncSession, row: dict, *, undo: bool
     detail = _detail(row)
     source_id = row.get("entity_id")
     if not source_id:
-        raise UnsupportedAction("missing source id")
+        raise _missing_data()
     if not undo:
         raise UnsupportedAction(
             "cannot redo a source replacement — upload the replacement file again"
         )
     before = detail.get("before_source")
     if not isinstance(before, dict) or not before.get("id"):
-        raise UnsupportedAction("missing before source row")
+        raise _missing_data()
     await _update_row(session, "source", "id", source_id, before)
     await _sync_capture(session, "source", "update", "id", source_id)
     restored = 0
@@ -993,7 +1045,7 @@ async def _revert_transcribe_start(session: AsyncSession, row: dict, *, undo: bo
     detail = _detail(row)
     job_id = detail.get("job_id")
     if not job_id:
-        raise UnsupportedAction("missing job id")
+        raise _missing_data()
     if not undo:
         raise UnsupportedAction("cannot redo a transcription start — start the job again from the media file")
     job = get_job(job_id)
@@ -1021,7 +1073,7 @@ async def _revert_r_run(session: AsyncSession, row: dict, *, undo: bool) -> str:
     detail = _detail(row)
     job_id = detail.get("job_id")
     if not job_id:
-        raise UnsupportedAction("missing job id")
+        raise _missing_data()
     if not undo:
         raise UnsupportedAction("cannot redo an R run — run the script again")
     job = r_service.get_r_job(job_id)
@@ -1064,9 +1116,7 @@ async def _revert_autocode(session: AsyncSession, row: dict, *, undo: bool) -> s
     created_rows = detail.get("created_rows") or []
     if undo:
         if not text_ids:
-            raise UnsupportedAction(
-                "this autocode run recorded no created codings — delete the affected codings manually"
-            )
+            raise _missing_data()
         placeholders, params = _in_params(text_ids)
         await session.execute(
             text(f"DELETE FROM code_text WHERE ctid IN ({placeholders})"), params
@@ -1090,7 +1140,7 @@ async def _revert_coding_undo(session: AsyncSession, row: dict, *, undo: bool) -
     detail = _detail(row)
     items = detail.get("items") or []
     if not items:
-        raise UnsupportedAction("missing restored coding rows")
+        raise _missing_data()
     if undo:
         deleted = 0
         for item in items:
@@ -1124,10 +1174,10 @@ async def _revert_code_memo(session: AsyncSession, row: dict, *, undo: bool) -> 
     detail = _detail(row)
     cid = row.get("entity_id") or detail.get("cid")
     if not cid:
-        raise UnsupportedAction("missing cid")
+        raise _missing_data()
     memo = detail.get("old_memo") if undo else detail.get("memo")
     if memo is None:
-        raise UnsupportedAction("missing memo value")
+        raise _missing_data()
     await session.execute(
         text("UPDATE code_name SET memo = :m WHERE cid = :v"), {"m": memo, "v": cid}
     )
@@ -1141,7 +1191,7 @@ async def _revert_bookmark(session: AsyncSession, row: dict, *, undo: bool) -> s
     detail = _detail(row)
     target = detail.get("before") if undo else detail.get("after")
     if not isinstance(target, dict):
-        raise UnsupportedAction("missing before/after bookmark values")
+        raise _missing_data()
     columns = (
         "bookmarkfile",
         "bookmarkpos",
@@ -1210,35 +1260,36 @@ async def _revert_pseudonym(session: AsyncSession, row: dict, *, undo: bool, pro
     """pseudonym.add / pseudonym.delete: invert the pseudonyms.json pair."""
     from qualcoder_api.services import pseudonyms
 
-    action = row["action"]
+    action = row.get("action") or ""
     detail = _detail(row)
     original = detail.get("original")
     if not original:
-        raise UnsupportedAction("missing pseudonym original")
+        raise _missing_data()
     if not project_path:
         raise UnsupportedAction("no project is open — cannot restore pseudonyms.json")
     pseudonym = detail.get("pseudonym")
+
+    async def _write(call, *args, what: str) -> None:
+        try:
+            call(*args)
+        except (ValueError, OSError) as err:
+            raise UnsupportedAction(f"cannot {what}: {err}") from err
+
     if action == "pseudonym.add":
         if undo:
-            pseudonyms.delete_pseudonym(project_path, original)
+            await _write(pseudonyms.delete_pseudonym, project_path, original, what="delete the pseudonym")
             return f"deleted pseudonym {original!r}"
         if not pseudonym:
-            raise UnsupportedAction("missing pseudonym value")
-        try:
-            pseudonyms.add_pseudonym(project_path, original, pseudonym)
-        except ValueError as err:
-            raise UnsupportedAction(f"cannot restore pseudonym: {err}") from err
+            raise _missing_data()
+        await _write(pseudonyms.add_pseudonym, project_path, original, pseudonym, what="restore the pseudonym")
         return f"restored pseudonym {original!r}"
     if action == "pseudonym.delete":
         if undo:
             if not pseudonym:
-                raise UnsupportedAction("missing pseudonym value")
-            try:
-                pseudonyms.add_pseudonym(project_path, original, pseudonym)
-            except ValueError as err:
-                raise UnsupportedAction(f"cannot restore pseudonym: {err}") from err
+                raise _missing_data()
+            await _write(pseudonyms.add_pseudonym, project_path, original, pseudonym, what="restore the pseudonym")
             return f"restored pseudonym {original!r}"
-        pseudonyms.delete_pseudonym(project_path, original)
+        await _write(pseudonyms.delete_pseudonym, project_path, original, what="delete the pseudonym")
         return f"deleted pseudonym {original!r}"
     raise UnsupportedAction(f"no undo for {action}")
 
@@ -1249,11 +1300,16 @@ async def _revert_reference_delete(session: AsyncSession, row: dict, *, undo: bo
     detail = _detail(row)
     risid = row.get("entity_id")
     if not risid:
-        raise UnsupportedAction("missing risid")
+        raise _missing_data()
     if undo:
         ris_rows = detail.get("rows") or []
+        if not ris_rows:
+            raise _missing_data()
         for r in ris_rows:
-            await _insert_row(session, "ris", r)
+            try:
+                await _insert_row(session, "ris", r)
+            except Exception as err:
+                raise UnsupportedAction(f"cannot restore ris row: {err}") from err
         source_ids = detail.get("source_ids") or []
         if source_ids:
             placeholders, params = _in_params(source_ids)
@@ -1275,7 +1331,7 @@ async def _revert_reference_attach(session: AsyncSession, row: dict, *, undo: bo
     detail = _detail(row)
     source_id = row.get("entity_id")
     if not source_id:
-        raise UnsupportedAction("missing source id")
+        raise _missing_data()
     if undo:
         await session.execute(
             text("UPDATE source SET risid = NULL WHERE id = :v"), {"v": source_id}
@@ -1292,7 +1348,7 @@ async def _revert_reference_attach(session: AsyncSession, row: dict, *, undo: bo
         return f"deleted attached source #{source_id}"
     row_dict = detail.get("row")
     if not isinstance(row_dict, dict) or not row_dict.get("id"):
-        raise UnsupportedAction("missing source row")
+        raise _missing_data()
     try:
         await _insert_row(session, "source", row_dict)
     except Exception as err:
@@ -1314,7 +1370,7 @@ async def _revert_reference_detach(session: AsyncSession, row: dict, *, undo: bo
     source_id = row.get("entity_id")
     risid = detail.get("risid")
     if not source_id or not risid:
-        raise UnsupportedAction("missing source/ris id")
+        raise _missing_data()
     if undo:
         await session.execute(
             text("UPDATE source SET risid = :r WHERE id = :v"),
@@ -1342,7 +1398,7 @@ async def _revert_row_pair(
     carries the full ``row``, the audit row's ``entity_id`` (or the row's own
     pk) identifies it. Undo of a create deletes the row; undo of a delete
     re-inserts it."""
-    action = row["action"]
+    action = row.get("action") or ""
     detail = _detail(row)
     row_dict = detail.get("row")
     if row_dict is None and detail.get(pk) is not None:
@@ -1353,12 +1409,12 @@ async def _revert_row_pair(
     if row_id is None and isinstance(row_dict, dict):
         row_id = row_dict.get(pk)
     if row_id is None:
-        raise UnsupportedAction(f"missing {pk}")
+        raise _missing_data()
     if (action in create_actions) == undo:
         await _delete_by_id(session, table, pk, row_id)
         return f"deleted {table} #{row_id}"
     if not isinstance(row_dict, dict) or not row_dict.get(pk):
-        raise UnsupportedAction(f"missing {table} row")
+        raise _missing_data()
     try:
         await _insert_row(session, table, row_dict)
     except Exception as err:
@@ -1375,10 +1431,10 @@ async def _revert_row_update(
     detail = _detail(row)
     target = detail.get("before") if undo else detail.get("after")
     if not isinstance(target, dict):
-        raise UnsupportedAction("missing before/after row")
+        raise _missing_data()
     pk_value = target.get(pk) or row.get("entity_id")
     if pk_value is None:
-        raise UnsupportedAction(f"missing {pk}")
+        raise _missing_data()
     await _update_row(session, table, pk, pk_value, target)
     await _sync_capture(session, table, "update", pk, pk_value)
     return f"{table} #{pk_value} {'restored' if undo else 're-applied'}"
@@ -1391,12 +1447,12 @@ async def _revert_coder(session: AsyncSession, row: dict, *, undo: bool) -> str:
     from qualcoder_api.persistence import tables
     from qualcoder_api.services.user_settings import get_coders, set_coders
 
-    action = row["action"]
+    action = row.get("action") or ""
     detail = _detail(row)
     if action == "coder.create":
         name = detail.get("name")
         if not name:
-            raise UnsupportedAction("missing coder name")
+            raise _missing_data()
         names = get_coders()
         if undo:
             if name in names:
@@ -1408,7 +1464,7 @@ async def _revert_coder(session: AsyncSession, row: dict, *, undo: bool) -> str:
     if action == "coder.delete":
         name = detail.get("name")
         if not name:
-            raise UnsupportedAction("missing coder name")
+            raise _missing_data()
         names = get_coders()
         if undo:
             if name not in names:
@@ -1424,7 +1480,7 @@ async def _revert_coder(session: AsyncSession, row: dict, *, undo: bool) -> str:
         old = detail.get("from")
         new = detail.get("to")
         if not old or not new:
-            raise UnsupportedAction("missing coder names")
+            raise _missing_data()
         source, target = (new, old) if undo else (old, new)
         names = get_coders()
         renamed = [target if n == source else n for n in names]
@@ -1442,7 +1498,7 @@ async def _revert_coder(session: AsyncSession, row: dict, *, undo: bool) -> str:
     if action == "coder.visibility":
         name = detail.get("name")
         if not name:
-            raise UnsupportedAction("missing coder name")
+            raise _missing_data()
         applied = 1 if detail.get("visible") else 0
         if undo:
             before = detail.get("before")
@@ -1477,22 +1533,22 @@ async def _revert_sync_toggle(session: AsyncSession, row: dict, *, undo: bool) -
     detail = _detail(row)
     enabled = detail.get("before") if undo else detail.get("enabled")
     if enabled is None:
-        raise UnsupportedAction("missing sync enabled state")
+        raise _missing_data()
     save_sync_settings(bool(enabled))
     return f"sync {'restored' if undo else 're-applied'} (enabled={bool(enabled)})"
 
 
 async def _revert_dictionary(session: AsyncSession, row: dict, *, undo: bool) -> str:
     """dictionary.create / dictionary.update / entry_add / entry_delete."""
-    action = row["action"]
+    action = row.get("action") or ""
     detail = _detail(row)
     if action == "dictionary.update":
         dict_id = row.get("entity_id") or detail.get("id")
         if not dict_id:
-            raise UnsupportedAction("missing dictionary id")
+            raise _missing_data()
         name = detail.get("old_name") if undo else detail.get("new_name")
         if not name:
-            raise UnsupportedAction("missing dictionary name")
+            raise _missing_data()
         await session.execute(
             text("UPDATE dictionary SET name = :n WHERE id = :v"), {"n": name, "v": dict_id}
         )
@@ -1516,18 +1572,21 @@ async def _revert_dictionary_delete(session: AsyncSession, row: dict, *, undo: b
     detail = _detail(row)
     dict_id = row.get("entity_id")
     if not dict_id:
-        raise UnsupportedAction("missing dictionary id")
+        raise _missing_data()
     if undo:
         row_dict = detail.get("row")
         if not isinstance(row_dict, dict) or not row_dict.get("id"):
-            raise UnsupportedAction("missing dictionary row")
+            raise _missing_data()
         try:
             await _insert_row(session, "dictionary", row_dict)
         except Exception as err:
             raise UnsupportedAction(f"cannot restore dictionary #{dict_id}: {err}") from err
         await _sync_capture(session, "dictionary", "insert", "id", dict_id)
         for entry in detail.get("entries") or []:
-            await _insert_row(session, "dictionary_entry", entry)
+            try:
+                await _insert_row(session, "dictionary_entry", entry)
+            except Exception as err:
+                raise UnsupportedAction(f"cannot restore dictionary entry: {err}") from err
         return f"restored dictionary #{dict_id} with its entries"
     await session.execute(
         text("DELETE FROM dictionary_entry WHERE dict_id = :v"), {"v": dict_id}
@@ -1542,7 +1601,7 @@ async def _revert_dictionary_import(session: AsyncSession, row: dict, *, undo: b
     if undo:
         dict_id = row.get("entity_id")
         if not dict_id:
-            raise UnsupportedAction("missing dictionary id")
+            raise _missing_data()
         await session.execute(
             text("DELETE FROM dictionary_entry WHERE dict_id = :v"), {"v": dict_id}
         )
@@ -1553,15 +1612,15 @@ async def _revert_dictionary_import(session: AsyncSession, row: dict, *, undo: b
 
 async def _revert_code_set(session: AsyncSession, row: dict, *, undo: bool) -> str:
     """code_set.create / rename / delete (with members)."""
-    action = row["action"]
+    action = row.get("action") or ""
     detail = _detail(row)
     set_id = row.get("entity_id")
     if not set_id:
-        raise UnsupportedAction("missing code set id")
+        raise _missing_data()
     if action == "code_set.rename":
         name = detail.get("old_name") if undo else detail.get("new_name")
         if not name:
-            raise UnsupportedAction("missing code set name")
+            raise _missing_data()
         await session.execute(
             text("UPDATE code_set SET name = :n WHERE id = :v"), {"n": name, "v": set_id}
         )
@@ -1576,7 +1635,7 @@ async def _revert_code_set(session: AsyncSession, row: dict, *, undo: bool) -> s
     if action == "code_set.create":
         row_dict = detail.get("row")
         if not isinstance(row_dict, dict) or not row_dict.get("id"):
-            raise UnsupportedAction("missing code set row")
+            raise _missing_data()
         try:
             await _insert_row(session, "code_set", row_dict)
         except Exception as err:
@@ -1589,7 +1648,7 @@ async def _revert_code_set(session: AsyncSession, row: dict, *, undo: bool) -> s
         if row_dict is None and detail.get("id") is not None:
             row_dict = detail  # legacy/delete rows record the row as the detail
         if not isinstance(row_dict, dict) or not row_dict.get("id"):
-            raise UnsupportedAction("missing code set row")
+            raise _missing_data()
         try:
             await _insert_row(session, "code_set", row_dict)
         except Exception as err:
@@ -1613,8 +1672,8 @@ async def _revert_code_set_members(session: AsyncSession, row: dict, *, undo: bo
     detail = _detail(row)
     set_id = row.get("entity_id")
     if not set_id:
-        raise UnsupportedAction("missing code set id")
-    is_add = row["action"] == "code_set.members_add"
+        raise _missing_data()
+    is_add = row.get("action") == "code_set.members_add"
     cids = detail.get("added_cids") if is_add else detail.get("removed_cids")
     cids = cids or []
     if undo == is_add:
@@ -1636,7 +1695,7 @@ async def _revert_code_set_members(session: AsyncSession, row: dict, *, undo: bo
 
 async def _revert_r_script(session: AsyncSession, row: dict, *, undo: bool) -> str:
     """r_script.create / update / delete."""
-    action = row["action"]
+    action = row.get("action") or ""
     if action == "r_script.update":
         return await _revert_row_update(session, row, undo=undo, table="r_script", pk="id")
     return await _revert_row_pair(
@@ -1650,14 +1709,14 @@ async def _revert_qtt_sheet_create(session: AsyncSession, row: dict, *, undo: bo
     detail = _detail(row)
     sheet_id = row.get("entity_id")
     if not sheet_id:
-        raise UnsupportedAction("missing worksheet id")
+        raise _missing_data()
     if undo:
         await session.execute(text("DELETE FROM qtt_item WHERE sheet_id = :v"), {"v": sheet_id})
         await _delete_by_id(session, "qtt_sheet", "id", sheet_id)
         return f"deleted worksheet #{sheet_id}"
     row_dict = detail.get("row")
     if not isinstance(row_dict, dict) or not row_dict.get("id"):
-        raise UnsupportedAction("missing worksheet row")
+        raise _missing_data()
     try:
         await _insert_row(session, "qtt_sheet", row_dict)
     except Exception as err:
@@ -1672,18 +1731,21 @@ async def _revert_qtt_sheet_delete(session: AsyncSession, row: dict, *, undo: bo
     detail = _detail(row)
     sheet_id = row.get("entity_id")
     if not sheet_id:
-        raise UnsupportedAction("missing worksheet id")
+        raise _missing_data()
     if undo:
         row_dict = detail.get("row")
         if not isinstance(row_dict, dict) or not row_dict.get("id"):
-            raise UnsupportedAction("missing worksheet row")
+            raise _missing_data()
         try:
             await _insert_row(session, "qtt_sheet", row_dict)
         except Exception as err:
             raise UnsupportedAction(f"cannot restore worksheet #{sheet_id}: {err}") from err
         await _sync_capture(session, "qtt_sheet", "insert", "id", sheet_id)
         for item in detail.get("items") or []:
-            await _insert_row(session, "qtt_item", item)
+            try:
+                await _insert_row(session, "qtt_item", item)
+            except Exception as err:
+                raise UnsupportedAction(f"cannot restore worksheet item: {err}") from err
         return f"restored worksheet #{sheet_id} with its items"
     await session.execute(text("DELETE FROM qtt_item WHERE sheet_id = :v"), {"v": sheet_id})
     await _delete_by_id(session, "qtt_sheet", "id", sheet_id)
@@ -1701,7 +1763,7 @@ async def _revert_graph_create(session: AsyncSession, row: dict, *, undo: bool) 
     detail = _detail(row)
     grid = row.get("entity_id")
     if not grid:
-        raise UnsupportedAction("missing grid")
+        raise _missing_data()
     if undo:
         await _delete_graph_rows(session, grid)
         await _delete_by_id(session, "graph", "grid", grid)
@@ -1710,7 +1772,7 @@ async def _revert_graph_create(session: AsyncSession, row: dict, *, undo: bool) 
         raise UnsupportedAction("cannot redo a model-generated graph — run the model generator again")
     row_dict = detail.get("row")
     if not isinstance(row_dict, dict) or not row_dict.get("grid"):
-        raise UnsupportedAction("missing graph row")
+        raise _missing_data()
     try:
         await _insert_row(session, "graph", row_dict)
     except Exception as err:
@@ -1725,11 +1787,11 @@ async def _revert_graph_delete(session: AsyncSession, row: dict, *, undo: bool) 
     detail = _detail(row)
     grid = row.get("entity_id")
     if not grid:
-        raise UnsupportedAction("missing grid")
+        raise _missing_data()
     if undo:
         row_dict = detail.get("row")
         if not isinstance(row_dict, dict) or not row_dict.get("grid"):
-            raise UnsupportedAction("missing graph row")
+            raise _missing_data()
         try:
             await _insert_row(session, "graph", row_dict)
         except Exception as err:
@@ -1759,7 +1821,7 @@ async def _revert_graph_delete(session: AsyncSession, row: dict, *, undo: bool) 
 
 async def _revert_graph_row(session: AsyncSession, row: dict, *, undo: bool) -> str:
     """graph.item_add / item_delete / line_add / line_delete."""
-    action = row["action"]
+    action = row.get("action") or ""
     entity = row.get("entity") or ""
     pk = _GRAPH_PKS.get(entity)
     if pk is None:
@@ -1770,13 +1832,13 @@ async def _revert_graph_row(session: AsyncSession, row: dict, *, undo: bool) -> 
     if row_id is None and isinstance(row_dict, dict):
         row_id = row_dict.get(pk)
     if row_id is None:
-        raise UnsupportedAction(f"missing {pk}")
+        raise _missing_data()
     is_create = action in ("graph.item_add", "graph.line_add")
     if is_create == undo:
         await _delete_by_id(session, entity, pk, row_id)
         return f"deleted {entity} #{row_id}"
     if not isinstance(row_dict, dict) or not row_dict.get(pk):
-        raise UnsupportedAction(f"missing {entity} row")
+        raise _missing_data()
     try:
         await _insert_row(session, entity, row_dict)
     except Exception as err:

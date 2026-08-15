@@ -1,10 +1,16 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { ProjectShell } from "@/components/shell/ProjectShell";
+import { LoadingState } from "@/components/ui/orchestrator";
 import { api, initApiBase } from "@/lib/api";
 import { I18nProvider } from "@/lib/i18n";
 import { ToastProvider } from "@/lib/toast";
 import { useProjectStore } from "@/stores/project";
 import { checkIntervalMs, updaterAvailable, useUpdatesStore } from "@/stores/updates";
+
+/** Ceiling for the boot gate. `initApiBase()` already caps its own port
+ *  poll at 30s before falling back to the dev URL; this race only guards
+ *  against a never-settling promise so the UI can never hang. */
+const API_BOOT_TIMEOUT_MS = 35_000;
 
 /** App-update scheduling: load the saved preferences, then check now and on
  *  the configured cadence when auto-updates are enabled. An available update
@@ -39,6 +45,8 @@ function scheduleUpdates() {
 }
 
 function App() {
+  const [baseReady, setBaseReady] = useState(false);
+
   useEffect(() => {
     // No default browser context menu anywhere — only the app's custom ones.
     const preventContextMenu = (e: MouseEvent) => e.preventDefault();
@@ -48,6 +56,28 @@ function App() {
 
   useEffect(() => {
     scheduleUpdates();
+  }, []);
+
+  // Boot gate: hold the whole UI until the backend base URL is resolved.
+  // Views build raw file URLs from apiBaseSync(), which is the DEV fallback
+  // until initApiBase() settles — in the packaged app the backend may boot
+  // slowly or fall back to an ephemeral port (a second instance holds 8765),
+  // so mounting views early makes their file fetches hit the wrong port and
+  // fail with "Failed to fetch". The timeout falls back to the dev URL in
+  // plain-browser dev (no backend_port command — resolves instantly) so the
+  // gate can never hang the app. After this, apiBaseSync() is stable for the
+  // whole session unless the backend restarts (handled by the retry helpers).
+  useEffect(() => {
+    let active = true;
+    void Promise.race([
+      initApiBase(),
+      new Promise((resolve) => setTimeout(resolve, API_BOOT_TIMEOUT_MS)),
+    ]).then(() => {
+      if (active) setBaseReady(true);
+    });
+    return () => {
+      active = false;
+    };
   }, []);
 
   useEffect(() => {
@@ -101,6 +131,10 @@ function App() {
       }
     });
   }, []);
+
+  if (!baseReady) {
+    return <LoadingState>QualCoder</LoadingState>;
+  }
 
   return (
     <I18nProvider>

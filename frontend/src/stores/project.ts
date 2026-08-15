@@ -18,6 +18,7 @@ import {
   type SourceDetails,
   type SyncStatus,
 } from "@/lib/api";
+import type { SortDir, SortKey } from "@/features/manage/files";
 
 export type ThemeMode = "light" | "dark";
 
@@ -276,6 +277,14 @@ interface ProjectState {
   /** Per-view workspace UI state (left bar / center coordination). */
   casesUi: { selectedId: number | null; query: string; tick: number };
   setCasesUi: (patch: Partial<{ selectedId: number | null; query: string; tick: number }>) => void;
+  /** Files view workspace UI state: the table's sort column/direction and
+   *  the active saved filter. Session-only: survives view remounts (and
+   *  view switches) but is never persisted to disk. The search query is
+   *  already session-stable via `fileQuery`. */
+  filesUi: { sortKey: SortKey; sortDir: SortDir; activeFilter: number | "" };
+  setFilesUi: (
+    patch: Partial<{ sortKey: SortKey; sortDir: SortDir; activeFilter: number | "" }>,
+  ) => void;
   /** QTT workspace state: the selected worksheet + reload tick. */
   qttUi: { selectedId: number | null; tick: number };
   setQttUi: (patch: Partial<{ selectedId: number | null; tick: number }>) => void;
@@ -750,6 +759,8 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
 
   casesUi: { selectedId: null, query: "", tick: 0 },
   setCasesUi: (patch) => set((s) => ({ casesUi: { ...s.casesUi, ...patch } })),
+  filesUi: { sortKey: "name", sortDir: "asc", activeFilter: "" },
+  setFilesUi: (patch) => set((s) => ({ filesUi: { ...s.filesUi, ...patch } })),
   qttUi: { selectedId: null, tick: 0 },
   setQttUi: (patch) => set((s) => ({ qttUi: { ...s.qttUi, ...patch } })),
   notesUi: { tab: "journal", query: "", selectedId: null, selectedKind: null, newAnnotation: false, tick: 0 },

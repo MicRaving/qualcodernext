@@ -197,6 +197,153 @@ async def test_pdf_text_locate_maps_selection_to_plain_text_offsets(project_clie
     ).status_code == 422
 
 
+async def test_pdf_text_locate_normalized_fallbacks(project_client):
+    """Selections whose pdf.js-side text differs from the extracted page
+    text by case, ligatures, soft hyphens or line-break hyphenation still
+    map onto the right offsets (normalized fallback)."""
+    import fitz
+
+    client, _ = project_client
+
+    doc = fitz.open()
+    page = doc.new_page()
+    page.insert_font(fontname="f0", fontfile="C:/Windows/Fonts/arial.ttf")
+    page.insert_text((72, 80), "in\u00adter\u00adnet", fontname="f0")
+    page.insert_text((72, 100), "some-")
+    page.insert_text((72, 110), "thing")
+    page.insert_text((72, 130), "fi fl ff ffi ffl")
+    page.insert_text((72, 150), "Hello World Example")
+    pdf_bytes = doc.tobytes()
+
+    res = await client.post(
+        "/api/v1/sources/import",
+        files={"file": ("normalized.pdf", pdf_bytes, "application/pdf")},
+    )
+    assert res.status_code == 200, res.text
+    sid = res.json()["id"]
+
+    def locate(text: str):
+        return client.post(
+            f"/api/v1/sources/{sid}/pdf-text-locate",
+            json={"page": 1, "text": text},
+        )
+
+    # Soft hyphens in the extracted page text vs. plain letters in the
+    # pdf.js-side selection (and vice versa).
+    r = await locate("internet")
+    assert r.status_code == 200, r.text
+    assert r.json()["seltext"] == "in\u00adter\u00adnet"
+    assert r.json()["confidence"] == "normalized"
+    r = await locate("in\u00adter\u00adnet")
+    assert r.status_code == 200, r.text
+    assert r.json()["seltext"] == "in\u00adter\u00adnet"
+
+    # Line-break hyphenation: pdf.js joins "some-" / "thing" as one word.
+    r = await locate("something")
+    assert r.status_code == 200, r.text
+    assert r.json()["seltext"] == "some-\nthing"
+    assert r.json()["confidence"] == "normalized"
+
+    # Ligature glyphs (U+FB00..FB04) vs. expanded letter pairs.
+    r = await locate("\ufb01 \ufb02 \ufb00 \ufb03 \ufb04")
+    assert r.status_code == 200, r.text
+    assert r.json()["seltext"] == "fi fl ff ffi ffl"
+    assert r.json()["confidence"] == "normalized"
+    # The reverse direction (page has the glyphs) is covered by the same
+    # normalization; the page text here has the pairs, so a ligature
+    # selection must map onto the whole line.
+    assert r.json()["pos1"] == r.json()["pos0"] + len("fi fl ff ffi ffl")
+
+    # Case-insensitive matching.
+    r = await locate("hello world example")
+    assert r.status_code == 200, r.text
+    assert r.json()["seltext"] == "Hello World Example"
+    assert r.json()["confidence"] == "normalized"
+
+
+async def test_pdf_text_locate_fuzzy_anchor(project_client):
+    """When even normalized matching fails (e.g. a typo in the selection or
+    OCR-ish differences), a best-effort positional estimate is returned with
+    ``confidence: "fuzzy"`` anchored on the page's first word."""
+    import fitz
+
+    client, _ = project_client
+
+    doc = fitz.open()
+    page = doc.new_page()
+    page.insert_text((72, 100), "The quick brown fox jumps over the lazy dog")
+    pdf_bytes = doc.tobytes()
+
+    res = await client.post(
+        "/api/v1/sources/import",
+        files={"file": ("fuzzy.pdf", pdf_bytes, "application/pdf")},
+    )
+    assert res.status_code == 200, res.text
+    sid = res.json()["id"]
+
+    r = await client.post(
+        f"/api/v1/sources/{sid}/pdf-text-locate",
+        json={"page": 1, "text": "The quick brovn fox"},
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["confidence"] == "fuzzy"
+    assert body["seltext"] == "The quick brown fox"
+    assert body["pos1"] == body["pos0"] + len("The quick brown fox")
+
+    # The exact/normalized paths still report their confidence levels.
+    r = await client.post(
+        f"/api/v1/sources/{sid}/pdf-text-locate",
+        json={"page": 1, "text": "The quick"},
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["confidence"] == "exact"
+    r = await client.post(
+        f"/api/v1/sources/{sid}/pdf-text-locate",
+        json={"page": 1, "text": "the   quick"},
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["confidence"] == "normalized"
+
+
+async def test_pdf_text_locate_unanchorable_page_still_422(project_client):
+    """A page with no extractable text cannot anchor anything — the fuzzy
+    fallback has nothing to work with and the request still 422s."""
+    import fitz
+
+    client, _ = project_client
+
+    doc = fitz.open()
+    doc.new_page()
+    doc.new_page()
+    page2 = doc[1]
+    page2.insert_text((72, 100), "text on page two")
+    pdf_bytes = doc.tobytes()
+
+    res = await client.post(
+        "/api/v1/sources/import",
+        files={"file": ("blank.pdf", pdf_bytes, "application/pdf")},
+    )
+    assert res.status_code == 200, res.text
+    sid = res.json()["id"]
+
+    # Blank page 1: nothing to anchor on.
+    r = await client.post(
+        f"/api/v1/sources/{sid}/pdf-text-locate",
+        json={"page": 1, "text": "anything at all"},
+    )
+    assert r.status_code == 422
+
+    # Page 2 still locates normally (offsets include the blank page's zero
+    # length, so the result stays consistent).
+    r = await client.post(
+        f"/api/v1/sources/{sid}/pdf-text-locate",
+        json={"page": 2, "text": "text on page two"},
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["confidence"] == "exact"
+
+
 async def test_source_crud_via_api(project_client):
     client, _ = project_client
     await client.post(

@@ -41,6 +41,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import concurrent.futures
+import concurrent.futures.thread
 import html
 import json
 import logging
@@ -48,8 +49,10 @@ import os
 import re
 import subprocess
 import sys
+import threading
 import urllib.error
 import urllib.request
+import weakref
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from urllib.parse import urljoin, urlparse
@@ -600,6 +603,20 @@ _YT_TIMEOUT_MESSAGE = (
 #: Markers some platforms report through ``DownloadError`` when yt-dlp
 #: aborts (e.g. "signal aborted without reason") instead of raising.
 _YT_ABORT_MARKERS = ("signal aborted", "aborted", "interrupted")
+
+
+def _yt_subprocess_enabled() -> bool:
+    """True when yt-dlp can run as a subprocess (``sys.executable -m yt_dlp``).
+
+    A PyInstaller-frozen build sets ``sys.frozen`` and runs from the app
+    exe (``qualcoder-backend.exe``) — NOT a Python interpreter — so ``-m
+    yt_dlp`` can never work there and the in-process fallback is the only
+    option. Everything else (dev, tests, server venv) runs yt-dlp in a
+    subprocess.
+    """
+    return not getattr(sys, "frozen", False)
+
+
 #: The in-process path is a PyInstaller-frozen fallback: ``sys.executable
 #: -m yt_dlp`` cannot work inside the packaged exe, so frozen builds run
 #: yt-dlp in-process (with the abort guards below). Everything else runs
@@ -609,7 +626,7 @@ _YT_ABORT_MARKERS = ("signal aborted", "aborted", "interrupted")
 #: longer propagate into the backend process and surface only as clean
 #: exit codes, and a hung extraction can be killed hard instead of leaving
 #: an unkillable thread behind.
-_YT_SUBPROCESS_ENABLED = not getattr(sys, "frozen", False)
+_YT_SUBPROCESS_ENABLED = _yt_subprocess_enabled()
 
 
 class _YouTubeAbortError(ScrapeError):
@@ -699,6 +716,13 @@ def _yt_extract_subprocess(url: str, getcomments: bool) -> dict:
     an unkillable thread), and ``CREATE_NO_WINDOW`` keeps the packaged app
     from flashing a console window on Windows.
     """
+    if getattr(sys, "frozen", False):
+        # Defense in depth: a frozen build has no ``python.exe``, so this
+        # command would launch the app exe itself (``qualcoder-backend.exe
+        # -m yt_dlp``). ``_yt_dlp_extract`` already skips this path there,
+        # but never let it run even if it is misrouted — the OSError
+        # triggers the in-process fallback.
+        raise OSError("no Python interpreter available in a frozen build")
     command = _yt_cli_command(url, getcomments)
     logger.debug("Running yt-dlp subprocess (%s comments)", "with" if getcomments else "without")
     creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0
@@ -721,12 +745,40 @@ def _yt_extract_subprocess(url: str, getcomments: bool) -> dict:
     )
 
 
-#: Dedicated executor for the in-process yt-dlp fallback: a timed-out call
-#: keeps its thread (threads cannot be killed) but must never block loop
-#: teardown.
-_YT_EXTRACTOR_EXECUTOR = concurrent.futures.ThreadPoolExecutor(
-    max_workers=1, thread_name_prefix="yt-extract"
-)
+class _FallbackExecutor(concurrent.futures.ThreadPoolExecutor):
+    """Single-slot executor whose worker thread is a daemon.
+
+    A timed-out yt-dlp call keeps its worker thread alive (threads cannot
+    be killed — it lingers inside yt-dlp until the network unwinds). Every
+    fallback call gets its OWN instance, so one stuck extraction can never
+    block the next scrape's slot; and the daemon worker means it can never
+    block the packaged app's interpreter shutdown either.
+    """
+
+    def _adjust_thread_count(self):
+        if self._idle_semaphore.acquire(timeout=0):
+            return
+
+        def weakref_cb(_, q=self._work_queue):
+            q.put(None)
+
+        num_threads = len(self._threads)
+        if num_threads < self._max_workers:
+            thread_name = f"{self._thread_name_prefix or self}_{num_threads}"
+            thread = threading.Thread(
+                name=thread_name,
+                target=concurrent.futures.thread._worker,
+                args=(
+                    weakref.ref(self, weakref_cb),
+                    self._work_queue,
+                    self._initializer,
+                    self._initargs,
+                ),
+            )
+            thread.daemon = True
+            thread.start()
+            self._threads.add(thread)
+            concurrent.futures.thread._threads_queues[thread] = self._work_queue
 
 
 def _yt_extract_fallback_sync(url: str, getcomments: bool) -> dict:
@@ -769,19 +821,25 @@ def _yt_extract_fallback_sync(url: str, getcomments: bool) -> dict:
 def _yt_extract_fallback(url: str, getcomments: bool) -> dict:
     """Run the in-process fallback off-loop with an abort + timeout guard.
 
-    The yt-dlp call runs in a thread under ``asyncio.wait_for`` so a hung
-    network cannot block the import: the timeout surfaces a friendly
-    error. When no event loop is running (the API's worker thread, unit
-    tests) the guard drives its own loop; inside an async caller the guard
-    runs on a private loop in a thread so the caller's loop is never
-    blocked.
+    The yt-dlp call runs in a per-call single-slot executor under
+    ``asyncio.wait_for`` so a hung network cannot block the import: the
+    timeout surfaces a friendly error. A timed-out call's worker thread
+    lingers inside yt-dlp until the network unwinds, but because every
+    call gets its own daemon-slot executor, a stuck extraction never
+    blocks a later scrape's slot or interpreter shutdown. When no event
+    loop is running (the API's worker thread, unit tests) the guard drives
+    its own loop; inside an async caller the guard runs on a private loop
+    in a thread so the caller's loop is never blocked.
     """
 
     async def _guarded() -> dict:
         loop = asyncio.get_running_loop()
         return await asyncio.wait_for(
             loop.run_in_executor(
-                _YT_EXTRACTOR_EXECUTOR, _yt_extract_fallback_sync, url, getcomments
+                _FallbackExecutor(max_workers=1, thread_name_prefix="yt-extract"),
+                _yt_extract_fallback_sync,
+                url,
+                getcomments,
             ),
             timeout=_YT_TIMEOUT_SECONDS,
         )
@@ -812,16 +870,22 @@ def _yt_dlp_extract(url: str, getcomments: bool) -> dict:
     signals completely and can be killed on timeout. When the subprocess
     cannot be used (PyInstaller-frozen package, ``sys.executable -m
     yt_dlp`` unavailable) or fails to start, the in-process fallback runs
-    with its abort + timeout guards instead.
+    with its abort + timeout guards instead. The returned info dict carries
+    a ``_qc_comments_requested`` marker so the caller can prove whether
+    comments were actually requested before choosing a caption fallback.
     """
-    if _YT_SUBPROCESS_ENABLED:
+    if _YT_SUBPROCESS_ENABLED and not getattr(sys, "frozen", False):
         try:
-            return _yt_extract_subprocess(url, getcomments)
-        except OSError as err:
+            info = _yt_extract_subprocess(url, getcomments)
+        except (OSError, subprocess.SubprocessError) as err:
             logger.warning(
                 "yt-dlp subprocess failed to start (%s) — falling back to in-process", err
             )
-    return _yt_extract_fallback(url, getcomments)
+            info = _yt_extract_fallback(url, getcomments)
+    else:
+        info = _yt_extract_fallback(url, getcomments)
+    info["_qc_comments_requested"] = getcomments
+    return info
 
 
 def scrape_youtube(url: str) -> ScrapedContent:
@@ -843,7 +907,10 @@ def scrape_youtube(url: str) -> ScrapedContent:
     signal can never propagate into the backend process. The first abort
     is retried once WITHOUT ``--write-comments`` so the import survives
     and falls back to captions or the ``No comments`` row; a second abort
-    — or a timeout — surfaces a friendly error.
+    — or a timeout — surfaces a friendly error. Captions are NEVER fetched
+    when a comment list exists: the ``_qc_comments_requested`` marker on
+    the extracted info makes the "comments are provably absent" decision
+    explicit.
     """
     getcomments = _YT_DLP_COMMENTS_SUPPORTED
     try:
@@ -863,19 +930,23 @@ def scrape_youtube(url: str) -> ScrapedContent:
 
     title = (info.get("title") or "").strip() or "youtube-video"
 
+    # The caption fallback may replace the table ONLY when the extraction
+    # provably produced no comments: either comments were requested and
+    # came back empty, or the extraction ran without them (the abort retry
+    # / an old yt-dlp). A non-empty comment list always wins over captions.
+    comments_requested = bool(info.get("_qc_comments_requested"))
     lines = [_COMMENT_HEADER]
-    if _YT_DLP_COMMENTS_SUPPORTED:
-        comment_lines = _youtube_comments(info)
-        if comment_lines:
-            lines.extend(comment_lines)
+    comment_lines = _youtube_comments(info) if comments_requested else []
+    if comment_lines:
+        lines.extend(comment_lines)
+    elif _YT_DLP_COMMENTS_SUPPORTED:
+        logger.warning("YouTube comments unavailable for %s", url)
+        caption_text = _youtube_captions(info)
+        if caption_text:
+            logger.info("YouTube comments unavailable; falling back to captions for %s", url)
+            lines = [caption_text]
         else:
-            caption_text = _youtube_captions(info)
-            if caption_text:
-                logger.info("YouTube comments unavailable; falling back to captions for %s", url)
-                lines = [caption_text]
-            else:
-                logger.warning("YouTube comments unavailable for %s", url)
-                lines.append("-\t-\t-\tNo comments")
+            lines.append("-\t-\t-\tNo comments")
     else:
         logger.warning("YouTube comment extraction unsupported for %s", url)
         lines.append("-\t-\t-\tNo comments")

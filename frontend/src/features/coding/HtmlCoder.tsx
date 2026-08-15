@@ -7,8 +7,12 @@
  *
  *  Coding happens on the PLAIN TEXT side (html sources are media_type
  *  "text", so TextCoder codes them as text); the WEBPAGE side mirrors the
- *  codings LIVE: coded segments are highlighted in the rendered page by a
- *  small controlled script injected into the sandboxed iframe.
+ *  codings LIVE: coded segments are highlighted in the rendered page. The
+ *  highlights are BULLETPROOF: the parent PRE-COMPUTES the `<mark>` elements
+ *  into the srcDoc HTML (buildHighlightedHtml — same matching the iframe
+ *  script uses), so they render with zero script/postMessage dependency,
+ *  and the injected script keeps only the live-update layer (re-marks on
+ *  `qc:codings` postMessages, replacing the baked marks in place).
  *
  *  Matching reality: the backend's text extraction decodes entities, collapses
  *  spaces and inserts newlines at block tags, so a segment's `seltext` almost
@@ -19,7 +23,10 @@
  *  segments crossing element boundaries and a 40-char prefix fallback. The
  *  matching core itself lives in `htmlHighlight.ts` (pure, unit-tested) and
  *  its source is embedded into the script verbatim, so the tests exercise
- *  exactly the code the iframe runs.
+ *  exactly the code the iframe runs. `buildViewModel` in the same module
+ *  rebuilds that collapsed layer over the SERIALIZED html — with per-char
+ *  source spans — which is what lets the parent bake the marks before the
+ *  iframe loads.
  *
  *  SECURITY: enabling `allow-scripts` would execute the page's own inline
  *  scripts too, so the srcDoc is sanitized first — all `<script>` blocks
@@ -45,8 +52,7 @@ import {
 import { CircleAlert, FileText, Globe, LoaderCircle } from "lucide-react";
 import {
   api,
-  fetchWithTimeout,
-  sourceFileUrl,
+  fetchSourceFile,
   type Annotation,
   type CodeTreeItem,
   type Coding,
@@ -54,6 +60,7 @@ import {
 } from "@/lib/api";
 import {
   MAX_HIGHLIGHTS,
+  buildHighlightedHtml,
   injectHighlightScript,
   qcFindMatches,
   stripPageScripts,
@@ -124,7 +131,16 @@ function decodeHtmlBytes(bytes: Uint8Array, declared: string | null): string {
  * iframe document (it runs after the DOM is parsed; the parent reposts the
  * current codings on the iframe `load` event, so nothing is missed).
  *
- * On every `qc:codings` message it removes the old marks and re-marks:
+ * The INITIAL highlights are not its job anymore: the parent pre-computes
+ * them into the srcDoc HTML (`buildHighlightedHtml`), so the marks render
+ * with zero script/postMessage dependency. The script only keeps the
+ * LIVE-UPDATE layer:
+ *
+ *  - on startup it posts `qc:highlight-ready` to the parent — the signal
+ *    that the live path is alive (until then the parent keeps rebaking the
+ *    marks into the srcDoc);
+ *  - on every `qc:codings` message it removes the old marks — including the
+ *    pre-computed ones (same `qc-live-coding` class) — and re-marks:
  *
  *  - a text model is built over the visible text nodes — one collapsed
  *    string (whitespace runs -> single space) with a per-character map back
@@ -137,6 +153,8 @@ function decodeHtmlBytes(bytes: Uint8Array, declared: string | null): string {
  *    splitting one text node never shifts a later target; ranges are
  *    clamped per node so overlapping matches cannot corrupt the DOM;
  *  - content inside script/style/noscript/template/code/pre is skipped;
+ *  - a text node already inside a `mark.qc-live-coding` is never wrapped
+ *    again (dedupe guard against double-wrapping the pre-computed marks);
  *  - the total mark count is capped.
  *
  * The message listener verifies the sender (parent window / inherited
@@ -169,6 +187,14 @@ const QC_HIGHLIGHT_SCRIPT = `(function () {
       var tag = el.nodeName;
       if (tag === "SCRIPT" || tag === "STYLE" || tag === "NOSCRIPT" || tag === "TEMPLATE" || tag === "CODE" || tag === "PRE") return true;
       if (el === document.documentElement || el === document.body) break;
+    }
+    return false;
+  }
+
+  function hasMarkAncestor(node) {
+    for (var el = node.parentNode; el; el = el.parentNode) {
+      if (el.nodeType === 1 && el.tagName === "MARK" && el.className === "qc-live-coding") return true;
+      if (el === document.body) break;
     }
     return false;
   }
@@ -255,6 +281,10 @@ const QC_HIGHLIGHT_SCRIPT = `(function () {
 
   function applyNodeRange(node, from, len, seg) {
     if (!node.parentNode) return;
+    // Never wrap text that is already inside a highlight mark — the parent
+    // pre-computes marks into the srcDoc, so a stale live pass must not
+    // double-wrap them (removeMarks normally clears them first).
+    if (hasMarkAncestor(node)) return;
     // splitText returns the new node holding [offset..end] (for offset 0 the
     // new node holds everything and is inserted before the original).
     var mid = node.splitText(from);
@@ -342,6 +372,14 @@ const QC_HIGHLIGHT_SCRIPT = `(function () {
     if (!isTrustedMessage(e)) return;
     markSegments(d.codings);
   });
+
+  // Report that the live layer is armed — the parent only stops rebaking
+  // marks into the srcDoc once this arrives. Posted AFTER the listener is
+  // registered, so any subsequent "qc:codings" message is guaranteed to be
+  // handled.
+  if (window.parent && window.parent !== window) {
+    window.parent.postMessage({ type: "qc:highlight-ready" }, "*");
+  }
 })();`;
 
 /** Insert our controlled script into the sanitized snapshot srcDoc. */
@@ -397,7 +435,8 @@ export function HtmlCoder({ source }: { source: Source }) {
 
   // Rebuild the payload and push it into the iframe whenever codings (or the
   // code color/name lookup) change. The injected script removes the old
-  // marks and re-marks in place, so the webpage keeps its scroll position.
+  // marks (including the pre-computed ones) and re-marks in place, so the
+  // webpage keeps its scroll position.
   useEffect(() => {
     const payload: QcCodingPayload[] = [];
     for (const c of codings) {
@@ -408,9 +447,49 @@ export function HtmlCoder({ source }: { source: Source }) {
     postCodingsToFrame();
   }, [codings, codeInfo, postCodingsToFrame]);
 
-  // Sanitized snapshot + our controlled highlight script. Rebuilt only when
-  // the raw HTML changes; coding updates flow through postMessage instead.
-  const srcDoc = useMemo(() => (html != null ? injectScript(stripPageScripts(html)) : null), [html]);
+  // The srcDoc carries PRE-COMPUTED highlight marks (baked by
+  // buildHighlightedHtml) plus our live-update script. It is frozen per
+  // document once the iframe's script reports itself alive
+  // (`qc:highlight-ready`) — from then on coding changes flow through
+  // postMessage and rebuilding the srcDoc (which would reload the frame and
+  // lose the scroll position) is avoided. Until that signal arrives —
+  // including packaged WebView2 runs where the script never fires — every
+  // coding change RE-BAKES the marks into the srcDoc, so highlights render
+  // with zero script/postMessage dependency.
+  const frozenSrcDocRef = useRef<{ html: string; payload: QcCodingPayload[]; srcDoc: string } | null>(null);
+  const liveReadyRef = useRef(false);
+  const [srcDoc, setSrcDoc] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (html == null) return;
+    const frozen = frozenSrcDocRef.current;
+    if (
+      frozen?.html === html &&
+      (liveReadyRef.current || frozen.payload === highlightPayloadRef.current)
+    ) {
+      return;
+    }
+    // New document: the previous frame (and its ready signal) is gone.
+    if (frozen?.html !== html) liveReadyRef.current = false;
+    const payload = highlightPayloadRef.current;
+    const doc = injectScript(buildHighlightedHtml(stripPageScripts(html), payload));
+    frozenSrcDocRef.current = { html, payload, srcDoc: doc };
+    setSrcDoc(doc);
+  }, [html, codings, codeInfo]);
+
+  // The iframe's script posts `qc:highlight-ready` right after registering
+  // its message listener — the live layer is fully armed at that point.
+  // Only messages from the current iframe count (a stale frame from a
+  // previous document must not un-freeze the baking).
+  useEffect(() => {
+    const onMessage = (e: MessageEvent) => {
+      if (e.data?.type !== "qc:highlight-ready") return;
+      if (e.source !== iframeRef.current?.contentWindow) return;
+      liveReadyRef.current = true;
+    };
+    window.addEventListener("message", onMessage);
+    return () => window.removeEventListener("message", onMessage);
+  }, []);
 
   /* ------------------------------------------------------- split resize */
 
@@ -475,12 +554,16 @@ export function HtmlCoder({ source }: { source: Source }) {
   // Fetch the raw .html file through the file-serving endpoint. When it is
   // unavailable (article-only import or a broken link) the webpage pane
   // shows a hint and the plain-text pane remains fully usable.
+  // fetchSourceFile builds the URL from the resolved base (the App boot
+  // gate holds the UI until initApiBase() settles) and re-resolves +
+  // retries a transport failure once, so an ephemeral-port backend cannot
+  // surface as a spurious "Failed to fetch".
   useEffect(() => {
     let cancelled = false;
     setHtmlLoading(true);
     void (async () => {
       try {
-        const res = await fetchWithTimeout(sourceFileUrl(source.id), undefined, 60_000);
+        const res = await fetchSourceFile(source.id);
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const bytes = new Uint8Array(await res.arrayBuffer());
         if (cancelled) return;

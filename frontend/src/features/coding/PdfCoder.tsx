@@ -29,7 +29,7 @@ import {
   Trash2,
   X,
 } from "lucide-react";
-import { api, fetchWithTimeout, initApiBase, type Annotation, type CodeTreeItem, type Coding, type ImageCoding, type Source } from "@/lib/api";
+import { api, fetchSourceFile, type Annotation, type CodeTreeItem, type Coding, type ImageCoding, type Source } from "@/lib/api";
 import { patchCodingWeight } from "@/features/coding/codingApi";
 import { CodePicker, type PickedCode } from "@/features/coding/CodePicker";
 import { AutocodeDialog } from "@/features/coding/AutocodeDialog";
@@ -64,32 +64,16 @@ const DRAG_MIN_SIZE = 5;
 
 /** Download a source's PDF bytes for pdf.js.
  *
- * The base URL must be RESOLVED before the fetch: `sourceFileUrl()` builds
- * from the synchronous dev fallback until `initApiBase()` settles, and in
- * the packaged app the embedded backend takes seconds to boot (or runs on an
- * ephemeral port when a second instance holds 8765) — every other API call
- * awaits `initApiBase()` first, so only this raw-file fetch used to race it
- * and intermittently fail with "Failed to fetch" when opening PDFs. A
- * network-level failure gets one retry (mirrors the `request()` client,
- * which drops the stale base and resolves it afresh).
- */
+ * `fetchSourceFile` builds the URL from the RESOLVED base — the App boot
+ * gate holds the UI until `initApiBase()` settles, and on a transport
+ * failure (backend still booting / restarted on an ephemeral port) the
+ * helper drops the cached base, re-resolves it and retries once — so a
+ * stale base can never surface as a spurious "Failed to fetch". HTTP
+ * errors stay definitive. */
 async function fetchPdfBytes(sourceId: number): Promise<ArrayBuffer> {
-  const base = await initApiBase();
-  const url = `${base}/sources/${sourceId}/file`;
-  const attempt = async (): Promise<ArrayBuffer> => {
-    const res = await fetchWithTimeout(url, undefined, 60_000);
-    if (!res.ok) throw new Error(`HTTP ${res.status} from ${url}`);
-    return res.arrayBuffer();
-  };
-  try {
-    return await attempt();
-  } catch (err) {
-    // HTTP errors are definitive (missing file etc.) — only a transport
-    // failure (backend still booting / restarted) deserves a retry.
-    if (err instanceof Error && err.message.startsWith("HTTP ")) throw err;
-    await new Promise((r) => setTimeout(r, 1000));
-    return attempt();
-  }
+  const res = await fetchSourceFile(sourceId);
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.arrayBuffer();
 }
 
 interface PageSize {

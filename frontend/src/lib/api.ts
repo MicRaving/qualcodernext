@@ -82,6 +82,58 @@ export function fetchWithTimeout(
   );
 }
 
+/** Raw-file fetch shared by the coders (PDF bytes, HTML snapshots, full
+ *  images, thumbnails). The URL is built from the RESOLVED base (`await
+ *  resolveBase()` — cheap once the App boot gate settled) and a
+ *  transport-level failure (backend still booting, restarted on a new
+ *  ephemeral port…) drops the cached base, re-resolves it afresh and
+ *  retries exactly once — mirroring `request()`. HTTP error responses are
+ *  NOT retried: the caller inspects `res.ok` and treats them as definitive. */
+async function fetchSourceBytes(
+  buildUrl: (base: string) => string,
+  timeoutMs: number,
+): Promise<Response> {
+  const attempt = async (): Promise<Response> => {
+    const base = await resolveBase();
+    resolvedBase = base;
+    return fetchWithTimeout(buildUrl(base), undefined, timeoutMs);
+  };
+  try {
+    return await attempt();
+  } catch {
+    basePromise = null;
+    resolvedBase = null;
+    await new Promise((r) => setTimeout(r, 1000));
+    return attempt();
+  }
+}
+
+/** Raw bytes of a source file (PDF pages, HTML snapshots, full images).
+ *  Returns the Response — the caller checks `res.ok` and consumes the body. */
+export function fetchSourceFile(sourceId: number, timeoutMs = 60_000): Promise<Response> {
+  return fetchSourceBytes((base) => `${base}/sources/${sourceId}/file`, timeoutMs);
+}
+
+/** Generated thumbnail (PNG) for image/PDF sources. */
+export function fetchThumbnail(
+  sourceId: number,
+  maxSize = 300,
+  timeoutMs = 15_000,
+): Promise<Response> {
+  return fetchSourceBytes(
+    (base) => `${base}/sources/${sourceId}/thumbnail?max_size=${maxSize}`,
+    timeoutMs,
+  );
+}
+
+/** Drop the cached base URL so the next `initApiBase()` resolves it afresh.
+ *  Used by callers that cannot go through the fetch helpers (media elements
+ *  stream from a raw URL) when the backend restarted on a new port. */
+export function invalidateApiBase(): void {
+  basePromise = null;
+  resolvedBase = null;
+}
+
 async function request<T>(path: string, init?: RequestInit, timeoutMs = 15_000): Promise<T> {
   const doFetch = async (): Promise<Response> => {
     const base = await resolveBase();

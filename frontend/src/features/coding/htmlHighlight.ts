@@ -1,6 +1,6 @@
 /**
- * Pure helpers behind the HtmlCoder live-coding highlights — all side-effect
- * free, so the matching logic can be unit-tested without a DOM:
+ * Pure helpers behind the HtmlCoder highlights — all side-effect free, so the
+ * matching logic can be unit-tested without a DOM:
  *
  *  - `stripPageScripts` / `injectHighlightScript` build the sanitized srcDoc
  *    (the snapshot file itself is never touched).
@@ -14,6 +14,15 @@
  *    whitespace-free fallback for segments that cross element boundaries in
  *    the rendered DOM (the backend's fulltext inserts "\n" at block tags,
  *    while the DOM joins the same words with no whitespace at all).
+ *  - `buildViewModel` builds the SAME collapsed text layer the iframe's DOM
+ *    walk produces, while mapping every view-text char back to the source
+ *    ranges that produced it — the bridge that lets the parent bake marks
+ *    into the serialized HTML.
+ *  - `buildHighlightedHtml` pre-computes the highlights: it matches the
+ *    codings against the view text and embeds the resulting `<mark>` elements
+ *    directly into the snapshot HTML, so the marks render with zero
+ *    script/postMessage dependency. The injected script is then only a
+ *    live-update layer (re-marks on postMessage, replacing the baked marks).
  */
 
 /** Cap on marked segments per highlight pass. */
@@ -346,11 +355,35 @@ export function collapseWhitespace(text: string): string {
   return text.replace(/[\s\u00A0\uFEFF]+/g, " ").trim();
 }
 
+/** Elements whose content is not a text node in the DOM — the iframe's DOM
+ * walk never sees their text, so they must not be matchable or markable:
+ * script/style/noscript/template (raw text), code/pre (excluded by the
+ * injected script), and the RCDATA/fallback elements the parser renders
+ * without text children (textarea, title, xmp, noembed, plaintext, iframe,
+ * noframes). */
+function hasInertTextContent(name: string): boolean {
+  return (
+    name === "script" ||
+    name === "style" ||
+    name === "noscript" ||
+    name === "template" ||
+    name === "code" ||
+    name === "pre" ||
+    name === "textarea" ||
+    name === "title" ||
+    name === "xmp" ||
+    name === "noembed" ||
+    name === "plaintext" ||
+    name === "iframe" ||
+    name === "noframes"
+  );
+}
+
 /**
  * The page's visible text the way the iframe's DOM walk produces it:
  * entities decoded, tags removed, whitespace collapsed, and script/style/
- * noscript/template/head content dropped (those produce no visible text
- * nodes). Inter-tag whitespace is kept — it IS a text node in the DOM.
+ * noscript/template/head/code/pre content dropped (those produce no visible
+ * text nodes). Inter-tag whitespace is kept — it IS a text node in the DOM.
  */
 export function htmlToViewText(html: string): string {
   const n = html.length;
@@ -378,11 +411,7 @@ export function htmlToViewText(html: string): string {
       i = lt + 1;
       continue;
     }
-    if (RAW_TEXT_TAGS.includes(name)) {
-      i = skipRawElement(html, lt, name, n);
-      continue;
-    }
-    if (name === "code" || name === "pre") {
+    if (hasInertTextContent(name)) {
       i = skipRawElement(html, lt, name, n);
       continue;
     }
@@ -395,9 +424,16 @@ export function htmlToViewText(html: string): string {
   return collapseWhitespace(out);
 }
 
+/** Elements that are allowed in <head> (anything else ends it implicitly). */
+const HEAD_ONLY_TAGS = [
+  "title", "base", "link", "meta", "style", "script", "noscript", "template",
+];
+
 /**
  * Skip a `<head>` element — its text is not part of document.body, so it
- * must not be matchable. Stops early at `<body` (the head auto-closes there).
+ * must not be matchable. Stops early at `<body` OR at the first element that
+ * is not head-only (the parser implicitly closes the head there, so malformed
+ * documents without `</head>` still map back to the real body text).
  */
 function skipHead(html: string, lt: number, n: number): number {
   let i = skipTag(html, lt, n);
@@ -409,7 +445,7 @@ function skipHead(html: string, lt: number, n: number): number {
       continue;
     }
     const name = readTagName(html, nlt, n);
-    if (name === "body") return nlt;
+    if (name === "body" || (name !== null && !HEAD_ONLY_TAGS.includes(name))) return nlt;
     if (name === null) {
       i = nlt + 1;
       continue;
@@ -504,4 +540,304 @@ export function qcFindMatches(text: string, segments: string[], maxMarks: number
 export function buildHighlights(htmlText: string, codings: QcCodingPayload[]): QcFindMatch[] {
   const view = htmlToViewText(htmlText);
   return qcFindMatches(view, codings.map((c) => c.seltext), MAX_HIGHLIGHTS);
+}
+
+/* --------------------------------------------------- view model + baking */
+
+/** RGB triplet used when a code has no usable color. */
+const ACCENT_RGB = [217, 119, 6];
+
+function isWsChar(c: string): boolean {
+  return (
+    c === " " ||
+    c === "\t" ||
+    c === "\n" ||
+    c === "\r" ||
+    c === "\f" ||
+    c === "\v" ||
+    c === "\u00A0" ||
+    c === "\uFEFF"
+  );
+}
+
+/** One decoded character plus the absolute source range it came from. */
+interface DecodedPiece {
+  ch: string;
+  start: number;
+  end: number;
+}
+
+/**
+ * Decode the HTML entities in a text slice while keeping a per-character map
+ * back to absolute source offsets: an entity is ONE decoded char spanning the
+ * entity's whole source range; unknown entities stay literal, char by char.
+ */
+function decodeTextSpans(text: string, base: number): DecodedPiece[] {
+  const out: DecodedPiece[] = [];
+  const n = text.length;
+  let i = 0;
+  while (i < n) {
+    const c = text.charAt(i);
+    if (c !== "&") {
+      out.push({ ch: c, start: base + i, end: base + i + 1 });
+      i++;
+      continue;
+    }
+    const m = /^&(#[0-9]+|#x[0-9a-fA-F]+|[a-zA-Z][a-zA-Z0-9]*);/.exec(text.slice(i));
+    if (!m) {
+      out.push({ ch: "&", start: base + i, end: base + i + 1 });
+      i++;
+      continue;
+    }
+    const entity = m[0];
+    const decoded = decodeHtmlEntities(entity);
+    if (decoded === entity) {
+      // Unknown entity — keep it literal so the view text stays identical.
+      for (let k = 0; k < entity.length; k++) {
+        out.push({ ch: entity.charAt(k), start: base + i + k, end: base + i + k + 1 });
+      }
+    } else {
+      out.push({ ch: decoded, start: base + i, end: base + i + entity.length });
+    }
+    i += entity.length;
+  }
+  return out;
+}
+
+/** The page's visible text plus the way back into the source HTML. */
+export interface ViewModel {
+  /** Collapsed visible text (single spaces), exactly the iframe's layer. */
+  text: string;
+  /** Per view-text char: the absolute source range(s) that produced it. */
+  charSpans: Array<Array<[number, number]>>;
+  /** The whitespace-free variant of `text` (stripped-mode matching). */
+  stripped: string;
+  /** Index into `text` for every char of `stripped`. */
+  strippedToText: number[];
+}
+
+/**
+ * Build the same collapsed text layer the iframe's DOM walk produces — the
+ * authority for matching — while mapping every view-text char back to its
+ * source range(s) in the serialized HTML:
+ *
+ *  - entities are decoded (one view char per entity, spanning its source);
+ *  - whitespace-only text nodes are DROPPED (the injected script skips them
+ *    via `!nodeValue.trim()` — this is why `<p>a</p>\n<p>b</p>` reads as
+ *    "ab", not "a b", unlike `htmlToViewText`);
+ *  - runs of whitespace collapse to one space, crossing text-node boundaries;
+ *  - script/style/noscript/template/code/pre/head content is skipped, as is
+ *    the content of RCDATA/fallback elements (textarea, title, iframe, …)
+ *    that never produces DOM text nodes.
+ */
+export function buildViewModel(html: string): ViewModel {
+  const n = html.length;
+  const text: string[] = [];
+  const charSpans: Array<Array<[number, number]>> = [];
+  let lastSpace = false;
+
+  const emitSpace = (spans: Array<[number, number]>) => {
+    if (!lastSpace && text.length > 0) {
+      text.push(" ");
+      charSpans.push(spans);
+    }
+    lastSpace = true;
+  };
+
+  const emitChar = (ch: string, start: number, end: number) => {
+    text.push(ch);
+    charSpans.push([[start, end]]);
+    lastSpace = false;
+  };
+
+  const consumeText = (raw: string, base: number) => {
+    const pieces = decodeTextSpans(raw, base);
+    if (!pieces.length) return;
+    let allWs = true;
+    for (const p of pieces) {
+      if (!isWsChar(p.ch)) {
+        allWs = false;
+        break;
+      }
+    }
+    // Whitespace-only text nodes are invisible to the iframe's DOM walk.
+    if (allWs) return;
+    let k = 0;
+    while (k < pieces.length) {
+      const p = pieces[k];
+      if (isWsChar(p.ch)) {
+        const spans: Array<[number, number]> = [];
+        let runEnd = k;
+        while (runEnd < pieces.length && isWsChar(pieces[runEnd].ch)) {
+          const sp = pieces[runEnd];
+          if (spans.length === 0 || spans[spans.length - 1][1] !== sp.start) {
+            spans.push([sp.start, sp.end]);
+          } else {
+            spans[spans.length - 1][1] = sp.end;
+          }
+          runEnd++;
+        }
+        emitSpace(spans);
+        k = runEnd;
+      } else {
+        emitChar(p.ch, p.start, p.end);
+        k++;
+      }
+    }
+  };
+
+  let i = 0;
+  while (i < n) {
+    const lt = html.indexOf("<", i);
+    if (lt < 0) {
+      consumeText(html.slice(i), i);
+      break;
+    }
+    consumeText(html.slice(i, lt), i);
+    if (html.startsWith("<!--", lt)) {
+      i = skipComment(html, lt, n);
+      continue;
+    }
+    const after = html.charAt(lt + 1);
+    if (after === "!" || after === "?") {
+      i = skipTag(html, lt, n);
+      continue;
+    }
+    const name = readTagName(html, lt, n);
+    if (name === null) {
+      consumeText(html.slice(lt, lt + 1), lt);
+      i = lt + 1;
+      continue;
+    }
+    if (hasInertTextContent(name)) {
+      i = skipRawElement(html, lt, name, n);
+      continue;
+    }
+    if (name === "head") {
+      i = skipHead(html, lt, n);
+      continue;
+    }
+    i = skipTag(html, lt, n);
+  }
+
+  const joined = text.join("");
+  const strippedToText: number[] = [];
+  let stripped = "";
+  for (let k = 0; k < joined.length; k++) {
+    if (joined.charAt(k) !== " ") {
+      strippedToText.push(k);
+      stripped += joined.charAt(k);
+    }
+  }
+  return { text: joined, charSpans, stripped, strippedToText };
+}
+
+/**
+ * The inline style for a highlight mark — byte-identical to the injected
+ * script's styleFor() (same accent fallback), so baked and live marks look
+ * the same.
+ */
+export function markStyleFor(color: string | null): string {
+  const m = /^#([0-9a-f]{6})$/i.exec(color ?? "");
+  const rgb = m
+    ? [
+        parseInt(m[1].slice(0, 2), 16),
+        parseInt(m[1].slice(2, 4), 16),
+        parseInt(m[1].slice(4, 6), 16),
+      ]
+    : ACCENT_RGB;
+  return (
+    `background:rgba(${rgb.join(",")},.22);outline:1px solid rgba(${rgb.join(",")},.6);` +
+    "border-radius:2px;color:inherit;padding:0"
+  );
+}
+
+/** Escape a value for a double-quoted HTML attribute. */
+function escapeAttr(value: string): string {
+  return value.replace(/[&"<>]/g, (c) => {
+    switch (c) {
+      case "&":
+        return "&amp;";
+      case '"':
+        return "&quot;";
+      case "<":
+        return "&lt;";
+      default:
+        return "&gt;";
+    }
+  });
+}
+
+/** Escape literal `<` in marked text so it never joins an adjacent tag. */
+function escapeMarkText(text: string): string {
+  return text.replace(/</g, "&lt;");
+}
+
+/**
+ * Embed the codings' marks directly into the serialized snapshot HTML —
+ * pre-computed in the parent BEFORE the iframe ever loads, so highlights
+ * render with zero script/postMessage dependency. The injected script keeps
+ * only the live-update job (re-mark on `qc:codings` messages), replacing
+ * these marks in place.
+ *
+ * Matching runs on the view text (`buildViewModel` — identical to the DOM
+ * walk the iframe performs) via the shared `qcFindMatches`; every view-text
+ * char carries its source range, so each match expands to concrete source
+ * spans. A span never crosses a tag boundary, so the inserted `<mark>` stays
+ * inside its text node's parent; spans overlapping an already-placed mark are
+ * dropped (marks are never nested). The page markup itself is preserved
+ * byte-for-byte except literal `<` inside marked text, which is escaped so
+ * it can never be re-parsed as a tag against an adjacent `<mark>`/`</mark>`.
+ */
+export function buildHighlightedHtml(html: string, codings: QcCodingPayload[]): string {
+  const model = buildViewModel(html);
+  const matches = qcFindMatches(model.text, codings.map((c) => c.seltext), MAX_HIGHLIGHTS);
+
+  interface Group {
+    start: number;
+    end: number;
+    seg: number;
+  }
+  const groups: Group[] = [];
+  for (const hit of matches) {
+    let s = hit.start;
+    let e = hit.start + hit.len;
+    if (hit.mode === "stripped") {
+      if (hit.start + hit.len - 1 >= model.strippedToText.length) continue;
+      s = model.strippedToText[hit.start];
+      e = model.strippedToText[hit.start + hit.len - 1] + 1;
+    }
+    if (s < 0 || e <= s || e > model.text.length) continue;
+    let cur: Group | null = null;
+    for (let k = s; k < e; k++) {
+      for (const [fs, fe] of model.charSpans[k]) {
+        if (cur && fs === cur.end) {
+          cur.end = fe;
+        } else {
+          if (cur) groups.push(cur);
+          cur = { start: fs, end: fe, seg: hit.seg };
+        }
+      }
+    }
+    if (cur) groups.push(cur);
+  }
+
+  groups.sort((a, b) => a.start - b.start || a.end - b.end);
+  let out = "";
+  let pos = 0;
+  let lastEnd = -1;
+  for (const g of groups) {
+    if (g.start < lastEnd) continue; // would nest inside an earlier mark
+    const coding = codings[g.seg];
+    out += html.slice(pos, g.start);
+    out += `<mark class="qc-live-coding"`;
+    if (coding.name) out += ` title="${escapeAttr(coding.name)}"`;
+    out += ` style="${markStyleFor(coding.color)}">`;
+    out += escapeMarkText(html.slice(g.start, g.end));
+    out += `</mark>`;
+    pos = g.end;
+    lastEnd = g.end;
+  }
+  out += html.slice(pos);
+  return out;
 }

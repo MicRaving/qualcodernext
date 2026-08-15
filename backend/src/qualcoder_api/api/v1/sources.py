@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 from typing import Annotated
 
 from fastapi import APIRouter, File, Form, HTTPException, Response, UploadFile
@@ -368,6 +369,204 @@ class PdfTextLocateResponse(BaseModel):
     pos0: int
     pos1: int
     seltext: str
+    #: How the selection was mapped onto the fulltext: ``"exact"`` (raw
+    #: substring), ``"normalized"`` (whitespace/case/ligature/soft-hyphen/
+    #: hyphenation tolerant), or ``"fuzzy"`` (best-effort positional
+    #: estimate — accept only when a precise span matters less than having
+    #: a span at all). Absent for old clients via the default.
+    confidence: str = "exact"
+
+
+#: Unicode ligature chars -> the letter pairs they stand for. pdf.js text
+#: items can carry the ligature glyphs (U+FB00..FB04) while PyMuPDF's
+#: ``get_text()`` — and therefore the extracted fulltext — expands them.
+_LIGATURE_EXPANSION: dict[int, str] = {
+    0xFB00: "ff",
+    0xFB01: "fi",
+    0xFB02: "fl",
+    0xFB03: "ffi",
+    0xFB04: "ffl",
+}
+
+
+def _normalize_with_spans(text: str) -> tuple[str, list[tuple[int, int]]]:
+    """Return ``text`` normalized for comparison plus, for every normalized
+    char, the raw-text span it was produced from.
+
+    Normalization levels the differences between pdf.js's rendered text and
+    PyMuPDF's extraction: whitespace collapses to single spaces, case is
+    folded, soft hyphens (U+00AD) vanish, a line-break hyphen ("some-\\nthing")
+    merges its parts, and ligature chars expand to their letter pairs. The
+    span map lets a match in the normalized text be translated back to the
+    raw offsets even though normalization changes lengths.
+    """
+    out: list[str] = []
+    spans: list[tuple[int, int]] = []
+    i, n = 0, len(text)
+    while i < n:
+        if text[i] == "\u00ad":
+            i += 1
+            continue
+        if text[i] == "-" and i + 1 < n and text[i + 1].isspace():
+            i += 2
+            while i < n and text[i].isspace():
+                i += 1
+            continue
+        if text[i].isspace():
+            start = i
+            while i < n and text[i].isspace():
+                i += 1
+            out.append(" ")
+            spans.append((start, i))
+            continue
+        expansion = _LIGATURE_EXPANSION.get(ord(text[i]))
+        if expansion is not None:
+            for ch in expansion:
+                out.append(ch.casefold())
+                spans.append((i, i + 1))
+            i += 1
+            continue
+        out.append(text[i].casefold())
+        spans.append((i, i + 1))
+        i += 1
+    return "".join(out), spans
+
+
+def _normalize_text(text: str) -> str:
+    """Normalize ``text`` the same way ``_normalize_with_spans`` does, for
+    word-level comparisons where offsets are not needed."""
+    norm, _ = _normalize_with_spans(text)
+    return norm
+
+
+def _word_seq_span(page_text: str, sel: str) -> tuple[int, int] | None:
+    """Whitespace-insensitive word-sequence match (the historical fallback):
+    the selection's words must appear verbatim, in order, in the page text.
+    Returns the raw page-text span of the first to last matched word."""
+    words = re.findall(r"\S+", sel)
+    if not words:
+        return None
+    page_words = list(re.finditer(r"\S+", page_text))
+    for i in range(len(page_words) - len(words) + 1):
+        if [m.group(0) for m in page_words[i : i + len(words)]] == words:
+            return page_words[i].start(), page_words[i + len(words) - 1].end()
+    return None
+
+
+def _normalized_match(page_text: str, sel: str) -> tuple[int, int] | None:
+    """Locate the selection in the page text after normalization (case,
+    whitespace, ligatures, soft hyphens, line-break hyphens), returning the
+    RAW page-text span of the match."""
+    norm_page, spans = _normalize_with_spans(page_text)
+    norm_sel = _normalize_text(sel)
+    if not norm_sel:
+        return None
+    idx = norm_page.find(norm_sel)
+    if idx < 0:
+        return None
+    return spans[idx][0], spans[idx + len(norm_sel) - 1][1]
+
+
+def _fuzzy_span(text: str, sel: str, max_mismatch: int) -> tuple[int, int] | None:
+    """Best-effort span of the selection's (normalized) words in ``text``,
+    tolerating up to ``max_mismatch`` word substitutions. Returns the span of
+    the first window with the fewest mismatches, or None when no window fits."""
+    tokens = list(re.finditer(r"\S+", text))
+    sel_norm = [_normalize_text(w) for w in re.findall(r"\S+", sel)]
+    n, m = len(tokens), len(sel_norm)
+    if m == 0 or n < m:
+        return None
+    norms = [_normalize_text(t.group(0)) for t in tokens]
+    best: tuple[int, int] | None = None
+    best_mism = max_mismatch + 1
+    for i in range(n - m + 1):
+        mism = 0
+        for j in range(m):
+            if norms[i + j] != sel_norm[j]:
+                mism += 1
+                if mism >= best_mism:
+                    break
+        if mism < best_mism:
+            best_mism = mism
+            best = (tokens[i].start(), tokens[i + m - 1].end())
+    return best
+
+
+def _page_anchor(fulltext: str, page_text: str, expected: int) -> int | None:
+    """Absolute offset at which the page's first word occurs in the
+    fulltext, preferring the occurrence nearest ``expected`` (words repeat
+    across pages). None when the page has no words or none occur verbatim."""
+    first_match = re.search(r"\S+", page_text)
+    if first_match is None:
+        return None
+    first_norm = _normalize_text(first_match.group(0))
+    best_pos: int | None = None
+    best_dist = 1 << 62
+    for m in re.finditer(r"\S+", fulltext):
+        if _normalize_text(m.group(0)) == first_norm:
+            dist = abs(m.start() - expected)
+            if dist < best_dist:
+                best_dist = dist
+                best_pos = m.start()
+    if best_pos is None:
+        return None
+    return best_pos - first_match.start()
+
+
+def _fuzzy_locate(
+    page_text: str, sel: str, fulltext: str, expected: int
+) -> tuple[int, int, str] | None:
+    """Positional best-effort fallback: fuzzy-match the selection's words
+    inside the page text and anchor the page via its first word's position
+    in the fulltext; when that cannot anchor, fuzzy-match inside a window of
+    the fulltext around the expected page offset instead."""
+    sel_words = re.findall(r"\S+", sel)
+    if not sel_words:
+        return None
+    max_mismatch = max(1, len(sel_words) // 4)
+    rel = _fuzzy_span(page_text, sel, max_mismatch)
+    anchor = _page_anchor(fulltext, page_text, expected)
+    if rel is not None and anchor is not None:
+        pos0, pos1 = anchor + rel[0], anchor + rel[1]
+        if 0 <= pos0 < pos1 <= len(fulltext):
+            return pos0, pos1, "fuzzy"
+    half = max(3 * len(page_text), 4096)
+    lo = max(0, expected - half)
+    hi = min(len(fulltext), expected + half)
+    abs_span = _fuzzy_span(fulltext[lo:hi], sel, max_mismatch)
+    if abs_span is not None:
+        pos0, pos1 = lo + abs_span[0], lo + abs_span[1]
+        if 0 <= pos0 < pos1 <= len(fulltext):
+            return pos0, pos1, "fuzzy"
+    return None
+
+
+def _locate(
+    page_text: str, sel: str, fulltext: str, expected: int
+) -> tuple[int, int, str] | None:
+    """Map a pdf.js selection to ``(pos0, pos1, confidence)`` offsets in the
+    fulltext.
+
+    Fallback chain:
+    1. exact substring in the page text;
+    2. word-sequence match (whitespace-insensitive);
+    3. normalized match (case, whitespace, ligatures, soft hyphens,
+       line-break hyphens);
+    4. positional fuzzy estimate anchored on the page's first word.
+
+    Only returns None when nothing can be anchored at all (e.g. the page has
+    no extractable text).
+    """
+    idx = page_text.find(sel)
+    if idx >= 0:
+        return expected + idx, expected + idx + len(sel), "exact"
+    seq = _word_seq_span(page_text, sel)
+    if seq is not None:
+        return expected + seq[0], expected + seq[1], "normalized"
+    norm = _normalized_match(page_text, sel)
+    if norm is not None:
+        return expected + norm[0], expected + norm[1], "normalized"
+    return _fuzzy_locate(page_text, sel, fulltext, expected)
 
 
 @router.post("/{source_id}/pdf-text-locate", response_model=PdfTextLocateResponse)
@@ -378,13 +577,14 @@ async def pdf_text_locate(
     extracted plain text — the same text the plain-text mode codes against.
 
     The frontend sends the reconstructed selection (items joined with
-    spaces/newlines); pdf.js whitespace differs from PyMuPDF's, so the match
-    is word-sequence based: the selection's words are located in the page's
-    extracted text and the raw span is returned (coded text therefore equals
-    the plain-text mode's slice exactly).
+    spaces/newlines); pdf.js's rendered text differs from PyMuPDF's
+    extraction in whitespace, case, ligature glyphs and hyphenation, so the
+    mapping walks a fallback chain (see :func:`_locate`) from the exact
+    substring over normalized matching to a positional fuzzy estimate. The
+    returned span always slices the fulltext exactly, so coded text equals
+    the plain-text mode's slice.
     """
     import asyncio
-    import re
 
     from qualcoder_api.services.source_files import resolve_source_path
 
@@ -399,20 +599,6 @@ async def pdf_text_locate(
     if not req.text.strip():
         raise HTTPException(status_code=422, detail="empty selection")
 
-    def _locate(page_text: str, sel: str) -> tuple[int, int] | None:
-        idx = page_text.find(sel)
-        if idx >= 0:
-            return idx, idx + len(sel)
-        # Whitespace-insensitive fallback: locate the word sequence.
-        words = re.findall(r"\S+", sel)
-        page_words = list(re.finditer(r"\S+", page_text))
-        for i in range(len(page_words) - len(words) + 1):
-            if [m.group(0) for m in page_words[i : i + len(words)]] == words:
-                start = page_words[i].start()
-                end = page_words[i + len(words) - 1].end()
-                return start, end
-        return None
-
     def _run() -> PdfTextLocateResponse:
         import fitz
 
@@ -421,15 +607,19 @@ async def pdf_text_locate(
                 raise HTTPException(status_code=422, detail="page out of range")
             page_texts = [page.get_text() for page in doc]
         page_text = page_texts[req.page - 1]
-        found = _locate(page_text, req.text)
+        fulltext = "".join(page_texts)
+        expected = sum(len(t) for t in page_texts[: req.page - 1])
+        found = _locate(page_text, req.text, fulltext, expected)
         if found is None:
             raise HTTPException(
                 status_code=422, detail="selection not found in the page text"
             )
-        pos0, pos1 = found
-        offset = sum(len(t) for t in page_texts[: req.page - 1])
+        pos0, pos1, confidence = found
         return PdfTextLocateResponse(
-            pos0=offset + pos0, pos1=offset + pos1, seltext=page_text[pos0:pos1]
+            pos0=pos0,
+            pos1=pos1,
+            seltext=fulltext[pos0:pos1],
+            confidence=confidence,
         )
 
     return await asyncio.to_thread(_run)
