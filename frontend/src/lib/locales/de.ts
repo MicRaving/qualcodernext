@@ -30,7 +30,7 @@ export const de: Record<string, string> = {
   "nav.history": "Verlauf",
   "nav.creative": "Kreativ",
   "nav.notes": "Journal",
-  "nav.qtt": "QTT",
+  "nav.qtt": "Crafter",
   "nav.code": "Codieren",
   "nav.codeGo": "Zum Codieren",
   "nav.codes": "Codes",
@@ -294,10 +294,10 @@ export const de: Record<string, string> = {
   "qtt.itemDelete": "Element löschen",
   "qtt.itemDeleteError": "Element konnte nicht gelöscht werden",
   "qtt.jumpTitle": "Segment im Codierer öffnen",
-  "qtt.send": "An QTT senden",
+  "qtt.send": "An Crafter senden",
   "qtt.sendTitle": "An Arbeitsblatt senden",
   "qtt.sendDone": "Gesendet",
-  "qtt.sendEmpty": "Noch keine Arbeitsblätter – erstellen Sie eines im QTT-Arbeitsbereich.",
+  "qtt.sendEmpty": "Noch keine Arbeitsblätter – erstellen Sie eines im Crafter-Arbeitsbereich.",
   "qtt.sendError": "Segment konnte nicht an das Arbeitsblatt gesendet werden",
 
   // transcription
@@ -617,6 +617,8 @@ export const de: Record<string, string> = {
   "pdfCoder.pageOf": "Seite {page} von {pages}",
   "pdfCoder.rendering": "Seite {page} wird gerendert …",
   "pdfCoder.pageWithDate": "Seite {page} · {date}",
+  "pdfCoder.pageLabel": "Seite {page}",
+  "pdfCoder.codedOn": "Codiert am {date}",
   "pdfCoder.removeConfirm": "Codierung für {name} entfernen?",
   "pdfCoder.editRegion": "Region bearbeiten",
 

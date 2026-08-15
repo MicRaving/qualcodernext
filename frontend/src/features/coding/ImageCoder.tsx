@@ -6,9 +6,10 @@
  * to screen pixels: screen = image * zoom.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { LoaderCircle, Pencil, Trash2, ZoomIn, ZoomOut } from "lucide-react";
+import { LoaderCircle, Minus, Pencil, Plus, Trash2, ZoomIn, ZoomOut } from "lucide-react";
 import { api, sourceFileUrl, type CodeTreeItem, type ImageCoding, type Source } from "@/lib/api";
 import { CodePicker, type PickedCode } from "@/features/coding/CodePicker";
+import { patchCodingWeight } from "@/features/coding/codingApi";
 import { codeTint } from "@/features/coding/tint";
 import { useI18n } from "@/lib/i18n";
 import {
@@ -152,7 +153,7 @@ export function ImageCoder({ source }: { source: Source }) {
       setSaving(true);
       setError(null);
       try {
-        await api.createImageCoding({
+        const created = await api.createImageCoding({
           id: source.id,
           x1: rect.x1,
           y1: rect.y1,
@@ -162,7 +163,10 @@ export function ImageCoder({ source }: { source: Source }) {
           owner: "default",
         });
         setPendingRect(null);
-        await load();
+        const fresh = await load();
+        setEditDraft(null);
+        // Show the details of the freshly assigned region automatically.
+        setSelected(fresh.find((c) => c.imid === created.imid) ?? null);
       } catch (e) {
         setError(e instanceof Error ? e.message : t("coder.createError"));
       } finally {
@@ -246,6 +250,23 @@ export function ImageCoder({ source }: { source: Source }) {
     } catch (e) {
       setError(e instanceof Error ? e.message : t("coder.deleteError"));
     }
+  }
+
+  /** Segment weight (backend rows carry it; 0 = no weight). */
+  const imgWeight = (coding: ImageCoding): number =>
+    (coding as ImageCoding & { weight?: number }).weight ?? 0;
+
+  /** Stepper update of a region's weight (0-100; 0 = no weight). */
+  function updateCodingWeight(coding: ImageCoding, weight: number) {
+    void (async () => {
+      try {
+        await patchCodingWeight("image", coding.imid, weight);
+        const fresh = await load();
+        setSelected(fresh.find((c) => c.imid === coding.imid) ?? null);
+      } catch (e) {
+        setError(e instanceof Error ? e.message : t("coder.weightError"));
+      }
+    })();
   }
 
   function startEditGeometry(coding: ImageCoding) {
@@ -410,7 +431,7 @@ export function ImageCoder({ source }: { source: Source }) {
               style={{ backgroundColor: codeColor(selected) }}
               aria-hidden
             />
-            <span className="truncate text-sm font-medium text-text-primary">
+            <span className="truncate text-sm font-medium text-text-primary" title={selected.date}>
               {nameByCid.get(selected.cid) ?? t("coder.fallbackCodePlain", { id: selected.cid })}
             </span>
             <span className="truncate text-xs text-text-secondary">
@@ -420,6 +441,30 @@ export function ImageCoder({ source }: { source: Source }) {
             <div className="flex-1" />
             {!editDraft && (
               <>
+                <span className="flex items-center gap-1">
+                  <span className="text-xs text-text-secondary">{t("coder.weight")}</span>
+                  <Button
+                    variant="secondary"
+                    className="h-6 w-6 justify-center px-0"
+                    icon={<Minus size={12} aria-hidden />}
+                    title={t("coder.weightDec")}
+                    aria-label={t("coder.weightDec")}
+                    disabled={imgWeight(selected) === 0}
+                    onClick={() => updateCodingWeight(selected, imgWeight(selected) - 1)}
+                  />
+                  <span className="min-w-5 text-center text-xs text-text-secondary" aria-label={t("coder.weight")}>
+                    {imgWeight(selected)}
+                  </span>
+                  <Button
+                    variant="secondary"
+                    className="h-6 w-6 justify-center px-0"
+                    icon={<Plus size={12} aria-hidden />}
+                    title={t("coder.weightInc")}
+                    aria-label={t("coder.weightInc")}
+                    disabled={imgWeight(selected) >= 100}
+                    onClick={() => updateCodingWeight(selected, imgWeight(selected) + 1)}
+                  />
+                </span>
                 <Button
                   variant="secondary"
                   icon={<Pencil size={12} aria-hidden />}

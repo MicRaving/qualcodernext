@@ -9,7 +9,7 @@
  * not in the list.
  */
 import { useCallback, useEffect, useState } from "react";
-import { Check, LoaderCircle, Plus, X } from "lucide-react";
+import { Check, ChevronDown, LoaderCircle, Plus, X } from "lucide-react";
 import {
   ApiError,
   api,
@@ -17,7 +17,7 @@ import {
   initApiBase,
 } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
-import { IconButton, Input, SectionLabel } from "@/components/ui/orchestrator";
+import { Button, Input, SectionLabel } from "@/components/ui/orchestrator";
 
 /** Attribute type shape with the value-labels map (api.ts type is fixed). */
 type AttrTypeLite = {
@@ -145,17 +145,17 @@ export function AttributeEditor({
     <div>
       <div className="mb-1 flex items-center justify-between">
         <SectionLabel>{t("inspector.attributes")}</SectionLabel>
-        <IconButton
-          label={t("inspector.attributesAddType")}
+        <Button
+          variant="primaryCompact"
+          icon={<Plus size={12} aria-hidden />}
           title={t("inspector.attributesAddType")}
-          size="sm"
           onClick={() => {
             setAdding((a) => !a);
             setNewName("");
           }}
         >
-          <Plus size={12} aria-hidden />
-        </IconButton>
+          {t("inspector.attributesAddType")}
+        </Button>
       </div>
       {adding && (
         <div className="mb-2 flex flex-col gap-1.5">
@@ -170,31 +170,38 @@ export function AttributeEditor({
               placeholder={t("inspector.attributesAddType")}
               className="min-w-0 flex-1"
             />
-            <IconButton
-              label={t("common.rename")}
+            <Button
+              variant="primary"
+              icon={<Check size={14} aria-hidden />}
               title={t("inspector.attributesAddType")}
-              size="md"
               disabled={!newName.trim()}
               onClick={() => void createType()}
             >
-              <Check size={14} aria-hidden />
-            </IconButton>
-            <IconButton
-              label={t("common.cancel")}
+              {t("common.add")}
+            </Button>
+            <Button
+              variant="secondary"
+              icon={<X size={14} aria-hidden />}
               title={t("common.cancel")}
-              size="md"
               onClick={() => setAdding(false)}
             >
-              <X size={14} aria-hidden />
-            </IconButton>
+              {t("common.cancel")}
+            </Button>
           </div>
-          <button
-            type="button"
-            className="self-start text-xs text-text-secondary underline-offset-2 hover:underline"
+          <Button
+            variant="secondary"
+            icon={
+              <ChevronDown
+                size={12}
+                aria-hidden
+                className={`transition-transform ${labelsOpen ? "rotate-180" : ""}`}
+              />
+            }
+            className="self-start"
             onClick={() => setLabelsOpen((o) => !o)}
           >
             {t("inspector.attributesValueLabels")}
-          </button>
+          </Button>
           {labelsOpen && (
             <div className="flex flex-col gap-1.5 border-l border-border pl-2">
               {newLabels.map((row, i) => (
@@ -211,23 +218,24 @@ export function AttributeEditor({
                     placeholder={t("inspector.attributesLabel")}
                     className="min-w-0 flex-1"
                   />
-                  <IconButton
-                    label={t("inspector.attributesRemoveLabel")}
+                  <Button
+                    variant="danger"
+                    icon={<X size={12} aria-hidden />}
+                    aria-label={t("inspector.attributesRemoveLabel")}
                     title={t("inspector.attributesRemoveLabel")}
-                    size="md"
+                    className="shrink-0"
                     onClick={() => setNewLabels((rows) => rows.filter((_, idx) => idx !== i))}
-                  >
-                    <X size={14} aria-hidden />
-                  </IconButton>
+                  />
                 </div>
               ))}
-              <button
-                type="button"
-                className="self-start text-xs text-text-secondary underline-offset-2 hover:underline"
+              <Button
+                variant="secondary"
+                icon={<Plus size={12} aria-hidden />}
+                className="self-start"
                 onClick={() => setNewLabels((rows) => [...rows, { raw: "", label: "" }])}
               >
                 {t("inspector.attributesAddLabel")}
-              </button>
+              </Button>
             </div>
           )}
         </div>

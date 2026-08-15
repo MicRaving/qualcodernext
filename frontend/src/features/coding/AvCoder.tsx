@@ -557,15 +557,17 @@ export function AvCoder({ source }: { source: Source }) {
 
   const codeColor = (coding: AVCoding) => colorByCid.get(coding.cid) ?? "rgba(0,0,0,0.15)";
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (): Promise<AVCoding[]> => {
     setLoading(true);
     setError(null);
     try {
       const [cs, flat] = await Promise.all([api.avCodings(source.id), api.codesFlat()]);
       setCodings(cs);
       setCodes(flat);
+      return cs;
     } catch (e) {
       setError(e instanceof Error ? e.message : t("coder.loadCodingsError"));
+      return [];
     } finally {
       setLoading(false);
     }
@@ -1101,7 +1103,7 @@ export function AvCoder({ source }: { source: Source }) {
     setPickerOpen(false);
     setError(null);
     try {
-      await api.createAvCoding({
+      const created = await api.createAvCoding({
         id: source.id,
         pos0,
         pos1,
@@ -1109,7 +1111,9 @@ export function AvCoder({ source }: { source: Source }) {
         owner: "default",
       });
       setPendingStart(null);
-      await load();
+      const fresh = await load();
+      // Show the details of the freshly assigned segment automatically.
+      setSelected(fresh.find((c) => c.avid === created.avid) ?? null);
     } catch (e) {
       setError(e instanceof Error ? e.message : t("coder.createError"));
     }
@@ -1145,7 +1149,8 @@ export function AvCoder({ source }: { source: Source }) {
     void (async () => {
       try {
         await patchCodingWeight("av", coding.avid, weight);
-        await load();
+        const fresh = await load();
+        setSelected(fresh.find((c) => c.avid === coding.avid) ?? null);
       } catch (e) {
         setError(e instanceof Error ? e.message : t("coder.weightError"));
       }
@@ -1747,7 +1752,7 @@ export function AvCoder({ source }: { source: Source }) {
             style={{ backgroundColor: codeColor(selected) }}
             aria-hidden
           />
-          <span className="truncate text-sm font-medium text-text-primary">
+          <span className="truncate text-sm font-medium text-text-primary" title={selected.date}>
             {nameByCid.get(selected.cid) ?? t("coder.fallbackCodePlain", { id: selected.cid })}
           </span>
           <span className="font-mono text-xs text-text-secondary">
@@ -1756,27 +1761,27 @@ export function AvCoder({ source }: { source: Source }) {
           <span className="truncate text-xs text-text-secondary">{selected.memo || t("common.noMemo")}</span>
           <span className="flex items-center gap-1">
             <span className="text-xs text-text-secondary">{t("coder.weight")}</span>
-            <IconButton
-              label={t("coder.weightDec")}
+            <Button
+              variant="secondary"
+              className="h-6 w-6 justify-center px-0"
+              icon={<Minus size={12} aria-hidden />}
               title={t("coder.weightDec")}
-              size="sm"
+              aria-label={t("coder.weightDec")}
               disabled={avWeight(selected) === 0}
               onClick={() => updateCodingWeight(selected, avWeight(selected) - 1)}
-            >
-              <Minus size={12} aria-hidden />
-            </IconButton>
+            />
             <span className="min-w-5 text-center text-xs text-text-secondary" aria-label={t("coder.weight")}>
               {avWeight(selected)}
             </span>
-            <IconButton
-              label={t("coder.weightInc")}
+            <Button
+              variant="secondary"
+              className="h-6 w-6 justify-center px-0"
+              icon={<Plus size={12} aria-hidden />}
               title={t("coder.weightInc")}
-              size="sm"
+              aria-label={t("coder.weightInc")}
               disabled={avWeight(selected) >= 100}
               onClick={() => updateCodingWeight(selected, avWeight(selected) + 1)}
-            >
-              <Plus size={12} aria-hidden />
-            </IconButton>
+            />
           </span>
           <div className="flex-1" />
           <Button

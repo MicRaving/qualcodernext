@@ -184,7 +184,9 @@ test("PDF import and region coding", async ({ page }) => {
   await region.click();
   await expect(page.getByText("Coding details")).toBeVisible({ timeout: 10_000 });
   await expect(page.getByText("PdfCode", { exact: true })).toBeVisible();
-  await expect(page.getByText(/Page 1 ·/)).toBeVisible();
+  // The page label is visible; the coding date moved into the hover tooltip.
+  await expect(page.getByText("Page 1", { exact: true })).toBeVisible();
+  await expect(page.locator("li span[title^='Coded on']")).toBeVisible();
 
   // --------------------------------------------------------------- delete
   // The details panel's Remove button deletes the coding (window.confirm).

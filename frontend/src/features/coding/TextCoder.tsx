@@ -399,10 +399,11 @@ export function TextCoder({
     };
   }, [sourceId, reloadTick, t, controlled]);
 
-  const refreshCodings = useCallback(async () => {
+  const refreshCodings = useCallback(async (): Promise<Coding[]> => {
     const next = await api.sourceCoding(sourceId);
     if (controlled) onCodingsChange?.(next);
     else setLocalCodings(next);
+    return next;
   }, [sourceId, controlled, onCodingsChange]);
 
   const refreshAnnotations = useCallback(async () => {
@@ -669,20 +670,33 @@ export function TextCoder({
 
   /* ----------------------------------------------------------- coding flow */
 
+  /** Select the details for a freshly created coding: locate the rendered
+   *  segment covering its span and show it in the footer. */
+  function selectCreatedSegment(created: Coding, next: Coding[]) {
+    const seg = buildRenderedSegments(text, next, colorByCid).find((s) =>
+      s.ctids.includes(created.ctid),
+    );
+    if (seg) {
+      setSelectedAnnSeg(null);
+      setSelectedSeg(seg);
+    }
+  }
+
   /** Code the pending text selection with the given code id. */
   function codeSelection(cid: number) {
     const sel = selection;
     if (!sel) return;
     void (async () => {
       try {
-        await api.createTextCoding({
+        const created = await api.createTextCoding({
           cid,
           fid: sourceId,
           seltext: text.slice(sel.start, sel.end),
           pos0: sel.start,
           pos1: sel.end,
         });
-        await refreshCodings();
+        const next = await refreshCodings();
+        selectCreatedSegment(created, next);
       } catch (e) {
         setErrMsg(e instanceof Error ? e.message : t("coder.createError"));
       } finally {
@@ -702,14 +716,15 @@ export function TextCoder({
     void (async () => {
       try {
         const res = await api.createCode(name, { catid: inVivoCat });
-        await api.createTextCoding({
+        const created = await api.createTextCoding({
           cid: res.cid,
           fid: sourceId,
           seltext: text.slice(sel.start, sel.end),
           pos0: sel.start,
           pos1: sel.end,
         });
-        await refreshCodings();
+        const next = await refreshCodings();
+        selectCreatedSegment(created, next);
         setInVivoOpen(false);
       } catch (e) {
         setErrMsg(e instanceof Error ? e.message : t("coder.inVivoCreateError"));
@@ -1399,37 +1414,36 @@ export function TextCoder({
                     style={{ backgroundColor: code?.color ?? FALLBACK_CODE_COLOR }}
                     aria-hidden
                   />
-                  <span className="font-medium">
+                  <span className="font-medium" title={r.date}>
                     {code?.name ?? t("coder.fallbackCode", { id: r.cid })}
                   </span>
                   {r.important !== 0 && (
                     <Star size={12} className="text-warning" fill="currentColor" aria-hidden />
                   )}
                   {code?.memo && <span className="truncate text-xs text-text-secondary">{code.memo}</span>}
-                  <span className="text-xs text-text-secondary">{r.date}</span>
                   <span className="flex items-center gap-1">
                     <span className="text-xs text-text-secondary">{t("coder.weight")}</span>
-                    <IconButton
-                      label={t("coder.weightDec")}
+                    <Button
+                      variant="secondary"
+                      className="h-6 w-6 justify-center px-0"
+                      icon={<Minus size={12} aria-hidden />}
                       title={t("coder.weightDec")}
-                      size="sm"
+                      aria-label={t("coder.weightDec")}
                       disabled={weightOf(r) === 0}
                       onClick={() => updateCodingWeight(r, weightOf(r) - 1)}
-                    >
-                      <Minus size={12} aria-hidden />
-                    </IconButton>
+                    />
                     <span className="min-w-5 text-center text-xs text-text-secondary" aria-label={t("coder.weight")}>
                       {weightOf(r)}
                     </span>
-                    <IconButton
-                      label={t("coder.weightInc")}
+                    <Button
+                      variant="secondary"
+                      className="h-6 w-6 justify-center px-0"
+                      icon={<Plus size={12} aria-hidden />}
                       title={t("coder.weightInc")}
-                      size="sm"
+                      aria-label={t("coder.weightInc")}
                       disabled={weightOf(r) >= 100}
                       onClick={() => updateCodingWeight(r, weightOf(r) + 1)}
-                    >
-                      <Plus size={12} aria-hidden />
-                    </IconButton>
+                    />
                   </span>
                   <div className="flex-1" />
                   <IconButton

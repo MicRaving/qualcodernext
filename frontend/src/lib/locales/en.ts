@@ -29,7 +29,7 @@ export const en: Record<string, string> = {
   "nav.history": "History",
   "nav.creative": "Creative",
   "nav.notes": "Journal",
-  "nav.qtt": "QTT",
+  "nav.qtt": "Crafter",
   "nav.code": "Code",
   "nav.codeGo": "Go to code",
   "nav.codes": "Codes",
@@ -286,10 +286,10 @@ export const en: Record<string, string> = {
   "qtt.itemDelete": "Delete item",
   "qtt.itemDeleteError": "Could not delete the item",
   "qtt.jumpTitle": "Open the segment in the coder",
-  "qtt.send": "Send to QTT",
+  "qtt.send": "Send to Crafter",
   "qtt.sendTitle": "Send to worksheet",
   "qtt.sendDone": "Sent",
-  "qtt.sendEmpty": "No worksheets yet — create one in the QTT workspace.",
+  "qtt.sendEmpty": "No worksheets yet — create one in the Crafter workspace.",
   "qtt.sendError": "Could not send the segment to the worksheet",
 
   // transcription
@@ -583,6 +583,8 @@ export const en: Record<string, string> = {
   "pdfCoder.pageOf": "Page {page} of {pages}",
   "pdfCoder.rendering": "Rendering page {page}…",
   "pdfCoder.pageWithDate": "Page {page} · {date}",
+  "pdfCoder.pageLabel": "Page {page}",
+  "pdfCoder.codedOn": "Coded on {date}",
   "pdfCoder.removeConfirm": "Remove the coding for {name}?",
 
   // html coder (webpage snapshots)

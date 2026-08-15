@@ -1,4 +1,4 @@
-# QTT — Questions-Themes-Theories workspace
+# Crafter — Questions-Themes-Theories workspace
 
 MAXQDA-style worksheets that collect insights (segments, notes, chart
 references, links) under themed sections. The name and the workflow mirror

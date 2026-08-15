@@ -29,8 +29,7 @@ import {
   Trash2,
   X,
 } from "lucide-react";
-import { api, fetchWithTimeout, type Annotation, type CodeTreeItem, type Coding, type ImageCoding, type Source } from "@/lib/api";
-import { sourceFileUrl } from "@/lib/api";
+import { api, fetchWithTimeout, initApiBase, type Annotation, type CodeTreeItem, type Coding, type ImageCoding, type Source } from "@/lib/api";
 import { patchCodingWeight } from "@/features/coding/codingApi";
 import { CodePicker, type PickedCode } from "@/features/coding/CodePicker";
 import { AutocodeDialog } from "@/features/coding/AutocodeDialog";
@@ -62,6 +61,36 @@ pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
 ).toString();
 
 const DRAG_MIN_SIZE = 5;
+
+/** Download a source's PDF bytes for pdf.js.
+ *
+ * The base URL must be RESOLVED before the fetch: `sourceFileUrl()` builds
+ * from the synchronous dev fallback until `initApiBase()` settles, and in
+ * the packaged app the embedded backend takes seconds to boot (or runs on an
+ * ephemeral port when a second instance holds 8765) — every other API call
+ * awaits `initApiBase()` first, so only this raw-file fetch used to race it
+ * and intermittently fail with "Failed to fetch" when opening PDFs. A
+ * network-level failure gets one retry (mirrors the `request()` client,
+ * which drops the stale base and resolves it afresh).
+ */
+async function fetchPdfBytes(sourceId: number): Promise<ArrayBuffer> {
+  const base = await initApiBase();
+  const url = `${base}/sources/${sourceId}/file`;
+  const attempt = async (): Promise<ArrayBuffer> => {
+    const res = await fetchWithTimeout(url, undefined, 60_000);
+    if (!res.ok) throw new Error(`HTTP ${res.status} from ${url}`);
+    return res.arrayBuffer();
+  };
+  try {
+    return await attempt();
+  } catch (err) {
+    // HTTP errors are definitive (missing file etc.) — only a transport
+    // failure (backend still booting / restarted) deserves a retry.
+    if (err instanceof Error && err.message.startsWith("HTTP ")) throw err;
+    await new Promise((r) => setTimeout(r, 1000));
+    return attempt();
+  }
+}
 
 interface PageSize {
   width: number;
@@ -204,6 +233,9 @@ export function PdfCoder({ source }: { source: Source }) {
   const [pickerOpen, setPickerOpen] = useState(false);
   const [selectedImid, setSelectedImid] = useState<number | null>(null);
   const [editDraft, setEditDraft] = useState<RectDraft | null>(null);
+  /** Freshly created text coding flashed on its matched overlay (~2s). */
+  const [flashTextCtid, setFlashTextCtid] = useState<number | null>(null);
+  const flashTextTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const containerRef = useRef<HTMLDivElement | null>(null);
   const canvasRefs = useRef(new Map<number, HTMLCanvasElement>());
@@ -300,11 +332,10 @@ export function PdfCoder({ source }: { source: Source }) {
         // Fetch the raw bytes ourselves (with a timeout) and hand them to
         // pdf.js as `data` — this avoids Range/streaming/mixed-content
         // quirks of `url` loading inside WebView2/Tauri custom protocols.
-        const res = await fetchWithTimeout(sourceFileUrl(source.id), undefined, 60_000);
-        if (!res.ok) {
-          throw new Error(`HTTP ${res.status} from ${sourceFileUrl(source.id)}`);
-        }
-        const data = await res.arrayBuffer();
+        // fetchPdfBytes resolves the API base first and retries transport
+        // failures once, so a still-booting/ephemeral-port backend cannot
+        // surface as a spurious "Failed to fetch".
+        const data = await fetchPdfBytes(source.id);
         if (cancelled) return;
         const task = pdfjsLib.getDocument({ data });
         const doc = await task.promise;
@@ -486,6 +517,35 @@ export function PdfCoder({ source }: { source: Source }) {
     setCodes(await api.codesFlat());
   }, []);
 
+  /** Flash a freshly created text coding's overlay and scroll its page into
+   *  view (the text overlays are best-effort word matches, so a missing
+   *  match just skips the scroll). Takes the created coding directly — the
+   *  refreshed codings array is not available in this closure yet. */
+  const flashTextCoding = useCallback(
+    (coding: Coding | null) => {
+      if (!coding || !coding.seltext) return;
+      for (const [page, items] of textItems) {
+        if (matchCodingItems(items, coding.seltext)) {
+          containerRef.current
+            ?.querySelector(`[data-page="${page}"]`)
+            ?.scrollIntoView({ block: "nearest" });
+          break;
+        }
+      }
+      setFlashTextCtid(coding.ctid);
+      if (flashTextTimer.current) clearTimeout(flashTextTimer.current);
+      flashTextTimer.current = setTimeout(() => setFlashTextCtid(null), 2000);
+    },
+    [textItems],
+  );
+
+  useEffect(
+    () => () => {
+      if (flashTextTimer.current) clearTimeout(flashTextTimer.current);
+    },
+    [],
+  );
+
   // History undo/redo: reload codings/annotations when the audit log reverts
   // a change (the shell only refreshes project metadata).
   useEffect(() => {
@@ -571,7 +631,7 @@ export function PdfCoder({ source }: { source: Source }) {
       setPickerOpen(false);
       void (async () => {
         try {
-          await api.createTextCoding({
+          const created = await api.createTextCoding({
             cid,
             fid: source.id,
             seltext: pending.seltext,
@@ -580,6 +640,9 @@ export function PdfCoder({ source }: { source: Source }) {
             owner: "default",
           });
           await refreshTextCodings();
+          // Auto-show the freshly created coding: flash its overlay and
+          // scroll the page it sits on into view.
+          flashTextCoding(created);
         } catch (e) {
           setErrMsg(e instanceof Error ? e.message : t("coder.createError"));
         } finally {
@@ -587,7 +650,7 @@ export function PdfCoder({ source }: { source: Source }) {
         }
       })();
     },
-    [source.id, t, refreshTextCodings],
+    [source.id, t, refreshTextCodings, flashTextCoding],
   );
 
   /** Code the pending drag rectangle with the given code id. */
@@ -598,7 +661,7 @@ export function PdfCoder({ source }: { source: Source }) {
       setPickerOpen(false);
       void (async () => {
         try {
-          await api.createImageCoding({
+          const created = await api.createImageCoding({
             id: source.id,
             cid,
             x1: Math.round(pending.rect.x1 / scale),
@@ -609,6 +672,9 @@ export function PdfCoder({ source }: { source: Source }) {
             pdf_page: pending.pageNumber,
           });
           await refreshCodings();
+          // Auto-show the details of the freshly created region coding.
+          setSelectedImid(created.imid);
+          setEditDraft(null);
         } catch (e) {
           setErrMsg(e instanceof Error ? e.message : t("coder.createError"));
         } finally {
@@ -952,6 +1018,7 @@ export function PdfCoder({ source }: { source: Source }) {
               return (
                 <div
                   key={p}
+                  data-page={p}
                   role="img"
                   aria-label={t("pdfCoder.pageOf", { page: p, pages: numPages })}
                   className="relative shrink-0"
@@ -1013,10 +1080,11 @@ export function PdfCoder({ source }: { source: Source }) {
                       <div
                         key={`t-${ov.ctid}-${i}`}
                         className={cn(
-                          "pointer-events-none absolute",
+                          "pointer-events-none absolute qc-seg",
                           hiddenCodes.includes(
                             textCodings.find((c) => c.ctid === ov.ctid)?.cid ?? -1,
                           ) && "qc-seg-hidden",
+                          flashTextCtid === ov.ctid && "qc-seg-flash",
                         )}
                         style={{
                           left: it.x * scale,
@@ -1132,38 +1200,39 @@ export function PdfCoder({ source }: { source: Source }) {
               {selectedCoding.memo && (
                 <span className="truncate text-xs text-text-secondary">{selectedCoding.memo}</span>
               )}
-              <span className="text-xs text-text-secondary">
-                {t("pdfCoder.pageWithDate", {
-                  page: selectedCoding.pdf_page ?? "?",
-                  date: selectedCoding.date,
-                })}
+              <span
+                className="text-xs text-text-secondary"
+                title={selectedCoding.date ? t("pdfCoder.codedOn", { date: selectedCoding.date }) : undefined}
+                aria-label={selectedCoding.date ? t("pdfCoder.codedOn", { date: selectedCoding.date }) : undefined}
+              >
+                {t("pdfCoder.pageLabel", { page: selectedCoding.pdf_page ?? "?" })}
               </span>
               <span className="flex items-center gap-1">
                 <span className="text-xs text-text-secondary">{t("coder.weight")}</span>
-                <IconButton
-                  label={t("coder.weightDec")}
+                <Button
+                  variant="secondary"
+                  className="h-6 w-6 justify-center px-0"
+                  icon={<Minus size={12} aria-hidden />}
                   title={t("coder.weightDec")}
-                  size="sm"
+                  aria-label={t("coder.weightDec")}
                   disabled={imageWeight(selectedCoding) === 0}
                   onClick={() => updateCodingWeight(selectedCoding, imageWeight(selectedCoding) - 1)}
-                >
-                  <Minus size={12} aria-hidden />
-                </IconButton>
+                />
                 <span
                   className="min-w-5 text-center text-xs text-text-secondary"
                   aria-label={t("coder.weight")}
                 >
                   {imageWeight(selectedCoding)}
                 </span>
-                <IconButton
-                  label={t("coder.weightInc")}
+                <Button
+                  variant="secondary"
+                  className="h-6 w-6 justify-center px-0"
+                  icon={<Plus size={12} aria-hidden />}
                   title={t("coder.weightInc")}
-                  size="sm"
+                  aria-label={t("coder.weightInc")}
                   disabled={imageWeight(selectedCoding) >= 100}
                   onClick={() => updateCodingWeight(selectedCoding, imageWeight(selectedCoding) + 1)}
-                >
-                  <Plus size={12} aria-hidden />
-                </IconButton>
+                />
               </span>
               <div className="flex-1" />
               {!editDraft && (
