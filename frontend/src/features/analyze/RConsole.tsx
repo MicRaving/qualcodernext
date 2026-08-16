@@ -15,7 +15,7 @@
  *
  * R runs with QC_PORT / QC_PROJECT / QC_EXCHANGE set in its environment.
  */
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   CircleAlert,
   CircleCheck,
@@ -161,9 +161,18 @@ export function RConsoleView() {
   const toast = useToast();
 
   // The newest R task in the store queue drives what we poll/display.
-  const rTasks = useProjectStore((s) => s.tasks.filter((j) => j.kind === "r"));
-  const currentRTask = rTasks[rTasks.length - 1];
-  const running = rTasks.find((j) => j.state === "running" || j.state === "queued");
+  // NOTE: select the raw array here and derive the R-task list with useMemo —
+  // a selector returning a fresh filter() array on every render makes
+  // useSyncExternalStore re-render forever ("Maximum update depth exceeded").
+  const allTasks = useProjectStore((s) => s.tasks);
+  const { rTasks, running } = useMemo(() => {
+    const list = allTasks.filter((j) => j.kind === "r");
+    return {
+      rTasks: list,
+      running: list.find((j) => j.state === "running" || j.state === "queued") ?? null,
+    };
+  }, [allTasks]);
+  const currentRTask = rTasks[rTasks.length - 1] ?? null;
   const removeTask = useProjectStore((s) => s.removeTask);
 
   const [status, setStatus] = useState<RStatus | null>(null);

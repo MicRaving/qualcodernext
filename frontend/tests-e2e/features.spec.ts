@@ -208,12 +208,16 @@ test("image coding: draw a region and code it", async ({ page }) => {
   const box = await img.boundingBox();
   expect(box).not.toBeNull();
 
-  // Drag from ~20% to ~60% of the image.
-  await page.mouse.move(box!.x + box!.width * 0.2, box!.y + box!.height * 0.2);
+  // Drag from ~20% to ~60% of the image. Integer coordinates: Chromium
+  // drags are unreliable on fractional pixels (a half-pixel start can make
+  // the gesture collapse instead of forming a region).
+  const sx = Math.round(box!.x + box!.width * 0.2);
+  const sy = Math.round(box!.y + box!.height * 0.2);
+  const ex = Math.round(box!.x + box!.width * 0.6);
+  const ey = Math.round(box!.y + box!.height * 0.6);
+  await page.mouse.move(sx, sy);
   await page.mouse.down();
-  await page.mouse.move(box!.x + box!.width * 0.6, box!.y + box!.height * 0.6, {
-    steps: 5,
-  });
+  await page.mouse.move(ex, ey, { steps: 5 });
   await page.mouse.up();
 
   // The CodePicker modal opens; create a brand-new code for the region.

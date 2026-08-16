@@ -10,7 +10,8 @@ This is a rework of [QualCoder](https://github.com/ccbogel/QualCoder), the open-
 
 ### Scope of the Rework
 
-I really love QualCoder but always felt like it had some shortcomings. I therefore tried to rework the codebase with the following major goals:
+I really love QualCoder but always felt like it had some shortcomings. Based on the upstream QualCoder as per 10.08.2026, I tried to rework the codebase with the following major goals 
+
 
 * **Simplified UI**: This was the main point behind the rework. I used QualCoder a lot but was never able to convince my students and fellow researchers because the UI was always unintuitive with many functions hidden behind menus and requiring just one too many clicks. The rework tries to simplify and reorganize the UI as much as possible while retaining full functionality.
 * **Simultaneous collaboration**: Nowadays, qualitative projects have grown substantially, heavily relying on many coders. While I understood the limitations of SQLite, I was never happy with not being able to work on projects simultaneously. In the rework, your just have to save the project in a shared folder, enable collaboration in the coder flyout on the top right and you're good to go. Projects sync every minute, just make sure you're not working as the same coder with multiple computers.
@@ -20,37 +21,6 @@ I really love QualCoder but always felt like it had some shortcomings. I therefo
 * **Full compatibility**: All of these changes do not break compatibility with your existing projects.
 * **Minor features**: Undo/redo with a full project history. More reports and additional interrater agreements like Fleiss Kappa. Implemented a dashboard for quick access. Easier file management with multiselect etc
 * **(Future) Web apps**: With more and more people relying on tablets and smartphones, using offline apps becomes less practical. The rework did not fully implement a client-server structure and future iterations will always retain offline functionality, but it lays the groundwork for running QualCoder in a browser.
-
-## Changelog
-
-> The full, area-by-area changelog compared to the upstream QualCoder code lives in
-> [CHANGELOG.md](CHANGELOG.md) (high-level summary first, then the detailed list).
-
-QCnext is based on the upstream QualCoder as per 10.08.2026 that was completely reworked with preserving compatibility for projects:
-
-* All data access goes through a typed HTTP API (`backend/src/qualcoder\\\_api`), preparing R/Python/MCP tooling
-* The whole UI is now simplified, featuring a ribbon and three-column layout (left bar, right bar, center view) that each contain a menu bar
-* Refactored the monolithic Python scripts
-* Reduced startup time from ~30s to ~2s by moving to **FastAPI + SQLAlchemy (async) + SQLite** backend, in a **Tauri 2** desktop shell (React 19 + TypeScript + Vite)
-* Full project history
-* Rename every project element inline (no more pesky popups)
-* Simple collaboration with automatic sync between multiple simultaneously working coders
-* Extended AI assistant
-* Included an updater
-* Added NVivo, Transana, XLSX/SPSS .sav import (experimental)
-* Subcodes on the coding menu
-* **Dictionary autocode**: MAXDictio-style word dictionaries with term-frequency report, used from the autocode dialog and the Dictionary report
-* **Sentiment report** (VADER lexicon or AI) and **document comparison** chart (LCS alignment)
-* **Statistics** suite: code × attribute crosstabs with chi-square, group comparisons (Mann-Whitney U), mixed-methods matrix, Multi-coder interrater reliability
-* **Summary tables** (coding memos as a document × code grid) and the **smart publisher** (Word/Excel/PowerPoint export of reports)
-* **Segment hyperlinks / linked quotes** between documents (copy/paste link payloads)
-* **Creative coding** scratchpad with promote-to-code
-* **QTT workspace** (MAXQDA-style questions-themes-theories worksheets, qualitative + Creswell 14-step mixed template, send-to-QTT from the coders)
-* URL import / scraping: YouTube comments, articles, raw HTML)
-* Automatic transcript and extended manual transcription (media keys, timestamp insert)
-* Attribute value labels
-* Coder flyout with per-coder delete + background-task queue controls
-* Batch transcribe/autocode
 
 ## Collaboration
 
@@ -95,6 +65,7 @@ Here is a non-exhaustive list of planned features
 * Fully implement client-server architecture
 * Implement more use cases for LLMs
 * Further refine the UI
+* Improve documentation and tutorials
 * Bug-fixing - You tell me!
 
 ## What will (likely) not be implemented

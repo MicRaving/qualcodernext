@@ -38,7 +38,7 @@ import { NotesEditor, NotesList } from "@/features/notes/NotesView";
 import { QttList, QttView } from "@/features/qtt/QttView";
 import { AnalyzeView } from "@/features/analyze/AnalyzeView";
 import { ReportsList } from "@/features/analyze/ReportsList";
-import { GraphsMenuBar, GraphsInspector, GraphsView } from "@/features/graphs/GraphsView";
+import { GraphsInspector, GraphsView } from "@/features/graphs/GraphsView";
 import { HistoryView } from "@/features/history/HistoryView";
 import { CreativePanel } from "@/features/creative/CreativePanel";
 import { SettingsView } from "@/features/settings/SettingsView";
@@ -605,11 +605,6 @@ export function ProjectShell() {
           <Settings size={20} aria-hidden />
         </button>
       </header>
-      }
-      menuBar={
-        projectOpen && view.kind === "analyze" && analyzeUi.selectedId === "graphs" ? (
-          <GraphsMenuBar />
-        ) : undefined
       }
       leftBar={
         view.kind === "cases" ? (

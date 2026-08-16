@@ -273,10 +273,15 @@ With a project open:
 - Editing a file memo from ANYWHERE opens the Inspector's inline editor
   (never window.prompt + toast).
 
-## 10. Menu bar slot (currently: Graphs)
+## 10. Function bars per view
 
-- Graphs menu bar: title "Graphs" + graph `<select>` + "New graph" +
-  "Models" + (spacer) + Delete. The canvas is the center.
+- Function bars always render as the **first row of the center view** (`h-10
+  border-b border-border bg-surface px-3`) — a bar must never span the side
+  bars. The orchestrator's `menuBar` slot exists but is intentionally unused
+  by the current views.
+- Graphs menu bar (first row of the center): title "Graphs" + graph `<select>`
+  + "New graph" + (spacer) + "Models" + zoom controls + connect. The canvas is
+  the rest of the center.
 
 ## 11. Status bar
 

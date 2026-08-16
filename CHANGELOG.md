@@ -5,9 +5,8 @@ QCnext is a complete rework of that codebase, keeping full compatibility with ex
 
 ---
 
-## 1. High-level summary
 
-### 1.1 The main changes
+### Major changes
 
 1. **Complete rewrite on a modern stack.** The monolithic PyQt6 desktop app was replaced by a
    **FastAPI + SQLAlchemy (async) + SQLite backend**, a **React 19 + TypeScript + Vite frontend**
@@ -44,17 +43,16 @@ QCnext is a complete rework of that codebase, keeping full compatibility with ex
    Zotero/RIS references, and **URL import/scraping**: YouTube comment threads (as a 4-column
    CSV), articles and raw HTML/PDF capture.
 
-7. **Productivity.** Full project history with **undo/redo for every action family**, a
+7. **Productivity.** Full project history with **undo/redo for every action family** (experimental), a
    background **task queue** (batch transcription/autocode with pause/reorder/clear), inline
-   rename, drag & drop everywhere (files, code tree), multi-select file management, and a
-   dashboard start screen.
+   rename (no more pesky popups), drag & drop in files and code tree, and a dashboard start screen.
 
-8. **New workspaces.** A **QTT workspace** ("Crafter", MAXQDA-style questions-themes-theories
-   worksheets incl. a Creswell 14-step mixed-methods template), **creative coding** scratchpad
+8. **New workspaces.** A **Crafter workspace** to create questions-themes-theories
+   worksheets incl. a Creswell 14-step mixed-methods template, **creative coding** scratchpad
    with promote-to-code, a graph editor with models, an **R console**, SQL reports, and a notes
    workspace (journal / annotations / memos with memo types).
 
-### 1.2 Clustered minor changes
+## Minor changes
 
 - **Coder details:** code weights (0–100) with steppers, "important" flags, segment flash
   highlights, bookmarks, hidden-code dimming, per-segment detail bars, in-vivo coding,
@@ -65,15 +63,10 @@ QCnext is a complete rework of that codebase, keeping full compatibility with ex
 - **Audio/video:** manual transcription mode (media keys, F9/Space, timestamp insert),
   preset transcripts, automatic transcription (faster-whisper), speaker assignment, transcript
   cascade on media delete.
-- **Files:** filters, shift-click range selection, session sort/filter memory, import-in-tasks,
-  mass-delete, bad-link repair, media format recognition.
-- **Code tree:** pointer-based drag & drop (no more HTML5 DnD quirks), promote/demote,
-  merge, subcodes, code sets (sidebar manager + tree filter), namespace-aware depth cap.
-- **Settings:** auto-update on by default, compact-on-close maintenance, model polling gated
-  when AI is disabled, pseudonyms, R status, About pinned to the bottom.
-- **Reliability:** CORS-safe error propagation, base-URL re-resolution on backend restarts,
-  stale-request guards everywhere, non-intrusive motion/accessibility modes, updater with
-  signed-bundle support that degrades to unsigned builds without a key.
+- **Files view:** filters, mass-delete/-transcribe/-autocode, bad-link repair, media format recognition.
+- **Code tree:** pointer-based drag & drop, merge, subcodes, code sets (sidebar manager + tree filter), namespace-aware depth cap.
+- **Settings:** auto-update, compact-on-close maintenance, pseudonyms, initial R integration (not really useful right now).
+- Accessibility options for screenreaders and color-blindness (experimental - please give me feedback!)
 - **Backend hygiene:** audit log for everything, maintenance compaction (WAL checkpoint +
   VACUUM + index rebuild), settings stored machine-level, 409s for duplicate codings, no
   console-window popups from subprocesses on Windows.

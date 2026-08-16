@@ -705,6 +705,9 @@ export function GraphsView() {
 
   return (
     <div className="flex h-full flex-col bg-bg">
+      {/* The graph function bar lives INSIDE the center view — per the
+          design it must not span the sidebars (menuBar slot is unused). */}
+      <GraphsMenuBar />
       {error && <ErrorBanner onClose={() => setGraphsUi({ error: null })}>{error}</ErrorBanner>}
 
       <div className="min-h-0 flex-1 overflow-hidden">
