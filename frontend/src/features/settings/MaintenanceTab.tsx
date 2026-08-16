@@ -1,29 +1,21 @@
 /**
- * MaintenanceTab — Settings "Maintenance" tab: project compaction (manual
- * run + compact-on-close toggle + last-compact time) and the semantic
- * index (build / rebuild / purge).
+ * MaintenanceTab — Settings "Maintenance" section: the compact-on-close
+ * switch (the full compaction runs automatically on project close) and the
+ * semantic index (build / rebuild / purge).
  */
 import { useCallback, useEffect, useState } from "react";
 import { HelpCircle, LoaderCircle, RotateCw, Trash2 } from "lucide-react";
-import { api, type AiIndexStatus, type CompactResult } from "@/lib/api";
+import { api, type AiIndexStatus } from "@/lib/api";
 import { errorDetail } from "@/features/ai/format";
 import { useI18n } from "@/lib/i18n";
 import { Button, ErrorBanner, HelpFlyout, IconButton, Toggle } from "@/components/ui/orchestrator";
 
-/** Byte count → "12.3 MB" (compact result feedback). */
-function formatMb(bytes: number): string {
-  return (bytes / (1024 * 1024)).toFixed(1);
-}
-
 export function MaintenanceTab() {
   const { t } = useI18n();
 
-  // Project compaction
-  const [compacting, setCompacting] = useState(false);
-  const [compactError, setCompactError] = useState<string | null>(null);
-  const [compactResult, setCompactResult] = useState<CompactResult | null>(null);
+  // Project compaction (automatic only — no manual "compact now").
   const [compactOnClose, setCompactOnClose] = useState(false);
-  const [lastCompact, setLastCompact] = useState("");
+  const [compactError, setCompactError] = useState<string | null>(null);
 
   // Semantic index
   const [indexStatus, setIndexStatus] = useState<AiIndexStatus | null>(null);
@@ -45,38 +37,19 @@ export function MaintenanceTab() {
     void loadIndex();
     api
       .maintenanceSettings()
-      .then((s) => {
-        setCompactOnClose(s.compact_on_close);
-        setLastCompact(s.last_compact);
-      })
+      .then((s) => setCompactOnClose(s.compact_on_close))
       .catch(() => undefined);
   }, [loadIndex]);
-
-  async function runCompact() {
-    if (compacting) return;
-    setCompacting(true);
-    setCompactError(null);
-    setCompactResult(null);
-    try {
-      const res = await api.compactProject();
-      setCompactResult(res);
-      const s = await api.maintenanceSettings();
-      setLastCompact(s.last_compact);
-    } catch (e) {
-      setCompactError(t("settings.compactFailed", { detail: errorDetail(e) }));
-    } finally {
-      setCompacting(false);
-    }
-  }
 
   async function toggleCompactOnClose() {
     const next = !compactOnClose;
     setCompactOnClose(next);
     try {
-      const s = await api.saveMaintenanceSettings({ compact_on_close: next });
-      setLastCompact(s.last_compact);
-    } catch {
-      /* keep the local toggle; the backend error surfaces on the next load */
+      await api.saveMaintenanceSettings({ compact_on_close: next });
+      setCompactError(null);
+    } catch (e) {
+      setCompactError(errorDetail(e, "Could not save maintenance settings"));
+      setCompactOnClose(!next);
     }
   }
 
@@ -103,53 +76,20 @@ export function MaintenanceTab() {
   }
 
   return (
-    <div className="min-h-0 flex-1 overflow-y-auto p-3">
+    <div className="p-3">
       {compactError && <ErrorBanner>{compactError}</ErrorBanner>}
 
-      {/* Project compaction */}
-      <section>
-        <h2 className="text-sm font-semibold text-text-primary">{t("settings.maintenanceSection")}</h2>
-        <p className="mt-1 text-xs text-text-secondary">{t("settings.compactProjectHint")}</p>
-
-        <div className="mt-3 flex items-center gap-2">
-          <Button
-            variant="secondary"
-            onClick={() => void runCompact()}
-            disabled={compacting}
-            icon={
-              compacting ? (
-                <LoaderCircle size={12} className="animate-spin" aria-hidden />
-              ) : (
-                <RotateCw size={12} aria-hidden />
-              )
-            }
-          >
-            {compacting ? t("settings.compactRunning") : t("settings.compactProject")}
-          </Button>
-          <span className="text-xs text-text-secondary">
-            {lastCompact ? t("settings.lastCompact", { time: lastCompact }) : t("settings.lastCompactNever")}
-          </span>
-        </div>
-
-        {compactResult && (
-          <p className="mt-2 text-xs text-success" role="status">
-            {t("settings.compactDone", {
-              freed: formatMb(compactResult.freed_bytes),
-              before: formatMb(compactResult.before_bytes),
-              after: formatMb(compactResult.after_bytes),
-            })}
-          </p>
-        )}
-
-        <div className="mt-3 border-t border-border pt-3">
-          <Toggle
-            checked={compactOnClose}
-            onChange={() => void toggleCompactOnClose()}
-            label={t("settings.compactOnClose")}
-            hint={t("settings.compactOnCloseHint")}
-          />
-        </div>
-      </section>
+      {/* Project compaction — the "Compact on close" switch only; the full
+          pass runs automatically when the project is closed. */}
+      <h2 className="text-sm font-semibold text-text-primary">{t("settings.maintenanceSection")}</h2>
+      <div className="mt-2">
+        <Toggle
+          checked={compactOnClose}
+          onChange={() => void toggleCompactOnClose()}
+          label={t("settings.compactOnClose")}
+          hint={t("settings.compactOnCloseHint")}
+        />
+      </div>
 
       {/* Semantic index */}
       <section className="mt-4 border-t border-border pt-3">

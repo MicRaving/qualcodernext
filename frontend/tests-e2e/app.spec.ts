@@ -158,12 +158,12 @@ test("settings and AI status", async ({ page }) => {
   await page.getByRole("button", { name: "Settings", exact: true }).click();
   await expect(page.getByText("Appearance", { exact: true })).toBeVisible();
 
-  // Settings are grouped into tabs — the AI section lives on the AI tab.
-  await page.getByRole("tab", { name: "AI", exact: true }).click();
+  // Settings are one scrollable pane with headline sections — the AI,
+  // updates and maintenance sections are all reachable without tabs.
   await expect(page.getByText("AI assistant", { exact: true })).toBeVisible();
-  await page.getByRole("tab", { name: "Updates", exact: true }).click();
+  await page.getByText("App updates", { exact: true }).scrollIntoViewIfNeeded();
   await expect(page.getByText("Auto-update", { exact: true }).first()).toBeVisible();
   await expect(page.getByText("Check interval", { exact: true })).toBeVisible();
-  await page.getByRole("tab", { name: "Maintenance", exact: true }).click();
-  await expect(page.getByText("Compact project", { exact: true })).toBeVisible();
+  await page.getByText("Project maintenance", { exact: true }).scrollIntoViewIfNeeded();
+  await expect(page.getByText("Compact on close", { exact: true })).toBeVisible();
 });

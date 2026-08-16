@@ -11,9 +11,10 @@
  *  body scrolls (vertical + horizontal for wide tables) under a sticky
  *  header. Coding works DIRECTLY in the table: selecting text inside a
  *  cell opens the shared SelectionToolbar (code / annotate / in-vivo /
- *  links / QTT), and cells covered by codings get a tinted background plus
- *  a code badge (clicking a coded cell or badge opens the shared
- *  CodingDetailsBar / AnnotationDetailsBar below the table). Cell spans
+ *  links / QTT), and ONLY the marked characters get the code tint plus a
+ *  code badge (annotated spans get a dashed underline) — a coding never
+ *  tints the whole cell. Clicking a coded cell or badge opens the shared
+ *  CodingDetailsBar / AnnotationDetailsBar below the table. Cell spans
  *  map 1:1 onto the source text via the parser's per-cell raw offsets.
  *
  *  Plain-text side: the embedded TextCoder runs in controlled mode
@@ -21,7 +22,7 @@
  *  exact pattern PdfCoder/HtmlCoder use — so text codings on the source
  *  keep working unchanged.
  */
-import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
 import { FileText, Table2, Undo2 } from "lucide-react";
 import {
   Button,
@@ -59,6 +60,18 @@ interface CellSpan {
   end: number;
   ri: number;
   ci: number;
+  /** Field-char → raw-char map (for sub-span highlights). */
+  toRaw: number[];
+}
+
+/** A field-char range carrying a visual mark. */
+interface MarkSeg {
+  start: number;
+  end: number;
+  /** Background tint (coded span); null = no tint. */
+  color: string | null;
+  /** Dashed underline (annotated span). */
+  underline: boolean;
 }
 
 /** Everything derived for one cell (key `${ri}:${ci}`). */
@@ -67,10 +80,91 @@ interface CellInfo {
   annotations: Annotation[];
   /** Distinct codes (by id, first-appearance order) for the badge cluster. */
   badges: CodeTreeItem[];
+  /** Field-char ranges covered by codings (disjoint, first code's color). */
+  highlights: MarkSeg[];
+  /** Field-char ranges covered by annotations (disjoint). */
+  annHighlights: MarkSeg[];
 }
 
 /** Shared empty cell — read-only fallback for cells without any codings. */
-const EMPTY_CELL_INFO: CellInfo = { codings: [], annotations: [], badges: [] };
+const EMPTY_CELL_INFO: CellInfo = {
+  codings: [],
+  annotations: [],
+  badges: [],
+  highlights: [],
+  annHighlights: [],
+};
+
+/** Field chars of a cell whose raw offset lies inside [pos0, pos1), or
+ *  null when the span does not reach the cell. ``toRaw`` is ascending. */
+function fieldRangeInRaw(toRaw: number[], pos0: number, pos1: number): [number, number] | null {
+  let lo = 0;
+  let hi = toRaw.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (toRaw[mid] < pos0) lo = mid + 1;
+    else hi = mid;
+  }
+  const start = lo;
+  if (start >= toRaw.length || toRaw[start] >= pos1) return null;
+  let end = start;
+  while (end < toRaw.length && toRaw[end] < pos1) end++;
+  return [start, end];
+}
+
+/** Sort + merge overlapping ranges (first range's color wins). */
+function mergeRanges(ranges: MarkSeg[]): MarkSeg[] {
+  if (ranges.length === 0) return [];
+  const sorted = [...ranges].sort((a, b) => a.start - b.start || b.end - a.end);
+  const out: MarkSeg[] = [];
+  for (const r of sorted) {
+    const last = out[out.length - 1];
+    if (last && r.start <= last.end) {
+      if (r.end > last.end) last.end = r.end;
+    } else {
+      out.push({ ...r });
+    }
+  }
+  return out;
+}
+
+/** Split the cell text at every mark boundary; coded chars get the code
+ *  tint, annotated chars the dashed underline (spans add no text, so
+ *  selection offsets stay intact). */
+function renderMarkedText(text: string, segs: MarkSeg[]): ReactNode {
+  if (segs.length === 0) return text;
+  const out: ReactNode[] = [];
+  let pos = 0;
+  for (const s of segs) {
+    if (s.start > pos) out.push(text.slice(pos, s.start));
+    const inner = s.color ? (
+      <span
+        key={`c${s.start}`}
+        className="rounded-sm"
+        style={{ backgroundColor: codeTint(s.color) }}
+      >
+        {text.slice(s.start, s.end)}
+      </span>
+    ) : (
+      text.slice(s.start, s.end)
+    );
+    out.push(
+      s.underline ? (
+        <span
+          key={`u${s.start}`}
+          className="underline decoration-dashed decoration-text-secondary underline-offset-2"
+        >
+          {inner}
+        </span>
+      ) : (
+        inner
+      ),
+    );
+    pos = s.end;
+  }
+  if (pos < text.length) out.push(text.slice(pos));
+  return out;
+}
 
 export function CsvCoder({ source }: { source: Source }) {
   const { t } = useI18n();
@@ -180,22 +274,29 @@ export function CsvCoder({ source }: { source: Source }) {
     parsed.cells.forEach((row, ri) =>
       row.forEach((cell, ci) => {
         if (cell.start === cell.end) return;
-        list.push({ start: cell.start, end: cell.end, ri, ci });
+        list.push({ start: cell.start, end: cell.end, ri, ci, toRaw: cell.toRaw });
       }),
     );
     list.sort((a, b) => a.start - b.start);
     return list;
   }, [parsed]);
 
-  /** Overlapping codings/annotations + badge codes per cell (key
-   *  `${ri}:${ci}`). Binary-search overlap lookup keeps big tables cheap. */
+  /** Overlapping codings/annotations, badges and sub-span highlights per
+   *  cell (key `${ri}:${ci}`). Binary-search overlap lookup keeps big
+   *  tables cheap. */
   const cellInfoMap = useMemo(() => {
     const map = new Map<string, CellInfo>();
     if (cellIndex.length === 0) return map;
     const ensure = (key: string): CellInfo => {
       const info = map.get(key);
       if (info) return info;
-      const created: CellInfo = { codings: [], annotations: [], badges: [] };
+      const created: CellInfo = {
+        codings: [],
+        annotations: [],
+        badges: [],
+        highlights: [],
+        annHighlights: [],
+      };
       map.set(key, created);
       return created;
     };
@@ -215,8 +316,10 @@ export function CsvCoder({ source }: { source: Source }) {
     };
     for (const c of codings) assign(c.pos0, c.pos1, c);
     for (const a of annotations) assign(a.pos0, a.pos1, a);
-    // Distinct code badges per cell, in first-appearance order.
-    for (const info of map.values()) {
+    for (const span of cellIndex) {
+      const info = map.get(`${span.ri}:${span.ci}`);
+      if (!info) continue;
+      // Distinct code badges per cell, in first-appearance order.
       const seen = new Set<number>();
       for (const c of info.codings) {
         if (seen.has(c.cid)) continue;
@@ -226,6 +329,31 @@ export function CsvCoder({ source }: { source: Source }) {
           code ?? { kind: "code", id: c.cid, name: "", color: null, parent_id: null, memo: "" },
         );
       }
+      // Sub-span marks: only the marked characters are highlighted — a
+      // coding must never tint the whole cell.
+      info.highlights = mergeRanges(
+        info.codings
+          .map((c): MarkSeg | null => {
+            const r = fieldRangeInRaw(span.toRaw, c.pos0, c.pos1);
+            if (!r) return null;
+            return {
+              start: r[0],
+              end: r[1],
+              color: codeById.get(c.cid)?.color ?? FALLBACK_CODE_COLOR,
+              underline: false,
+            };
+          })
+          .filter((r): r is MarkSeg => r !== null),
+      );
+      info.annHighlights = mergeRanges(
+        info.annotations
+          .map((a): MarkSeg | null => {
+            const r = fieldRangeInRaw(span.toRaw, a.pos0, a.pos1);
+            if (!r) return null;
+            return { start: r[0], end: r[1], color: null, underline: true };
+          })
+          .filter((r): r is MarkSeg => r !== null),
+      );
     }
     return map;
   }, [cellIndex, codings, annotations, codeById]);
@@ -527,8 +655,7 @@ export function CsvCoder({ source }: { source: Source }) {
                 <tr key={ri} className="hover:bg-surface-higher">
                   {row.map((cellText, ci) => {
                     const info = cellInfo(ri, ci);
-                    const firstCode = info.codings.length > 0 ? codeById.get(info.codings[0].cid) : null;
-                    const tint = firstCode ? codeTint(firstCode.color ?? FALLBACK_CODE_COLOR) : null;
+                    const marks = mergeRanges([...info.highlights, ...info.annHighlights]);
                     return (
                       <td
                         key={ci}
@@ -536,7 +663,6 @@ export function CsvCoder({ source }: { source: Source }) {
                         data-row={ri}
                         data-col={ci}
                         className={cn(tdCls, "relative max-w-96 align-top")}
-                        style={tint ? { backgroundColor: tint } : undefined}
                       >
                         <span
                           data-qc-cell-text
@@ -545,12 +671,10 @@ export function CsvCoder({ source }: { source: Source }) {
                           className={cn(
                             "block truncate whitespace-nowrap",
                             info.codings.length > 0 && "pr-14",
-                            info.annotations.length > 0 &&
-                              "underline decoration-dashed decoration-text-secondary underline-offset-2",
                           )}
                           title={cellText}
                         >
-                          {cellText}
+                          {renderMarkedText(cellText, marks)}
                         </span>
                         {info.codings.length > 0 && (
                           <span className="absolute right-1 top-0.5 z-10 flex max-w-[80%] items-center gap-0.5">

@@ -89,7 +89,7 @@ export function GeneralTab() {
   }
 
   return (
-    <div className="min-h-0 flex-1 divide-y divide-border overflow-y-auto">
+    <div className="p-3">
       <section className="p-3">
         <div className="grid grid-cols-2 gap-4">
           <div>
@@ -248,4 +248,5 @@ export function GeneralTab() {
     </div>
   );
 }
+
 

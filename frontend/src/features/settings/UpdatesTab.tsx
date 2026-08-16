@@ -62,7 +62,7 @@ export function UpdatesTab() {
   }
 
   return (
-    <div className="min-h-0 flex-1 overflow-y-auto p-3">
+    <div className="p-3">
       <h2 className="text-sm font-semibold text-text-primary">{t("settings.updatesSection")}</h2>
 
       {/* Auto-update toggle + check interval, side by side */}
@@ -149,3 +149,4 @@ export function UpdatesTab() {
     </div>
   );
 }
+

@@ -227,9 +227,15 @@ test("csv table view codes cell text and shows the badge", async ({ page }) => {
   await expect(cell).toBeVisible();
   const box = await cell.boundingBox();
   expect(box).not.toBeNull();
-  await page.mouse.move(box!.x + box!.width * 0.05, box!.y + box!.height / 2);
+  // Integer coordinates: Chromium's drag-selection is unreliable when the
+  // pointer lands on a fractional pixel (a half-pixel start collapses the
+  // selection instead of anchoring it).
+  const sx = Math.round(box!.x + box!.width * 0.05);
+  const ex = Math.round(box!.x + box!.width * 0.6);
+  const sy = Math.round(box!.y + box!.height / 2);
+  await page.mouse.move(sx, sy);
   await page.mouse.down();
-  await page.mouse.move(box!.x + box!.width * 0.6, box!.y + box!.height / 2, { steps: 6 });
+  await page.mouse.move(ex, sy, { steps: 6 });
   await page.mouse.up();
 
   // The selection toolbar offers the ACTIVE code — coding lands in the cell.
@@ -238,9 +244,18 @@ test("csv table view codes cell text and shows the badge", async ({ page }) => {
   await toolbar.getByRole("button", { name: /TblCode/ }).click();
   await expect(toolbar).toBeHidden({ timeout: 10_000 });
 
-  // The cell now shows a code badge + the details bar lists the coding.
+  // The cell now shows ONLY the marked sub-span highlighted (not the whole
+  // cell) plus a code badge; the details bar lists the coding.
+  const marked = page
+    .locator('[data-qc-cell-text] span[style*="background-color"]')
+    .filter({ hasText: "is a great" })
+    .first();
+  await expect(marked).toBeVisible({ timeout: 10_000 });
+  const markedText = (await marked.textContent()) ?? "";
+  expect(markedText.length).toBeGreaterThan(0);
+  expect(markedText.length).toBeLessThan("This is a great comment about research".length);
   const badge = page.locator("[data-qc-badge]").first();
-  await expect(badge).toBeVisible({ timeout: 10_000 });
+  await expect(badge).toBeVisible();
   await expect(badge).toContainText("TblCode");
   await expect(page.getByText("Coding details", { exact: true })).toBeVisible();
   // Nothing was removed yet — Unmark last stays disabled.

@@ -213,7 +213,7 @@ export function AiTab() {
   }
 
   return (
-    <div className="min-h-0 flex-1 overflow-y-auto">
+    <div className="p-3">
       {saveError && <ErrorBanner>{saveError}</ErrorBanner>}
       <div className="p-3">
         <div className="flex items-center justify-between gap-2">
@@ -402,3 +402,4 @@ export function AiTab() {
     </div>
   );
 }
+

@@ -94,8 +94,12 @@ def find_rscript() -> str | None:
 def r_version(path: str) -> str | None:
     """Ask Rscript for its version (first line, e.g. ``4.3.1``)."""
     try:
+        # CREATE_NO_WINDOW: never flash a console window for the probe
+        # (the packaged app has no console; a visible popup would be a bug).
+        creationflags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
         result = subprocess.run(
-            [path, "--version"], capture_output=True, text=True, timeout=10
+            [path, "--version"], capture_output=True, text=True, timeout=10,
+            creationflags=creationflags,
         )
     except Exception:
         return None
@@ -261,6 +265,8 @@ async def _run_r_job(job_id: str, project_path: str, rscript: str | None) -> Non
             stderr=asyncio.subprocess.PIPE,
             cwd=str(out_dir),
             env=env,
+            # Never flash a console window for R jobs in the packaged app.
+            creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
         )
     except Exception as err:
         _set_job(job_id, state="error", message="failed to start Rscript", error=str(err))
