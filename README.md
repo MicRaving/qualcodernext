@@ -23,34 +23,34 @@ I really love QualCoder but always felt like it had some shortcomings. I therefo
 
 ## Changelog
 
-Based on the upstream QualCoder as per 10.08.2026 that was completely reworked with preserving compatibility for projects:
+> The full, area-by-area changelog compared to the upstream QualCoder code lives in
+> [CHANGELOG.md](CHANGELOG.md) (high-level summary first, then the detailed list).
 
-* **FastAPI + SQLAlchemy (async) + SQLite** backend, packaged with PyInstaller and embedded in a **Tauri 2** desktop shell (React 19 + TypeScript + Vite)
+QCnext is based on the upstream QualCoder as per 10.08.2026 that was completely reworked with preserving compatibility for projects:
+
 * All data access goes through a typed HTTP API (`backend/src/qualcoder\\\_api`), preparing R/Python/MCP tooling
 * The whole UI is now simplified, featuring a ribbon and three-column layout (left bar, right bar, center view) that each contain a menu bar
 * Refactored the monolithic Python scripts
+* Reduced startup time from ~30s to ~2s by moving to **FastAPI + SQLAlchemy (async) + SQLite** backend, in a **Tauri 2** desktop shell (React 19 + TypeScript + Vite)
 * Full project history
-* Rename every project element inline
-* Collaboration with automatic sync between multiple simultaneously working coders
-* Extended local AI assistant
+* Rename every project element inline (no more pesky popups)
+* Simple collaboration with automatic sync between multiple simultaneously working coders
+* Extended AI assistant
 * Included an updater
-
-### 0.2.0 alpha — roadmap wave
-
-* Code **promote/demote** via the code-tree context menu (Word-list style hierarchy moves)
-* **Multi-coder interrater** reliability (N-rater Alpha, pairwise Kappa / AC1)
+* Added NVivo, Transana, XLSX/SPSS .sav import (experimental)
+* Subcodes on the coding menu
 * **Dictionary autocode**: MAXDictio-style word dictionaries with term-frequency report, used from the autocode dialog and the Dictionary report
 * **Sentiment report** (VADER lexicon or AI) and **document comparison** chart (LCS alignment)
-* **Statistics** suite: code × attribute crosstabs with chi-square, group comparisons (Mann-Whitney U), mixed-methods matrix
+* **Statistics** suite: code × attribute crosstabs with chi-square, group comparisons (Mann-Whitney U), mixed-methods matrix, Multi-coder interrater reliability
 * **Summary tables** (coding memos as a document × code grid) and the **smart publisher** (Word/Excel/PowerPoint export of reports)
 * **Segment hyperlinks / linked quotes** between documents (copy/paste link payloads)
 * **Creative coding** scratchpad with promote-to-code
 * **QTT workspace** (MAXQDA-style questions-themes-theories worksheets, qualitative + Creswell 14-step mixed template, send-to-QTT from the coders)
-* **URL import / scraping** (Reddit threads, YouTube metadata/captions/comments, articles, raw HTML)
-* **Manual transcription mode** (media keys, F9/Space, timestamp insert)
-* **Attribute value labels** (labelled dropdowns in the case/file properties)
-* **XLSX/SPSS .sav import** and **Transana `.tprd` import**
-* Coder flyout with per-coder delete + background-task queue controls; batch transcribe/autocode buttons with eligible counts
+* URL import / scraping: YouTube comments, articles, raw HTML)
+* Automatic transcript and extended manual transcription (media keys, timestamp insert)
+* Attribute value labels
+* Coder flyout with per-coder delete + background-task queue controls
+* Batch transcribe/autocode
 
 ## Collaboration
 
@@ -85,11 +85,8 @@ All releases are available on: [https://github.com/MicRaving/QCnext/releases](ht
 
 ## License
 
-QualCoder is distributed under the GNU LGPL-3.0 (see the upstream project). The
-rework follows the same licensing intent; the upstream reference checkout carries
+QualCoder is distributed under the GNU LGPL-3.0 (see the upstream project). QCnext follows the same licensing intent; the upstream reference checkout carries
 its own license text in `upstreamQualcoder/`.
-
-
 
 ## Future
 
@@ -98,31 +95,10 @@ Here is a non-exhaustive list of planned features
 * Fully implement client-server architecture
 * Implement more use cases for LLMs
 * Further refine the UI
-* Bugs: You tell me
+* Bug-fixing - You tell me!
 
 ## What will (likely) not be implemented
 * ATLAS.ti: Closed format, other migration paths exist, not worth the effort.
 
 
-### Roadmap
-
-Items shipped in the current `development` branch (0.2.0) are listed in the changelog
-above; the remaining planned work:
-
-### Open-source format research — NVivo / ATLAS.ti
-
-NVivo (`.nvpx`/`.nvp`, a ZIP of XML files) is **shipped in 0.2.0** (best-effort importer).
-ATLAS.ti `.atlproj`/`.atlasti` bundles are proprietary and undocumented — no open-source
-parser exists, so ATLAS.ti import is covered via its REFI-QDA / XML exports. Relevant
-open-source mapping work:
-
-* [REFI-QDA standard](https://www.qdasoftware.org/) — the open exchange format for QDA projects (`.qdp`/`.qdc`); implemented by NVivo, ATLAS.ti, MAXQDA and others as export/import fallback
-* [openqda/refi-tools](https://github.com/openqda/refi-tools) (AGPL-3.0) — utilities, XSD schemas and the spec PDFs for implementing the REFI standard
-* [cbrincoveanu/pyrefiqda](https://github.com/cbrincoveanu/pyrefiqda) (MIT) — Python/Pydantic models mapping REFI-QDA `.qdpx` files
-* [vmnacar/refio](https://github.com/vmnacar/refio) (MIT) — read, write and convert REFI-QDA `.qdpx`/`.qde`/`.qdc` files in Python
-* [borisbachmann/atlas-qdpx](https://github.com/borisbachmann/atlas-qdpx) (MIT) — extracts annotations from ATLAS.ti REFI-QDA exports
-* [BarraQDA/nvivotools](https://github.com/BarraQDA/nvivotools) (GPL-3.0) — Python tooling around NVivo, incl. its XML export
-* [SecurityEssentials/Teams2NVivo](https://github.com/SecurityEssentials/Teams2NVivo) (MIT) — writes NVivo XML project files (documents the format)
-* Transana — the old GPL code lives on [SourceForge](https://sourceforge.net/projects/transana/) (current versions are commercial); single-user `.tprd` projects are SQLite — **shipped in 0.2.0** (defensive schema probe, media + transcript + keyword mapping)
-* Full assessment: [docs/atlasti-import-assessment.md](docs/atlasti-import-assessment.md)
 
