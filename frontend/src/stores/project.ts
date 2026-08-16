@@ -910,14 +910,14 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     if (grid == null) return;
     const url =
       kind === "category" || kind === "code"
-        ? `/graphs/${grid}/cdct/entity/${id}`
+        ? `/graphs/${grid}/items/cdct/${id}`
         : kind === "case"
-          ? `/graphs/${grid}/cases/entity/${id}`
+          ? `/graphs/${grid}/items/case/${id}`
           : kind === "file"
-            ? `/graphs/${grid}/files/entity/${id}`
+            ? `/graphs/${grid}/items/file/${id}`
             : kind === "free"
-              ? `/graphs/${grid}/free/entity/${id}`
-              : `/graphs/${grid}/memos/entity/${id}`;
+              ? `/graphs/${grid}/items/free/${id}`
+              : `/graphs/${grid}/items/memo/${id}`;
     try {
       await api.patchPath(url, body);
     } catch {

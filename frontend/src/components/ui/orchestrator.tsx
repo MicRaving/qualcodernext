@@ -21,10 +21,11 @@ import {
   type TextareaHTMLAttributes,
   type ThHTMLAttributes,
 } from "react";
-import { ArrowLeft, LoaderCircle, X } from "lucide-react";
+import { ArrowLeft, CircleAlert, LoaderCircle, X } from "lucide-react";
 import { ViewBackButton } from "@/components/shell/ViewBackButton";
 import { cls } from "@/components/ui/tokens";
 import { BarWidthContext } from "@/components/ui/barWidth";
+import { useI18n } from "@/lib/i18n";
 
 /* ------------------------------------------------------------------ */
 /* Buttons                                                             */
@@ -488,6 +489,71 @@ export function EmptyState({ icon, children }: { icon?: ReactNode; children: Rea
     <div className="flex h-full flex-1 flex-col items-center justify-center gap-2 text-text-secondary">
       {icon}
       <p className="text-sm">{children}</p>
+    </div>
+  );
+}
+
+/** The uniform toggle switch (settings rows, panes). */
+export function Toggle({
+  checked,
+  onChange,
+  label,
+  ariaLabel,
+  hint,
+}: {
+  checked: boolean;
+  onChange: () => void;
+  label?: ReactNode;
+  ariaLabel?: string;
+  hint?: ReactNode;
+}) {
+  return (
+    <div>
+      <button
+        type="button"
+        role="switch"
+        aria-checked={checked}
+        aria-label={ariaLabel ?? (typeof label === "string" ? label : undefined)}
+        onClick={onChange}
+        className="flex items-center gap-2"
+      >
+        <span
+          className={`relative h-4 w-8 shrink-0 rounded-full transition-colors ${
+            checked ? "bg-accent" : "bg-border"
+          }`}
+        >
+          <span
+            className="absolute top-0.5 h-3 w-3 rounded-full bg-white transition-all"
+            style={{ left: checked ? 18 : 2 }}
+          />
+        </span>
+        {label != null && <span className="text-xs text-text-primary">{label}</span>}
+      </button>
+      {hint != null && <p className="mt-1 text-xs text-text-secondary">{hint}</p>}
+    </div>
+  );
+}
+
+/** Full-surface load error with a retry button (coder surfaces). */
+export function LoadError({
+  message,
+  onRetry,
+}: {
+  message: string;
+  onRetry: () => void;
+}) {
+  const { t } = useI18n();
+  return (
+    <div className="flex h-full items-center justify-center bg-bg">
+      <div className="max-w-md text-center">
+        <p className="flex items-center justify-center gap-1.5 text-sm text-danger">
+          <CircleAlert size={16} aria-hidden />
+          {message}
+        </p>
+        <Button variant="secondary" className="mt-3" onClick={onRetry}>
+          {t("common.retry")}
+        </Button>
+      </div>
     </div>
   );
 }

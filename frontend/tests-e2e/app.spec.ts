@@ -157,5 +157,13 @@ test("settings and AI status", async ({ page }) => {
 
   await page.getByRole("button", { name: "Settings", exact: true }).click();
   await expect(page.getByText("Appearance", { exact: true })).toBeVisible();
+
+  // Settings are grouped into tabs — the AI section lives on the AI tab.
+  await page.getByRole("tab", { name: "AI", exact: true }).click();
   await expect(page.getByText("AI assistant", { exact: true })).toBeVisible();
+  await page.getByRole("tab", { name: "Updates", exact: true }).click();
+  await expect(page.getByText("Auto-update", { exact: true }).first()).toBeVisible();
+  await expect(page.getByText("Check interval", { exact: true })).toBeVisible();
+  await page.getByRole("tab", { name: "Maintenance", exact: true }).click();
+  await expect(page.getByText("Compact project", { exact: true })).toBeVisible();
 });

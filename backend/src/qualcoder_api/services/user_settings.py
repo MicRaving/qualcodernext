@@ -61,7 +61,7 @@ DEFAULT_SETTINGS: dict = {
     "ai": dict(AI_DEFAULTS),
     "transcription": dict(TRANSCRIPTION_DEFAULTS),
     "sync": {"enabled": False},
-    "updates": {"check_interval": "daily", "auto_update": False},
+    "updates": {"check_interval": "daily", "auto_update": True},
     "maintenance": dict(MAINTENANCE_DEFAULTS),
     "auto_open_project": True,
 }
@@ -72,7 +72,7 @@ SYNC_OVERRIDE_MODES: tuple[str, ...] = ("auto", "on", "off")
 
 UPDATES_DEFAULTS: dict = {
     "check_interval": "daily",
-    "auto_update": False,
+    "auto_update": True,
 }
 
 

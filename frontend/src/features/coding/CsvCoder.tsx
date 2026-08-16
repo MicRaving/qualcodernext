@@ -9,27 +9,68 @@
  *  parser (lib/csv.ts — quoted fields, escaped quotes, embedded newlines,
  *  CRLF/LF, TSV auto-detection); the header row labels the columns and the
  *  body scrolls (vertical + horizontal for wide tables) under a sticky
- *  header. The toggle pair mirrors the HtmlCoder/PdfCoder split pattern:
- *  both buttons are always visible and exactly one view is active.
+ *  header. Coding works DIRECTLY in the table: selecting text inside a
+ *  cell opens the shared SelectionToolbar (code / annotate / in-vivo /
+ *  links / QTT), and cells covered by codings get a tinted background plus
+ *  a code badge (clicking a coded cell or badge opens the shared
+ *  CodingDetailsBar / AnnotationDetailsBar below the table). Cell spans
+ *  map 1:1 onto the source text via the parser's per-cell raw offsets.
  *
  *  Plain-text side: the embedded TextCoder runs in controlled mode
  *  (bare + forceText), the parent owning codings/annotations/codes — the
  *  exact pattern PdfCoder/HtmlCoder use — so text codings on the source
  *  keep working unchanged.
  */
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { CircleAlert, FileText, Table2 } from "lucide-react";
-import { Button, ErrorBanner, LoadingState, ViewHeader } from "@/components/ui/orchestrator";
+import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
+import { FileText, Table2, Undo2 } from "lucide-react";
+import {
+  Button,
+  ErrorBanner,
+  LoadError,
+  LoadingState,
+  ViewHeader,
+} from "@/components/ui/orchestrator";
 import { api, type Annotation, type CodeTreeItem, type Coding, type Source } from "@/lib/api";
 import { TextCoder } from "@/features/coding/TextCoder";
+import { SelectionToolbar } from "@/features/coding/SelectionToolbar";
+import {
+  AnnotationDetailsBar,
+  CodingDetailsBar,
+} from "@/features/coding/DetailsBars";
+import { patchCodingWeight } from "@/features/coding/codingApi";
 import { parseCsv } from "@/lib/csv";
 import { tdCls, thCls } from "@/features/analyze/reportData";
+import { getSelectionOffsets } from "@/features/coding/selection";
+import { codeTint } from "@/features/coding/tint";
 import { cn } from "@/lib/utils";
 import { useI18n } from "@/lib/i18n";
+import { useProjectStore } from "@/stores/project";
 
 /** Which view is active — a single state so the two toggles can never be
  *  both off (mirrors the HtmlCoder/PdfCoder never-both-off rule). */
 type CsvView = "table" | "plain";
+
+/** Fallback badge/tint color when a code carries none. */
+const FALLBACK_CODE_COLOR = "var(--qc-accent)";
+
+/** A cell's text range in the raw source (row/col resolved via spans). */
+interface CellSpan {
+  start: number;
+  end: number;
+  ri: number;
+  ci: number;
+}
+
+/** Everything derived for one cell (key `${ri}:${ci}`). */
+interface CellInfo {
+  codings: Coding[];
+  annotations: Annotation[];
+  /** Distinct codes (by id, first-appearance order) for the badge cluster. */
+  badges: CodeTreeItem[];
+}
+
+/** Shared empty cell — read-only fallback for cells without any codings. */
+const EMPTY_CELL_INFO: CellInfo = { codings: [], annotations: [], badges: [] };
 
 export function CsvCoder({ source }: { source: Source }) {
   const { t } = useI18n();
@@ -37,15 +78,36 @@ export function CsvCoder({ source }: { source: Source }) {
 
   const [codings, setCodings] = useState<Coding[]>([]);
   const [annotations, setAnnotations] = useState<Annotation[]>([]);
-  const [codes, setCodes] = useState<CodeTreeItem[]>([]);
   const [fulltext, setFulltext] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [reloadTick, setReloadTick] = useState(0);
   const [errMsg, setErrMsg] = useState<string | null>(null);
 
-  const refreshCodings = useCallback(async () => {
-    setCodings(await api.sourceCoding(source.id));
+  /** The code list is the project store's tree (the backend serves it flat;
+   *  the sidebar refreshes it on every code change, so names stay fresh when
+   *  a code is created while this coder is open). */
+  const codes = useProjectStore((s) => s.codeTree);
+
+  /** The current text selection (in source coordinates) + popup position. */
+  const [selection, setSelection] = useState<{ pos0: number; pos1: number; text: string } | null>(
+    null,
+  );
+  const [toolbarAnchor, setToolbarAnchor] = useState<{ left: number; top: number } | null>(null);
+
+  /** Codings/annotations of the cell the user clicked (details bars). */
+  const [selectedCodings, setSelectedCodings] = useState<Coding[] | null>(null);
+  const [selectedAnnotations, setSelectedAnnotations] = useState<Annotation[] | null>(null);
+
+  /** Unmark/undo stack of the codings removed from this session. */
+  const [undoStack, setUndoStack] = useState<Coding[]>([]);
+
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+
+  const refreshCodings = useCallback(async (): Promise<Coding[]> => {
+    const next = await api.sourceCoding(source.id);
+    setCodings(next);
+    return next;
   }, [source.id]);
 
   const refreshAnnotations = useCallback(async () => {
@@ -53,7 +115,7 @@ export function CsvCoder({ source }: { source: Source }) {
   }, [source.id]);
 
   const refreshCodes = useCallback(async () => {
-    setCodes(await api.codesFlat());
+    await useProjectStore.getState().refreshProject();
   }, []);
 
   useEffect(() => {
@@ -62,20 +124,19 @@ export function CsvCoder({ source }: { source: Source }) {
     setLoadError(null);
     setCodings([]);
     setAnnotations([]);
-    setCodes([]);
     setFulltext(null);
+    setSelection(null);
+    setToolbarAnchor(null);
     void (async () => {
       try {
-        const [cod, anns, flat, src] = await Promise.all([
+        const [cod, anns, src] = await Promise.all([
           api.sourceCoding(source.id),
           api.fileAnnotations(source.id),
-          api.codesFlat(),
           api.getSource(source.id),
         ]);
         if (cancelled) return;
         setCodings(cod);
         setAnnotations(anns);
-        setCodes(flat);
         setFulltext(src.fulltext ?? source.fulltext ?? null);
       } catch (e) {
         if (!cancelled) setLoadError(e instanceof Error ? e.message : t("csvCoder.loadCodingsError"));
@@ -103,24 +164,267 @@ export function CsvCoder({ source }: { source: Source }) {
   /** The parsed table — columns detected from the header row. */
   const parsed = useMemo(() => (fulltext != null ? parseCsv(fulltext) : null), [fulltext]);
 
+  const codeById = useMemo(() => {
+    const m = new Map<number, CodeTreeItem>();
+    for (const c of codes) if (c.kind === "code") m.set(c.id, c);
+    return m;
+  }, [codes]);
+
+  /** All non-empty cells in text order (row-major) — enables binary-search
+   *  overlap lookup, so big tables stay cheap when codings change. Empty
+   *  fields (start === end) are skipped: a spanning coding must never tint
+   *  a cell that holds no text. */
+  const cellIndex = useMemo<CellSpan[]>(() => {
+    if (!parsed) return [];
+    const list: CellSpan[] = [];
+    parsed.cells.forEach((row, ri) =>
+      row.forEach((cell, ci) => {
+        if (cell.start === cell.end) return;
+        list.push({ start: cell.start, end: cell.end, ri, ci });
+      }),
+    );
+    list.sort((a, b) => a.start - b.start);
+    return list;
+  }, [parsed]);
+
+  /** Overlapping codings/annotations + badge codes per cell (key
+   *  `${ri}:${ci}`). Binary-search overlap lookup keeps big tables cheap. */
+  const cellInfoMap = useMemo(() => {
+    const map = new Map<string, CellInfo>();
+    if (cellIndex.length === 0) return map;
+    const ensure = (key: string): CellInfo => {
+      const info = map.get(key);
+      if (info) return info;
+      const created: CellInfo = { codings: [], annotations: [], badges: [] };
+      map.set(key, created);
+      return created;
+    };
+    const assign = (start: number, end: number, item: Coding | Annotation) => {
+      let lo = 0;
+      let hi = cellIndex.length;
+      while (lo < hi) {
+        const mid = (lo + hi) >> 1;
+        if (cellIndex[mid].end <= start) lo = mid + 1;
+        else hi = mid;
+      }
+      for (let k = lo; k < cellIndex.length && cellIndex[k].start < end; k++) {
+        const info = ensure(`${cellIndex[k].ri}:${cellIndex[k].ci}`);
+        if ("anid" in item) info.annotations.push(item as Annotation);
+        else info.codings.push(item as Coding);
+      }
+    };
+    for (const c of codings) assign(c.pos0, c.pos1, c);
+    for (const a of annotations) assign(a.pos0, a.pos1, a);
+    // Distinct code badges per cell, in first-appearance order.
+    for (const info of map.values()) {
+      const seen = new Set<number>();
+      for (const c of info.codings) {
+        if (seen.has(c.cid)) continue;
+        seen.add(c.cid);
+        const code = codeById.get(c.cid);
+        info.badges.push(
+          code ?? { kind: "code", id: c.cid, name: "", color: null, parent_id: null, memo: "" },
+        );
+      }
+    }
+    return map;
+  }, [cellIndex, codings, annotations, codeById]);
+
+  const cellInfo = useCallback(
+    (ri: number, ci: number): CellInfo => cellInfoMap.get(`${ri}:${ci}`) ?? EMPTY_CELL_INFO,
+    [cellInfoMap],
+  );
+
+  /* ------------------------------------------------------------ selection */
+
+  /** Hide only the floating popup — the selection survives (outside click). */
+  const hideToolbar = useCallback(() => {
+    setToolbarAnchor(null);
+  }, []);
+
+  function clearSelection() {
+    window.getSelection()?.removeAllRanges();
+    setSelection(null);
+    setToolbarAnchor(null);
+  }
+
+  /** Drop every selection-owned UI state (view switches must not leak the
+   *  table selection into the plain-text coder). */
+  const resetSelectionUi = useCallback(() => {
+    window.getSelection()?.removeAllRanges();
+    setSelection(null);
+    setToolbarAnchor(null);
+    setSelectedCodings(null);
+    setSelectedAnnotations(null);
+  }, []);
+
+  /** Open the details bars for the cell the user clicked. */
+  function handleCellClick(cellEl: HTMLElement) {
+    const td = cellEl.closest("td[data-row]") as HTMLElement | null;
+    if (!td || !parsed) return;
+    const ri = Number(td.dataset.row);
+    const ci = Number(td.dataset.col);
+    const cell = parsed.cells[ri]?.[ci];
+    if (!cell) return;
+    const info = cellInfo(ri, ci);
+    setSelectedCodings(info.codings.length > 0 ? info.codings : null);
+    setSelectedAnnotations(info.annotations.length > 0 ? info.annotations : null);
+  }
+
+  /** Select text inside a single cell → show the coding toolbar. Selections
+   *  spanning multiple cells are ignored (cells map onto contiguous spans
+   *  of the source text, so mixed-cell selections are not codeable). */
+  function handleTableMouseUp(e: ReactMouseEvent) {
+    const target = e.target as HTMLElement;
+    if (target.closest("[data-qc-badge]")) return;
+    const cellEl = target.closest("td[data-qc-cell]") as HTMLElement | null;
+    if (!cellEl) return;
+    const sel = window.getSelection();
+    if (!sel || sel.rangeCount === 0 || sel.isCollapsed) {
+      handleCellClick(cellEl);
+      return;
+    }
+    const span = target.closest("[data-qc-cell-text]") as HTMLElement | null;
+    if (!span) return;
+    const offsets = getSelectionOffsets(span, sel);
+    if (!offsets) return;
+    const ri = Number(span.dataset.row);
+    const ci = Number(span.dataset.col);
+    const cell = parsed?.cells[ri]?.[ci];
+    if (!cell || cell.toRaw.length === 0) return;
+    const pos0 = cell.toRaw[Math.min(offsets.start, cell.toRaw.length - 1)];
+    const last = Math.min(offsets.end - 1, cell.toRaw.length - 1);
+    const pos1 = pos0 !== undefined && last >= 0 ? cell.toRaw[last] + 1 : cell.start;
+    if (pos1 <= pos0) return;
+    const rect = sel.getRangeAt(0).getBoundingClientRect();
+    const scrollRect = scrollRef.current?.getBoundingClientRect();
+    const left = scrollRect
+      ? Math.min(Math.max(rect.left, scrollRect.left + 4), scrollRect.right - 300)
+      : rect.left;
+    const top = scrollRect ? Math.min(rect.bottom + 6, scrollRect.bottom - 40) : rect.bottom + 6;
+    setSelection({ pos0, pos1, text: cell.text.slice(offsets.start, offsets.end) });
+    setToolbarAnchor({ left, top });
+  }
+
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const onScroll = () => hideToolbar();
+    el.addEventListener("scroll", onScroll, { passive: true });
+    return () => el.removeEventListener("scroll", onScroll);
+  }, [hideToolbar]);
+
+  useEffect(() => {
+    const onBlur = () => hideToolbar();
+    window.addEventListener("blur", onBlur);
+    return () => window.removeEventListener("blur", onBlur);
+  }, [hideToolbar]);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      resetSelectionUi();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [resetSelectionUi]);
+
+  /* ------------------------------------------------------------- mutations */
+
+  /** Show the details bars for a freshly coded cell (parity with the text
+   *  coder's auto-show-segment behavior). */
+  function handleToolbarCoded(created: Coding, next: Coding[]) {
+    void refreshCodes().catch(() => undefined);
+    if (!parsed) return;
+    for (let ri = 0; ri < parsed.cells.length; ri++) {
+      for (let ci = 0; ci < parsed.cells[ri].length; ci++) {
+        const cell = parsed.cells[ri][ci];
+        if (created.pos0 < cell.end && created.pos1 > cell.start) {
+          const cod = next.filter((c) => c.pos0 < cell.end && c.pos1 > cell.start);
+          setSelectedCodings(cod.length > 0 ? cod : null);
+          setSelectedAnnotations(null);
+          return;
+        }
+      }
+    }
+  }
+
+  /** Non-coding mutations (annotation, link, QTT): refresh the rest. */
+  const handleToolbarChanged = useCallback(() => {
+    void refreshAnnotations();
+    void refreshCodes().catch(() => undefined);
+  }, [refreshAnnotations, refreshCodes]);
+
+  function deleteCoding(row: Coding) {
+    void (async () => {
+      try {
+        await api.deleteTextCoding(row.ctid);
+        setUndoStack((s) => [...s.slice(-19), row]);
+        setSelectedCodings(null);
+        await refreshCodings();
+      } catch (e) {
+        setErrMsg(e instanceof Error ? e.message : t("coder.removeError"));
+      }
+    })();
+  }
+
+  /** Stepper update of a segment's weight (0-100; 0 = no weight). */
+  function updateCodingWeight(row: Coding, weight: number) {
+    void (async () => {
+      try {
+        await patchCodingWeight("text", row.ctid, weight);
+        await refreshCodings();
+      } catch (e) {
+        setErrMsg(e instanceof Error ? e.message : t("coder.weightError"));
+      }
+    })();
+  }
+
+  function unmarkLast() {
+    const row = undoStack[undoStack.length - 1];
+    if (!row) return;
+    setUndoStack((s) => s.slice(0, -1));
+    void (async () => {
+      try {
+        await api.undoCodings([row]);
+        await refreshCodings();
+      } catch (e) {
+        setErrMsg(e instanceof Error ? e.message : t("coder.restoreError"));
+      }
+    })();
+  }
+
+  function updateAnnotationMemo(anid: number, memo: string) {
+    void (async () => {
+      try {
+        await api.updateAnnotation(anid, memo);
+        await refreshAnnotations();
+      } catch (e) {
+        setErrMsg(e instanceof Error ? e.message : t("coder.annotationUpdateError"));
+      }
+    })();
+  }
+
+  function deleteAnnotation(ann: Annotation) {
+    void (async () => {
+      try {
+        await api.deleteAnnotation(ann.anid);
+        setSelectedAnnotations(null);
+        await refreshAnnotations();
+      } catch (e) {
+        setErrMsg(e instanceof Error ? e.message : t("coder.annotationDeleteError"));
+      }
+    })();
+  }
+
+  /* -------------------------------------------------------------- rendering */
+
   if (loading) {
     return <LoadingState>{t("csvCoder.loading")}</LoadingState>;
   }
 
   if (loadError) {
-    return (
-      <div className="flex h-full items-center justify-center bg-bg">
-        <div className="max-w-md text-center">
-          <p className="flex items-center justify-center gap-1.5 text-sm text-danger">
-            <CircleAlert size={16} aria-hidden />
-            {loadError}
-          </p>
-          <Button variant="secondary" className="mt-3" onClick={() => setReloadTick((v) => v + 1)}>
-            {t("common.retry")}
-          </Button>
-        </div>
-      </div>
-    );
+    return <LoadError message={loadError} onRetry={() => setReloadTick((v) => v + 1)} />;
   }
 
   return (
@@ -146,7 +450,10 @@ export function CsvCoder({ source }: { source: Source }) {
                   "h-7 shrink-0",
                   view === "table" ? "border-accent text-accent" : "bg-bg text-text-secondary",
                 )}
-                onClick={() => setView("table")}
+                onClick={() => {
+                  resetSelectionUi();
+                  setView("table");
+                }}
                 aria-pressed={view === "table"}
                 title={t("csvCoder.tableHint")}
                 icon={<Table2 size={12} aria-hidden />}
@@ -159,12 +466,24 @@ export function CsvCoder({ source }: { source: Source }) {
                   "h-7 shrink-0",
                   view === "plain" ? "border-accent text-accent" : "bg-bg text-text-secondary",
                 )}
-                onClick={() => setView("plain")}
+                onClick={() => {
+                  resetSelectionUi();
+                  setView("plain");
+                }}
                 aria-pressed={view === "plain"}
                 title={t("csvCoder.plainTextHint")}
                 icon={<FileText size={12} aria-hidden />}
               >
                 {t("csvCoder.plainText")}
+              </Button>
+              <Button
+                variant="secondary"
+                icon={<Undo2 size={12} aria-hidden />}
+                onClick={unmarkLast}
+                disabled={undoStack.length === 0}
+                title={t("coder.unmarkTitle")}
+              >
+                {t("coder.unmarkLast")}
               </Button>
             </div>
           </>
@@ -183,11 +502,14 @@ export function CsvCoder({ source }: { source: Source }) {
           codes={codes}
           onCodingsChange={setCodings}
           onAnnotationsChange={setAnnotations}
-          onCodesChange={setCodes}
         />
       ) : parsed && parsed.headers.length > 0 ? (
-        <div className="min-h-0 flex-1 overflow-auto bg-bg">
-          <table className="w-max min-w-full border-collapse text-sm">
+        <div
+          ref={scrollRef}
+          onMouseUp={handleTableMouseUp}
+          className="min-h-0 flex-1 overflow-auto bg-bg"
+        >
+          <table className="qc-selectable w-max min-w-full border-collapse text-sm">
             <thead>
               <tr>
                 {parsed.headers.map((header, col) => (
@@ -203,15 +525,71 @@ export function CsvCoder({ source }: { source: Source }) {
             <tbody>
               {parsed.rows.map((row, ri) => (
                 <tr key={ri} className="hover:bg-surface-higher">
-                  {row.map((cell, ci) => (
-                    <td
-                      key={ci}
-                      className={cn(tdCls, "max-w-96 truncate whitespace-nowrap")}
-                      title={cell}
-                    >
-                      {cell}
-                    </td>
-                  ))}
+                  {row.map((cellText, ci) => {
+                    const info = cellInfo(ri, ci);
+                    const firstCode = info.codings.length > 0 ? codeById.get(info.codings[0].cid) : null;
+                    const tint = firstCode ? codeTint(firstCode.color ?? FALLBACK_CODE_COLOR) : null;
+                    return (
+                      <td
+                        key={ci}
+                        data-qc-cell
+                        data-row={ri}
+                        data-col={ci}
+                        className={cn(tdCls, "relative max-w-96 align-top")}
+                        style={tint ? { backgroundColor: tint } : undefined}
+                      >
+                        <span
+                          data-qc-cell-text
+                          data-row={ri}
+                          data-col={ci}
+                          className={cn(
+                            "block truncate whitespace-nowrap",
+                            info.codings.length > 0 && "pr-14",
+                            info.annotations.length > 0 &&
+                              "underline decoration-dashed decoration-text-secondary underline-offset-2",
+                          )}
+                          title={cellText}
+                        >
+                          {cellText}
+                        </span>
+                        {info.codings.length > 0 && (
+                          <span className="absolute right-1 top-0.5 z-10 flex max-w-[80%] items-center gap-0.5">
+                            {info.badges.slice(0, 2).map((c) => (
+                              <button
+                                key={c.id}
+                                type="button"
+                                data-qc-badge
+                                title={badgeTitle(info.codings, codeById, t)}
+                                aria-label={badgeTitle(info.codings, codeById, t)}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setSelectedCodings(info.codings);
+                                  setSelectedAnnotations(
+                                    info.annotations.length > 0 ? info.annotations : null,
+                                  );
+                                }}
+                                className="flex h-4 max-w-28 items-center gap-1 truncate rounded-sm border border-border bg-surface px-1 text-[10px] text-text-primary hover:bg-surface-higher"
+                              >
+                                <span
+                                  className="h-2 w-2 shrink-0 rounded-full"
+                                  style={{ backgroundColor: c.color ?? FALLBACK_CODE_COLOR }}
+                                  aria-hidden
+                                />
+                                <span className="truncate">
+                                  {c.name || t("coder.fallbackCode", { id: c.id })}
+                                </span>
+                              </button>
+                            ))}
+                            {info.badges.length > 2 && (
+                              <span className="shrink-0 rounded-sm bg-surface-higher px-1 text-[10px] text-text-secondary">
+                                +{info.badges.length - 2}
+                              </span>
+                            )}
+                          </span>
+                        )}
+                      </td>
+                    );
+                  })}
                 </tr>
               ))}
             </tbody>
@@ -224,6 +602,55 @@ export function CsvCoder({ source }: { source: Source }) {
           </p>
         </div>
       )}
+
+      {selectedCodings && selectedCodings.length > 0 && (
+        <CodingDetailsBar
+          rows={selectedCodings}
+          codeById={codeById}
+          onDelete={deleteCoding}
+          onWeight={updateCodingWeight}
+          onClose={() => setSelectedCodings(null)}
+        />
+      )}
+
+      {selectedAnnotations && selectedAnnotations.length > 0 && (
+        <AnnotationDetailsBar
+          rows={selectedAnnotations}
+          onUpdateMemo={updateAnnotationMemo}
+          onDelete={deleteAnnotation}
+          onClose={() => setSelectedAnnotations(null)}
+        />
+      )}
+
+      <SelectionToolbar
+        anchor={toolbarAnchor}
+        selection={selection}
+        fid={source.id}
+        codes={codes}
+        refreshCodings={refreshCodings}
+        onCoded={handleToolbarCoded}
+        onChanged={handleToolbarChanged}
+        onHide={hideToolbar}
+        onClose={clearSelection}
+        onError={(msg) => setErrMsg(msg)}
+      />
     </div>
   );
 }
+
+/** Tooltip of a cell's badge cluster: "Code A | Code B | …". */
+function badgeTitle(
+  cellCodes: Coding[],
+  codeById: Map<number, CodeTreeItem>,
+  t: (key: string, vars?: Record<string, string>) => string,
+): string {
+  const seen = new Set<number>();
+  const names: string[] = [];
+  for (const c of cellCodes) {
+    if (seen.has(c.cid)) continue;
+    seen.add(c.cid);
+    names.push(codeById.get(c.cid)?.name ?? t("coder.fallbackCode", { id: String(c.cid) }));
+  }
+  return names.join(" | ");
+}
+

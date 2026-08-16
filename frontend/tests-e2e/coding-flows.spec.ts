@@ -188,6 +188,88 @@ doc.save(r"${pdfPath}")
   await expect(page.locator("[class*=banner]")).toHaveCount(0);
 });
 
+/* ----------------------------------------------------------------- csv table */
+
+test("csv table view codes cell text and shows the badge", async ({ page }) => {
+  await ensureProjectOpen(page);
+  const csvPath = path.join(E2E_ROOT, `csv_${Date.now() % 100000}.csv`);
+  fs.writeFileSync(
+    csvPath,
+    "author,likes,date,comment\n" +
+      "alice,12,2026-01-01,This is a great comment about research\n" +
+      "bob,3,2026-01-02,Another comment with interesting words\n",
+    "utf-8",
+  );
+
+  await page.getByRole("button", { name: "Coding", exact: true }).click();
+  await page.setInputFiles("input[type=file]", [csvPath]);
+  await expect(page.getByRole("row").filter({ hasText: "csv_" })).toBeVisible({
+    timeout: 20_000,
+  });
+  await page.getByRole("row").filter({ hasText: "csv_" }).click();
+
+  // The table view opens (4 columns x 2 rows) with a sticky header.
+  await expect(page.getByRole("button", { name: "Table" })).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByText("4 columns · 2 rows")).toBeVisible();
+
+  // Create a code via the sidebar, then select part of the comment cell.
+  await page.getByRole("button", { name: "Code", exact: true }).click();
+  await expect(page.getByTestId("inline-name-edit")).toBeVisible({ timeout: 10_000 });
+  await page.getByTestId("inline-name-edit").fill("TblCode");
+  await page.keyboard.press("Enter");
+  await expect(page.getByText("TblCode", { exact: true }).first()).toBeVisible({ timeout: 10_000 });
+  // Clicking the code makes it the ACTIVE code (the selection toolbar then
+  // offers it directly; no selection exists yet, so the assign event is a
+  // no-op).
+  await page.getByRole("button", { name: "TblCode", exact: true }).first().click();
+
+  const cell = page.locator('[data-qc-cell-text]').filter({ hasText: "This is a great" }).first();
+  await expect(cell).toBeVisible();
+  const box = await cell.boundingBox();
+  expect(box).not.toBeNull();
+  await page.mouse.move(box!.x + box!.width * 0.05, box!.y + box!.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(box!.x + box!.width * 0.6, box!.y + box!.height / 2, { steps: 6 });
+  await page.mouse.up();
+
+  // The selection toolbar offers the ACTIVE code — coding lands in the cell.
+  const toolbar = page.getByRole("toolbar", { name: "Text selection actions" });
+  await expect(toolbar).toBeVisible({ timeout: 10_000 });
+  await toolbar.getByRole("button", { name: /TblCode/ }).click();
+  await expect(toolbar).toBeHidden({ timeout: 10_000 });
+
+  // The cell now shows a code badge + the details bar lists the coding.
+  const badge = page.locator("[data-qc-badge]").first();
+  await expect(badge).toBeVisible({ timeout: 10_000 });
+  await expect(badge).toContainText("TblCode");
+  await expect(page.getByText("Coding details", { exact: true })).toBeVisible();
+  // Nothing was removed yet — Unmark last stays disabled.
+  await expect(page.getByRole("button", { name: /Unmark last/ })).toBeDisabled();
+
+  // Switch to plain text and back: no selection/toolbar leaks over.
+  await page.getByRole("button", { name: "Plain text" }).click();
+  await expect(page.getByText("This is a great comment about research")).toBeVisible({
+    timeout: 15_000,
+  });
+  await expect(page.getByRole("toolbar", { name: "Text selection actions" })).toHaveCount(0);
+  await page.getByRole("button", { name: "Table" }).click();
+  await expect(page.locator("[data-qc-badge]").first()).toBeVisible({ timeout: 10_000 });
+
+  // Remove the coding from the details bar, then Unmark restores it.
+  // (The details bar opens when a coded cell/badge is clicked.)
+  await page.locator("[data-qc-badge]").first().click();
+  await expect(page.getByRole("button", { name: "Remove coding for TblCode" })).toBeVisible({
+    timeout: 10_000,
+  });
+  await page.getByRole("button", { name: "Remove coding for TblCode" }).click();
+  await expect(page.locator("[data-qc-badge]")).toHaveCount(0, { timeout: 10_000 });
+  await expect(page.getByRole("button", { name: /Unmark last/ })).toBeEnabled();
+  await page.getByRole("button", { name: /Unmark last/ }).click();
+  await expect(page.locator("[data-qc-badge]").first()).toContainText("TblCode", {
+    timeout: 10_000,
+  });
+});
+
 /* ---------------------------------------------------------------- autocode */
 
 test("autocode dialog codes multiple selected codes", async ({ page }) => {

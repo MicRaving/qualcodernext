@@ -310,11 +310,14 @@ function ConfirmDialog({
 /** The center-contained graph toolbar: graph dropdown + Add on the right
  *  (graph picking lives here since the dedicated left bar is gone), plus
  *  Models / zoom / connect / delete. The dialogs are owned here. */
-export function GraphsMenuBar({ actions }: { actions?: ReactNode }) {
+export function GraphsMenuBar() {
   const { t } = useI18n();
   const graphsUi = useProjectStore((s) => s.graphsUi);
   const setGraphsUi = useProjectStore((s) => s.setGraphsUi);
+  const selectedNode = useProjectStore((s) => s.graphsUi.selectedNode);
+  const connectFrom = useProjectStore((s) => s.graphsUi.connectFrom);
   const dialog = graphsUi.dialog;
+  const zoom = graphsUi.zoom;
 
   async function loadGraphs(preferredGrid?: number | null) {
     try {
@@ -368,6 +371,7 @@ export function GraphsMenuBar({ actions }: { actions?: ReactNode }) {
 
   return (
     <div className="flex h-10 shrink-0 items-center gap-2 border-b border-border bg-surface px-3">
+      <span className="text-sm font-semibold text-text-primary">{t("nav.graphs")}</span>
       <Select
         value={graphsUi.grid ?? ""}
         onChange={(e) => {
@@ -411,7 +415,34 @@ export function GraphsMenuBar({ actions }: { actions?: ReactNode }) {
       >
         {t("graphs.models")}
       </Button>
-      {actions}
+      <IconButton
+        label={t("graphs.zoomIn")}
+        title={t("graphs.zoomIn")}
+        onClick={() => setGraphsUi({ zoom: Math.min(2.5, +(zoom * 1.2).toFixed(2)) })}
+      >
+        <ZoomIn size={16} aria-hidden />
+      </IconButton>
+      <span className="w-10 text-center text-xs text-text-secondary">
+        {Math.round(zoom * 100)}%
+      </span>
+      <IconButton
+        label={t("graphs.zoomOut")}
+        title={t("graphs.zoomOut")}
+        onClick={() => setGraphsUi({ zoom: Math.max(0.25, +(zoom / 1.2).toFixed(2)) })}
+      >
+        <ZoomOut size={16} aria-hidden />
+      </IconButton>
+      <IconButton
+        label={t("graphs.connect")}
+        title={t("graphs.connect")}
+        onClick={() => {
+          if (selectedNode) setGraphsUi({ connectFrom: selectedNode });
+        }}
+        disabled={!selectedNode}
+        className={connectFrom ? "bg-accent/20 text-accent" : ""}
+      >
+        <Link2 size={16} aria-hidden />
+      </IconButton>
       <GraphNameDialog
         open={dialog === "name"}
         onClose={() => setGraphsUi({ dialog: null })}
@@ -674,32 +705,6 @@ export function GraphsView() {
 
   return (
     <div className="flex h-full flex-col bg-bg">
-      <GraphsMenuBar
-        actions={
-          <>
-            <IconButton label="Zoom in" onClick={() => setGraphsUi({ zoom: Math.min(2.5, +(graphsUi.zoom * 1.2).toFixed(2)) })}>
-              <ZoomIn size={16} aria-hidden />
-            </IconButton>
-            <span className="w-10 text-center text-xs text-text-secondary">
-              {Math.round(zoom * 100)}%
-            </span>
-            <IconButton label="Zoom out" onClick={() => setGraphsUi({ zoom: Math.max(0.25, +(graphsUi.zoom / 1.2).toFixed(2)) })}>
-              <ZoomOut size={16} aria-hidden />
-            </IconButton>
-            <IconButton
-              label={t("graphs.connect")}
-              title={t("graphs.connect")}
-              onClick={() => {
-                if (selectedNode) setGraphsUi({ connectFrom: selectedNode });
-              }}
-              disabled={!selectedNode}
-              className={connectFrom ? "bg-accent/20 text-accent" : ""}
-            >
-              <Link2 size={16} aria-hidden />
-            </IconButton>
-          </>
-        }
-      />
       {error && <ErrorBanner onClose={() => setGraphsUi({ error: null })}>{error}</ErrorBanner>}
 
       <div className="min-h-0 flex-1 overflow-hidden">

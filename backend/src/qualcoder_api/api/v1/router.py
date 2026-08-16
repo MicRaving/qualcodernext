@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import contextlib
-from typing import Annotated
+import logging
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
 from qualcoder_api.api.v1.ai import router as ai_router
@@ -17,6 +17,7 @@ from qualcoder_api.api.v1.codings import router as codings_router
 from qualcoder_api.api.v1.comments import router as comments_router
 from qualcoder_api.api.v1.compare import router as compare_router
 from qualcoder_api.api.v1.creative import router as creative_router
+from qualcoder_api.api.v1.deps import ServiceDep
 from qualcoder_api.api.v1.dictionaries import router as dictionaries_router
 from qualcoder_api.api.v1.entities import (
     annotation_router,
@@ -40,7 +41,9 @@ from qualcoder_api.api.v1.sql_reports import router as sql_router
 from qualcoder_api.api.v1.sync_api import router as sync_router
 from qualcoder_api.api.v1.tools import router as tools_router
 from qualcoder_api.api.v1.transcribe import router as transcribe_router
-from qualcoder_api.services.project_service import OpenResult, ProjectService
+from qualcoder_api.services.project_service import OpenResult
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -76,16 +79,6 @@ router.include_router(comments_router)
 router.include_router(code_sets_router)
 router.include_router(r_router)
 router.include_router(r_scripts_router)
-
-
-def get_service() -> ProjectService:
-    """Return the process-wide ProjectService (set by the app lifespan)."""
-    from qualcoder_api.main import service
-
-    return service
-
-
-ServiceDep = Annotated[ProjectService, Depends(get_service)]
 
 
 class HealthResponse(BaseModel):
@@ -141,7 +134,7 @@ class MemosResponse(BaseModel):
 
 class UpdatesSettingsRequest(BaseModel):
     check_interval: str = "daily"
-    auto_update: bool = False
+    auto_update: bool = True
 
 
 class AppSettingsRequest(BaseModel):
@@ -342,7 +335,11 @@ async def compact_project(svc: ServiceDep) -> CompactResponse:
         raise HTTPException(status_code=409, detail="no project is open")
     from qualcoder_api.services.cleanup_service import compact_project as run_compact
 
-    stats = await run_compact(svc.db_path())
+    try:
+        stats = await run_compact(svc.db_path())
+    except Exception as err:  # pragma: no cover - depends on the environment
+        logger.exception("project compaction failed")
+        raise HTTPException(status_code=500, detail=f"compaction failed: {err}") from err
 
     _, factory = svc._ensure_engine()
     async with factory() as session:

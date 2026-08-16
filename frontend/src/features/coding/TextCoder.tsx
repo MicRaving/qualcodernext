@@ -15,23 +15,13 @@ import {
 import {
   Bookmark,
   BookmarkCheck,
-  Check,
   CircleAlert,
-  Code,
   FilePen,
   Link as LinkIcon,
   LoaderCircle,
-  Minus,
-  Pencil,
-  Plus,
   Rows3,
   Save,
-  ScrollText,
   Sparkles,
-  Star,
-  StickyNote,
-  Tag,
-  Trash2,
   Undo2,
   X,
 } from "lucide-react";
@@ -39,10 +29,8 @@ import {
   Button,
   ErrorBanner,
   IconButton,
-  Input,
+  LoadError,
   LoadingState,
-  Select,
-  Textarea,
   ViewHeader,
 } from "@/components/ui/orchestrator";
 import { AutocodeDialog } from "@/features/coding/AutocodeDialog";
@@ -55,7 +43,6 @@ import {
   type ShiftPositionsResponse,
   type Source,
 } from "@/lib/api";
-import { CodePicker, type PickedCode } from "@/features/coding/CodePicker";
 import {
   buildAnnotationSegments,
   buildRenderedSegments,
@@ -63,23 +50,21 @@ import {
   type RenderedSegment,
 } from "@/features/coding/segments";
 import { getSelectionOffsets, type SelectionOffsets } from "@/features/coding/selection";
+import { SelectionToolbar } from "@/features/coding/SelectionToolbar";
+import {
+  AnnotationDetailsBar,
+  CodingDetailsBar,
+} from "@/features/coding/DetailsBars";
 import { codeTint } from "@/features/coding/tint";
 import {
   consumePendingJump,
-  copyLinkPayload,
-  createLink,
   fetchOutgoingLinks,
   jumpToSpan,
-  readLinkPayload,
-  type LinkSpanTarget,
   type PendingJump,
   type SegmentLink,
 } from "@/features/coding/links";
 import { usesPdfCoder } from "@/lib/media";
 import { cn } from "@/lib/utils";
-import { cls } from "@/components/ui/tokens";
-import { Menu, MenuItem } from "@/components/ui/orchestrator";
-import { listQttSheets, sendSegmentToQtt, type QttSheet } from "@/lib/qttApi";
 import { useI18n } from "@/lib/i18n";
 import { useProjectStore } from "@/stores/project";
 
@@ -177,7 +162,6 @@ export function TextCoder({
 }) {
   const { t } = useI18n();
   const storeCodeTree = useProjectStore((s) => s.codeTree);
-  const activeCodeId = useProjectStore((s) => s.activeCodeId);
   const hiddenCodes = useProjectStore((s) => s.hiddenCodes);
   /** When OFF, creating a coding does NOT auto-select it in the details bar. */
   const autoShowDetails = useProjectStore((s) => s.autoShowSegmentDetails);
@@ -206,33 +190,13 @@ export function TextCoder({
 
   const [selection, setSelection] = useState<SelectionOffsets | null>(null);
   const [toolbarPos, setToolbarPos] = useState<{ left: number; top: number } | null>(null);
-  const [pickerOpen, setPickerOpen] = useState(false);
-  const [annotateOpen, setAnnotateOpen] = useState(false);
-  const [annotateMemo, setAnnotateMemo] = useState("");
-  const [inVivoOpen, setInVivoOpen] = useState(false);
-  const [inVivoName, setInVivoName] = useState("");
-  const [inVivoCat, setInVivoCat] = useState<number | null>(null);
-  const [inVivoBusy, setInVivoBusy] = useState(false);
 
   const [selectedSeg, setSelectedSeg] = useState<RenderedSegment | null>(null);
   const [selectedAnnSeg, setSelectedAnnSeg] = useState<AnnotationSegment | null>(null);
-  const [editingAnnMemo, setEditingAnnMemo] = useState<{ anid: number; memo: string } | null>(null);
 
-  /* Segment links: outgoing links of this file (markers), the clipboard
-     link payload (paste), and a transient "copied" feedback. */
+  /** Outgoing links of this file — markers + jump targets. */
   const [links, setLinks] = useState<SegmentLink[]>([]);
-  const [clipboardLink, setClipboardLink] = useState<LinkSpanTarget | null>(null);
-  const [linkCopied, setLinkCopied] = useState(false);
-  const linkCopiedTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  /* "Send to QTT": pick a worksheet in a small inline menu and store the
-     selected span as a segment item (transient "sent" feedback). */
-  const [qttOpen, setQttOpen] = useState(false);
-  const [qttSheets, setQttSheets] = useState<QttSheet[]>([]);
-  const [qttLoading, setQttLoading] = useState(false);
-  const [qttSending, setQttSending] = useState<number | null>(null);
-  const [qttSent, setQttSent] = useState(false);
-  const qttSentTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   /** A jump target for ANOTHER file opened via the qc:jump-span event. */
   const [pendingFlash, setPendingFlash] = useState<PendingJump | null>(null);
 
@@ -250,7 +214,6 @@ export function TextCoder({
 
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const textRef = useRef<HTMLDivElement | null>(null);
-  const floatingRef = useRef<HTMLDivElement | null>(null);
   const editAreaRef = useRef<HTMLTextAreaElement | null>(null);
   const draftRef = useRef<DraftPositions & { lastText: string }>({
     lastText: "",
@@ -286,8 +249,6 @@ export function TextCoder({
   useEffect(
     () => () => {
       if (flashTimer.current) clearTimeout(flashTimer.current);
-      if (linkCopiedTimer.current) clearTimeout(linkCopiedTimer.current);
-      if (qttSentTimer.current) clearTimeout(qttSentTimer.current);
     },
     [],
   );
@@ -359,14 +320,8 @@ export function TextCoder({
     draftRef.current = { lastText: "", codings: [], annotations: [] };
     setSelection(null);
     setToolbarPos(null);
-    setPickerOpen(false);
-    setAnnotateOpen(false);
-    setInVivoOpen(false);
-    setInVivoName("");
-    setInVivoCat(null);
     setSelectedSeg(null);
     setSelectedAnnSeg(null);
-    setEditingAnnMemo(null);
     setUndoStack([]);
     setAutoOpen(false);
     if (!controlled) {
@@ -454,18 +409,6 @@ export function TextCoder({
     };
   }, [sourceId, reloadTick]);
 
-  // Track whether a qcnext-link payload is on the clipboard so the
-  // selection toolbar can offer "Paste link here".
-  useEffect(() => {
-    let cancelled = false;
-    void readLinkPayload().then((target) => {
-      if (!cancelled) setClipboardLink(target);
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [selection]);
-
   /* ------------------------------------------------------------- bookmark */
 
   useEffect(() => {
@@ -522,15 +465,6 @@ export function TextCoder({
     return m;
   }, [codes]);
 
-  /** Segment weight (backend rows carry it; 0 = no weight). */
-  const weightOf = (row: Coding & { weight?: number }): number => row.weight ?? 0;
-
-  /** Top-level code categories for the in-vivo popover's optional target. */
-  const categories = useMemo(
-    () => storeCodeTree.filter((c) => c.kind === "category"),
-    [storeCodeTree],
-  );
-
   const colorByCid = useMemo(() => {
     const m: Record<number, string> = {};
     for (const [id, c] of codeById) m[id] = c.color ?? FALLBACK_CODE_COLOR;
@@ -580,16 +514,15 @@ export function TextCoder({
 
   /* ------------------------------------------------------------ selection */
 
-  function clearSelection() {
+  const clearSelection = useCallback(() => {
     window.getSelection()?.removeAllRanges();
     setSelection(null);
     setToolbarPos(null);
-  }
+  }, []);
 
+  /** Hide only the floating popup — the selection survives (outside click). */
   const hideToolbar = useCallback(() => {
     setToolbarPos(null);
-    setAnnotateOpen(false);
-    setInVivoOpen(false);
   }, []);
 
   function handleDocMouseUp() {
@@ -630,37 +563,11 @@ export function TextCoder({
     return () => window.removeEventListener("blur", onBlur);
   }, [hideToolbar]);
 
-  useEffect(() => {
-    const onDown = (e: MouseEvent) => {
-      const target = e.target instanceof Node ? e.target : null;
-      if (!target) return;
-      const insideDoc = scrollRef.current?.contains(target);
-      const insideFloating = floatingRef.current?.contains(target);
-      if (!insideDoc && !insideFloating) hideToolbar();
-    };
-    document.addEventListener("mousedown", onDown);
-    return () => document.removeEventListener("mousedown", onDown);
-  }, [hideToolbar]);
-
+  // Escape dismisses the toolbar and the segment details (the selection
+  // toolbar closes its own popovers first via its capture-phase handler).
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "Escape") return;
-      if (qttOpen) {
-        setQttOpen(false);
-        return;
-      }
-      if (pickerOpen) {
-        setPickerOpen(false);
-        return;
-      }
-      if (annotateOpen) {
-        setAnnotateOpen(false);
-        return;
-      }
-      if (inVivoOpen) {
-        setInVivoOpen(false);
-        return;
-      }
       setToolbarPos(null);
       setSelectedSeg(null);
       setSelectedAnnSeg(null);
@@ -668,7 +575,7 @@ export function TextCoder({
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  });
+  }, [clearSelection]);
 
   /* ----------------------------------------------------------- coding flow */
 
@@ -691,60 +598,6 @@ export function TextCoder({
     }
   }
 
-  /** Code the pending text selection with the given code id. */
-  function codeSelection(cid: number) {
-    const sel = selection;
-    if (!sel) return;
-    void (async () => {
-      try {
-        const created = await api.createTextCoding({
-          cid,
-          fid: sourceId,
-          seltext: text.slice(sel.start, sel.end),
-          pos0: sel.start,
-          pos1: sel.end,
-        });
-        const next = await refreshCodings();
-        selectCreatedSegment(created, next);
-      } catch (e) {
-        setErrMsg(e instanceof Error ? e.message : t("coder.createError"));
-      } finally {
-        clearSelection();
-      }
-    })();
-    void refreshCodes().catch(() => undefined);
-  }
-
-  /** In-vivo coding: create a NEW code from the selection text, then code
-   *  the current selection with it. */
-  function codeInVivo() {
-    const name = inVivoName.trim();
-    const sel = selection;
-    if (!name || inVivoBusy || !sel) return;
-    setInVivoBusy(true);
-    void (async () => {
-      try {
-        const res = await api.createCode(name, { catid: inVivoCat });
-        const created = await api.createTextCoding({
-          cid: res.cid,
-          fid: sourceId,
-          seltext: text.slice(sel.start, sel.end),
-          pos0: sel.start,
-          pos1: sel.end,
-        });
-        const next = await refreshCodings();
-        selectCreatedSegment(created, next);
-        setInVivoOpen(false);
-      } catch (e) {
-        setErrMsg(e instanceof Error ? e.message : t("coder.inVivoCreateError"));
-      } finally {
-        setInVivoBusy(false);
-        clearSelection();
-      }
-    })();
-    void refreshCodes().catch(() => undefined);
-  }
-
   /** Stepper update of a segment's weight (0-100; 0 = no weight). */
   function updateCodingWeight(row: Coding, weight: number) {
     void (async () => {
@@ -755,23 +608,6 @@ export function TextCoder({
         setErrMsg(e instanceof Error ? e.message : t("coder.weightError"));
       }
     })();
-  }
-
-  // Clicking a code in the left sidebar assigns it to the selected part.
-  useEffect(() => {
-    const onAssign = (e: Event) => {
-      const cid = (e as CustomEvent<{ cid: number }>).detail?.cid;
-      if (typeof cid !== "number") return;
-      setPickerOpen(false);
-      codeSelection(cid);
-    };
-    window.addEventListener("qc:assign-code", onAssign);
-    return () => window.removeEventListener("qc:assign-code", onAssign);
-  });
-
-  function handlePickCode(picked: PickedCode) {
-    setPickerOpen(false);
-    codeSelection(picked.cid);
   }
 
   function deleteCoding(row: Coding) {
@@ -803,45 +639,10 @@ export function TextCoder({
 
   /* ------------------------------------------------------------- annotations */
 
-  function openAnnotate() {
-    setAnnotateMemo("");
-    setAnnotateOpen(true);
-    setInVivoOpen(false);
-  }
-
-  function openInVivo() {
-    setInVivoName("");
-    setInVivoCat(null);
-    setAnnotateOpen(false);
-    setInVivoOpen(true);
-  }
-
-  function saveAnnotation() {
-    const sel = selection;
-    if (!sel) return;
-    void (async () => {
-      try {
-        await api.createAnnotation({
-          fid: sourceId,
-          pos0: sel.start,
-          pos1: sel.end,
-          memo: annotateMemo.trim(),
-        });
-        await refreshAnnotations();
-      } catch (e) {
-        setErrMsg(e instanceof Error ? e.message : t("coder.annotationCreateError"));
-      } finally {
-        setAnnotateOpen(false);
-        clearSelection();
-      }
-    })();
-  }
-
   function updateAnnotationMemo(anid: number, memo: string) {
     void (async () => {
       try {
         await api.updateAnnotation(anid, memo);
-        setEditingAnnMemo(null);
         await refreshAnnotations();
       } catch (e) {
         setErrMsg(e instanceof Error ? e.message : t("coder.annotationUpdateError"));
@@ -861,90 +662,21 @@ export function TextCoder({
     })();
   }
 
-  /* ------------------------------------------------------------- links */
+  /* ------------------------------------------- selection toolbar callbacks */
 
-  function copySegmentLink() {
-    const sel = selection;
-    if (!sel) return;
-    void (async () => {
-      try {
-        await copyLinkPayload(sourceId, sel.start, sel.end);
-        setClipboardLink({ fid: sourceId, pos0: sel.start, pos1: sel.end });
-        setLinkCopied(true);
-        if (linkCopiedTimer.current) clearTimeout(linkCopiedTimer.current);
-        linkCopiedTimer.current = setTimeout(() => setLinkCopied(false), 1500);
-      } catch (e) {
-        setErrMsg(e instanceof Error ? e.message : t("coder.linkCopyError"));
-      }
-    })();
+  /** A coding was just created (text or in-vivo): refresh the code tree and
+   *  auto-select the new segment per the "Auto-show segment details" pref. */
+  function handleToolbarCoded(created: Coding, next: Coding[]) {
+    void refreshCodes().catch(() => undefined);
+    selectCreatedSegment(created, next);
   }
 
-  /** Create one link from the current selection to the copied segment. */
-  function pasteSegmentLink() {
-    const sel = selection;
-    const target = clipboardLink;
-    if (!sel || !target) return;
-    void (async () => {
-      try {
-        await createLink({
-          from_fid: sourceId,
-          from_pos0: sel.start,
-          from_pos1: sel.end,
-          to_fid: target.fid,
-          to_pos0: target.pos0,
-          to_pos1: target.pos1,
-        });
-        await refreshLinks();
-      } catch (e) {
-        setErrMsg(e instanceof Error ? e.message : t("coder.linkCreateError"));
-      } finally {
-        clearSelection();
-      }
-    })();
-  }
-
-  /* ------------------------------------------------------------- QTT */
-
-  /** Open the worksheet picker for the current selection. */
-  function openQttPicker() {
-    setQttOpen(true);
-    setQttLoading(true);
-    void listQttSheets()
-      .then((sheets) => setQttSheets(sheets))
-      .catch((e) => {
-        setErrMsg(e instanceof Error ? e.message : t("qtt.sendError"));
-        setQttOpen(false);
-      })
-      .finally(() => setQttLoading(false));
-  }
-
-  /** Store the selected span as a segment item on the given worksheet. */
-  function sendSelectionToSheet(sheet: QttSheet) {
-    const sel = selection;
-    if (!sel || qttSending != null) return;
-    setQttSending(sheet.id);
-    void (async () => {
-      try {
-        await sendSegmentToQtt(sheet.id, {
-          fid: sourceId,
-          pos0: sel.start,
-          pos1: sel.end,
-        });
-        setQttOpen(false);
-        setQttSent(true);
-        if (qttSentTimer.current) clearTimeout(qttSentTimer.current);
-        qttSentTimer.current = setTimeout(() => setQttSent(false), 1500);
-        // An open QTT workspace refreshes its sheets/items.
-        const { qttUi, setQttUi } = useProjectStore.getState();
-        setQttUi({ tick: qttUi.tick + 1 });
-        clearSelection();
-      } catch (e) {
-        setErrMsg(e instanceof Error ? e.message : t("qtt.sendError"));
-      } finally {
-        setQttSending(null);
-      }
-    })();
-  }
+  /** Non-coding mutations (annotation, link, QTT): refresh the rest. */
+  const handleToolbarChanged = useCallback(() => {
+    void refreshAnnotations();
+    void refreshCodes().catch(() => undefined);
+    void refreshLinks();
+  }, [refreshAnnotations, refreshCodes, refreshLinks]);
 
   /* --------------------------------------------------------------- edit mode */
 
@@ -1206,23 +938,7 @@ export function TextCoder({
   }
 
   if (loadError) {
-    return (
-      <div className="flex h-full items-center justify-center bg-bg">
-        <div className="max-w-md text-center">
-          <p className="flex items-center justify-center gap-1.5 text-sm text-danger">
-            <CircleAlert size={16} aria-hidden />
-            {loadError}
-          </p>
-          <button
-            type="button"
-            onClick={() => setReloadTick((t) => t + 1)}
-            className="mt-3 rounded-sm border border-border bg-surface px-3 py-1.5 text-sm hover:bg-surface-higher"
-          >
-            {t("common.retry")}
-          </button>
-        </div>
-      </div>
-    );
+    return <LoadError message={loadError} onRetry={() => setReloadTick((t) => t + 1)} />;
   }
 
   if (!source) return null;
@@ -1402,323 +1118,39 @@ export function TextCoder({
       </div>
 
       {!editMode && segRows.length > 0 && (
-        <div className="shrink-0 border-t border-border bg-surface px-3 py-2">
-          <div className="flex items-center gap-2">
-            <span className="text-xs font-medium text-text-secondary">{t("coder.codingDetails")}</span>
-            <div className="flex-1" />
-            <IconButton label={t("common.closeDetails")} size="sm" onClick={() => setSelectedSeg(null)}>
-              <X size={14} aria-hidden />
-            </IconButton>
-          </div>
-          <ul className="mt-1.5 space-y-1.5">
-            {segRows.map((r) => {
-              const code = codeById.get(r.cid);
-              return (
-                <li
-                  key={r.ctid}
-                  className="flex items-center gap-2 rounded-sm border border-border bg-bg px-2 py-1.5 text-sm"
-                >
-                  <span
-                    className="h-3 w-3 shrink-0 rounded-sm border border-border"
-                    style={{ backgroundColor: code?.color ?? FALLBACK_CODE_COLOR }}
-                    aria-hidden
-                  />
-                  <span className="font-medium" title={r.date}>
-                    {code?.name ?? t("coder.fallbackCode", { id: r.cid })}
-                  </span>
-                  {r.important !== 0 && (
-                    <Star size={12} className="text-warning" fill="currentColor" aria-hidden />
-                  )}
-                  {code?.memo && <span className="truncate text-xs text-text-secondary">{code.memo}</span>}
-                  <span className="flex items-center gap-1">
-                    <span className="text-xs text-text-secondary">{t("coder.weight")}</span>
-                    <Button
-                      variant="secondary"
-                      className="h-6 w-6 justify-center px-0"
-                      icon={<Minus size={12} aria-hidden />}
-                      title={t("coder.weightDec")}
-                      aria-label={t("coder.weightDec")}
-                      disabled={weightOf(r) === 0}
-                      onClick={() => updateCodingWeight(r, weightOf(r) - 1)}
-                    />
-                    <span className="min-w-5 text-center text-xs text-text-secondary" aria-label={t("coder.weight")}>
-                      {weightOf(r)}
-                    </span>
-                    <Button
-                      variant="secondary"
-                      className="h-6 w-6 justify-center px-0"
-                      icon={<Plus size={12} aria-hidden />}
-                      title={t("coder.weightInc")}
-                      aria-label={t("coder.weightInc")}
-                      disabled={weightOf(r) >= 100}
-                      onClick={() => updateCodingWeight(r, weightOf(r) + 1)}
-                    />
-                  </span>
-                  <div className="flex-1" />
-                  <IconButton
-                    label={t("coder.removeFor", { name: code?.name ?? "code" })}
-                    title={t("coder.removeThis")}
-                    size="sm"
-                    onClick={() => deleteCoding(r)}
-                    className="hover:text-danger"
-                  >
-                    <Trash2 size={14} aria-hidden />
-                  </IconButton>
-                </li>
-              );
-            })}
-          </ul>
-        </div>
+        <CodingDetailsBar
+          rows={segRows}
+          codeById={codeById}
+          onDelete={deleteCoding}
+          onWeight={updateCodingWeight}
+          onClose={() => setSelectedSeg(null)}
+        />
       )}
 
       {!editMode && annRows.length > 0 && (
-        <div className="shrink-0 border-t border-border bg-surface px-3 py-2">
-          <div className="flex items-center gap-2">
-            <span className="text-xs font-medium text-text-secondary">{t("coder.annotationDetails")}</span>
-            <div className="flex-1" />
-            <IconButton label={t("common.closeDetails")} size="sm" onClick={() => setSelectedAnnSeg(null)}>
-              <X size={14} aria-hidden />
-            </IconButton>
-          </div>
-          <ul className="mt-1.5 space-y-1.5">
-            {annRows.map((a) => {
-              const editing = editingAnnMemo?.anid === a.anid;
-              return (
-                <li key={a.anid} className="rounded-sm border border-border bg-bg px-2 py-1.5 text-sm">
-                  {editing ? (
-                    <div className="flex items-start gap-1.5">
-                      <Textarea
-                        value={editingAnnMemo.memo}
-                        onChange={(e) => setEditingAnnMemo({ anid: a.anid, memo: e.target.value })}
-                        className="min-h-12 w-full resize-none p-1.5"
-                      />
-                      <Button
-                        variant="primary"
-                        icon={<Check size={12} aria-hidden />}
-                        onClick={() => updateAnnotationMemo(a.anid, editingAnnMemo.memo)}
-                      >
-                        {t("common.save")}
-                      </Button>
-                      <Button variant="secondary" onClick={() => setEditingAnnMemo(null)}>
-                        {t("common.cancel")}
-                      </Button>
-                    </div>
-                  ) : (
-                    <div className="flex items-center gap-2">
-                      <span className="min-w-0 flex-1 truncate">
-                        {a.memo || <span className="text-text-secondary">{t("coder.noMemoInline")}</span>}
-                      </span>
-                      <span className="text-xs text-text-secondary">{a.date}</span>
-                      <IconButton
-                        label={t("coder.editAnnotationMemo")}
-                        title={t("common.editMemo")}
-                        size="sm"
-                        onClick={() => setEditingAnnMemo({ anid: a.anid, memo: a.memo })}
-                      >
-                        <Pencil size={14} aria-hidden />
-                      </IconButton>
-                      <IconButton
-                        label={t("coder.deleteAnnotation")}
-                        title={t("coder.deleteAnnotation")}
-                        size="sm"
-                        onClick={() => deleteAnnotation(a)}
-                        className="hover:text-danger"
-                      >
-                        <Trash2 size={14} aria-hidden />
-                      </IconButton>
-                    </div>
-                  )}
-                </li>
-              );
-            })}
-          </ul>
-        </div>
+        <AnnotationDetailsBar
+          rows={annRows}
+          onUpdateMemo={updateAnnotationMemo}
+          onDelete={deleteAnnotation}
+          onClose={() => setSelectedAnnSeg(null)}
+        />
       )}
 
-      {toolbarPos && (
-        <div
-          ref={floatingRef}
-          className="fixed z-40"
-          style={{ left: toolbarPos.left, top: toolbarPos.top }}
-        >
-          {annotateOpen ? (
-            <div
-              className={`w-72 p-2 ${cls.popup}`}
-              role="dialog"
-              aria-modal="true"
-              aria-label={t("coder.addAnnotation")}
-            >
-              <Textarea
-                autoFocus
-                value={annotateMemo}
-                onChange={(e) => setAnnotateMemo(e.target.value)}
-                placeholder={t("coder.annotationMemoPlaceholder")}
-                className="h-20 w-full resize-none p-1.5"
-              />
-              <div className="mt-2 flex justify-end gap-1.5">
-                <Button variant="secondary" onClick={() => setAnnotateOpen(false)}>
-                  {t("common.cancel")}
-                </Button>
-                <Button variant="primary" icon={<Check size={12} aria-hidden />} onClick={saveAnnotation}>
-                  {t("common.save")}
-                </Button>
-              </div>
-            </div>
-          ) : inVivoOpen ? (
-            <div
-              className={`w-64 p-2 ${cls.popup}`}
-              role="dialog"
-              aria-modal="true"
-              aria-label={t("coder.inVivo")}
-            >
-              <Input
-                autoFocus
-                value={inVivoName}
-                onChange={(e) => setInVivoName(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") codeInVivo();
-                }}
-                placeholder={t("coder.inVivoNamePlaceholder")}
-                aria-label={t("coder.inVivoNamePlaceholder")}
-              />
-              <Select
-                value={inVivoCat ?? ""}
-                onChange={(e) => setInVivoCat(e.target.value === "" ? null : Number(e.target.value))}
-                aria-label={t("coder.inVivoCategory")}
-                className="mt-1.5 w-full"
-              >
-                <option value="">{t("coder.inVivoNoCategory")}</option>
-                {categories.map((c) => (
-                  <option key={c.id} value={c.id}>
-                    {c.name}
-                  </option>
-                ))}
-              </Select>
-              <div className="mt-2 flex justify-end gap-1.5">
-                <Button variant="secondary" onClick={() => setInVivoOpen(false)}>
-                  {t("common.cancel")}
-                </Button>
-                <Button
-                  variant="primary"
-                  icon={inVivoBusy ? <LoaderCircle size={12} className="animate-spin" aria-hidden /> : <Tag size={12} aria-hidden />}
-                  onClick={codeInVivo}
-                  disabled={inVivoBusy || inVivoName.trim() === ""}
-                >
-                  {t("common.create")}
-                </Button>
-              </div>
-            </div>
-          ) : qttOpen ? (
-            <Menu role="menu" className="w-64" aria-label={t("qtt.sendTitle")}>
-              <div className="border-b border-border px-2 py-1 text-[11px] font-medium uppercase tracking-wide text-text-secondary">
-                {t("qtt.sendTitle")}
-              </div>
-              {qttLoading ? (
-                <div className="flex items-center gap-1.5 px-2 py-2 text-xs text-text-secondary">
-                  <LoaderCircle size={12} className="animate-spin" aria-hidden />
-                  {t("qtt.loading")}
-                </div>
-              ) : qttSheets.length === 0 ? (
-                <div className="px-2 py-2 text-xs text-text-secondary">{t("qtt.sendEmpty")}</div>
-              ) : (
-                qttSheets.map((sheet) => (
-                  <MenuItem
-                    key={sheet.id}
-                    role="menuitem"
-                    disabled={qttSending != null}
-                    onClick={() => sendSelectionToSheet(sheet)}
-                    className={qttSending === sheet.id ? "opacity-60" : ""}
-                  >
-                    {qttSending === sheet.id ? (
-                      <LoaderCircle size={12} className="animate-spin" aria-hidden />
-                    ) : (
-                      <ScrollText size={12} aria-hidden />
-                    )}
-                    <span className="min-w-0 flex-1 truncate">{sheet.name}</span>
-                    <span className="shrink-0 rounded-sm bg-surface-higher px-1 py-px text-[10px] font-medium uppercase text-text-secondary">
-                      {sheet.kind === "mixed" ? t("qtt.kindMixed") : t("qtt.kindQual")}
-                    </span>
-                  </MenuItem>
-                ))
-              )}
-            </Menu>
-          ) : !editMode ? (
-            <div
-              className={`flex items-center gap-1 p-1 ${cls.popup}`}
-              role="toolbar"
-              aria-label={t("coder.selectionActions")}
-            >
-              <Button
-                variant="primary"
-                icon={<Code size={12} aria-hidden />}
-                className="max-w-56"
-                onClick={() => {
-                  if (activeCodeId != null) codeSelection(activeCodeId);
-                  else setPickerOpen(true);
-                }}
-                title={
-                  activeCodeId != null
-                    ? t("coder.codeWithActive", {
-                        name: codeById.get(activeCodeId)?.name ?? "",
-                      })
-                    : t("coder.codeAction")
-                }
-              >
-                <span className="truncate">
-                  {activeCodeId != null
-                    ? codeById.get(activeCodeId)?.name ?? t("coder.codeAction")
-                    : t("coder.codeAction")}
-                </span>
-              </Button>
-              <Button variant="secondary" icon={<StickyNote size={12} aria-hidden />} onClick={openAnnotate}>
-                {t("coder.annotate")}
-              </Button>
-              <Button
-                variant="secondary"
-                icon={<Tag size={12} aria-hidden />}
-                onClick={openInVivo}
-                title={t("coder.inVivo")}
-              >
-                {t("coder.inVivo")}
-              </Button>
-              <Button
-                variant="secondary"
-                icon={<LinkIcon size={12} aria-hidden />}
-                onClick={copySegmentLink}
-                title={t("coder.linkCopied")}
-              >
-                {linkCopied ? t("coder.copyLinkDone") : t("coder.copyLink")}
-              </Button>
-              {clipboardLink && (
-                <Button
-                  variant="secondary"
-                  icon={<LinkIcon size={12} aria-hidden />}
-                  onClick={pasteSegmentLink}
-                  title={t("coder.linkCopied")}
-                >
-                  {t("coder.pasteLinkHere")}
-                </Button>
-              )}
-              <Button
-                variant="secondary"
-                icon={
-                  qttSent ? <Check size={12} aria-hidden /> : <ScrollText size={12} aria-hidden />
-                }
-                onClick={openQttPicker}
-                title={t("qtt.sendTitle")}
-              >
-                {qttSent ? t("qtt.sendDone") : t("qtt.send")}
-              </Button>
-            </div>
-          ) : null}
-        </div>
-      )}
-
-      <CodePicker
-        open={pickerOpen}
-        codes={storeCodeTree}
-        onClose={() => setPickerOpen(false)}
-        onPick={handlePickCode}
+      <SelectionToolbar
+        anchor={toolbarPos}
+        selection={
+          selection
+            ? { pos0: selection.start, pos1: selection.end, text: text.slice(selection.start, selection.end) }
+            : null
+        }
+        fid={sourceId}
+        codes={codes}
+        refreshCodings={refreshCodings}
+        onCoded={handleToolbarCoded}
+        onChanged={handleToolbarChanged}
+        onHide={hideToolbar}
+        onClose={clearSelection}
+        onError={(msg) => setErrMsg(msg)}
       />
     </div>
   );

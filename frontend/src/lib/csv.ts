@@ -36,12 +36,41 @@ function detectDelimiter(text: string): string {
  * (LF tolerated). The delimiter is auto-detected (tabs win only when the
  * header line carries more unquoted tabs than commas), so the same
  * function serves .csv and .tsv sources. A UTF-8 BOM is stripped.
+ *
+ * Alongside the decoded fields the result carries per-cell spans in the
+ * RAW source text (plus a field-char → raw-char map), so a coder surface
+ * can translate a selection inside a decoded cell back to the source
+ * coordinates that text codings use.
  */
-export function parseCsv(text: string): { headers: string[]; rows: string[][] } {
+export interface CsvCell {
+  /** The decoded field text (quotes stripped, `""` unescaped). */
+  text: string;
+  /** Raw-text offset of the field's first decoded character; equals `end`
+   *  for an empty field. */
+  start: number;
+  /** Raw-text offset one past the field's last decoded character. */
+  end: number;
+  /** Field-character index → raw-text index. Field chars inside an
+   *  escaped quote (`""`) map to the first quote; the array is empty for
+   *  an empty field. */
+  toRaw: number[];
+}
+
+export interface CsvParse {
+  headers: string[];
+  rows: string[][];
+  /** One entry per parsed data row (aligned with `rows`). */
+  cells: CsvCell[][];
+}
+
+export function parseCsv(text: string): CsvParse {
   const delimiter = detectDelimiter(text);
   const records: string[][] = [];
+  const cellRows: CsvCell[][] = [];
   let row: string[] = [];
+  let cells: CsvCell[] = [];
   let field = "";
+  let toRaw: number[] = [];
   let inQuotes = false;
   /** True while the current field was opened with a quote — an empty quoted
    *  field (`""`) at EOF must still flush, but a bare empty input must not
@@ -49,12 +78,32 @@ export function parseCsv(text: string): { headers: string[]; rows: string[][] } 
   let fieldOpenedQuoted = false;
   let i = text.charCodeAt(0) === 0xfeff ? 1 : 0;
   const n = text.length;
+  const appendChar = (raw: number, c: string) => {
+    field += c;
+    toRaw.push(raw);
+  };
+  const flushField = (endRaw: number) => {
+    const start = toRaw.length > 0 ? toRaw[0] : endRaw;
+    const end = toRaw.length > 0 ? toRaw[toRaw.length - 1] + 1 : endRaw;
+    cells.push({ text: field, start, end, toRaw });
+    row.push(field);
+    field = "";
+    toRaw = [];
+    fieldOpenedQuoted = false;
+  };
+  const flushRecord = (endRaw: number) => {
+    flushField(endRaw);
+    records.push(row);
+    cellRows.push(cells);
+    row = [];
+    cells = [];
+  };
   while (i < n) {
     const c = text[i];
     if (inQuotes) {
       if (c === '"') {
         if (text[i + 1] === '"') {
-          field += '"';
+          appendChar(i, '"');
           i += 2;
           continue;
         }
@@ -62,7 +111,7 @@ export function parseCsv(text: string): { headers: string[]; rows: string[][] } 
         i++;
         continue;
       }
-      field += c;
+      appendChar(i, c);
       i++;
       continue;
     }
@@ -73,33 +122,26 @@ export function parseCsv(text: string): { headers: string[]; rows: string[][] } 
       continue;
     }
     if (c === delimiter) {
-      row.push(field);
-      field = "";
-      fieldOpenedQuoted = false;
+      flushField(i);
       i++;
       continue;
     }
     if (c === "\r" || c === "\n") {
       if (c === "\r" && text[i + 1] === "\n") i++;
-      row.push(field);
-      field = "";
-      fieldOpenedQuoted = false;
-      records.push(row);
-      row = [];
+      flushRecord(i);
       i++;
       continue;
     }
-    field += c;
+    appendChar(i, c);
     i++;
   }
   // Flush a pending record: a final line without a trailing newline, a lone
   // quoted empty field (`""`), or a quoted field still open at EOF. An
   // empty input produces no records.
   if (inQuotes || fieldOpenedQuoted || field.length > 0 || row.length > 0) {
-    row.push(field);
-    records.push(row);
+    flushRecord(n);
   }
-  return { headers: records[0] ?? [], rows: records.slice(1) };
+  return { headers: records[0] ?? [], rows: records.slice(1), cells: cellRows.slice(1) };
 }
 
 function escapeCell(cell: unknown): string {

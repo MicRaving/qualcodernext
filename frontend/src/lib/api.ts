@@ -168,18 +168,6 @@ export function fetchSourceFile(sourceId: number, timeoutMs = 60_000): Promise<R
   return fetchSourceBytes((base) => `${base}/sources/${sourceId}/file`, timeoutMs);
 }
 
-/** Generated thumbnail (PNG) for image/PDF sources. */
-export function fetchThumbnail(
-  sourceId: number,
-  maxSize = 300,
-  timeoutMs = 15_000,
-): Promise<Response> {
-  return fetchSourceBytes(
-    (base) => `${base}/sources/${sourceId}/thumbnail?max_size=${maxSize}`,
-    timeoutMs,
-  );
-}
-
 /** Drop the cached base URL so the next `initApiBase()` resolves it afresh.
  *  Used by callers that cannot go through the fetch helpers (media elements
  *  stream from a raw URL) when the backend restarted on a new port. */
@@ -234,14 +222,45 @@ export function sourceFileUrl(sourceId: number): string {
   return `${apiBaseSync()}/sources/${sourceId}/file`;
 }
 
-/** URL to the PDF export of an HTML source (GET returns PDF bytes). */
-export function sourcePdfUrl(sourceId: number): string {
-  return `${apiBaseSync()}/sources/${sourceId}/pdf`;
-}
-
-/** URL to a generated thumbnail (PNG) for image/PDF sources. */
-export function thumbnailUrl(sourceId: number, maxSize = 300): string {
-  return `${apiBaseSync()}/sources/${sourceId}/thumbnail?max_size=${maxSize}`;
+/** Shared JSON fetch for endpoints consumed outside the `api` object (QTT,
+ *  creative, stats, code-sets, links, dictionaries, …). Resolves the base
+ *  URL, applies the JSON content-type unless the body is FormData,
+ *  normalizes non-2xx responses into `ApiError` (with the backend's
+ *  `detail`) and retries ONCE on transport-level failure — the packaged
+ *  backend may have restarted on a new port. This is the single home of the
+ *  pattern feature modules used to copy around; new local clients should
+ *  call it instead of re-implementing it. */
+export async function localRequest<T>(
+  path: string,
+  init: RequestInit = {},
+  timeoutMs = 15_000,
+): Promise<T> {
+  const doFetch = async (): Promise<T> => {
+    const base = await initApiBase();
+    const headers =
+      init.body instanceof FormData ? undefined : { "Content-Type": "application/json" };
+    const res = await fetchWithTimeout(`${base}${path}`, { headers, ...init }, timeoutMs);
+    if (!res.ok) {
+      let detail: unknown;
+      try {
+        detail = (await res.json()).detail;
+      } catch {
+        /* non-JSON error body */
+      }
+      const suffix = typeof detail === "string" && detail ? `: ${detail}` : "";
+      throw new ApiError(res.status, `API error ${res.status} on ${path}${suffix}`, detail);
+    }
+    if (res.status === 204) return undefined as T;
+    return (await res.json()) as T;
+  };
+  try {
+    return await doFetch();
+  } catch (err) {
+    if (err instanceof ApiError) throw err;
+    // Network-level failure (the packaged backend restarted): retry once so
+    // the base URL is resolved afresh.
+    return doFetch();
+  }
 }
 
 /** URL to an R artifact (PNG/CSV written by an R job into the exchange dir). */
@@ -1075,6 +1094,20 @@ export interface UpdatesSettings {
   auto_update: boolean;
 }
 
+export interface MaintenanceSettings {
+  compact_on_close: boolean;
+  last_compact: string;
+}
+
+export interface CompactResult {
+  ok: boolean;
+  before_bytes: number;
+  after_bytes: number;
+  freed_bytes: number;
+  indexes_dropped: number;
+  indexes_recreated: number;
+}
+
 export interface SyncResult {
   ok: boolean;
   reason?: string;
@@ -1256,7 +1289,7 @@ export const api = {
   undoCodings: (items: object[]) =>
     request<UndoCodingsResponse>("/codings/undo", {
       method: "POST",
-      body: JSON.stringify(items),
+      body: JSON.stringify({ items }),
     }),
 
   imageCodings: (sourceId: number) => request<ImageCoding[]>(`/codings/image/${sourceId}`),
@@ -1451,16 +1484,6 @@ export const api = {
   // --- Attributes ------------------------------------------------------
 
   attributeTypes: () => request<AttributeType[]>("/attributes/types"),
-  createAttributeType: (
-    name: string,
-    case_or_file: string,
-    value_type: string,
-    owner?: string,
-  ) =>
-    request<AttributeType>("/attributes/types", {
-      method: "POST",
-      body: JSON.stringify({ name, case_or_file, value_type, owner }),
-    }),
   attributeValues: () => request<AttributeValue[]>("/attributes/values"),
   setAttributeValue: (
     name: string,
@@ -1525,13 +1548,6 @@ export const api = {
   interchange: {
     exportRefiUrl: () => `${apiBaseSync()}/interchange/export/refi`,
   },
-  importAuto: (file: File, codername?: string, qualitativeHeaders?: string[]) =>
-    importMultipart<InterchangeResult>(
-      "/interchange/import/auto",
-      file,
-      codername,
-      qualitativeHeaders ? { qualitative_headers: qualitativeHeaders.join(",") } : undefined,
-    ),
   aiStatus: (probe = false) =>
     request<AiStatus>(`/ai/status${probe ? "?probe=1" : ""}`),
   aiModels: (opts?: { provider?: string; api_base?: string; api_key?: string }) => {
@@ -1557,11 +1573,6 @@ export const api = {
     request<AiChatReply>("/ai/chat", {
       method: "POST",
       body: JSON.stringify({ message, context, mode, prompt_id: promptId }),
-    }),
-  aiSearch: (query: string, limit = 10) =>
-    request<{ results: AiSearchResult[]; indexed?: boolean }>("/ai/search", {
-      method: "POST",
-      body: JSON.stringify({ query, limit }),
     }),
   aiPrompts: () => request<{ prompts: AiPromptInfo[] }>("/ai/prompts"),
   aiIndexStatus: () => request<AiIndexStatus>("/ai/index"),
@@ -1660,8 +1671,6 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ name, script }),
     }),
-  rScriptGet: (name: string) =>
-    request<RScript>(`/r/scripts/${encodeURIComponent(name)}`),
   rScriptPatch: (name: string, script: string) =>
     request<RScript>(`/r/scripts/${encodeURIComponent(name)}`, {
       method: "PATCH",
@@ -1685,10 +1694,6 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ name, description }),
     }),
-  updateGraph: (
-    grid: number,
-    body: { name?: string; description?: string; scene_width?: number; scene_height?: number },
-  ) => request<GraphSummary>(`/graphs/${grid}`, { method: "PATCH", body: JSON.stringify(body) }),
   deleteGraph: (grid: number) => request<void>(`/graphs/${grid}`, { method: "DELETE" }),
   graphData: (grid: number) => request<GraphData>(`/graphs/${grid}`),
 
@@ -1788,11 +1793,6 @@ export const api = {
       method: "PUT",
       body: JSON.stringify({ enabled }),
     }),
-  /** Shared-folder detection for a project path (marker / UNC / sidecars). */
-  syncAutoDetect: (projectPath: string) =>
-    request<{ shared: boolean; reason: string }>(
-      `/sync/auto-detect?project_path=${encodeURIComponent(projectPath)}`,
-    ),
   /** Remember a per-project sync decision: "on"/"off" win over the
    *  auto-detection on the next open; "auto" re-detects. */
   syncSetOverride: (projectPath: string, mode: "auto" | "on" | "off") =>
@@ -1829,24 +1829,19 @@ export const api = {
       method: "PUT",
       body: JSON.stringify(body),
     }),
+
+  // --- Maintenance -----------------------------------------------------
+
+  maintenanceSettings: () => request<MaintenanceSettings>("/maintenance/settings"),
+  saveMaintenanceSettings: (body: { compact_on_close: boolean }) =>
+    request<MaintenanceSettings>("/maintenance/settings", {
+      method: "PUT",
+      body: JSON.stringify(body),
+    }),
+  compactProject: () => request<CompactResult>("/projects/compact", { method: "POST" }),
 };
 
 async function handleJson<T>(res: Response): Promise<T> {
   if (!res.ok) throw await apiErrorFrom(res);
   return (await res.json()) as T;
-}
-
-async function importMultipart<T>(
-  path: string,
-  file: File,
-  codername?: string,
-  extra?: Record<string, string>,
-): Promise<T> {
-  const form = new FormData();
-  form.append("file", file);
-  if (codername) form.append("codername", codername);
-  for (const [key, value] of Object.entries(extra ?? {})) {
-    form.append(key, value);
-  }
-  return fetch(`${apiBaseSync()}${path}`, { method: "POST", body: form }).then(handleJson<T>);
 }

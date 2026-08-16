@@ -55,6 +55,9 @@ vi.mock("@/lib/api", () => ({
     throw new Error("unexpected fetchWithTimeout call");
   },
   initApiBase: async () => "http://mock",
+  localRequest: async () => {
+    throw new Error("unexpected localRequest call");
+  },
 }));
 
 const MEDIA_ID = 1;
@@ -589,3 +592,4 @@ describe("AvCoder transcript delete + re-transcription", () => {
     container.remove();
   });
 });
+

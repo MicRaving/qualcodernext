@@ -794,9 +794,9 @@ async def undo_codings(session: AsyncSession, items: list[dict]) -> int:
     """Re-insert previously deleted ``code_text`` rows; return count restored.
 
     Port of the legacy undo_stack insert (cid, fid, seltext, pos0, pos1,
-    owner, memo, date, important). Rows that collide with the unique
-    constraint are skipped without discarding the previously restored rows
-    (each insert runs in its own savepoint).
+    owner, memo, date, important, avid, weight). Rows that collide with the
+    unique constraint are skipped without discarding the previously restored
+    rows (each insert runs in its own savepoint).
     """
     restored = 0
     from qualcoder_api.persistence.repositories import _capture, _rowdict
@@ -817,6 +817,8 @@ async def undo_codings(session: AsyncSession, items: list[dict]) -> int:
                         memo=item.get("memo", ""),
                         date=item.get("date", _now()),
                         important=item.get("important", 0),
+                        avid=item.get("avid"),
+                        weight=item.get("weight", 0),
                     )
                 )
                 await session.flush()

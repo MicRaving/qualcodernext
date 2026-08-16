@@ -64,8 +64,15 @@ describe("downloadCsv", () => {
 });
 
 describe("parseCsv", () => {
+  /** Headers+rows only — the cell-span tests below cover the new field. */
+  const table = (text: string) => {
+    const { cells, ...rest } = parseCsv(text);
+    void cells;
+    return rest;
+  };
+
   it("parses a simple header + rows", () => {
-    expect(parseCsv("name,note\nalpha,one\nbeta,two\n")).toEqual({
+    expect(table("name,note\nalpha,one\nbeta,two\n")).toEqual({
       headers: ["name", "note"],
       rows: [
         ["alpha", "one"],
@@ -75,48 +82,48 @@ describe("parseCsv", () => {
   });
 
   it("keeps quoted fields containing commas intact", () => {
-    expect(parseCsv('name,note\n"a, b",plain\n')).toEqual({
+    expect(table('name,note\n"a, b",plain\n')).toEqual({
       headers: ["name", "note"],
       rows: [["a, b", "plain"]],
     });
   });
 
   it("unescapes doubled quotes inside quoted fields", () => {
-    expect(parseCsv('quote\n"say ""hi"""\n')).toEqual({
+    expect(table('quote\n"say ""hi"""\n')).toEqual({
       headers: ["quote"],
       rows: [['say "hi"']],
     });
   });
 
   it("keeps newlines inside quoted fields as one record", () => {
-    expect(parseCsv('text\n"line1\nline2"\n')).toEqual({
+    expect(table('text\n"line1\nline2"\n')).toEqual({
       headers: ["text"],
       rows: [["line1\nline2"]],
     });
   });
 
   it("accepts CRLF and LF line endings", () => {
-    expect(parseCsv("a,b\r\n1,2\r\n")).toEqual({
+    expect(table("a,b\r\n1,2\r\n")).toEqual({
       headers: ["a", "b"],
       rows: [["1", "2"]],
     });
-    expect(parseCsv("a,b\n1,2\n")).toEqual({
+    expect(table("a,b\n1,2\n")).toEqual({
       headers: ["a", "b"],
       rows: [["1", "2"]],
     });
-    expect(parseCsv("a,b\r\n1,2")).toEqual({
+    expect(table("a,b\r\n1,2")).toEqual({
       headers: ["a", "b"],
       rows: [["1", "2"]],
     });
   });
 
   it("returns headers with an empty row list for a header-only file", () => {
-    expect(parseCsv("a,b\n")).toEqual({ headers: ["a", "b"], rows: [] });
-    expect(parseCsv("a,b")).toEqual({ headers: ["a", "b"], rows: [] });
+    expect(table("a,b\n")).toEqual({ headers: ["a", "b"], rows: [] });
+    expect(table("a,b")).toEqual({ headers: ["a", "b"], rows: [] });
   });
 
   it("detects tabs for TSV input", () => {
-    expect(parseCsv("name\tnote\nalpha\tone\ntwo\t" + "three\n")).toEqual({
+    expect(table("name\tnote\nalpha\tone\ntwo\t" + "three\n")).toEqual({
       headers: ["name", "note"],
       rows: [
         ["alpha", "one"],
@@ -126,14 +133,14 @@ describe("parseCsv", () => {
   });
 
   it("keeps commas inside quoted header cells", () => {
-    expect(parseCsv('"a, b",c\n1,2\n')).toEqual({
+    expect(table('"a, b",c\n1,2\n')).toEqual({
       headers: ["a, b", "c"],
       rows: [["1", "2"]],
     });
   });
 
   it("strips a UTF-8 BOM", () => {
-    expect(parseCsv("\uFEFFa,b\n1,2\n")).toEqual({
+    expect(table("\uFEFFa,b\n1,2\n")).toEqual({
       headers: ["a", "b"],
       rows: [["1", "2"]],
     });
@@ -141,7 +148,7 @@ describe("parseCsv", () => {
 
   it("round-trips toCsv output", () => {
     const text = toCsv(["name", "note"], [["a, b", 'say "hi"'], ["line1\nline2", ""]]);
-    expect(parseCsv(text)).toEqual({
+    expect(table(text)).toEqual({
       headers: ["name", "note"],
       rows: [
         ["a, b", 'say "hi"'],
@@ -151,8 +158,73 @@ describe("parseCsv", () => {
   });
 
   it("handles empty input and a lone quoted empty field", () => {
-    expect(parseCsv("")).toEqual({ headers: [], rows: [] });
-    expect(parseCsv('""')).toEqual({ headers: [""], rows: [] });
-    expect(parseCsv('"",""\n""\n')).toEqual({ headers: ["", ""], rows: [[""]] });
+    expect(table("")).toEqual({ headers: [], rows: [] });
+    expect(table('""')).toEqual({ headers: [""], rows: [] });
+    expect(table('"",""\n""\n')).toEqual({ headers: ["", ""], rows: [[""]] });
+  });
+
+  describe("cells (raw spans)", () => {
+    it("maps simple fields to their raw offsets", () => {
+      const { cells } = parseCsv("a,b\nxx,yyy\n");
+      expect(cells).toEqual([
+        [
+          { text: "xx", start: 4, end: 6, toRaw: [4, 5] },
+          { text: "yyy", start: 7, end: 10, toRaw: [7, 8, 9] },
+        ],
+      ]);
+    });
+
+    it("skips quote delimiters and unescapes quotes in the map", () => {
+      const text = 'a,b\n"x, y","say ""hi"""\n';
+      const { cells } = parseCsv(text);
+      const [c0, c1] = cells[0];
+      expect(c0).toEqual({
+        text: "x, y",
+        start: 5, // first decoded char, past the opening quote
+        end: 9, // one past the last decoded char
+        toRaw: [5, 6, 7, 8],
+      });
+      // "say ""hi""" — decoded `say "hi"`; the doubled-quote pairs map to
+      // their first quote (16 and 20).
+      expect(c1.text).toBe('say "hi"');
+      expect(c1.start).toBe(12);
+      expect(c1.end).toBe(21);
+      expect(c1.toRaw).toEqual([12, 13, 14, 15, 16, 18, 19, 20]);
+      // every decoded char maps back to the matching raw text char:
+      expect(c1.toRaw.map((r) => text[r]).join("")).toBe(c1.text);
+    });
+
+    it("maps embedded newlines inside quoted fields", () => {
+      const { cells } = parseCsv('text\n"l1\nl2"\n');
+      const [c] = cells[0];
+      expect(c.text).toBe("l1\nl2");
+      expect(c.start).toBe(6);
+      expect(c.end).toBe(11);
+      expect(c.toRaw).toEqual([6, 7, 8, 9, 10]);
+    });
+
+    it("reports zero-length spans for empty fields", () => {
+      const { cells } = parseCsv("a,b,c\n1,,3\n");
+      expect(cells[0][1]).toEqual({ text: "", start: 8, end: 8, toRaw: [] });
+    });
+
+    it("round-trips toCsv output with exact char maps", () => {
+      const text = toCsv(["name", "note"], [["a, b", 'say "hi"'], ["line1\nline2", ""]]);
+      const { cells, rows } = parseCsv(text);
+      cells.forEach((cellRow, ri) =>
+        cellRow.forEach((cell, ci) => {
+          expect(cell.text).toBe(rows[ri][ci]);
+          const raw = cell.toRaw.map((r) => text[r]).join("");
+          expect(raw).toBe(cell.text);
+        }),
+      );
+    });
+
+    it("aligns cells with rows 1:1", () => {
+      const text = toCsv(["a", "b"], [["x", "y"], ["z", "w"]]);
+      const { cells, rows } = parseCsv(text);
+      expect(cells).toHaveLength(rows.length);
+      cells.forEach((row, ri) => expect(row).toHaveLength(rows[ri].length));
+    });
   });
 });

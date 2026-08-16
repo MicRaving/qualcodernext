@@ -7,7 +7,7 @@
  * restarted on a new port).
  */
 
-import { ApiError, fetchWithTimeout, initApiBase } from "@/lib/api";
+import { localRequest } from "@/lib/api";
 
 export interface CreativeItem {
   id: number;
@@ -28,34 +28,9 @@ export interface PromoteResult {
 }
 
 async function requestJson<T>(path: string, init: RequestInit = {}): Promise<T> {
-  const doFetch = async (): Promise<T> => {
-    const base = await initApiBase();
-    const res = await fetchWithTimeout(`${base}${path}`, {
-      headers: { "Content-Type": "application/json" },
-      ...init,
-    });
-    if (!res.ok) {
-      let detail: unknown;
-      try {
-        detail = (await res.json()).detail;
-      } catch {
-        /* non-JSON error body */
-      }
-      const suffix = typeof detail === "string" && detail ? `: ${detail}` : "";
-      throw new ApiError(res.status, `API error ${res.status} on ${path}${suffix}`, detail);
-    }
-    if (res.status === 204) return undefined as T;
-    return (await res.json()) as T;
-  };
-  try {
-    return await doFetch();
-  } catch (err) {
-    if (err instanceof ApiError) throw err;
-    // Network-level failure (packaged backend restarted): retry once so the
-    // base URL is resolved afresh.
-    return doFetch();
-  }
+  return localRequest<T>(path, init);
 }
+
 
 export function listCreativeItems(): Promise<CreativeItem[]> {
   return requestJson<CreativeItem[]>("/creative");
@@ -93,3 +68,5 @@ export function promoteCreativeItem(
     body: JSON.stringify(body),
   });
 }
+
+

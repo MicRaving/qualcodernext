@@ -6,7 +6,7 @@
  * built on the exported `initApiBase` / `fetchWithTimeout` / `ApiError`
  * primitives (api.ts itself is supervisor-owned).
  */
-import { ApiError, fetchWithTimeout, initApiBase } from "@/lib/api";
+import { localRequest } from "@/lib/api";
 
 export interface SegmentLink {
   id: number;
@@ -79,35 +79,7 @@ export async function readLinkPayload(): Promise<LinkSpanTarget | null> {
 /* API — local fetches (same shape as the annotation endpoints)        */
 /* ------------------------------------------------------------------ */
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const doFetch = async (): Promise<T> => {
-    const base = await initApiBase();
-    const res = await fetchWithTimeout(`${base}${path}`, {
-      headers: { "Content-Type": "application/json" },
-      ...init,
-    });
-    if (!res.ok) {
-      let detail: unknown;
-      try {
-        detail = (await res.json()).detail;
-      } catch {
-        /* non-JSON error body */
-      }
-      const suffix = typeof detail === "string" && detail ? `: ${detail}` : "";
-      throw new ApiError(res.status, `API error ${res.status} on ${path}${suffix}`, detail);
-    }
-    if (res.status === 204) return undefined as T;
-    return (await res.json()) as T;
-  };
-  try {
-    return await doFetch();
-  } catch (err) {
-    if (err instanceof ApiError) throw err;
-    // Network-level failure (the packaged backend restarted): retry once
-    // so the base URL is resolved afresh.
-    return doFetch();
-  }
-}
+const request = localRequest;
 
 /** Outgoing links anchored on a file (from_fid == fid). */
 export function fetchOutgoingLinks(fid: number): Promise<SegmentLink[]> {
@@ -167,3 +139,4 @@ export function consumePendingJump(fid: number): PendingJump | null {
   }
   return null;
 }
+
