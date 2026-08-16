@@ -4,8 +4,8 @@
  * pseudonyms, R integration and About.
  */
 import { useEffect, useState, type FormEvent } from "react";
-import { CircleAlert, CircleCheck, LoaderCircle, Moon, Sun, Trash2 } from "lucide-react";
-import { api, type Pseudonym, type RStatus } from "@/lib/api";
+import { Moon, Sun, Trash2 } from "lucide-react";
+import { api, type Pseudonym } from "@/lib/api";
 import { errorDetail } from "@/features/ai/format";
 import { A11yControls } from "@/features/accessibility/A11yControls";
 import { useI18n, LOCALE_NAMES, type Locale } from "@/lib/i18n";
@@ -29,9 +29,6 @@ export function GeneralTab() {
   const [pseudoName, setPseudoName] = useState("");
   const [pseudoError, setPseudoError] = useState<string | null>(null);
 
-  // R integration status
-  const [rStatus, setRStatus] = useState<RStatus | null>(null);
-
   useEffect(() => {
     api
       .appSettings()
@@ -40,10 +37,6 @@ export function GeneralTab() {
         /* backend unreachable — keep the default */
       });
     void loadPseudonyms();
-    api
-      .rStatus()
-      .then(setRStatus)
-      .catch(() => setRStatus(null));
   }, []);
 
   async function toggleAutoLoadProject() {
@@ -207,43 +200,6 @@ export function GeneralTab() {
             </table>
           </div>
         )}
-      </section>
-
-      {/* R integration */}
-      <section className="p-3">
-        <h2 className="text-sm font-semibold text-text-primary">{t("r.statusTitle")}</h2>
-        {rStatus === null ? (
-          <p className="mt-2 flex items-center gap-1.5 text-xs text-text-secondary">
-            <LoaderCircle size={12} className="animate-spin" aria-hidden />
-            {t("r.checking")}
-          </p>
-        ) : rStatus.available ? (
-          <p className="mt-2 flex items-center gap-1.5 text-xs text-success">
-            <CircleCheck size={13} aria-hidden />
-            {t("r.detected", { version: rStatus.version ?? "?", path: rStatus.path ?? "?" })}
-          </p>
-        ) : (
-          <div className="mt-2">
-            <p className="flex items-center gap-1.5 text-xs text-warning">
-              <CircleAlert size={13} aria-hidden />
-              {t("r.notFound")}
-            </p>
-            <a
-              href="https://www.r-project.org/"
-              target="_blank"
-              rel="noreferrer"
-              className="mt-1 inline-block text-xs text-accent underline"
-            >
-              {t("r.installHint")}
-            </a>
-          </div>
-        )}
-      </section>
-
-      {/* About */}
-      <section className="p-3">
-        <h2 className="text-sm font-semibold text-text-primary">{t("settings.about")}</h2>
-        <p className="mt-1 text-xs text-text-secondary">{t("settings.aboutText")}</p>
       </section>
     </div>
   );
