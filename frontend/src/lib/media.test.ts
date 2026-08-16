@@ -7,11 +7,13 @@ import {
   canTranscribeSource,
   hasRealTranscript,
   isAudioFilename,
+  isCsv,
   isDocumentFilename,
   isHtml,
   isImageFilename,
   isPdf,
   isVideoFilename,
+  usesCsvCoder,
   usesHtmlCoder,
   usesPdfCoder,
 } from "@/lib/media";
@@ -47,6 +49,25 @@ describe("media helpers", () => {
     expect(usesHtmlCoder({ name: "notes.txt", media_type: "text" })).toBe(false);
     expect(usesHtmlCoder({ name: "paper.pdf", media_type: "text" })).toBe(false);
     expect(usesHtmlCoder({ name: "page.html", media_type: "video" })).toBe(false);
+  });
+
+  it("detects csv and tsv by extension", () => {
+    expect(isCsv("comments.CSV")).toBe(true);
+    expect(isCsv("comments.csv")).toBe(true);
+    expect(isCsv("comments.tsv")).toBe(true);
+    expect(isCsv("data.TSV")).toBe(true);
+    expect(isCsv("notes.txt")).toBe(false);
+    expect(isCsv("paper.pdf")).toBe(false);
+    expect(isCsv("page.html")).toBe(false);
+  });
+
+  it("routes text sources with .csv/.tsv names to the CSV coder", () => {
+    expect(usesCsvCoder({ name: "comments.csv", media_type: "text" })).toBe(true);
+    expect(usesCsvCoder({ name: "comments.tsv", media_type: "text" })).toBe(true);
+    expect(usesCsvCoder({ name: "notes.txt", media_type: "text" })).toBe(false);
+    expect(usesCsvCoder({ name: "page.html", media_type: "text" })).toBe(false);
+    expect(usesCsvCoder({ name: "paper.pdf", media_type: "text" })).toBe(false);
+    expect(usesCsvCoder({ name: "comments.csv", media_type: "video" })).toBe(false);
   });
 
   it("classifies every audio extension", () => {

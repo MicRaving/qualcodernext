@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, expect, it, vi } from "vitest";
-import { downloadCsv, toCsv } from "@/lib/csv";
+import { downloadCsv, parseCsv, toCsv } from "@/lib/csv";
 
 describe("toCsv", () => {
   it("quotes cells containing commas", () => {
@@ -60,5 +60,99 @@ describe("downloadCsv", () => {
     );
 
     click.mockRestore();
+  });
+});
+
+describe("parseCsv", () => {
+  it("parses a simple header + rows", () => {
+    expect(parseCsv("name,note\nalpha,one\nbeta,two\n")).toEqual({
+      headers: ["name", "note"],
+      rows: [
+        ["alpha", "one"],
+        ["beta", "two"],
+      ],
+    });
+  });
+
+  it("keeps quoted fields containing commas intact", () => {
+    expect(parseCsv('name,note\n"a, b",plain\n')).toEqual({
+      headers: ["name", "note"],
+      rows: [["a, b", "plain"]],
+    });
+  });
+
+  it("unescapes doubled quotes inside quoted fields", () => {
+    expect(parseCsv('quote\n"say ""hi"""\n')).toEqual({
+      headers: ["quote"],
+      rows: [['say "hi"']],
+    });
+  });
+
+  it("keeps newlines inside quoted fields as one record", () => {
+    expect(parseCsv('text\n"line1\nline2"\n')).toEqual({
+      headers: ["text"],
+      rows: [["line1\nline2"]],
+    });
+  });
+
+  it("accepts CRLF and LF line endings", () => {
+    expect(parseCsv("a,b\r\n1,2\r\n")).toEqual({
+      headers: ["a", "b"],
+      rows: [["1", "2"]],
+    });
+    expect(parseCsv("a,b\n1,2\n")).toEqual({
+      headers: ["a", "b"],
+      rows: [["1", "2"]],
+    });
+    expect(parseCsv("a,b\r\n1,2")).toEqual({
+      headers: ["a", "b"],
+      rows: [["1", "2"]],
+    });
+  });
+
+  it("returns headers with an empty row list for a header-only file", () => {
+    expect(parseCsv("a,b\n")).toEqual({ headers: ["a", "b"], rows: [] });
+    expect(parseCsv("a,b")).toEqual({ headers: ["a", "b"], rows: [] });
+  });
+
+  it("detects tabs for TSV input", () => {
+    expect(parseCsv("name\tnote\nalpha\tone\ntwo\t" + "three\n")).toEqual({
+      headers: ["name", "note"],
+      rows: [
+        ["alpha", "one"],
+        ["two", "three"],
+      ],
+    });
+  });
+
+  it("keeps commas inside quoted header cells", () => {
+    expect(parseCsv('"a, b",c\n1,2\n')).toEqual({
+      headers: ["a, b", "c"],
+      rows: [["1", "2"]],
+    });
+  });
+
+  it("strips a UTF-8 BOM", () => {
+    expect(parseCsv("\uFEFFa,b\n1,2\n")).toEqual({
+      headers: ["a", "b"],
+      rows: [["1", "2"]],
+    });
+  });
+
+  it("round-trips toCsv output", () => {
+    const text = toCsv(["name", "note"], [["a, b", 'say "hi"'], ["line1\nline2", ""]]);
+    expect(parseCsv(text)).toEqual({
+      headers: ["name", "note"],
+      rows: [
+        ["a, b", 'say "hi"'],
+        ["line1\nline2", ""],
+      ],
+    });
+  });
+
+  it("handles empty input and a lone quoted empty field", () => {
+    expect(parseCsv("")).toEqual({ headers: [], rows: [] });
+    expect(parseCsv('""')).toEqual({ headers: [""], rows: [] });
+    expect(parseCsv('"",""\n""\n')).toEqual({ headers: ["", ""], rows: [[""]] });
   });
 });

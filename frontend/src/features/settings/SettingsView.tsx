@@ -18,7 +18,6 @@ import {
   Trash2,
 } from "lucide-react";
 import { api, type AiIndexStatus, type Pseudonym, type RStatus } from "@/lib/api";
-import { DEFAULT_GITHUB_REPO } from "@/features/bugreport/github";
 import { errorDetail } from "@/features/ai/format";
 import { A11yControls } from "@/features/accessibility/A11yControls";
 import { useI18n, LOCALE_NAMES, type Locale } from "@/lib/i18n";
@@ -94,7 +93,9 @@ export function SettingsView() {
   const updatesError = useUpdatesStore((s) => s.error);
   const updatesSettings = useUpdatesStore((s) => s.settings);
   const [checkInterval, setCheckInterval] = useState<UpdatesSettings["check_interval"]>("daily");
-  const [autoUpdate, setAutoUpdate] = useState(false);
+  const [autoUpdate, setAutoUpdate] = useState(
+    () => useUpdatesStore.getState().settings?.auto_update ?? true,
+  );
 
   useEffect(() => {
     const store = useUpdatesStore.getState();
@@ -173,14 +174,6 @@ export function SettingsView() {
   // Auto-load project on start (packaged app only; harmless elsewhere).
   const [autoLoadProject, setAutoLoadProject] = useState(true);
 
-  // GitHub bug-report integration (token + target repository). Defaults to
-  // the repo the updater manifest points at (MicRaving/QCnext).
-  const [githubToken, setGithubToken] = useState("");
-  const [githubRepo, setGithubRepo] = useState(DEFAULT_GITHUB_REPO);
-  const [githubSaving, setGithubSaving] = useState(false);
-  const [githubSaved, setGithubSaved] = useState(false);
-  const [githubError, setGithubError] = useState<string | null>(null);
-
   useEffect(() => {
     api
       .appSettings()
@@ -199,42 +192,6 @@ export function SettingsView() {
       /* keep the local toggle; the backend error surfaces on the next load */
     }
   }
-
-  // Load the stored GitHub config with the app settings on mount.
-  useEffect(() => {
-    api
-      .appSettings()
-      .then((s) => {
-        if (s.github_token) setGithubToken(s.github_token);
-        if (s.github_repo && s.github_repo.trim().includes("/")) {
-          setGithubRepo(s.github_repo.trim());
-        }
-      })
-      .catch(() => {
-        /* backend unreachable — keep the defaults */
-      });
-  }, []);
-
-  async function saveGithub() {
-    if (githubSaving) return;
-    setGithubSaving(true);
-    setGithubError(null);
-    setGithubSaved(false);
-    try {
-      await api.saveAppSettings({
-        auto_open_project: autoLoadProject,
-        github_token: githubToken.trim(),
-        github_repo: githubRepo.trim() || DEFAULT_GITHUB_REPO,
-      });
-      setGithubSaved(true);
-      window.setTimeout(() => setGithubSaved(false), 2500);
-    } catch (e) {
-      setGithubError(errorDetail(e, t("settings.githubSaveError")));
-    } finally {
-      setGithubSaving(false);
-    }
-  }
-
 
   // Help popovers (anchored for the shared HelpFlyout)
   const [helpOpen, setHelpOpen] = useState<"interchange" | "index" | null>(null);
@@ -329,17 +286,23 @@ export function SettingsView() {
   // Model polling: fetch whenever the provider or base URL changes (with the
   // previous list cleared — no leftover models from other providers), and
   // refresh periodically while the pane is mounted so newly pulled models
-  // (Ollama/LM Studio) appear on their own.
+  // (Ollama/LM Studio) appear on their own. Skipped entirely while the AI
+  // assistant is disabled.
   useEffect(() => {
+    if (!enabled) {
+      setModels([]);
+      return;
+    }
     setModels([]);
     void loadModels();
-  }, [provider, apiBase, loadModels]);
+  }, [provider, apiBase, loadModels, enabled]);
 
   useEffect(() => {
+    if (!enabled) return;
     void loadModels();
     const timer = window.setInterval(() => void loadModels(), 60_000);
     return () => window.clearInterval(timer);
-  }, [loadModels]);
+  }, [loadModels, enabled]);
 
   /** Probe the configured provider; the button shows OK/broken for 3s. */
   async function checkService() {
@@ -566,7 +529,7 @@ export function SettingsView() {
         </section>
 
         {/* Import / Export — embedded in the General area (no ribbon entry) */}
-        <section className="p-3">
+        <section className="p-3 [&>div>p]:hidden">
           <InterchangeView />
         </section>
 
@@ -602,150 +565,158 @@ export function SettingsView() {
             </button>
           </div>
 
-          <div className="mt-3 grid grid-cols-1 gap-3">
-            <div className="grid grid-cols-2 gap-3">
-              <Field label={t("settings.aiProvider")}>
-                <Select
-                  value={provider}
-                  onChange={(e) => handleProviderChange(e.target.value)}
-                  className="w-full"
-                >
-                  {PROVIDER_ORDER.map((name) => (
-                    <option key={name} value={name}>
-                      {t(PROVIDER_LABEL_KEYS[name])}
-                    </option>
-                  ))}
-                </Select>
-              </Field>
-              <Field label={t("settings.model")}>
-                <Select
-                  value={model}
-                  onChange={(e) => {
-                    markTouched();
-                    setModel(e.target.value);
-                  }}
-                  className="w-full"
-                  disabled={models.length === 0}
-                >
-                  {model && !models.includes(model) && <option value={model}>{model}</option>}
-                  {models.map((m) => (
-                    <option key={m} value={m}>
-                      {m}
-                    </option>
-                  ))}
-                </Select>
-                {modelsLoading ? (
-                  <span className="mt-1 flex items-center gap-1.5 text-xs text-text-secondary">
-                    <LoaderCircle size={11} className="animate-spin" aria-hidden />
-                    {t("settings.aiModelsLoading")}
-                  </span>
-                ) : modelsError ? (
-                  <span className="mt-1 block text-xs text-danger" role="alert">
-                    {modelsError}
-                  </span>
-                ) : (
-                  models.length === 0 &&
-                  enabled && (
-                    <span className="mt-1 block text-xs text-warning">
-                      {t("settings.aiModelsUnavailable")}
+          {enabled && (
+            <div className="mt-3 grid grid-cols-1 gap-3">
+              <div className="grid grid-cols-2 gap-3">
+                <Field label={t("settings.aiProvider")}>
+                  <Select
+                    value={provider}
+                    onChange={(e) => handleProviderChange(e.target.value)}
+                    className="w-full"
+                  >
+                    {PROVIDER_ORDER.map((name) => (
+                      <option key={name} value={name}>
+                        {t(PROVIDER_LABEL_KEYS[name])}
+                      </option>
+                    ))}
+                  </Select>
+                </Field>
+                <Field label={t("settings.model")}>
+                  <Select
+                    value={model}
+                    onChange={(e) => {
+                      markTouched();
+                      setModel(e.target.value);
+                    }}
+                    className="w-full"
+                    disabled={models.length === 0}
+                  >
+                    {model && !models.includes(model) && <option value={model}>{model}</option>}
+                    {models.map((m) => (
+                      <option key={m} value={m}>
+                        {m}
+                      </option>
+                    ))}
+                  </Select>
+                  {modelsLoading ? (
+                    <span className="mt-1 flex items-center gap-1.5 text-xs text-text-secondary">
+                      <LoaderCircle size={11} className="animate-spin" aria-hidden />
+                      {t("settings.aiModelsLoading")}
                     </span>
-                  )
-                )}
-              </Field>
-            </div>
-            <Field label={t("settings.apiBaseUrl")}>
-              <Input
-                type="text"
-                value={apiBase}
-                onChange={(e) => {
-                  markTouched(); setApiBase(e.target.value);
-                  setProvider((p) =>
-                    p in PROVIDER_PRESETS && PROVIDER_PRESETS[p].url !== e.target.value
-                      ? "custom"
-                      : p,
-                  );
-                }}
-                placeholder="https://api.openai.com/v1"
-                className="w-full"
-              />
-            </Field>
-            <div className="grid grid-cols-2 gap-3">
-              <Field label={t("settings.apiKey")}>
+                  ) : modelsError ? (
+                    <span className="mt-1 block text-xs text-danger" role="alert">
+                      {modelsError}
+                    </span>
+                  ) : (
+                    models.length === 0 &&
+                    enabled && (
+                      <span className="mt-1 block text-xs text-warning">
+                        {t("settings.aiModelsUnavailable")}
+                      </span>
+                    )
+                  )}
+                </Field>
+              </div>
+              <Field label={t("settings.apiBaseUrl")}>
                 <Input
-                  type="password"
-                  value={apiKey}
+                  type="text"
+                  value={apiBase}
                   onChange={(e) => {
-                    markTouched();
-                    setApiKey(e.target.value);
+                    markTouched(); setApiBase(e.target.value);
+                    setProvider((p) =>
+                      p in PROVIDER_PRESETS && PROVIDER_PRESETS[p].url !== e.target.value
+                        ? "custom"
+                        : p,
+                    );
                   }}
-                  placeholder={t("settings.optional")}
+                  placeholder="https://api.openai.com/v1"
                   className="w-full"
                 />
-                {["gemini", "gpt", "claude"].includes(provider) && !apiKey.trim() && (
-                  <span className="mt-1 block text-xs text-warning">
-                    {t("settings.aiKeyRequired")}
-                  </span>
-                )}
               </Field>
-              <Field label={t("ai.mcpPermissions")}>
-                <Select
-                  value={mcpPermissions}
-                  onChange={(e) => { markTouched(); setMcpPermissions(e.target.value); }}
-                  className="w-full"
-                >
-                  <option value="read">{t("ai.mcpRead")}</option>
-                  <option value="write">{t("ai.mcpWrite")}</option>
-                  <option value="full">{t("ai.mcpFull")}</option>
-                </Select>
-              </Field>
+              <div className="grid grid-cols-2 gap-3">
+                <Field label={t("settings.apiKey")}>
+                  <Input
+                    type="password"
+                    value={apiKey}
+                    onChange={(e) => {
+                      markTouched();
+                      setApiKey(e.target.value);
+                    }}
+                    placeholder={t("settings.optional")}
+                    className="w-full"
+                  />
+                  {["gemini", "gpt", "claude"].includes(provider) && !apiKey.trim() && (
+                    <span className="mt-1 block text-xs text-warning">
+                      {t("settings.aiKeyRequired")}
+                    </span>
+                  )}
+                </Field>
+                <Field label={t("ai.mcpPermissions")}>
+                  <Select
+                    value={mcpPermissions}
+                    onChange={(e) => { markTouched(); setMcpPermissions(e.target.value); }}
+                    className="w-full"
+                  >
+                    <option value="read">{t("ai.mcpRead")}</option>
+                    <option value="write">{t("ai.mcpWrite")}</option>
+                    <option value="full">{t("ai.mcpFull")}</option>
+                  </Select>
+                </Field>
+              </div>
             </div>
-          </div>
+          )}
 
           {/* Service status | Semantic index — side by side */}
-          <div className="mt-3 grid grid-cols-1 gap-3 border-t border-border pt-3 sm:grid-cols-2">
-            {/* Service status — the Check button turns into a transient
-                OK/broken indicator for 3s after probing the provider. */}
-            <div>
-              <div className="flex items-center gap-1.5">
-                <h3 className="text-xs font-semibold text-text-primary">{t("settings.aiServiceStatus")}</h3>
-              </div>
-              <div className="mt-2 flex items-center gap-2">
-                <Button
-                  variant="secondary"
-                  onClick={() => void checkService()}
-                  disabled={serviceCheck === "checking"}
-                  icon={
-                    serviceCheck === "checking" ? (
+          {enabled && (
+            <div className="mt-3 grid grid-cols-1 gap-3 border-t border-border pt-3 sm:grid-cols-2">
+              {/* Service status — a fixed-height inline row: a status dot +
+                  short label and a small re-probe button. The dot stays
+                  success/danger/warning-colored; no banners, no height jumps. */}
+              <div>
+                <div className="flex items-center gap-1.5">
+                  <h3 className="text-xs font-semibold text-text-primary">{t("settings.aiServiceStatus")}</h3>
+                </div>
+                <div
+                  className="mt-2 flex h-6 items-center gap-1.5"
+                  title={serviceProbeError ?? undefined}
+                >
+                  <span
+                    className={`h-1.5 w-1.5 shrink-0 rounded-full ${
+                      serviceCheck === "ok"
+                        ? "bg-success"
+                        : serviceCheck === "broken"
+                          ? "bg-danger"
+                          : serviceCheck === "checking"
+                            ? "bg-warning"
+                            : "bg-border"
+                    }`}
+                    aria-hidden
+                  />
+                  <span className="min-w-0 truncate text-xs text-text-secondary">
+                    {serviceCheck === "checking"
+                      ? t("settings.aiChecking")
+                      : serviceCheck === "ok"
+                        ? t("settings.aiStatusConnected")
+                        : serviceCheck === "broken"
+                          ? t("settings.aiStatusUnreachable")
+                          : t("settings.aiCheckStatus")}
+                  </span>
+                  <IconButton
+                    label={t("settings.aiCheckStatus")}
+                    title={t("settings.aiCheckStatus")}
+                    size="sm"
+                    disabled={serviceCheck === "checking"}
+                    onClick={() => void checkService()}
+                    className="ml-auto"
+                  >
+                    {serviceCheck === "checking" ? (
                       <LoaderCircle size={12} className="animate-spin" aria-hidden />
-                    ) : serviceCheck === "ok" ? (
-                      <CircleCheck size={12} aria-hidden />
-                    ) : serviceCheck === "broken" ? (
-                      <CircleAlert size={12} aria-hidden />
                     ) : (
                       <RotateCw size={12} aria-hidden />
-                    )
-                  }
-                  className={
-                    serviceCheck === "ok"
-                      ? "border-success text-success hover:bg-success/10"
-                      : serviceCheck === "broken"
-                        ? "border-danger text-danger hover:bg-danger/10"
-                        : ""
-                  }
-                >
-                  {serviceCheck === "checking"
-                    ? t("settings.aiChecking")
-                    : serviceCheck === "ok"
-                      ? t("settings.aiStatusOk")
-                      : serviceCheck === "broken"
-                        ? t("settings.aiStatusBroken")
-                        : t("settings.aiCheckStatus")}
-                </Button>
+                    )}
+                  </IconButton>
+                </div>
               </div>
-              {serviceCheck === "broken" && serviceProbeError && (
-                <p className="mt-1.5 break-words text-xs text-danger">{serviceProbeError}</p>
-              )}
-            </div>
 
             {/* Semantic index */}
             <div>
@@ -769,17 +740,31 @@ export function SettingsView() {
                   </HelpFlyout>
                 )}
               </div>
-              {indexStatus?.indexed ? (
-                <p className="mt-1 text-xs text-text-primary">
-                  {t("ai.indexStatusReady", {
-                    chunks: String(indexStatus.chunks),
-                    model: indexStatus.model,
-                  })}
+              <div
+                className="mt-2 flex h-6 items-center gap-1.5"
+                title={indexError ?? undefined}
+              >
+                <span
+                  className={`h-1.5 w-1.5 shrink-0 rounded-full ${
+                    indexError
+                      ? "bg-danger"
+                      : indexStatus?.indexed
+                        ? "bg-success"
+                        : "bg-border"
+                  }`}
+                  aria-hidden
+                />
+                <p className="min-w-0 truncate text-xs text-text-secondary">
+                  {indexError
+                    ? indexError
+                    : indexStatus?.indexed
+                      ? t("ai.indexStatusReady", {
+                          chunks: String(indexStatus.chunks),
+                          model: indexStatus.model,
+                        })
+                      : t("ai.indexStatusNone")}
                 </p>
-              ) : (
-                <p className="mt-1 text-xs text-text-secondary">{t("ai.indexStatusNone")}</p>
-              )}
-              {indexError && <p className="mt-1 text-xs text-danger">{indexError}</p>}
+              </div>
               <div className="mt-2 flex items-center gap-2">
                 <Button
                   variant="secondary"
@@ -807,6 +792,7 @@ export function SettingsView() {
               </div>
             </div>
           </div>
+          )}
         </section>
 
         {/* Pseudonyms */}
@@ -955,55 +941,6 @@ export function SettingsView() {
                 : t("settings.updatesError", { detail: updatesError ?? "" })}
             </p>
           )}
-        </section>
-
-        {/* GitHub (bug reports) */}
-        <section className="p-3">
-          <h2 className="text-sm font-semibold text-text-primary">{t("settings.githubSection")}</h2>
-          <p className="mt-1 text-xs text-text-secondary">{t("settings.githubHint")}</p>
-          <div className="mt-2 flex flex-col gap-3">
-            <Field label={t("settings.githubToken")}>
-              <Input
-                type="password"
-                value={githubToken}
-                onChange={(e) => setGithubToken(e.target.value)}
-                placeholder={t("settings.optional")}
-                autoComplete="off"
-                className="w-full"
-              />
-            </Field>
-            <Field label={t("settings.githubRepo")}>
-              <Input
-                value={githubRepo}
-                onChange={(e) => setGithubRepo(e.target.value)}
-                placeholder="owner/repo"
-                className="w-full"
-              />
-            </Field>
-            <div className="flex items-center gap-2">
-              <Button
-                variant="primary"
-                disabled={githubSaving}
-                icon={
-                  githubSaving ? (
-                    <LoaderCircle size={12} className="animate-spin" aria-hidden />
-                  ) : (
-                    <Check size={12} aria-hidden />
-                  )
-                }
-                onClick={() => void saveGithub()}
-              >
-                {githubSaving ? t("settings.saving") : t("common.save")}
-              </Button>
-              {githubSaved && (
-                <span className="flex items-center gap-1 text-xs text-success" role="status">
-                  <Check size={12} aria-hidden />
-                  {t("settings.saved")}
-                </span>
-              )}
-            </div>
-            {githubError && <p className="text-xs text-danger">{githubError}</p>}
-          </div>
         </section>
 
         {/* R integration */}

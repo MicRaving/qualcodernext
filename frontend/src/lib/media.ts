@@ -104,6 +104,17 @@ export function usesHtmlCoder(source: { name: string; media_type: string }): boo
   return source.media_type === "text" && isHtml(source.name);
 }
 
+/** True when a file name is a delimited spreadsheet (CSV or TSV). */
+export function isCsv(filename: string): boolean {
+  const lower = filename.toLowerCase();
+  return lower.endsWith(".csv") || lower.endsWith(".tsv");
+}
+
+/** True when a source should open in the CSV table coder. */
+export function usesCsvCoder(source: { name: string; media_type: string }): boolean {
+  return source.media_type === "text" && isCsv(source.name);
+}
+
 /**
  * True when a source can be transcribed (single source of truth for the
  * batch transcribe button AND the AV coder's transcribe button, so the two

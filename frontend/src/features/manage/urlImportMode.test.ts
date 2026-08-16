@@ -17,18 +17,16 @@ describe("detectModeFromUrl", () => {
     expect(detectModeFromUrl("https://www.youtu.be/abc123")).toBe("youtube");
   });
 
-  it("maps reddit hosts to reddit", () => {
-    expect(detectModeFromUrl("https://www.reddit.com/r/x/comments/abc/")).toBe("reddit");
-    expect(detectModeFromUrl("https://reddit.com/r/x/comments/abc/")).toBe("reddit");
-    expect(detectModeFromUrl("https://old.reddit.com/r/x/comments/abc/")).toBe("reddit");
-    expect(detectModeFromUrl("https://m.reddit.com/r/x/comments/abc/")).toBe("reddit");
-    expect(detectModeFromUrl("https://np.reddit.com/r/x/comments/abc/")).toBe("reddit");
+  it("no longer maps reddit hosts (Reddit scraper purged → null)", () => {
+    expect(detectModeFromUrl("https://www.reddit.com/r/x/comments/abc/")).toBeNull();
+    expect(detectModeFromUrl("https://reddit.com/r/x/comments/abc/")).toBeNull();
+    expect(detectModeFromUrl("https://old.reddit.com/r/x/comments/abc/")).toBeNull();
   });
 
   it("accepts scheme-less pastes", () => {
     expect(detectModeFromUrl("youtube.com/watch?v=abc")).toBe("youtube");
     expect(detectModeFromUrl("youtu.be/abc123")).toBe("youtube");
-    expect(detectModeFromUrl("www.reddit.com/r/x/comments/abc/")).toBe("reddit");
+    expect(detectModeFromUrl("www.reddit.com/r/x/comments/abc/")).toBeNull();
   });
 
   it("leaves unknown, empty or malformed URLs untouched (null)", () => {
