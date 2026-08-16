@@ -192,7 +192,6 @@ export function SentimentReportView() {
         <Select
           value={scope}
           onChange={(e) => setScope(e.target.value as SentimentScope)}
-          className="h-7"
           aria-label={t("analyze.summaryScope")}
         >
           <option value="segments">{t("analyze.sentimentSegments")}</option>
@@ -203,7 +202,6 @@ export function SentimentReportView() {
         <Select
           value={mode}
           onChange={(e) => changeMode(e.target.value as SentimentMode)}
-          className="h-7"
           aria-label={t("analyze.sentimentMode")}
         >
           <option value="lexicon">{t("analyze.sentimentLexicon")}</option>
@@ -215,7 +213,6 @@ export function SentimentReportView() {
         <Select
           value={fid}
           onChange={(e) => setFid(e.target.value === "" ? "" : Number(e.target.value))}
-          className="h-7"
           aria-label={t("analyze.source")}
         >
           <option value="">{t("analyze.allTextSources")}</option>

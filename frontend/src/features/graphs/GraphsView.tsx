@@ -379,7 +379,7 @@ export function GraphsMenuBar() {
           if (grid) setGraphsUi({ grid, tick: graphsUi.tick + 1 });
         }}
         aria-label={t("graphs.pickGraph")}
-        className="h-7 min-w-40 max-w-72 text-xs"
+        className="min-w-40 max-w-72 text-xs"
       >
         {graphsUi.list.length === 0 ? (
           <option value="">{t("graphs.noGraphs")}</option>

@@ -1490,14 +1490,13 @@ export function AvCoder({ source }: { source: Source }) {
       {(() => {
         const transportRow = (
           <div className="flex shrink-0 items-center gap-1.5 border-b border-border bg-surface px-3 py-1.5">
-            <button
-              type="button"
+            <Button
+              variant="toolbarIconPrimary"
+              className="shrink-0"
               onClick={togglePlay}
               aria-label={playing ? t("avCoder.pause") : t("avCoder.play")}
-              className="flex h-7 w-7 shrink-0 items-center justify-center rounded-sm bg-accent text-[var(--qc-bg)] hover:bg-accent-hover"
-            >
-              {playing ? <Pause size={14} aria-hidden /> : <Play size={14} aria-hidden />}
-            </button>
+              icon={playing ? <Pause size={14} aria-hidden /> : <Play size={14} aria-hidden />}
+            />
             <span className="shrink-0 font-mono text-xs text-text-primary">{formatTime(currentMs)}</span>
             <span className="shrink-0 text-xs text-text-secondary">/ {formatTime(durationMs)}</span>
             <Select
@@ -1598,8 +1597,7 @@ export function AvCoder({ source }: { source: Source }) {
               ) : (
                 transcriptId != null && (
                   <Button
-                    variant="secondary"
-                    className="h-6 px-1.5"
+                    variant="toolbar"
                     onClick={() => setAutoOpen((o) => !o)}
                     icon={<Sparkles size={12} aria-hidden />}
                   >
@@ -1609,8 +1607,7 @@ export function AvCoder({ source }: { source: Source }) {
               )}
               {transcriptId != null && !transcribeSaving && (
                 <Button
-                  variant="danger"
-                  className="h-6 px-1.5"
+                  variant="toolbarDanger"
                   icon={<Trash2 size={12} aria-hidden />}
                   onClick={() => void deleteTranscript()}
                   disabled={transcribeBusy}
@@ -1738,7 +1735,7 @@ export function AvCoder({ source }: { source: Source }) {
             {/* Floating selection toolbar (code / annotate) */}
             {tSel && !tAnnotateOpen && !tInVivoOpen && (
               <div
-                className="fixed z-40 flex items-center gap-1 rounded-md border border-border bg-surface p-1 shadow-lg"
+                className={`${cls.popup} fixed z-40 flex items-center gap-1 p-1`}
                 style={{ left: Math.min(tSel.left, window.innerWidth - 200), top: tSel.top }}
                 role="toolbar"
                 aria-label={t("coder.selectionActions")}
@@ -1966,8 +1963,7 @@ export function AvCoder({ source }: { source: Source }) {
               <span className="flex items-center gap-1">
                 <span className="text-xs text-text-secondary">{t("coder.weight")}</span>
                 <Button
-                  variant="secondary"
-                  className="h-6 w-6 justify-center px-0"
+                  variant="toolbarIcon"
                   icon={<Minus size={12} aria-hidden />}
                   title={t("coder.weightDec")}
                   aria-label={t("coder.weightDec")}
@@ -1978,8 +1974,7 @@ export function AvCoder({ source }: { source: Source }) {
                   {avWeight(selected)}
                 </span>
                 <Button
-                  variant="secondary"
-                  className="h-6 w-6 justify-center px-0"
+                  variant="toolbarIcon"
                   icon={<Plus size={12} aria-hidden />}
                   title={t("coder.weightInc")}
                   aria-label={t("coder.weightInc")}
@@ -2024,23 +2019,21 @@ export function AvCoder({ source }: { source: Source }) {
                     value={memoDraft}
                     placeholder={t("pdfCoder.memoPlaceholder")}
                     aria-label={t("pdfCoder.memoPlaceholder")}
-                    className="h-6 w-48"
+                    className="w-48"
                     onChange={(e) => setMemoDraft(e.target.value)}
                     onKeyDown={(e) => {
                       if (e.key === "Enter") void saveTranscriptMemo();
                     }}
                   />
                   <Button
-                    variant="primaryCompact"
-                    className="h-6 px-1.5"
+                    variant="toolbarIconPrimary"
                     icon={<Check size={12} aria-hidden />}
                     title={t("common.save")}
                     aria-label={t("common.save")}
                     onClick={() => void saveTranscriptMemo()}
                   />
                   <Button
-                    variant="secondary"
-                    className="h-6 px-1.5"
+                    variant="toolbarIcon"
                     icon={<X size={12} aria-hidden />}
                     title={t("common.cancel")}
                     aria-label={t("common.cancel")}
@@ -2065,8 +2058,7 @@ export function AvCoder({ source }: { source: Source }) {
               <span className="flex items-center gap-1">
                 <span className="text-xs text-text-secondary">{t("coder.weight")}</span>
                 <Button
-                  variant="secondary"
-                  className="h-6 w-6 justify-center px-0"
+                  variant="toolbarIcon"
                   icon={<Minus size={12} aria-hidden />}
                   title={t("coder.weightDec")}
                   aria-label={t("coder.weightDec")}
@@ -2077,8 +2069,7 @@ export function AvCoder({ source }: { source: Source }) {
                   {avWeight(selectedText)}
                 </span>
                 <Button
-                  variant="secondary"
-                  className="h-6 w-6 justify-center px-0"
+                  variant="toolbarIcon"
                   icon={<Plus size={12} aria-hidden />}
                   title={t("coder.weightInc")}
                   aria-label={t("coder.weightInc")}

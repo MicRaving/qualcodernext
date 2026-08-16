@@ -8,7 +8,7 @@ import { cn } from "@/lib/utils";
 import { useI18n } from "@/lib/i18n";
 import { useEffect, useState } from "react";
 import { fileTypeLabel, formatCount } from "@/features/analyze/reportHelpers";
-import { EmptyState } from "@/components/ui/orchestrator";
+import { EmptyState, Pill } from "@/components/ui/orchestrator";
 import {
   cardCls,
   thCls,
@@ -110,9 +110,7 @@ export function FileSummaryReport() {
                 <span className="block truncate font-medium">{row.name}</span>
               </td>
               <td className={cn(tdCls, "whitespace-nowrap")}>
-                <span className="rounded-sm bg-surface-higher px-1.5 py-px text-xs font-medium text-text-secondary">
-                  {fileTypeLabel(row.name, row.media_type)}
-                </span>
+                <Pill size="md">{fileTypeLabel(row.name, row.media_type)}</Pill>
               </td>
               <td className={cn(tdCls, "text-right tabular-nums")}>{row.codes_count}</td>
               <td className={cn(tdCls, "text-right tabular-nums")}>{row.segments_count}</td>
@@ -203,9 +201,7 @@ export function AttributesReport() {
                 </span>
               </td>
               <td className={cn(tdCls, "whitespace-nowrap")}>
-                <span className="rounded-sm bg-surface-higher px-1.5 py-px text-xs font-medium text-text-secondary">
-                  {row.entity_kind === "case" ? "Case" : "File"}
-                </span>
+                <Pill size="md">{row.entity_kind === "case" ? "Case" : "File"}</Pill>
               </td>
               <td className={cn(tdCls, "max-w-56")}>
                 <span className="block truncate text-text-secondary">{row.entity_name}</span>

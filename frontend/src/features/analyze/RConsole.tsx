@@ -430,7 +430,6 @@ export function RConsoleView() {
           value={prepareReportId}
           onChange={(e) => setPrepareReportId(e.target.value)}
           aria-label={t("r.prepareReport")}
-          className="h-7"
           disabled={!status?.available || preparing || !!running}
         >
           {PREPARE_REPORTS.map((r) => (
@@ -440,8 +439,7 @@ export function RConsoleView() {
           ))}
         </Select>
         <Button
-          variant="secondary"
-          className="h-7"
+          variant="toolbar"
           onClick={() => void handlePrepare()}
           disabled={!status?.available || preparing || !!running}
         >
@@ -492,11 +490,10 @@ export function RConsoleView() {
             onChange={(e) => setScriptName(e.target.value)}
             placeholder={t("r.scriptName")}
             aria-label={t("r.scriptName")}
-            className="h-6 w-40 text-xs"
+            className="w-40 text-xs"
           />
           <Button
-            variant="primary"
-            className="h-6 px-2 py-0 text-xs"
+            variant="toolbarPrimary"
             onClick={() => void handleSaveScript()}
             disabled={!scriptName.trim() || !script.trim()}
             icon={<Save size={12} aria-hidden />}
@@ -519,7 +516,7 @@ export function RConsoleView() {
               }
             }}
             aria-label={t("r.templates")}
-            className="h-7 w-56"
+            className="w-56"
           >
             <option value="">{t("r.templates")}…</option>
             <option value="matrix">{t("r.templateMatrix")}</option>
@@ -530,8 +527,7 @@ export function RConsoleView() {
           <span className="flex-1" />
           {running ? (
             <Button
-              variant="danger"
-              className="h-7"
+              variant="toolbarDanger"
               onClick={() => removeTask(running.id)}
               disabled={!status?.available}
               icon={<Square size={13} aria-hidden />}
@@ -540,8 +536,7 @@ export function RConsoleView() {
             </Button>
           ) : (
             <Button
-              variant="primary"
-              className="h-7"
+              variant="toolbarPrimary"
               onClick={() => void handleRun()}
               disabled={!status?.available || !script.trim()}
               icon={<Play size={13} aria-hidden />}
@@ -634,8 +629,7 @@ export function RConsoleView() {
         <div className="flex items-center justify-between gap-2">
           <SectionLabel>{t("r.artifacts")}</SectionLabel>
           <Button
-            variant="secondary"
-            className="h-6 px-2 py-0"
+            variant="toolbar"
             onClick={() => void loadArtifacts()}
             icon={<RefreshCw size={11} aria-hidden />}
           >

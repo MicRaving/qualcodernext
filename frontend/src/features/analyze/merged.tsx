@@ -47,6 +47,7 @@ import {
   Button,
   EmptyState,
   LoadingState,
+  Pill,
   SectionLabel,
   Select,
 } from "@/components/ui/orchestrator";
@@ -261,21 +262,19 @@ export function CodeFrequenciesView() {
       <div className="space-y-4">
         <ReportMenuBar>
           <Button
-            variant="primary"
-            className="h-6 px-2 py-0"
+            variant="toolbarPrimary"
             onClick={() => setMode("ranked")}
           >
             {t("analyze.ranked")}
           </Button>
           <Button
-            variant="secondary"
-            className="h-6 px-2 py-0"
+            variant="toolbar"
             onClick={() => setMode("cumulative")}
           >
             {t("analyze.cumulative")}
           </Button>
           {selectedCid != null && (
-            <Button variant="secondary" className="h-6 px-2 py-0 text-text-secondary" onClick={() => setSelectedCid(null)}>
+            <Button variant="toolbar" className="text-text-secondary" onClick={() => setSelectedCid(null)}>
               {t("analyze.clearCode")}
             </Button>
           )}
@@ -392,10 +391,10 @@ export function CodeFrequenciesView() {
   return (
     <div className="space-y-4">
       <ReportMenuBar>
-        <Button variant="secondary" className="h-6 px-2 py-0" onClick={() => setMode("ranked")}>
+        <Button variant="toolbar" onClick={() => setMode("ranked")}>
           Ranked
         </Button>
-        <Button variant="primary" className="h-6 px-2 py-0" onClick={() => setMode("cumulative")}>
+        <Button variant="toolbarPrimary" onClick={() => setMode("cumulative")}>
           Cumulative
         </Button>
         <ReportCsvButton
@@ -498,7 +497,7 @@ export function CodeSegmentsView() {
     return (
       <div className="space-y-2">
         <ReportMenuBar>
-          <Button variant="secondary" className="h-7" onClick={() => setCompare(false)}>
+          <Button variant="toolbar" onClick={() => setCompare(false)}>
             {t("analyze.flatList")}
           </Button>
           <ReportCsvButton
@@ -569,7 +568,7 @@ export function CodeSegmentsView() {
     return (
       <div className="space-y-2">
         <ReportMenuBar>
-          <Button variant="secondary" className="h-7" onClick={() => setCompare(true)}>
+          <Button variant="toolbar" onClick={() => setCompare(true)}>
             {t("analyze.compareTwoCoders")}
           </Button>
           <ReportCsvButton
@@ -685,9 +684,7 @@ export function CodeSegmentsView() {
             {rows.map((r) => (
               <tr key={`${r.kind}-${r.id}`} className="hover:bg-surface-higher">
                 <td className={cn(tdCls, "whitespace-nowrap")}>
-                  <span className="rounded-sm bg-surface-higher px-1.5 py-px text-xs font-medium text-text-secondary">
-                    {KIND_LABEL[r.kind]}
-                  </span>
+                  <Pill size="md">{KIND_LABEL[r.kind]}</Pill>
                 </td>
                 <td className={cn(tdCls, "max-w-48")}>
                   <span className="block truncate">{r.file_name}</span>
@@ -765,7 +762,6 @@ export function FileCodeView() {
           value={dim}
           onChange={(e) => setDim(e.target.value as typeof dim)}
           aria-label="Dimension"
-          className="h-7"
         >
           <option value="files">{t("analyze.perFile")}</option>
           <option value="cases">{t("analyze.perCase")}</option>
@@ -773,8 +769,8 @@ export function FileCodeView() {
         {(["table", "stacked", "heatmap"] as const).map((v) => (
           <Button
             key={v}
-            variant={view === v ? "primary" : "secondary"}
-            className="h-6 px-2 py-0 capitalize"
+            variant={view === v ? "toolbarPrimary" : "toolbar"}
+            className="capitalize"
             onClick={() => setView(v)}
           >
             {v === "table" ? t("analyze.table") : v === "stacked" ? t("analyze.stacked") : t("analyze.heatmap")}
@@ -856,13 +852,13 @@ export function CodeRelationsView() {
     return (
       <div className="space-y-2">
         <ReportMenuBar>
-          <Button variant="secondary" className="h-6 px-2 py-0" onClick={() => setMode("cooccurrence")}>
+          <Button variant="toolbar" onClick={() => setMode("cooccurrence")}>
             {t("analyze.cooccurrence")}
           </Button>
-          <Button variant="primary" className="h-6 px-2 py-0" onClick={() => setMode("crossover")}>
+          <Button variant="toolbarPrimary" onClick={() => setMode("crossover")}>
             {t("analyze.crossovers")}
           </Button>
-          <Select value={owner} onChange={(e) => setOwner(e.target.value)} className="h-7" aria-label="Coder">
+          <Select value={owner} onChange={(e) => setOwner(e.target.value)} aria-label="Coder">
             {coders.map((n) => (
               <option key={n} value={n}>{n}</option>
             ))}
@@ -904,10 +900,10 @@ export function CodeRelationsView() {
   return (
     <div className="space-y-2">
       <ReportMenuBar>
-        <Button variant="primary" className="h-6 px-2 py-0" onClick={() => setMode("cooccurrence")}>
+        <Button variant="toolbarPrimary" onClick={() => setMode("cooccurrence")}>
           Co-occurrence
         </Button>
-        <Button variant="secondary" className="h-6 px-2 py-0" onClick={() => setMode("crossover")}>
+        <Button variant="toolbar" onClick={() => setMode("crossover")}>
           Crossovers
         </Button>
         <ReportCsvButton
@@ -1142,12 +1138,9 @@ export function InterraterView() {
           {coders.map((n) => (
             <Button
               key={n}
-              variant="secondary"
+              variant="toolbar"
               onClick={() => toggleCoder(n)}
-              className={cn(
-                "h-6 px-2.5 text-xs",
-                selected.includes(n) && "border-accent bg-accent/10 text-accent",
-              )}
+              className={cn(selected.includes(n) && "border-accent bg-accent/10 text-accent")}
             >
               {n}
             </Button>
@@ -1186,12 +1179,9 @@ export function InterraterView() {
             ).map(([key, label]) => (
               <Button
                 key={key}
-                variant="secondary"
+                variant="toolbar"
                 onClick={() => setShowCoefs((s) => ({ ...s, [key]: !s[key] }))}
-                className={cn(
-                  "h-6 px-2.5 text-xs",
-                  showCoefs[key] && "border-accent bg-accent/10 text-accent",
-                )}
+                className={cn(showCoefs[key] && "border-accent bg-accent/10 text-accent")}
               >
                 {label}
               </Button>
@@ -1347,8 +1337,7 @@ export function CorpusTextView() {
         {CORPUS_TABS.map((t) => (
           <Button
             key={t.id}
-            variant={tab === t.id ? "primary" : "secondary"}
-            className="h-6 px-2 py-0"
+            variant={tab === t.id ? "toolbarPrimary" : "toolbar"}
             onClick={() => setTab(t.id)}
           >
             {t.label}

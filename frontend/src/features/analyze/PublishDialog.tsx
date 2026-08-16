@@ -180,8 +180,8 @@ export function PublishButton() {
   return (
     <>
       <Button
-        variant="secondary"
-        className="h-6 px-2 py-0 text-text-secondary hover:text-text-primary"
+        variant="toolbar"
+        className="text-text-secondary hover:text-text-primary"
         onClick={() => setOpen(true)}
         icon={<Share2 size={12} aria-hidden />}
         title={t("analyze.publish")}

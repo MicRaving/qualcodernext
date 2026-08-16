@@ -8,7 +8,7 @@
 import { useEffect, useState } from "react";
 import { useI18n } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
-import { Button, EmptyState, Select } from "@/components/ui/orchestrator";
+import { Button, EmptyState, Pill, Select } from "@/components/ui/orchestrator";
 import { cardCls, tdCls, thCls, useReport } from "@/features/analyze/reportData";
 import { ColorSwatch, ReportCsvButton, ReportMenuBar, ReportStatus } from "@/features/analyze/reportKit";
 import {
@@ -169,8 +169,7 @@ export function SummaryTableReportView() {
                                   aria-label={t("analyze.memo")}
                                 />
                                 <Button
-                                  variant="primary"
-                                  className="h-6 px-2 text-xs"
+                                  variant="toolbarPrimary"
                                   disabled={savingKey === k}
                                   onClick={() => void saveItem(item, ri, ci)}
                                 >
@@ -181,8 +180,7 @@ export function SummaryTableReportView() {
                           })}
                           <div>
                             <Button
-                              variant="secondary"
-                              className="h-6 px-2 text-xs"
+                              variant="toolbar"
                               onClick={() => setEditing(null)}
                             >
                               {t("analyze.summaryDone")}
@@ -207,9 +205,7 @@ export function SummaryTableReportView() {
                           {cell.memo || <span className="italic text-text-secondary">—</span>}
                         </span>
                         {cell.memo_count > 1 && (
-                          <span className="mt-0.5 inline-block rounded-sm bg-surface-higher px-1 py-px text-[10px] font-medium tabular-nums text-text-secondary">
-                            {t("analyze.summaryMemos", { n: cell.memo_count })}
-                          </span>
+                          <Pill className="mt-0.5 tabular-nums">{t("analyze.summaryMemos", { n: cell.memo_count })}</Pill>
                         )}
                       </button>
                     </td>
@@ -236,7 +232,6 @@ function ScopePicker({
     <Select
       value={value}
       onChange={(e) => onChange(e.target.value as "file" | "case")}
-      className="h-7"
       aria-label={t("analyze.summaryScope")}
     >
       <option value="file">{t("analyze.summaryFiles")}</option>

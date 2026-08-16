@@ -26,6 +26,12 @@
   --qc-motion-fast: 150ms;
   --qc-motion-base: 250ms;
   --qc-ease: cubic-bezier(0.16, 1, 0.3, 1);
+
+  /* Elevation — the 3-level shadow system (popovers / menus / modals).
+     Light mode: soft neutral shadows at ~8% opacity, spread tight. */
+  --qc-shadow-sm: 0 1px 2px rgba(16, 24, 40, 0.1);
+  --qc-shadow-md: 0 4px 12px rgba(16, 24, 40, 0.14);
+  --qc-shadow-lg: 0 8px 24px rgba(16, 24, 40, 0.18);
 }
 
 .dark {
@@ -41,6 +47,12 @@
   --qc-success: #22c55e;
   --qc-warning: #eab308;
   --qc-info: #3b82f6;
+
+  /* Elevation — dark mode pushes deeper and tighter (no visible halo
+     against the near-black background). */
+  --qc-shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.45);
+  --qc-shadow-md: 0 4px 12px rgba(0, 0, 0, 0.5);
+  --qc-shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.6);
 }
 
 @theme inline {
@@ -65,6 +77,11 @@
   --radius-sm: 3px;
   --radius-md: 4px;
   --radius-lg: 8px;
+
+  /* Elevation utilities: shadow-qc-sm/md/lg → the themed shadow vars. */
+  --shadow-qc-sm: var(--qc-shadow-sm);
+  --shadow-qc-md: var(--qc-shadow-md);
+  --shadow-qc-lg: var(--qc-shadow-lg);
 
   --font-sans:
     "Inter", system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;

@@ -106,7 +106,7 @@ function ContextPicker({
           onChange={(e) => onQuery(e.target.value)}
           placeholder={placeholder}
           aria-label={placeholder}
-          className="h-7 min-w-0 flex-1 px-2 py-1 text-xs"
+          className="min-w-0 flex-1 text-xs"
         />
         <span className="shrink-0 text-[10px] text-text-secondary">
           {t("ai.memosSelected", { count: selectedCount })}

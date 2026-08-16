@@ -1396,9 +1396,9 @@ export function HtmlCoder({ source }: { source: Source }) {
           <>
             <div className="flex flex-wrap items-center gap-1">
               <Button
-                variant="secondary"
+                variant="toolbar"
                 className={cn(
-                  "h-7 shrink-0",
+                  "shrink-0",
                   plainVisible ? "border-accent text-accent" : "bg-bg text-text-secondary",
                 )}
                 onClick={() => toggleView("plain")}
@@ -1409,9 +1409,9 @@ export function HtmlCoder({ source }: { source: Source }) {
                 {t("htmlCoder.plainText")}
               </Button>
               <Button
-                variant="secondary"
+                variant="toolbar"
                 className={cn(
-                  "h-7 shrink-0",
+                  "shrink-0",
                   webpageVisible ? "border-accent text-accent" : "bg-bg text-text-secondary",
                 )}
                 onClick={() => toggleView("webpage")}
@@ -1456,8 +1456,7 @@ export function HtmlCoder({ source }: { source: Source }) {
                   {t("htmlCoder.noSnapshot")}
                 </p>
                 <Button
-                  variant="secondary"
-                  className="h-7"
+                  variant="toolbar"
                   onClick={() => setHtmlReloadTick((v) => v + 1)}
                 >
                   {t("common.retry")}
@@ -1673,23 +1672,21 @@ export function HtmlCoder({ source }: { source: Source }) {
                     value={memoDraft}
                     placeholder={t("pdfCoder.memoPlaceholder")}
                     aria-label={t("pdfCoder.memoPlaceholder")}
-                    className="h-6 w-48"
+                    className="w-48"
                     onChange={(e) => setMemoDraft(e.target.value)}
                     onKeyDown={(e) => {
                       if (e.key === "Enter") void saveMemo();
                     }}
                   />
                   <Button
-                    variant="primaryCompact"
-                    className="h-6 px-1.5"
+                    variant="toolbarIconPrimary"
                     icon={<Check size={12} aria-hidden />}
                     title={t("common.save")}
                     aria-label={t("common.save")}
                     onClick={() => void saveMemo()}
                   />
                   <Button
-                    variant="secondary"
-                    className="h-6 px-1.5"
+                    variant="toolbarIcon"
                     icon={<X size={12} aria-hidden />}
                     title={t("common.cancel")}
                     aria-label={t("common.cancel")}
@@ -1715,8 +1712,7 @@ export function HtmlCoder({ source }: { source: Source }) {
               <span className="flex items-center gap-1">
                 <span className="text-xs text-text-secondary">{t("coder.weight")}</span>
                 <Button
-                  variant="secondary"
-                  className="h-6 w-6 justify-center px-0"
+                  variant="toolbarIcon"
                   icon={<Minus size={12} aria-hidden />}
                   title={t("coder.weightDec")}
                   aria-label={t("coder.weightDec")}
@@ -1730,8 +1726,7 @@ export function HtmlCoder({ source }: { source: Source }) {
                   {rowWeight(selectedCoding)}
                 </span>
                 <Button
-                  variant="secondary"
-                  className="h-6 w-6 justify-center px-0"
+                  variant="toolbarIcon"
                   icon={<Plus size={12} aria-hidden />}
                   title={t("coder.weightInc")}
                   aria-label={t("coder.weightInc")}

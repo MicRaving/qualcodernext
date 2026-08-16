@@ -341,7 +341,7 @@ export function ProjectShell() {
           aria-live="polite"
           className="pointer-events-none fixed left-1/2 top-12 z-40 -translate-x-1/2"
         >
-          <div className="flex items-center gap-1.5 rounded-md border border-border bg-surface px-3 py-1.5 text-xs text-text-primary shadow-lg">
+          <div className="flex items-center gap-1.5 rounded-md border border-border bg-surface px-3 py-1.5 text-xs text-text-primary shadow-qc-md">
             <Users size={13} className="shrink-0 text-accent" aria-hidden />
             {t("sync.autoEnabled")}
           </div>

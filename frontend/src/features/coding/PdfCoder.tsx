@@ -1142,8 +1142,8 @@ export function PdfCoder({ source }: { source: Source }) {
           <>
             <div className="flex flex-wrap items-center gap-1">
               <Button
-                variant="secondary"
-                className={cn("h-7", zoom === "fit" && "border-accent text-accent")}
+                variant="toolbar"
+                className={cn(zoom === "fit" && "border-accent text-accent")}
                 onClick={() => setZoom("fit")}
               >
                 {t("pdfCoder.fitWidth")}
@@ -1151,8 +1151,8 @@ export function PdfCoder({ source }: { source: Source }) {
               {([0.5, 0.75, 1, 1.5] as const).map((z) => (
                 <Button
                   key={z}
-                  variant="secondary"
-                  className={cn("h-7", zoom === z && "border-accent text-accent")}
+                  variant="toolbar"
+                  className={cn(zoom === z && "border-accent text-accent")}
                   onClick={() => setZoom(z)}
                 >
                   {Math.round(z * 100)}%
@@ -1163,8 +1163,7 @@ export function PdfCoder({ source }: { source: Source }) {
                 <>
                   <div className="mx-1 h-4 w-px bg-border" aria-hidden />
                   <Button
-                    variant="secondary"
-                    className="h-7"
+                    variant="toolbarIcon"
                     onClick={() => setCurrentPage((p) => clampPage(p - 1))}
                     disabled={currentPage <= 1}
                     aria-label={t("pdfCoder.prevPage")}
@@ -1182,8 +1181,7 @@ export function PdfCoder({ source }: { source: Source }) {
                   />
                   <span className="text-xs text-text-secondary">/ {numPages}</span>
                   <Button
-                    variant="secondary"
-                    className="h-7"
+                    variant="toolbarIcon"
                     onClick={() => setCurrentPage((p) => clampPage(p + 1))}
                     disabled={currentPage >= numPages}
                     aria-label={t("pdfCoder.nextPage")}
@@ -1195,8 +1193,8 @@ export function PdfCoder({ source }: { source: Source }) {
 
               <div className="mx-1 h-4 w-px bg-border" aria-hidden />
               <Button
-                variant="secondary"
-                className={cn("h-7", continuous && "border-accent text-accent")}
+                variant="toolbar"
+                className={cn(continuous && "border-accent text-accent")}
                 onClick={() => setContinuous((c) => !c)}
                 icon={<Rows3 size={12} aria-hidden />}
               >
@@ -1205,8 +1203,7 @@ export function PdfCoder({ source }: { source: Source }) {
 
               <div className="mx-1 h-4 w-px bg-border" aria-hidden />
               <Button
-                variant="secondary"
-                className="h-7"
+                variant="toolbar"
                 onClick={() => setAutoOpen((o) => !o)}
                 icon={<Sparkles size={12} aria-hidden />}
               >
@@ -1215,9 +1212,9 @@ export function PdfCoder({ source }: { source: Source }) {
 
               <div className="mx-1 h-4 w-px bg-border" aria-hidden />
               <Button
-                variant="secondary"
+                variant="toolbar"
                 className={cn(
-                  "h-7 shrink-0",
+                  "shrink-0",
                   plainVisible ? "border-accent text-accent" : "bg-bg text-text-secondary",
                 )}
                 onClick={() => toggleView("plain")}
@@ -1228,9 +1225,9 @@ export function PdfCoder({ source }: { source: Source }) {
                 {t("pdfCoder.plainText")}
               </Button>
               <Button
-                variant="secondary"
+                variant="toolbar"
                 className={cn(
-                  "h-7 shrink-0",
+                  "shrink-0",
                   pdfVisible ? "border-accent text-accent" : "bg-bg text-text-secondary",
                 )}
                 onClick={() => toggleView("pdf")}
@@ -1463,23 +1460,21 @@ export function PdfCoder({ source }: { source: Source }) {
                     value={memoDraft}
                     placeholder={t("pdfCoder.memoPlaceholder")}
                     aria-label={t("pdfCoder.memoPlaceholder")}
-                    className="h-6 w-48"
+                    className="w-48"
                     onChange={(e) => setMemoDraft(e.target.value)}
                     onKeyDown={(e) => {
                       if (e.key === "Enter") void saveMemo();
                     }}
                   />
                   <Button
-                    variant="primaryCompact"
-                    className="h-6 px-1.5"
+                    variant="toolbarIconPrimary"
                     icon={<Check size={12} aria-hidden />}
                     title={t("common.save")}
                     aria-label={t("common.save")}
                     onClick={() => void saveMemo()}
                   />
                   <Button
-                    variant="secondary"
-                    className="h-6 px-1.5"
+                    variant="toolbarIcon"
                     icon={<X size={12} aria-hidden />}
                     title={t("common.cancel")}
                     aria-label={t("common.cancel")}
@@ -1505,8 +1500,7 @@ export function PdfCoder({ source }: { source: Source }) {
               <span className="flex items-center gap-1">
                 <span className="text-xs text-text-secondary">{t("coder.weight")}</span>
                 <Button
-                  variant="secondary"
-                  className="h-6 w-6 justify-center px-0"
+                  variant="toolbarIcon"
                   icon={<Minus size={12} aria-hidden />}
                   title={t("coder.weightDec")}
                   aria-label={t("coder.weightDec")}
@@ -1520,8 +1514,7 @@ export function PdfCoder({ source }: { source: Source }) {
                   {rowWeight(footerRow)}
                 </span>
                 <Button
-                  variant="secondary"
-                  className="h-6 w-6 justify-center px-0"
+                  variant="toolbarIcon"
                   icon={<Plus size={12} aria-hidden />}
                   title={t("coder.weightInc")}
                   aria-label={t("coder.weightInc")}

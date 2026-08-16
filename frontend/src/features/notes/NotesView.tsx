@@ -33,7 +33,9 @@ import {
   BarHeader,
   Button,
   IconButton,
+  Input,
   LeftBar,
+  Pill,
   Select,
   ViewHeader,
 } from "@/components/ui/orchestrator";
@@ -239,12 +241,12 @@ export function NotesList() {
           className="pointer-events-none absolute left-5 top-1/2 -translate-y-1/2 text-text-secondary"
           aria-hidden
         />
-        <input
+        <Input
           value={notesUi.query}
           onChange={(e) => setNotesUi({ query: e.target.value })}
           placeholder={t("notes.searchPlaceholder")}
           aria-label={t("notes.searchAria")}
-          className="h-7 w-full rounded-sm border border-border bg-bg pl-7 pr-2 text-sm outline-none focus:border-accent"
+          className="w-full pl-7 pr-2"
         />
       </div>
       <div className="min-h-0 flex-1 overflow-auto">
@@ -575,7 +577,7 @@ function AnnotationDetails() {
               value={selected.fid}
               onChange={(e) => void moveAnnotation(Number(e.target.value))}
               aria-label={t("notes.pickFileLabel")}
-              className="h-7 max-w-64 min-w-0 text-xs"
+              className="max-w-64 min-w-0 text-xs"
             >
               {sources.map((s) => (
                 <option key={s.id} value={s.id}>
@@ -583,9 +585,7 @@ function AnnotationDetails() {
                 </option>
               ))}
             </Select>
-            <span className="shrink-0 rounded-sm bg-surface-higher px-1.5 py-px text-[10px] font-medium uppercase text-text-secondary">
-              {selected.pos0}–{selected.pos1}
-            </span>
+            <Pill className="uppercase">{selected.pos0}–{selected.pos1}</Pill>
           </span>
         }
         actions={
@@ -1006,9 +1006,9 @@ function MemoEditor() {
         title={
           <span className="flex min-w-0 items-center gap-1.5">
             <span className="truncate">{selected.name}</span>
-            <span className="shrink-0 rounded-sm bg-surface-higher px-1.5 py-px text-[10px] font-medium uppercase text-text-secondary">
+            <Pill className="shrink-0 uppercase">
               {isCode ? t("notes.kindCode") : t("notes.kindFile")}
-            </span>
+            </Pill>
           </span>
         }
         actions={

@@ -91,7 +91,7 @@ function ToastCard({ toast, onDismiss }: { toast: Toast; onDismiss: (id: number)
   return (
     <div
       role="status"
-      className={`qc-toast ${leaving ? "qc-toast-out" : ""} rounded-lg border bg-surface px-3 py-2 shadow ${KIND_BORDER[toast.kind]}`}
+      className={`qc-toast ${leaving ? "qc-toast-out" : ""} rounded-lg border bg-surface px-3 py-2 shadow-qc-md ${KIND_BORDER[toast.kind]}`}
     >
       <div className="flex items-start gap-2">
         <Icon size={14} className={`mt-px shrink-0 ${KIND_TEXT[toast.kind]}`} aria-hidden />

@@ -62,8 +62,7 @@ export function CodingDetailsBar({
               <span className="flex items-center gap-1">
                 <span className="text-xs text-text-secondary">{t("coder.weight")}</span>
                 <Button
-                  variant="secondary"
-                  className="h-6 w-6 justify-center px-0"
+                  variant="toolbarIcon"
                   icon={<Minus size={12} aria-hidden />}
                   title={t("coder.weightDec")}
                   aria-label={t("coder.weightDec")}
@@ -74,8 +73,7 @@ export function CodingDetailsBar({
                   {weightOf(r)}
                 </span>
                 <Button
-                  variant="secondary"
-                  className="h-6 w-6 justify-center px-0"
+                  variant="toolbarIcon"
                   icon={<Plus size={12} aria-hidden />}
                   title={t("coder.weightInc")}
                   aria-label={t("coder.weightInc")}

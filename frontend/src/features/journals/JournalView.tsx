@@ -14,7 +14,7 @@ import {
 import { api } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { useI18n } from "@/lib/i18n";
-import { Button, ErrorBanner, IconButton, ViewHeader } from "@/components/ui/orchestrator";
+import { Button, ErrorBanner, IconButton, Input, ViewHeader } from "@/components/ui/orchestrator";
 import { InlineNameEdit } from "@/components/ui/InlineNameEdit";
 import { RowContextMenu } from "@/features/shell/RowContextMenu";
 import { useProjectStore } from "@/stores/project";
@@ -292,7 +292,7 @@ export function JournalEditor() {
           <ViewHeader
             back={false}
             title={
-              <input
+              <Input
                 value={name}
                 onChange={(e) => handleNameChange(e.target.value)}
                 onKeyDown={(e) => {
@@ -300,7 +300,7 @@ export function JournalEditor() {
                 }}
                 placeholder={t("journal.namePlaceholder")}
                 aria-label={t("journal.namePlaceholder")}
-                className="h-7 w-64 min-w-0 rounded-sm border border-border bg-surface px-2 text-sm font-normal outline-none focus:border-accent"
+                className="w-64 min-w-0 font-normal"
               />
             }
             actions={

@@ -614,7 +614,7 @@ function SectionCard({
             }}
             placeholder={t("qtt.notePlaceholder")}
             aria-label={t("qtt.notePlaceholder")}
-            className="h-7 min-w-0 flex-1"
+            className="min-w-0 flex-1"
           />
           <Button
             variant="secondary"

@@ -25,10 +25,12 @@ import {
   Button,
   ErrorBanner,
   IconButton,
+  Input,
   LeftBar,
   Menu,
   MenuItem,
   SectionLabel,
+  Select,
   ViewHeader,
 } from "@/components/ui/orchestrator";
 import { cn } from "@/lib/utils";
@@ -135,12 +137,12 @@ export function CasesList() {
           className="pointer-events-none absolute left-5 top-1/2 -translate-y-1/2 text-text-secondary"
           aria-hidden
         />
-        <input
+        <Input
           value={casesUi.query}
           onChange={(e) => setCasesUi({ query: e.target.value })}
           placeholder={t("cases.searchPlaceholder")}
           aria-label={t("cases.searchAria")}
-          className="h-7 w-full rounded-sm border border-border bg-bg pl-7 pr-2 text-sm outline-none focus:border-accent"
+          className="w-full pl-7 pr-2"
         />
       </div>
       <div className="min-h-0 flex-1 overflow-auto">
@@ -490,11 +492,11 @@ export function CaseDetails() {
               {t("cases.linkFiles")}
             </SectionLabel>
             <div className="mt-1.5 flex items-center gap-2">
-              <select
+              <Select
                 value={linkFid}
                 onChange={(e) => setLinkFid(e.target.value)}
                 aria-label={t("cases.linkAria")}
-                className="h-7 min-w-0 flex-1 rounded-sm border border-border bg-surface px-2 text-sm outline-none focus:border-accent"
+                className="min-w-0 flex-1"
               >
                 <option value="">{t("cases.selectFilePlaceholder")}</option>
                 {linkable.map((s) => (
@@ -502,7 +504,7 @@ export function CaseDetails() {
                     {s.name}
                   </option>
                 ))}
-              </select>
+              </Select>
               <Button
                 variant="primary"
                 icon={<Link2 size={14} aria-hidden />}

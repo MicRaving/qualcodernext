@@ -32,7 +32,16 @@ import { useI18n } from "@/lib/i18n";
 /* ------------------------------------------------------------------ */
 
 export interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
-  variant?: "primary" | "primaryCompact" | "secondary" | "danger";
+  variant?:
+    | "primary"
+    | "primaryCompact"
+    | "secondary"
+    | "danger"
+    | "toolbar"
+    | "toolbarPrimary"
+    | "toolbarDanger"
+    | "toolbarIcon"
+    | "toolbarIconPrimary";
   icon?: ReactNode;
 }
 
@@ -44,7 +53,17 @@ export function Button({ variant = "secondary", icon, className = "", children, 
         ? cls.primaryCompact
         : variant === "danger"
           ? cls.danger
-          : cls.secondary;
+          : variant === "toolbar"
+            ? cls.toolbarBtn
+            : variant === "toolbarPrimary"
+              ? cls.toolbarBtnPrimary
+              : variant === "toolbarDanger"
+                ? cls.toolbarBtnDanger
+                : variant === "toolbarIcon"
+                  ? cls.toolbarIconBtn
+                  : variant === "toolbarIconPrimary"
+                    ? cls.toolbarIconBtnPrimary
+                    : cls.secondary;
   return (
     <button type="button" className={`flex items-center gap-1 ${base} ${className}`} {...rest}>
       {icon}
@@ -328,7 +347,7 @@ export function Menu({
     <div
       className={`${
         position === "fixed"
-          ? "fixed z-40 rounded-md border border-border bg-surface py-1 shadow-lg"
+          ? "fixed z-40 rounded-md border border-border bg-surface py-1 shadow-qc-md"
           : cls.menu
       } qc-popover ${className}`}
       {...rest}
@@ -438,6 +457,27 @@ export function TableHead({ className = "", children, ...rest }: TableHeadProps)
 
 export function CountBadge({ value }: { value: number | string }) {
   return <span className={cls.countBadge}>{value}</span>;
+}
+
+/** Neutral status pill (positions, scopes, counts); `tone="accent"` for
+ *  new/selected markers; `size="md"` for report-row badges (text-xs). */
+export function Pill({
+  tone = "neutral",
+  size = "sm",
+  className = "",
+  children,
+}: {
+  tone?: "neutral" | "accent";
+  size?: "sm" | "md";
+  className?: string;
+  children: ReactNode;
+}) {
+  const sizeCls = size === "md" ? "text-xs" : "";
+  return (
+    <span className={`${tone === "accent" ? cls.pillAccent : cls.pill} ${sizeCls} ${className}`}>
+      {children}
+    </span>
+  );
 }
 
 export function SectionLabel({ children }: { children: ReactNode }) {

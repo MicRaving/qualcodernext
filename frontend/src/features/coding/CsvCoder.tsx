@@ -573,9 +573,9 @@ export function CsvCoder({ source }: { source: Source }) {
             )}
             <div className="flex flex-wrap items-center gap-1">
               <Button
-                variant="secondary"
+                variant="toolbar"
                 className={cn(
-                  "h-7 shrink-0",
+                  "shrink-0",
                   view === "table" ? "border-accent text-accent" : "bg-bg text-text-secondary",
                 )}
                 onClick={() => {
@@ -589,9 +589,9 @@ export function CsvCoder({ source }: { source: Source }) {
                 {t("csvCoder.table")}
               </Button>
               <Button
-                variant="secondary"
+                variant="toolbar"
                 className={cn(
-                  "h-7 shrink-0",
+                  "shrink-0",
                   view === "plain" ? "border-accent text-accent" : "bg-bg text-text-secondary",
                 )}
                 onClick={() => {
@@ -605,7 +605,7 @@ export function CsvCoder({ source }: { source: Source }) {
                 {t("csvCoder.plainText")}
               </Button>
               <Button
-                variant="secondary"
+                variant="toolbar"
                 icon={<Undo2 size={12} aria-hidden />}
                 onClick={unmarkLast}
                 disabled={undoStack.length === 0}

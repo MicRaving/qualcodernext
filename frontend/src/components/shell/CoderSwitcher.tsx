@@ -28,8 +28,7 @@ import { api, ApiError } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 import { useProjectStore } from "@/stores/project";
 import { useToast } from "@/lib/toast";
-import { HelpFlyout, IconButton, Menu, MenuItem, Modal } from "@/components/ui/orchestrator";
-import { cls } from "@/components/ui/tokens";
+import { Button, HelpFlyout, IconButton, Menu, MenuItem, Modal } from "@/components/ui/orchestrator";
 
 const SYNC_POLL_MS = 30_000;
 
@@ -316,8 +315,8 @@ export function CoderSwitcher() {
 
   return (
     <div ref={rootRef} className="relative flex shrink-0 items-center gap-1">
-      <button
-        type="button"
+      <Button
+        variant="toolbar"
         onClick={() => setOpen((o) => !o)}
         aria-haspopup="listbox"
         aria-expanded={open}
@@ -326,7 +325,7 @@ export function CoderSwitcher() {
         // Flex row so a long coder name ellipsizes instead of wrapping
         // the trailing dot/chevron to a second (clipped) line; auto-adapts
         // to the text width, capped so it never dominates the ribbon.
-        className={`${cls.secondary} flex h-7 min-w-[4.5rem] max-w-[20rem] items-center gap-1 overflow-hidden leading-none`}
+        className="min-w-[4.5rem] max-w-[20rem] overflow-hidden leading-none"
       >
         <User size={12} className="shrink-0 text-text-secondary" aria-hidden />
         <span className="min-w-0 flex-1 overflow-hidden text-ellipsis whitespace-nowrap">{coderName}</span>
@@ -345,7 +344,7 @@ export function CoderSwitcher() {
           }`}
         />
         <ChevronDown size={12} className="shrink-0 text-text-secondary" aria-hidden />
-      </button>
+      </Button>
 
       {open && (
         <Menu

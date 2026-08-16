@@ -124,7 +124,6 @@ export function StatsReportView() {
           value={attrName}
           onChange={(e) => setAttrName(e.target.value)}
           aria-label={t("analyze.statsAttribute")}
-          className="h-7"
         >
           {attrs.map((a) => (
             <option key={a.name} value={a.name}>
@@ -138,7 +137,6 @@ export function StatsReportView() {
             <Select
               value={compareCid}
               onChange={(e) => setCompareCid(e.target.value === "" ? "" : Number(e.target.value))}
-              className="h-7"
               aria-label={t("analyze.statsComparisonCode")}
             >
               {codes.map((c) => (
@@ -182,12 +180,9 @@ export function StatsReportView() {
             codes.map((c) => (
               <Button
                 key={c.cid}
-                variant="secondary"
+                variant="toolbar"
                 onClick={() => toggleCode(c.cid)}
-                className={cn(
-                  "h-6 px-2.5 text-xs",
-                  selected.includes(c.cid) && "border-accent bg-accent/10 text-accent",
-                )}
+                className={cn(selected.includes(c.cid) && "border-accent bg-accent/10 text-accent")}
               >
                 <ColorSwatch color={c.color} />
                 {c.name}
@@ -195,7 +190,7 @@ export function StatsReportView() {
             ))
           )}
           {selected.length > 0 && (
-            <Button variant="secondary" className="h-6 px-2.5 text-xs" onClick={() => setSelected([])}>
+            <Button variant="toolbar" onClick={() => setSelected([])}>
               {t("analyze.clearCode")}
             </Button>
           )}
