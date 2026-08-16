@@ -22,8 +22,6 @@ class AiSettingsRequest(BaseModel):
     model: str
     api_key: str = ""
     mcp_permissions: str = "read"
-    reddit_client_id: str = ""
-    reddit_client_secret: str = ""
 
 
 class ChatRequest(BaseModel):

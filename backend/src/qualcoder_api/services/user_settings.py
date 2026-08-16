@@ -64,12 +64,6 @@ DEFAULT_SETTINGS: dict = {
     "updates": {"check_interval": "daily", "auto_update": False},
     "maintenance": dict(MAINTENANCE_DEFAULTS),
     "auto_open_project": True,
-    #: Optional Reddit API app credentials (``reddit.com/prefs/apps``,
-    #: "script" type). When BOTH are non-empty the Reddit scraper uses
-    #: authenticated app-only OAuth (``client_credentials``) instead of the
-    #: anonymous ``.json`` endpoint, which Reddit blocks for scripts.
-    "reddit_client_id": "",
-    "reddit_client_secret": "",
 }
 
 # Per-project collaboration-sync decisions: "auto" re-detects the shared
@@ -147,47 +141,6 @@ def save_maintenance_settings(maintenance: dict, settings: dict | None = None) -
     settings["maintenance"] = clean
     save_settings(settings)
     return dict(clean)
-
-
-def _settings_str(settings: dict, key: str, default: str = "") -> str:
-    """A settings value coerced to str (None -> default)."""
-    value = settings.get(key)
-    if value is None:
-        return default
-    if isinstance(value, str):
-        return value
-    return str(value)
-
-
-def get_reddit_credentials(settings: dict | None = None) -> dict:
-    """Return the optional Reddit API app credentials (client ID + secret).
-
-    Both values must be non-empty for the Reddit scraper to use
-    authenticated app-only OAuth (``client_credentials``); otherwise it
-    falls back to the anonymous ``.json`` endpoint.
-    """
-    settings = settings or load_settings()
-    return {
-        "client_id": _settings_str(settings, "reddit_client_id", "").strip(),
-        "client_secret": _settings_str(settings, "reddit_client_secret", "").strip(),
-    }
-
-
-def save_reddit_credentials(credentials: dict, settings: dict | None = None) -> dict:
-    """Validate and persist the Reddit API app credentials.
-
-    Blank values are stored as-is: a blank client ID means the scraper
-    falls back to anonymous access. Unlike ``save_ai_settings`` there is
-    no "blank keeps the stored value" rule here — callers that cannot
-    read the stored value back must enforce that themselves.
-    """
-    settings = settings or load_settings()
-    if not isinstance(credentials, dict):
-        raise ValueError("Reddit credentials must be a dict")
-    settings["reddit_client_id"] = _settings_str(credentials, "client_id", "").strip()
-    settings["reddit_client_secret"] = _settings_str(credentials, "client_secret", "").strip()
-    save_settings(settings)
-    return get_reddit_credentials(settings)
 
 
 def get_compact_on_close(settings: dict | None = None) -> bool:
@@ -289,6 +242,11 @@ def load_settings() -> dict:
         if SETTINGS_FILE.exists():
             data = json.loads(SETTINGS_FILE.read_text(encoding="utf-8"))
             if isinstance(data, dict):
+                # The Reddit API credentials were removed with the Reddit
+                # scraper purge — drop legacy stored keys so they never
+                # resurface or get persisted again.
+                data.pop("reddit_client_id", None)
+                data.pop("reddit_client_secret", None)
                 settings.update(data)
     except (OSError, json.JSONDecodeError) as err:
         logger.warning("Failed to load user settings: %s", err)
@@ -393,13 +351,6 @@ def save_ai_settings(ai: dict, settings: dict | None = None) -> dict:
         ),
     }
     settings["ai"] = clean
-    # The settings pane ships the optional Reddit API credentials through
-    # the AI-settings save (its only auto-save mechanism). Blank values
-    # keep the stored ones — the pane never reads them back, so a blank
-    # means "leave unchanged" (the same rule as the AI api_key).
-    for key in ("reddit_client_id", "reddit_client_secret"):
-        if key in ai and isinstance(ai[key], str) and ai[key].strip():
-            settings[key] = ai[key].strip()
     save_settings(settings)
     return dict(clean)
 

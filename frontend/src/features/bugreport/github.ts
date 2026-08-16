@@ -2,11 +2,38 @@
  * GitHub submission helpers for the bug report (no dependencies).
  *
  * Two paths:
- *  - Token configured: upload the screenshot through the issues web
- *    editor's attachment endpoint, then POST the issue via the REST API.
- *  - No token: build the prefilled `issues/new` URL and open it in the
- *    default browser (the user pastes the screenshot there).
+ *  - Token configured (OPTIONAL): upload the screenshot through the issues
+ *    web editor's attachment endpoint, then POST the issue via the REST API.
+ *  - No token (the default): build the prefilled `issues/new` URL and open
+ *    it in the system browser via `openExternal` — no account or token is
+ *    needed inside QCnext; the user completes the issue on GitHub (and can
+ *    attach the screenshot downloaded from the report view).
  */
+
+/** Whether the app runs inside the Tauri WebView2 shell (vs. dev browser). */
+function inTauri(): boolean {
+  return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+}
+
+/**
+ * Open a URL in the system browser.
+ *
+ * Packaged app: Tauri's WebView2 blocks `window.open` popups, so the opener
+ * plugin's `openUrl` is used (permission `opener:default`, registered in
+ * `src-tauri/capabilities/default.json`). Dev/browser: falls back to
+ * `window.open` (the plugin is only imported when running under Tauri).
+ *
+ * Throws when the browser cannot be opened (popup blocked / plugin error).
+ */
+export async function openExternal(url: string): Promise<void> {
+  if (inTauri()) {
+    const { openUrl } = await import("@tauri-apps/plugin-opener");
+    await openUrl(url);
+    return;
+  }
+  const win = window.open(url, "_blank", "noopener,noreferrer");
+  if (!win) throw new Error("The browser could not be opened (popup blocked)");
+}
 
 export interface GitHubIssueDraft {
   title: string;

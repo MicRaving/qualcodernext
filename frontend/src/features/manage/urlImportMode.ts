@@ -7,7 +7,7 @@
  * every ``www.``/``m.``/``old.``-style subdomain of the two platforms.
  */
 
-export type ScrapeMode = "reddit" | "youtube" | "article" | "html" | "pdf";
+export type ScrapeMode = "youtube" | "article" | "html" | "pdf";
 
 export function detectModeFromUrl(url: string): ScrapeMode | null {
   const trimmed = url.trim();
@@ -24,9 +24,6 @@ export function detectModeFromUrl(url: string): ScrapeMode | null {
   }
   if (host === "youtube.com" || host === "youtu.be" || host.endsWith(".youtube.com") || host.endsWith(".youtu.be")) {
     return "youtube";
-  }
-  if (host === "reddit.com" || host.endsWith(".reddit.com")) {
-    return "reddit";
   }
   return null;
 }

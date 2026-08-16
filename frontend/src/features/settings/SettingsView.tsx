@@ -53,8 +53,6 @@ interface AiDraft {
   model: string;
   apiKey: string;
   mcpPermissions: string;
-  redditClientId: string;
-  redditClientSecret: string;
 }
 
 let aiDraftCache: AiDraft | null = null;
@@ -143,10 +141,6 @@ export function SettingsView() {
   const [apiKey, setApiKey] = useState(() => aiDraftCache?.apiKey ?? "");
   const [mcpPermissions, setMcpPermissions] = useState(
     () => aiDraftCache?.mcpPermissions ?? "read",
-  );
-  const [redditClientId, setRedditClientId] = useState(() => aiDraftCache?.redditClientId ?? "");
-  const [redditClientSecret, setRedditClientSecret] = useState(
-    () => aiDraftCache?.redditClientSecret ?? "",
   );
   const [models, setModels] = useState<string[]>([]);
   const [modelsLoading, setModelsLoading] = useState(false);
@@ -329,10 +323,8 @@ export function SettingsView() {
       model,
       apiKey,
       mcpPermissions,
-      redditClientId,
-      redditClientSecret,
     };
-  }, [enabled, provider, apiBase, model, apiKey, mcpPermissions, redditClientId, redditClientSecret]);
+  }, [enabled, provider, apiBase, model, apiKey, mcpPermissions]);
 
   // Model polling: fetch whenever the provider or base URL changes (with the
   // previous list cleared — no leftover models from other providers), and
@@ -384,8 +376,6 @@ export function SettingsView() {
     if (!touchedRef.current) return;
     saveTimer.current = window.setTimeout(() => {
       setSaveError(null);
-      // The Reddit API credentials ride the AI-settings request (the
-      // pane's only auto-save mechanism); the backend persists them
       // separately in the settings JSON. Blank values are left unchanged
       // server-side, so a fresh mount can never wipe stored credentials.
       const body = {
@@ -395,15 +385,13 @@ export function SettingsView() {
         model: model.trim(),
         api_key: apiKey,
         mcp_permissions: mcpPermissions,
-        reddit_client_id: redditClientId.trim(),
-        reddit_client_secret: redditClientSecret.trim(),
       };
       void api.aiSaveSettings(body).catch((e) => setSaveError(errorDetail(e, t("settings.aiSaveError"))));
     }, 600);
     return () => {
       if (saveTimer.current !== null) window.clearTimeout(saveTimer.current);
     };
-  }, [enabled, provider, apiBase, model, apiKey, mcpPermissions, redditClientId, redditClientSecret, t]);
+  }, [enabled, provider, apiBase, model, apiKey, mcpPermissions, t]);
 
 
   function handleProviderChange(next: string) {
@@ -711,48 +699,6 @@ export function SettingsView() {
                 </Select>
               </Field>
             </div>
-          </div>
-
-          {/* Reddit API credentials — optional app-only OAuth for the
-              Reddit scraper when anonymous access is blocked */}
-          <div className="mt-3 border-t border-border pt-3">
-            <div className="grid grid-cols-2 gap-3">
-              <Field label={t("settings.redditClientId")}>
-                <Input
-                  type="password"
-                  value={redditClientId}
-                  onChange={(e) => {
-                    markTouched();
-                    setRedditClientId(e.target.value);
-                  }}
-                  placeholder={t("settings.optional")}
-                  className="w-full"
-                />
-              </Field>
-              <Field label={t("settings.redditClientSecret")}>
-                <Input
-                  type="password"
-                  value={redditClientSecret}
-                  onChange={(e) => {
-                    markTouched();
-                    setRedditClientSecret(e.target.value);
-                  }}
-                  placeholder={t("settings.optional")}
-                  className="w-full"
-                />
-              </Field>
-            </div>
-            <p className="mt-1 text-xs text-text-secondary">
-              {t("settings.redditCredentialsHint")}{" "}
-              <a
-                href="https://www.reddit.com/prefs/apps"
-                target="_blank"
-                rel="noreferrer"
-                className="inline-block text-accent underline"
-              >
-                reddit.com/prefs/apps
-              </a>
-            </p>
           </div>
 
           {/* Service status | Semantic index — side by side */}

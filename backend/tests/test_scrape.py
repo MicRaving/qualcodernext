@@ -1,9 +1,8 @@
-"""URL import tests — Reddit/YouTube/article scraping, source persistence,
+"""URL import tests — YouTube/article/HTML/PDF scraping, source persistence,
 duplicate detection and audit."""
 
 from __future__ import annotations
 
-import base64
 import csv
 import io
 import json
@@ -32,61 +31,6 @@ app_with_scrape.include_router(scrape_router, prefix="/api/v1")
 # ----------------------------------------------------------------------
 # Fixtures
 # ----------------------------------------------------------------------
-
-REDDIT_POST = {
-    "kind": "Listing",
-    "data": {
-        "children": [
-            {
-                "kind": "t3",
-                "data": {
-                    "title": "My Reddit Thread",
-                    "author": "op_user",
-                    "selftext": "The selftext body.",
-                    "score": 42,
-                },
-            }
-        ]
-    },
-}
-
-REDDIT_COMMENTS = {
-    "kind": "Listing",
-    "data": {
-        "children": [
-            {
-                "kind": "t1",
-                "data": {
-                    "author": "alice",
-                    "body": "Top level comment.",
-                    "depth": 0,
-                    "replies": {
-                        "kind": "Listing",
-                        "data": {
-                            "children": [
-                                {
-                                    "kind": "t1",
-                                    "data": {
-                                        "author": "bob",
-                                        "body": "Nested reply.",
-                                        "depth": 1,
-                                        "replies": "",
-                                    },
-                                }
-                            ]
-                        },
-                    },
-                },
-            },
-            {"kind": "more", "data": {"count": 7}},
-        ]
-    },
-}
-
-
-def reddit_payload() -> bytes:
-    return json.dumps([REDDIT_POST, REDDIT_COMMENTS]).encode("utf-8")
-
 
 ARTICLE_HTML = b"""<!DOCTYPE html>
 <html>
@@ -195,13 +139,16 @@ async def scrape_client(tmp_path):
 # Mode detection / name sanitizing
 # ----------------------------------------------------------------------
 
-def test_detect_mode_reddit_youtube_article():
-    assert scrape_service.detect_mode("https://www.reddit.com/r/x/comments/abc/") == "reddit"
+def test_detect_mode_youtube_article():
     assert scrape_service.detect_mode("https://youtu.be/abc123") == "youtube"
     assert scrape_service.detect_mode("https://www.youtube.com/watch?v=abc") == "youtube"
     assert scrape_service.detect_mode("https://example.org/story") == "article"
     assert scrape_service.detect_mode("https://example.org/story", mode="html") == "html"
     assert scrape_service.detect_mode("https://example.org/story", mode="pdf") == "pdf"
+    # Reddit links have no dedicated scraper anymore — auto-detection routes
+    # them to the generic article extraction (they still produce a source).
+    assert scrape_service.detect_mode("https://www.reddit.com/r/x/comments/abc/") == "article"
+    assert scrape_service.detect_mode("https://old.reddit.com/r/x/comments/abc/") == "article"
 
 
 def test_validate_url_rejects_non_http():
@@ -217,502 +164,6 @@ def test_sanitize_name_strips_path_characters():
     assert name == "abc spaced"
     assert scrape_service.sanitize_name("", "fallback") == "fallback"
     assert len(scrape_service.sanitize_name("x" * 300, "f")) <= 100
-
-
-# ----------------------------------------------------------------------
-# Reddit
-# ----------------------------------------------------------------------
-
-def test_reddit_parse_builds_indented_thread():
-    with patch("qualcoder_api.services.scrape_service.fetch_url", return_value=reddit_payload()):
-        content = scrape_service.scrape_reddit("https://www.reddit.com/r/Test/comments/abc123/")
-
-    assert content.mode == "reddit"
-    assert content.filename == "My Reddit Thread.txt"
-    text = content.data.decode("utf-8")
-    assert "My Reddit Thread" in text
-    assert "Posted by u/op_user, 42 points" in text
-    assert "The selftext body." in text
-    assert "u/alice: Top level comment." in text
-    assert "  u/bob: Nested reply." in text
-
-
-def test_reddit_json_suffix_appended_and_query_kept():
-    seen: list[str] = []
-
-    def fake_fetch(url: str, **kwargs) -> bytes:
-        seen.append(url)
-        return reddit_payload()
-
-    with patch("qualcoder_api.services.scrape_service.fetch_url", side_effect=fake_fetch):
-        scrape_service.scrape_reddit("https://www.reddit.com/r/Test/comments/abc123/title/?sort=new")
-
-    assert seen == ["https://www.reddit.com/r/Test/comments/abc123/title.json?sort=new"]
-
-
-@pytest.mark.parametrize(
-    ("url", "expected"),
-    [
-        (
-            "https://old.reddit.com/r/Test/comments/abc123/some-slug/",
-            "https://www.reddit.com/r/Test/comments/abc123/some-slug.json",
-        ),
-        (
-            "https://np.reddit.com/r/Test/comments/abc123/some-slug",
-            "https://www.reddit.com/r/Test/comments/abc123/some-slug.json",
-        ),
-        (
-            "https://m.reddit.com/r/Test/comments/abc123/",
-            "https://www.reddit.com/r/Test/comments/abc123.json",
-        ),
-        (
-            "https://new.reddit.com/r/Test/comments/abc123/",
-            "https://www.reddit.com/r/Test/comments/abc123.json",
-        ),
-        (
-            "https://reddit.com/r/Test/comments/abc123/",
-            "https://www.reddit.com/r/Test/comments/abc123.json",
-        ),
-        (
-            "https://www.reddit.com/r/Test/comments/abc123/",
-            "https://www.reddit.com/r/Test/comments/abc123.json",
-        ),
-    ],
-)
-def test_reddit_host_variants_normalize_to_www(url, expected):
-    """old/np/m/new/bare reddit hosts all fetch through www.reddit.com."""
-    seen: list[str] = []
-
-    def fake_fetch(fetched: str, **kwargs) -> bytes:
-        seen.append(fetched)
-        return reddit_payload()
-
-    with patch("qualcoder_api.services.scrape_service.fetch_url", side_effect=fake_fetch):
-        content = scrape_service.scrape_reddit(url)
-
-    assert seen == [expected]
-    assert content.mode == "reddit"
-
-
-def test_reddit_slug_form_keeps_sort_param():
-    seen: list[str] = []
-
-    def fake_fetch(fetched: str, **kwargs) -> bytes:
-        seen.append(fetched)
-        return reddit_payload()
-
-    with patch("qualcoder_api.services.scrape_service.fetch_url", side_effect=fake_fetch):
-        scrape_service.scrape_reddit(
-            "https://old.reddit.com/r/Test/comments/abc123/title_with_underscores/?sort=confidence&t=all"
-        )
-
-    assert seen == [
-        "https://www.reddit.com/r/Test/comments/abc123/title_with_underscores.json?sort=confidence&t=all"
-    ]
-
-
-def test_reddit_json_url_used_as_is():
-    assert scrape_service._reddit_json_url("https://www.reddit.com/r/x/comments/a/b.json") == (
-        "https://www.reddit.com/r/x/comments/a/b.json"
-    )
-
-
-def test_reddit_rejects_non_json_response():
-    with patch("qualcoder_api.services.scrape_service.fetch_url", return_value=b"<html>"), pytest.raises(ScrapeError, match="not JSON"):
-        scrape_service.scrape_reddit("https://www.reddit.com/r/x/comments/a/")
-
-    with patch("qualcoder_api.services.scrape_service.fetch_url", return_value=b"{}"), pytest.raises(ScrapeError, match="response shape"):
-        scrape_service.scrape_reddit("https://www.reddit.com/r/x/comments/a/")
-
-
-@pytest.mark.parametrize(
-    ("body", "message"),
-    [
-        (b'{"reason": "banned", "error": 403}', "as banned"),
-        (b'{"reason": "quarantined", "error": 403}', "as quarantined"),
-        (b'{"reason": "private", "error": 403}', "as private"),
-    ],
-)
-def test_reddit_banned_and_quarantined_bodies_raise_clear_error(body, message):
-    """Banned/quarantined subreddits answer 200 + a reason body — surface a
-    clear error instead of the generic shape failure."""
-    with (
-        patch("qualcoder_api.services.scrape_service.fetch_url", return_value=body),
-        pytest.raises(ScrapeError, match=message),
-    ):
-        scrape_service.scrape_reddit("https://www.reddit.com/r/Test/comments/abc123/")
-
-
-def test_reddit_anonymous_403_error_body_raises_clear_error():
-    with (
-        patch("qualcoder_api.services.scrape_service.fetch_url", return_value=b'{"error": 403}'),
-        pytest.raises(ScrapeError, match="private or blocked"),
-    ):
-        scrape_service.scrape_reddit("https://www.reddit.com/r/Test/comments/abc123/")
-
-
-def test_reddit_accepts_single_listing_object():
-    post_listing = {"kind": "Listing", "data": {"children": [REDDIT_POST["data"]["children"][0]]}}
-    payload = json.dumps(post_listing).encode("utf-8")
-    with patch("qualcoder_api.services.scrape_service.fetch_url", return_value=payload):
-        content = scrape_service.scrape_reddit("https://www.reddit.com/r/Test/comments/abc123/")
-
-    text = content.data.decode("utf-8")
-    assert "My Reddit Thread" in text
-    assert "The selftext body." in text
-    assert "Comments" not in text
-
-
-def test_reddit_429_retries_after_retry_after_then_succeeds():
-    """A 429 with a Retry-After header sleeps for the header's seconds and
-    retries once; the retry succeeding means the scrape succeeds."""
-    err = ScrapeError(
-        "server returned HTTP 429 for https://www.reddit.com/...",
-        code=429,
-        headers={"Retry-After": "2"},
-    )
-    seen: list[str] = []
-
-    def fake_fetch(url: str, **kwargs) -> bytes:
-        seen.append(url)
-        if len(seen) == 1:
-            raise err
-        return reddit_payload()
-
-    with (
-        patch("qualcoder_api.services.scrape_service.time.sleep") as sleep,
-        patch("qualcoder_api.services.scrape_service.fetch_url", side_effect=fake_fetch),
-    ):
-        content = scrape_service.scrape_reddit("https://www.reddit.com/r/Test/comments/abc123/")
-
-    sleep.assert_called_once_with(2)
-    assert seen == [
-        "https://www.reddit.com/r/Test/comments/abc123.json",
-        "https://www.reddit.com/r/Test/comments/abc123.json",
-    ]
-    assert content.mode == "reddit"
-    assert "u/alice: Top level comment." in content.data.decode("utf-8")
-
-
-def test_reddit_429_retries_once_then_raises_rate_limit_error():
-    """A second 429 after the Retry-After retry surfaces a clear
-    rate-limit error (no further retries, no host fallback)."""
-    err = ScrapeError(
-        "server returned HTTP 429 for https://www.reddit.com/...",
-        code=429,
-        headers={"Retry-After": "3"},
-    )
-    with (
-        patch("qualcoder_api.services.scrape_service.time.sleep") as sleep,
-        patch("qualcoder_api.services.scrape_service.fetch_url", side_effect=err),
-        pytest.raises(ScrapeError, match="rate-limited"),
-    ):
-        scrape_service.scrape_reddit("https://www.reddit.com/r/Test/comments/abc123/")
-    sleep.assert_called_once_with(3)
-
-
-def test_reddit_429_without_retry_after_uses_default_delay():
-    err = ScrapeError("server returned HTTP 429 for https://www.reddit.com/...", code=429)
-    with (
-        patch("qualcoder_api.services.scrape_service.time.sleep") as sleep,
-        patch("qualcoder_api.services.scrape_service.fetch_url", side_effect=err),
-        pytest.raises(ScrapeError, match="rate-limited"),
-    ):
-        scrape_service.scrape_reddit("https://www.reddit.com/r/Test/comments/abc123/")
-    sleep.assert_called_once_with(60)
-
-
-def test_reddit_403_tries_old_reddit_then_mentions_oauth():
-    """A 403 (Reddit's network-policy block) falls back to old.reddit.com;
-    when both hosts are blocked the error mentions the optional OAuth
-    credentials instead of the old "private or blocked" message."""
-    err = ScrapeError("server returned HTTP 403 for https://www.reddit.com/...", code=403)
-    seen: list[str] = []
-
-    def fake_fetch(url: str, **kwargs) -> bytes:
-        seen.append(url)
-        raise err
-
-    with (
-        patch("qualcoder_api.services.scrape_service.fetch_url", side_effect=fake_fetch),
-        pytest.raises(ScrapeError, match="configure Reddit API credentials in Settings"),
-    ):
-        scrape_service.scrape_reddit("https://www.reddit.com/r/Test/comments/abc123/")
-    assert seen == [
-        "https://www.reddit.com/r/Test/comments/abc123.json",
-        "https://old.reddit.com/r/Test/comments/abc123.json",
-    ]
-
-
-def test_reddit_403_on_www_recovers_on_old_reddit():
-    """When www blocks the request but old.reddit.com answers, the scrape
-    succeeds through the fallback host."""
-    seen: list[str] = []
-
-    def fake_fetch(url: str, **kwargs) -> bytes:
-        seen.append(url)
-        if "old.reddit.com" in url:
-            return reddit_payload()
-        raise ScrapeError("server returned HTTP 403 for " + url, code=403)
-
-    with patch("qualcoder_api.services.scrape_service.fetch_url", side_effect=fake_fetch):
-        content = scrape_service.scrape_reddit("https://www.reddit.com/r/Test/comments/abc123/")
-
-    assert seen == [
-        "https://www.reddit.com/r/Test/comments/abc123.json",
-        "https://old.reddit.com/r/Test/comments/abc123.json",
-    ]
-    assert content.mode == "reddit"
-
-
-def test_reddit_anonymous_fetch_uses_unique_user_agent():
-    """The anonymous path must send the descriptive Reddit User-Agent, not
-    the browser-spoofing default — Reddit blocks generic UAs."""
-    calls: list[dict] = []
-
-    def fake_fetch(url: str, **kwargs) -> bytes:
-        calls.append({"url": url, **kwargs})
-        return reddit_payload()
-
-    with patch("qualcoder_api.services.scrape_service.fetch_url", side_effect=fake_fetch):
-        scrape_service.scrape_reddit("https://www.reddit.com/r/Test/comments/abc123/")
-
-    assert calls[0]["user_agent"] == scrape_service.REDDIT_USER_AGENT
-    assert calls[0]["user_agent"] != scrape_service.USER_AGENT
-
-
-# ----------------------------------------------------------------------
-# Reddit — app-only OAuth (client_credentials)
-# ----------------------------------------------------------------------
-
-REDDIT_TOKEN_RESPONSE = {
-    "access_token": "tok-123",
-    "token_type": "bearer",
-    "expires_in": 3600,
-    "scope": "read",
-}
-
-REDDIT_CREDENTIALS = {"client_id": "qc-cid", "client_secret": "qc-secret"}
-
-
-def test_reddit_oauth_path_fetches_token_then_oauth_listing():
-    """Configured credentials: the app-only token is fetched with HTTP
-    Basic auth (client_id:secret) + the form-encoded client_credentials
-    grant, then the listing comes from oauth.reddit.com with the Bearer
-    token — the payload parsing is identical to the anonymous path."""
-    calls: list[tuple[str, dict]] = []
-
-    def fake_fetch(url: str, **kwargs) -> bytes:
-        calls.append((url, kwargs))
-        if url == scrape_service._REDDIT_TOKEN_URL:
-            return json.dumps(REDDIT_TOKEN_RESPONSE).encode("utf-8")
-        return reddit_payload()
-
-    with (
-        patch(
-            "qualcoder_api.services.user_settings.get_reddit_credentials",
-            return_value=REDDIT_CREDENTIALS,
-        ),
-        patch("qualcoder_api.services.scrape_service.fetch_url", side_effect=fake_fetch),
-    ):
-        content = scrape_service.scrape_reddit("https://www.reddit.com/r/Test/comments/abc123/")
-
-    token_url, token_kw = calls[0]
-    assert token_url == "https://www.reddit.com/api/v1/access_token"
-    assert token_kw["method"] == "POST"
-    assert token_kw["data"] == b"grant_type=client_credentials"
-    assert token_kw["user_agent"] == scrape_service.REDDIT_USER_AGENT
-    expected_basic = "Basic " + base64.b64encode(b"qc-cid:qc-secret").decode("ascii")
-    assert token_kw["extra_headers"]["Authorization"] == expected_basic
-    assert token_kw["extra_headers"]["Content-Type"] == "application/x-www-form-urlencoded"
-
-    listing_url, listing_kw = calls[1]
-    assert listing_url == "https://oauth.reddit.com/r/Test/comments/abc123"
-    assert listing_kw["extra_headers"]["Authorization"] == "Bearer tok-123"
-
-    assert content.mode == "reddit"
-    text = content.data.decode("utf-8")
-    assert "My Reddit Thread" in text
-    assert "u/alice: Top level comment." in text
-
-
-def test_reddit_oauth_token_http_error_mentions_credentials():
-    """A 401/400/403 from the token endpoint is a credential problem — the
-    error points at the Settings instead of the raw HTTP status."""
-    for code in (400, 401, 403):
-        err = ScrapeError(
-            f"server returned HTTP {code} for {scrape_service._REDDIT_TOKEN_URL}", code=code
-        )
-        with (
-            patch(
-                "qualcoder_api.services.user_settings.get_reddit_credentials",
-                return_value=REDDIT_CREDENTIALS,
-            ),
-            patch("qualcoder_api.services.scrape_service.fetch_url", side_effect=err),
-            pytest.raises(ScrapeError, match="rejected the API credentials"),
-        ):
-            scrape_service.scrape_reddit("https://www.reddit.com/r/Test/comments/abc123/")
-
-
-def test_reddit_oauth_token_without_access_token_raises_clear_error():
-    """A 200 without an access_token (invalid_grant etc.) is mapped to the
-    same clear credential error."""
-    with (
-        patch(
-            "qualcoder_api.services.user_settings.get_reddit_credentials",
-            return_value=REDDIT_CREDENTIALS,
-        ),
-        patch(
-            "qualcoder_api.services.scrape_service.fetch_url",
-            return_value=json.dumps({"error": "invalid_grant"}).encode("utf-8"),
-        ),
-        pytest.raises(ScrapeError, match="rejected the API credentials"),
-    ):
-        scrape_service.scrape_reddit("https://www.reddit.com/r/Test/comments/abc123/")
-
-
-def test_reddit_oauth_token_non_json_raises_clear_error():
-    with (
-        patch(
-            "qualcoder_api.services.user_settings.get_reddit_credentials",
-            return_value=REDDIT_CREDENTIALS,
-        ),
-        patch("qualcoder_api.services.scrape_service.fetch_url", return_value=b"<html>"),
-        pytest.raises(ScrapeError, match="token response is not JSON"),
-    ):
-        scrape_service.scrape_reddit("https://www.reddit.com/r/Test/comments/abc123/")
-
-
-def test_reddit_oauth_listing_403_mentions_scope_or_private():
-    """A 403 on the OAuth listing itself is not the anonymous block — it
-    points at the token scope or a private subreddit."""
-    err = ScrapeError("server returned HTTP 403 for https://oauth.reddit.com/...", code=403)
-    token_ok = json.dumps(REDDIT_TOKEN_RESPONSE).encode("utf-8")
-
-    def fake_fetch(url: str, **kwargs) -> bytes:
-        if url == scrape_service._REDDIT_TOKEN_URL:
-            return token_ok
-        raise err
-
-    with (
-        patch(
-            "qualcoder_api.services.user_settings.get_reddit_credentials",
-            return_value=REDDIT_CREDENTIALS,
-        ),
-        patch("qualcoder_api.services.scrape_service.fetch_url", side_effect=fake_fetch),
-        pytest.raises(ScrapeError, match="read scope"),
-    ):
-        scrape_service.scrape_reddit("https://www.reddit.com/r/Test/comments/abc123/")
-
-
-def test_reddit_without_credentials_uses_anonymous_only():
-    """Unconfigured settings: the scraper never touches the token endpoint
-    or oauth.reddit.com — it goes straight at the anonymous .json URL."""
-    seen: list[str] = []
-
-    def fake_fetch(url: str, **kwargs) -> bytes:
-        seen.append(url)
-        return reddit_payload()
-
-    with (
-        patch(
-            "qualcoder_api.services.user_settings.get_reddit_credentials",
-            return_value={"client_id": "", "client_secret": ""},
-        ),
-        patch("qualcoder_api.services.scrape_service.fetch_url", side_effect=fake_fetch),
-    ):
-        content = scrape_service.scrape_reddit("https://www.reddit.com/r/Test/comments/abc123/")
-
-    assert seen == ["https://www.reddit.com/r/Test/comments/abc123.json"]
-    assert content.mode == "reddit"
-
-
-def test_reddit_partial_credentials_still_anonymous():
-    """Only one of the two values set = not configured: anonymous path."""
-    seen: list[str] = []
-
-    def fake_fetch(url: str, **kwargs) -> bytes:
-        seen.append(url)
-        return reddit_payload()
-
-    with (
-        patch(
-            "qualcoder_api.services.user_settings.get_reddit_credentials",
-            return_value={"client_id": "only-an-id", "client_secret": ""},
-        ),
-        patch("qualcoder_api.services.scrape_service.fetch_url", side_effect=fake_fetch),
-    ):
-        scrape_service.scrape_reddit("https://www.reddit.com/r/Test/comments/abc123/")
-
-    assert seen == ["https://www.reddit.com/r/Test/comments/abc123.json"]
-
-
-def test_reddit_credentials_settings_roundtrip(tmp_path, monkeypatch):
-    """The settings JSON stores the two credential keys; blanks are stored
-    as-is (blank client ID = anonymous fallback)."""
-    from qualcoder_api.services import user_settings
-
-    monkeypatch.setattr(user_settings, "SETTINGS_FILE", tmp_path / "settings.json")
-    assert user_settings.get_reddit_credentials() == {"client_id": "", "client_secret": ""}
-
-    user_settings.save_reddit_credentials({"client_id": " a ", "client_secret": " b "})
-    assert user_settings.get_reddit_credentials() == {"client_id": "a", "client_secret": "b"}
-
-    user_settings.save_reddit_credentials({"client_id": "", "client_secret": ""})
-    assert user_settings.get_reddit_credentials() == {"client_id": "", "client_secret": ""}
-
-
-def test_save_ai_settings_bridges_reddit_credentials(tmp_path, monkeypatch):
-    """The settings pane saves the Reddit credentials through the AI
-    settings save (its only auto-save mechanism). Blank values keep the
-    stored ones — the pane never reads them back, so a bare mount (or an
-    unrelated AI edit) can never wipe saved credentials."""
-    from qualcoder_api.services import user_settings
-
-    monkeypatch.setattr(user_settings, "SETTINGS_FILE", tmp_path / "settings.json")
-    ai = dict(user_settings.AI_DEFAULTS)
-    ai["reddit_client_id"] = "cid"
-    ai["reddit_client_secret"] = "secret"
-    user_settings.save_ai_settings(ai)
-    assert user_settings.get_reddit_credentials() == {"client_id": "cid", "client_secret": "secret"}
-
-    user_settings.save_ai_settings(dict(user_settings.AI_DEFAULTS))
-    assert user_settings.get_reddit_credentials() == {"client_id": "cid", "client_secret": "secret"}
-
-    ai = dict(user_settings.AI_DEFAULTS)
-    ai["reddit_client_secret"] = "new-secret"
-    user_settings.save_ai_settings(ai)
-    assert user_settings.get_reddit_credentials() == {
-        "client_id": "cid",
-        "client_secret": "new-secret",
-    }
-
-
-def test_reddit_json_suffix_handles_trailing_slash_after_json():
-    assert scrape_service._reddit_json_url("https://www.reddit.com/r/x/comments/a/b.json/") == (
-        "https://www.reddit.com/r/x/comments/a/b.json"
-    )
-
-
-def test_reddit_skips_removed_and_deleted_comments():
-    comments_listing = {
-        "kind": "Listing",
-        "data": {
-            "children": [
-                {"kind": "t1", "data": {"author": "alice", "body": "Visible.", "replies": ""}},
-                {"kind": "t1", "data": {"author": "bob", "body": "[removed]", "replies": ""}},
-                {"kind": "t1", "data": {"author": "[deleted]", "body": "[deleted]", "replies": ""}},
-            ]
-        },
-    }
-    payload = json.dumps([REDDIT_POST, comments_listing]).encode("utf-8")
-    with patch("qualcoder_api.services.scrape_service.fetch_url", return_value=payload):
-        content = scrape_service.scrape_reddit("https://www.reddit.com/r/Test/comments/abc123/")
-
-    text = content.data.decode("utf-8")
-    assert "u/alice: Visible." in text
-    assert "[removed]" not in text
-    assert "u/[deleted]" not in text
 
 
 # ----------------------------------------------------------------------
@@ -1107,238 +558,6 @@ def test_yt_timeout_seconds_matches_frontend_dialog_wait():
     """The backend extraction timeout must match the frontend dialog's 240s
     wait so real comment extractions on large threads can complete."""
     assert scrape_service._YT_TIMEOUT_SECONDS == 240
-
-
-# ----------------------------------------------------------------------
-# YouTube — structured import (cases + attributes + coded comment sources)
-# ----------------------------------------------------------------------
-
-STRUCTURED_COMMENTS = [
-    {
-        "id": "1",
-        "author": "alice",
-        "text": "Loved it",
-        "timestamp": 1700000000,
-        "like_count": 12,
-        "replies": [
-            {
-                "id": "2",
-                "author": "bob",
-                "text": "Me too",
-                "timestamp": 1700000100,
-                "like_count": 3,
-                "replies": [],
-            }
-        ],
-    },
-    {"id": "3", "text": "No author,\nno\tmeta"},
-]
-
-
-def make_yt_comment(index: int) -> dict:
-    """One flat-layout comment with deterministic author/text/likes/date."""
-    return {
-        "id": str(index),
-        "author": f"user{index}",
-        "text": f"Comment {index} text",
-        "timestamp": 1700000000 + index,
-        "like_count": index * 10,
-    }
-
-
-def open_project_factory(target) -> tuple:
-    """(session_factory, project_path) of the project the client opened."""
-    from qualcoder_api.main import service
-
-    assert service.session_factory is not None
-    return service.session_factory, str(target)
-
-
-async def test_youtube_structured_import_creates_cases_attributes_and_codings(scrape_client):
-    """POST /scrape/import with a YouTube URL imports every comment as a
-    CASE with author/likes/date attributes and a CODED comment source —
-    the CSV contract columns become real fields, not a text file."""
-    client, target = scrape_client
-    info = make_youtube_info(comments=STRUCTURED_COMMENTS)
-    with (
-        patch("qualcoder_api.services.scrape_service.subprocess.run", return_value=yt_completed(info)) as run,
-        patch("qualcoder_api.services.scrape_service.fetch_url") as fetch,
-    ):
-        res = await client.post(
-            "/api/v1/scrape/import", json={"url": "https://www.youtube.com/watch?v=abc"}
-        )
-    assert res.status_code == 200, res.text
-    body = res.json()
-    assert "--write-comments" in record_yt_calls(run)[0]
-    fetch.assert_not_called()  # captions are never fetched while comments exist
-    assert body["mode"] == "youtube-structured"
-    assert body["name"] == "Demo Video.csv"
-    assert body["text_length"] == 0  # the comments live as data, not file text
-
-    with sqlite3.connect(str(target / "data.qda")) as conn:
-        # One case per comment (replies included), named after the video.
-        names = sorted(r[0] for r in conn.execute("SELECT name FROM cases"))
-        assert names == [
-            "Demo Video — Comment 1",
-            "Demo Video — Comment 2",
-            "Demo Video — Comment 3",
-        ]
-        # Attribute types: author/likes/date (case scope, text).
-        assert {
-            r[0]: (r[1], r[2])
-            for r in conn.execute("SELECT name, caseOrFile, valuetype FROM attribute_type")
-        } == {
-            "author": ("case", "text"),
-            "likes": ("case", "text"),
-            "date": ("case", "text"),
-        }
-        # Attribute values per case (replies keep the ``→ `` prefix).
-        attrs = {
-            (r[0], r[1]): r[2]
-            for r in conn.execute(
-                "SELECT a.name, c.name, a.value FROM attribute a "
-                "JOIN cases c ON c.caseid = a.id WHERE a.attr_type = 'case'"
-            )
-        }
-        assert attrs == {
-            ("author", "Demo Video — Comment 1"): "alice",
-            ("likes", "Demo Video — Comment 1"): "12 likes",
-            ("date", "Demo Video — Comment 1"): "2023-11-14 22:13",
-            ("author", "Demo Video — Comment 2"): "→ bob",
-            ("likes", "Demo Video — Comment 2"): "3 likes",
-            ("date", "Demo Video — Comment 2"): "2023-11-14 22:15",
-            ("author", "Demo Video — Comment 3"): "unknown",
-            ("likes", "Demo Video — Comment 3"): "-",
-            ("date", "Demo Video — Comment 3"): "-",
-        }
-        # One analyzable text source per comment, coded with the column
-        # name as the code (the survey core names codes after columns).
-        # The API's file-import pipeline also registers the empty
-        # ``Demo Video.csv`` row — the comments themselves never travel
-        # as file text.
-        assert sorted(r[0] for r in conn.execute("SELECT name FROM source")) == [
-            "Demo Video — Comment 1_comment",
-            "Demo Video — Comment 2_comment",
-            "Demo Video — Comment 3_comment",
-            "Demo Video.csv",
-        ]
-        fulltext = dict(conn.execute("SELECT name, fulltext FROM source"))
-        assert fulltext["Demo Video — Comment 1_comment"] == "Loved it"
-        assert fulltext["Demo Video — Comment 2_comment"] == "Me too"
-        assert fulltext["Demo Video — Comment 3_comment"] == "No author, no meta"
-        assert fulltext["Demo Video.csv"] == ""
-        assert [(r[0], r[1]) for r in conn.execute("SELECT name, color FROM code_name")] == [
-            ("comment", "#B8B8B8")
-        ]
-        assert conn.execute("SELECT COUNT(*) FROM code_text").fetchone()[0] == 3
-        codings = {
-            seltext: (fid, cid)
-            for fid, cid, seltext in conn.execute("SELECT fid, cid, seltext FROM code_text")
-        }
-        assert set(codings) == {"Loved it", "Me too", "No author, no meta"}
-        assert conn.execute("SELECT COUNT(*) FROM case_text").fetchone()[0] == 3
-        # The audit records the structured outcome with the counts.
-        rows = conn.execute(
-            "SELECT detail FROM audit_log WHERE action = 'scrape.import'"
-        ).fetchall()
-        details = [json.loads(r[0]) for r in rows]
-        assert any(
-            d.get("mode") == "youtube-structured" and d.get("cases") == 3
-            and d.get("qualitative_files") == 3 and d.get("qualitative_codings") == 3
-            for d in details
-        )
-        assert any(d.get("mode") == "youtube-structured" for d in details)
-
-
-def test_youtube_structured_cap_notes_first_n_of_total(scrape_client):
-    """Only the first _YT_COMMENT_CAP comments are imported; the result
-    dict and the audit note say ``first n of N comments imported``."""
-    _, target = scrape_client
-    info = make_youtube_info(comments=[make_yt_comment(i) for i in range(5)])
-    with (
-        patch.object(scrape_service, "_YT_COMMENT_CAP", 2),
-        patch("qualcoder_api.services.scrape_service.subprocess.run", return_value=yt_completed(info)),
-    ):
-        content = scrape_service.scrape_youtube(
-            "https://www.youtube.com/watch?v=abc",
-            session_factory=open_project_factory(target)[0],
-            project_path=open_project_factory(target)[1],
-        )
-
-    assert content.mode == "youtube-structured"
-    assert content.data == b""  # no comment text travels as a file
-    result = content.structured
-    assert result["mode"] == "youtube-structured"
-    assert result["cases"] == 2
-    assert result["comments_total"] == 5
-    assert result["comments_imported"] == 2
-    assert result["note"] == "first 2 of 5 comments imported"
-    assert result["attribute_types"] == 3
-    with sqlite3.connect(str(target / "data.qda")) as conn:
-        assert conn.execute("SELECT COUNT(*) FROM cases").fetchone()[0] == 2
-        assert conn.execute("SELECT COUNT(*) FROM source").fetchone()[0] == 2
-        assert conn.execute("SELECT COUNT(*) FROM code_text").fetchone()[0] == 2
-        # The audit carries the result dict including the cap note.
-        rows = conn.execute(
-            "SELECT detail FROM audit_log WHERE action = 'scrape.import'"
-        ).fetchall()
-    details = [json.loads(r[0]) for r in rows]
-    assert any(d.get("note") == "first 2 of 5 comments imported" for d in details)
-
-
-def test_youtube_structured_falls_back_to_csv_when_no_comments(scrape_client):
-    """A video with no comments keeps the captions-with-note CSV and the
-    result dict marks the fallback — no cases are created."""
-    _, target = scrape_client
-    info = make_youtube_info(comments=[])
-    with (
-        patch("qualcoder_api.services.scrape_service.subprocess.run", return_value=yt_completed(info)),
-        patch("qualcoder_api.services.scrape_service.fetch_url", return_value=VTT_CAPTIONS),
-    ):
-        content = scrape_service.scrape_youtube(
-            "https://www.youtube.com/watch?v=abc",
-            session_factory=open_project_factory(target)[0],
-            project_path=open_project_factory(target)[1],
-        )
-
-    assert content.mode == "youtube"
-    assert content.structured == {"mode": "youtube", "fallback": "the video has no comments"}
-    text = content.data.decode("utf-8")
-    assert text.startswith("# Comments unavailable (the video has no comments) — captions shown below,,,")
-    assert "[00:01] Hello caption text" in text
-    with sqlite3.connect(str(target / "data.qda")) as conn:
-        assert conn.execute("SELECT COUNT(*) FROM cases").fetchone()[0] == 0
-        assert conn.execute("SELECT COUNT(*) FROM source").fetchone()[0] == 0
-
-
-def test_youtube_structured_failure_falls_back_to_csv(scrape_client):
-    """A failing row import must not lose the comments: the comment table
-    stays the CSV text source and the result marks the fallback."""
-    _, target = scrape_client
-    info = make_youtube_info(comments=STRUCTURED_COMMENTS)
-    with (
-        patch("qualcoder_api.services.scrape_service.subprocess.run", return_value=yt_completed(info)),
-        patch(
-            "qualcoder_api.interchange.importers._import_survey_rows",
-            side_effect=ValueError("boom"),
-        ),
-    ):
-        content = scrape_service.scrape_youtube(
-            "https://www.youtube.com/watch?v=abc",
-            session_factory=open_project_factory(target)[0],
-            project_path=open_project_factory(target)[1],
-        )
-
-    assert content.mode == "youtube"
-    assert content.structured["mode"] == "youtube"
-    assert content.structured["fallback"].startswith("structured import failed")
-    text = content.data.decode("utf-8")
-    assert text.startswith("author,likes,date,comment")
-    assert "alice,12 likes,2023-11-14 22:13,Loved it" in text
-    assert "→ bob,3 likes,2023-11-14 22:15,Me too" in text
-    assert 'unknown,-,-,"No author, no meta"' in text
-    with sqlite3.connect(str(target / "data.qda")) as conn:
-        assert conn.execute("SELECT COUNT(*) FROM cases").fetchone()[0] == 0
 
 
 # ----------------------------------------------------------------------
@@ -1861,20 +1080,20 @@ def test_pdf_mode_raises_when_render_fails_and_page_has_no_text(monkeypatch):
 
 async def test_scrape_import_creates_source_and_audits(scrape_client):
     client, target = scrape_client
-    with patch("qualcoder_api.services.scrape_service.fetch_url", return_value=reddit_payload()):
+    with patch("qualcoder_api.services.scrape_service.fetch_url", return_value=ARTICLE_HTML):
         res = await client.post(
-            "/api/v1/scrape/import", json={"url": "https://www.reddit.com/r/Test/comments/abc/"}
+            "/api/v1/scrape/import", json={"url": "https://example.org/testing"}
         )
     assert res.status_code == 200, res.text
     body = res.json()
-    assert body["mode"] == "reddit"
-    assert body["name"] == "My Reddit Thread.txt"
+    assert body["mode"] == "article"
+    assert body["name"] == "Testing Article.txt"
     assert body["text_length"] > 0
 
     got = await client.get(f"/api/v1/sources/{body['source_id']}")
     assert got.status_code == 200
-    assert got.json()["name"] == "My Reddit Thread.txt"
-    assert (target / "documents" / "My Reddit Thread.txt").exists()
+    assert got.json()["name"] == "Testing Article.txt"
+    assert (target / "documents" / "Testing Article.txt").exists()
 
     with sqlite3.connect(str(target / "data.qda")) as conn:
         row = conn.execute(
@@ -1883,7 +1102,7 @@ async def test_scrape_import_creates_source_and_audits(scrape_client):
     assert row[0] == "scrape.import"
     assert row[1] == "source"
     assert row[2] == body["source_id"]
-    assert "reddit" in json.loads(row[3])["mode"]
+    assert json.loads(row[3])["mode"] == "article"
 
 
 async def test_scrape_import_article_default_mode(scrape_client):
@@ -1896,15 +1115,36 @@ async def test_scrape_import_article_default_mode(scrape_client):
     assert res.json()["mode"] == "article"
 
 
+async def test_scrape_import_reddit_url_falls_through_to_article(scrape_client):
+    """Reddit URLs have no dedicated scraper anymore — an auto-mode import
+    routes them to the generic article extraction and still produces a
+    source."""
+    client, _ = scrape_client
+    with patch("qualcoder_api.services.scrape_service.fetch_url", return_value=ARTICLE_HTML):
+        res = await client.post(
+            "/api/v1/scrape/import",
+            json={"url": "https://www.reddit.com/r/Test/comments/abc/"},
+        )
+    assert res.status_code == 200, res.text
+    assert res.json()["mode"] == "article"
+
+
+def test_scrape_mode_whitelist_no_longer_includes_reddit():
+    from qualcoder_api.api.v1.scrape import VALID_MODES
+
+    assert "reddit" not in VALID_MODES
+    assert VALID_MODES == ("auto", "youtube", "article", "html", "pdf")
+
+
 async def test_scrape_import_duplicate_returns_409(scrape_client):
     client, _ = scrape_client
-    with patch("qualcoder_api.services.scrape_service.fetch_url", return_value=reddit_payload()):
+    with patch("qualcoder_api.services.scrape_service.fetch_url", return_value=ARTICLE_HTML):
         first = await client.post(
-            "/api/v1/scrape/import", json={"url": "https://www.reddit.com/r/Test/comments/abc/"}
+            "/api/v1/scrape/import", json={"url": "https://example.org/testing"}
         )
         assert first.status_code == 200, first.text
         second = await client.post(
-            "/api/v1/scrape/import", json={"url": "https://www.reddit.com/r/Test/comments/abc/"}
+            "/api/v1/scrape/import", json={"url": "https://example.org/testing"}
         )
     assert second.status_code == 409
     assert "duplicate" in second.json()["detail"]
@@ -1925,11 +1165,23 @@ async def test_scrape_import_unknown_mode_returns_422(scrape_client):
     assert res.status_code == 422
 
 
+async def test_scrape_import_reddit_mode_rejected_returns_422(scrape_client):
+    """The ``reddit`` mode was purged — the API rejects it instead of
+    dispatching a Reddit scrape."""
+    client, _ = scrape_client
+    res = await client.post(
+        "/api/v1/scrape/import",
+        json={"url": "https://www.reddit.com/r/Test/comments/abc/", "mode": "reddit"},
+    )
+    assert res.status_code == 422
+    assert "mode must be one of" in res.json()["detail"]
+
+
 async def test_scrape_import_without_project_returns_409(scrape_client):
     client, _ = scrape_client
     await client.post("/api/v1/projects/close")
     res = await client.post(
-        "/api/v1/scrape/import", json={"url": "https://www.reddit.com/r/Test/comments/abc/"}
+        "/api/v1/scrape/import", json={"url": "https://example.org/testing"}
     )
     assert res.status_code == 409
 
@@ -1939,6 +1191,53 @@ def test_scrape_url_auto_dispatch_returns_content():
         content = scrape_service.scrape_url("https://example.org/testing", mode="auto")
     assert isinstance(content, ScrapedContent)
     assert content.filename.endswith(".txt")
+
+
+def test_scrape_url_reddit_url_dispatches_to_article():
+    """``scrape_url`` auto-detection no longer special-cases reddit hosts —
+    the link goes through the generic article extraction."""
+    with patch("qualcoder_api.services.scrape_service.fetch_url", return_value=ARTICLE_HTML):
+        content = scrape_service.scrape_url(
+            "https://www.reddit.com/r/Test/comments/abc/", mode="auto"
+        )
+    assert content.mode == "article"
+    assert content.filename == "Testing Article.txt"
+    assert "first paragraph" in content.data.decode("utf-8")
+
+
+def test_settings_roundtrip_without_reddit_keys(tmp_path, monkeypatch):
+    """The settings storage no longer carries the Reddit API credentials —
+    the AI settings round-trip cleanly and legacy stored keys are dropped
+    on load."""
+    from qualcoder_api.services import user_settings
+
+    monkeypatch.setattr(user_settings, "SETTINGS_FILE", tmp_path / "settings.json")
+    assert "reddit_client_id" not in user_settings.DEFAULT_SETTINGS
+    assert "reddit_client_secret" not in user_settings.DEFAULT_SETTINGS
+
+    ai = dict(user_settings.AI_DEFAULTS)
+    ai["api_key"] = "stored-key"
+    user_settings.save_ai_settings(ai)
+    saved = json.loads((tmp_path / "settings.json").read_text(encoding="utf-8"))
+    assert "reddit_client_id" not in saved
+    assert "reddit_client_secret" not in saved
+    assert user_settings.get_ai_settings()["api_key"] == "stored-key"
+
+    # A legacy settings file with the old keys: loading drops them.
+    legacy = {
+        "codername": "default",
+        "reddit_client_id": "cid",
+        "reddit_client_secret": "secret",
+        "ai": dict(user_settings.AI_DEFAULTS),
+    }
+    (tmp_path / "settings.json").write_text(
+        json.dumps(legacy), encoding="utf-8"
+    )
+    loaded = user_settings.load_settings()
+    assert "reddit_client_id" not in loaded
+    assert "reddit_client_secret" not in loaded
+    assert not hasattr(user_settings, "get_reddit_credentials")
+    assert not hasattr(user_settings, "save_reddit_credentials")
 
 
 def test_scrape_url_pdf_dispatch_returns_pdf_content():

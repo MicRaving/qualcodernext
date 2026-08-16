@@ -1,4 +1,4 @@
-"""URL scraping service — Reddit threads, YouTube videos, web articles.
+"""URL scraping service — YouTube videos, web articles, raw HTML, PDF.
 
 Each scraper returns a ``ScrapedContent`` (filename + file bytes); the
 caller persists it through the regular file-import pipeline
@@ -6,69 +6,35 @@ caller persists it through the regular file-import pipeline
 placeholders and the source row behave exactly like any other file import.
 
 Modes:
-- ``reddit``  — submission selftext + flattened comment tree (indented by
-  depth, authors prefixed ``u/<author>:``).
+- ``youtube`` — the video's comment thread as ONE four-column CSV file
+  (``<video title>.csv``): the ``author,likes,date,comment`` header row
+  plus one row per comment. Replies are their own rows with a ``→ `` (one
+  per depth level) nesting prefix in the author column only; missing
+  likes/dates render as ``-``. The file is written through the stdlib
+  ``csv`` module (RFC-4180 quoting, embedded quotes doubled), so it opens
+  directly in any spreadsheet, and the source contains ONLY the comments
+  table — no title/uploader/duration/description header block. Comment
+  extraction runs in a SEPARATE yt-dlp subprocess (an in-process path is
+  the PyInstaller-frozen fallback only); the first abort is retried once
+  without comment extraction and a second abort — or a timeout when
+  comments were not requested — surfaces a friendly error.
 
-  ACCESS STRATEGY (facts researched August 2026):
-  * Anonymous path: the ``.json`` endpoint is fetched from
-    ``www.reddit.com`` first, then ``old.reddit.com``, with a unique
-    descriptive User-Agent. Reddit blocks script access to the anonymous
-    ``.json`` endpoints with HTTP 403 (live verification: both hosts
-    answer ``403 "whoa there, pardner! ... please register or sign in
-    with your developer credentials ... make sure your User-Agent is not
-    empty and is something unique and descriptive"``; plain browser UAs
-    are blocked too). Rate limiting surfaces as HTTP 429 with a
-    ``Retry-After`` header (seconds) — the anonymous path sleeps and
-    retries ONCE, then reports a clear rate-limit error.
-  * OAuth path (when ``reddit_client_id`` + ``reddit_client_secret`` are
-    configured in the user settings — app created at
-    ``reddit.com/prefs/apps``, "script" type): app-only
-    ``client_credentials`` flow per Reddit's OAuth2 wiki — ``POST
-    https://www.reddit.com/api/v1/access_token`` with HTTP Basic auth
-    (``client_id:client_secret``) and a form-encoded
-    ``grant_type=client_credentials`` body, then the thread URL on
-    ``https://oauth.reddit.com`` with ``Authorization: Bearer <token>``.
-    Per the wiki, NO ``scope`` parameter is sent for app-only tokens —
-    the app's configured scopes apply (script apps get ``read``). Tokens
-    live 1 hour and app-only tokens have no refresh token, so one token
-    is fetched per scrape (cheap). The payload parsing (post + comments
-    array) is identical for both paths.
-- ``youtube`` — when a project is open the comment thread is imported as
-  STRUCTURED data through the survey row-import core: every comment
-  becomes a case (``<video title> — Comment <n>``) with the ``author``,
-  ``likes`` and ``date`` case attributes and the comment text as an
-  analyzable text source (``<case name>_comment``) linked to the case and
-  coded with a code named after the column (``comment``; the survey core
-  has no code-name option — the column name is kept and the code renders
-  gray). Replies are their own rows with a ``→ `` nesting prefix in the
-  author column; only the first 300 comments are imported (the result
-  note names the total). The result dict carries ``mode:
-  "youtube-structured"`` + the counts and is recorded in the audit log.
-  Fallbacks (legacy behavior, with a clear fallback marker): the comment
-  list is empty (captions-only / no comments), the structured import
-  fails (the comment table itself becomes the CSV so nothing is lost),
-  extraction aborts/times out, or the installed yt-dlp predates comment
-  extraction (2021.12.17) — the comment thread is then rendered as a
-  proper RFC-4180 CSV file (``author,likes,date,comment`` header row,
-  one row per comment). The CSV layout is the machine-readable contract:
-  every row has exactly four fields written through the stdlib ``csv``
-  module — cells containing commas or quotes are quoted (embedded quotes
-  doubled), tabs/newlines inside a cell collapse to spaces, and missing
-  likes/dates render as ``-``. The source contains ONLY the comments
-  table — no title/uploader/duration/description header block. Comments
-  are the primary content; caption tracks are NEVER substituted
-  silently. When a video provably has no comments the table keeps the
-  header row and a ``-,-,-,No comments`` row. When comments were
-  REQUESTED but could not be retrieved (extraction timed out or aborted,
-  or an empty comment list) and no captions exist, the same header row
-  is kept with a ``-,-,-,<note>`` row explaining the missing columns;
-  when caption text exists it is shown instead of the table as a
-  ``# Comments unavailable (<reason>) — captions shown below`` note row
-  followed by one row per transcript line (no header). If the installed
-  yt-dlp predates comment extraction (2021.12.17) the header +
-  ``-,-,-,<note>`` row is printed and captions are not fetched either.
+  Fallbacks (legacy behavior, never a silent substitution): when the
+  comment list is empty and caption tracks exist, the table is replaced
+  by a ``# Comments unavailable (<reason>) — captions shown below`` note
+  row followed by one row per transcript line (no header). When comments
+  were REQUESTED but could not be retrieved (extraction timed out or
+  aborted) and no captions exist, the table keeps its header row plus a
+  ``-,-,-,<note>`` row explaining the missing columns. When the video
+  provably has no comments the header row is kept with a ``-,-,-,No
+  comments`` row. If the installed yt-dlp predates comment extraction
+  (2021.12.17) the header + ``-,-,-,<note>`` row is printed and captions
+  are not fetched either.
 - ``article`` — page fetched with urllib, cleaned with trafilatura
-  (falling back to the project's own ``html_to_text``).
+  (falling back to the project's own ``html_to_text``). This is also the
+  destination for ``reddit.com`` links: the dedicated Reddit scraper was
+  removed, so they flow through the generic article extraction and still
+  produce a source (plain page text).
 - ``html``    — offline snapshot: the page HTML with same-origin
   stylesheets inlined into ``<style>`` blocks and same-origin images
   and fonts inlined as ``data:`` URIs — one self-contained ``.html``
@@ -96,24 +62,18 @@ import re
 import subprocess
 import sys
 import threading
-import time
 import urllib.error
-import urllib.parse
 import urllib.request
 import weakref
-from collections.abc import Callable, Coroutine, Mapping
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Any, TypeVar
 from urllib.parse import urljoin, urlparse
 
 import trafilatura
 import yt_dlp
-from sqlalchemy.ext.asyncio import async_sessionmaker
 
 logger = logging.getLogger(__name__)
-
-_T = TypeVar("_T")
 
 USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -121,21 +81,6 @@ USER_AGENT = (
 )
 FETCH_TIMEOUT = 45
 
-#: Reddit's anonymous ``.json`` endpoint requires a UNIQUE, descriptive
-#: User-Agent ("please use a unique User-Agent" / "whoa there, pardner").
-#: Browser-spoofing UAs and empty/generic UAs are blocked (403) and
-#: rate-limited (429) much faster. Used for BOTH the anonymous path and
-#: the OAuth token/list requests (Reddit inspects it on every call).
-REDDIT_USER_AGENT = "QCnext/0.2.0 (+contact@example.org)"
-
-REDDIT_HOSTS = (
-    "reddit.com",
-    "www.reddit.com",
-    "old.reddit.com",
-    "m.reddit.com",
-    "np.reddit.com",
-    "new.reddit.com",
-)
 YOUTUBE_HOSTS = ("youtube.com", "m.youtube.com", "youtu.be")
 
 _PREFERRED_CAPTION_LANGS = ("en", "en-US", "en-GB", "en-orig")
@@ -162,17 +107,11 @@ class ScrapeError(ValueError):
 
 @dataclass(frozen=True)
 class ScrapedContent:
-    """A page/thread/video reduced to a file ready for the import pipeline.
-
-    ``structured`` carries the result dict of a structured import (YouTube
-    comments as cases/attributes/coded sources) or the fallback marker:
-    ``None`` when the scrape ran in plain file mode.
-    """
+    """A page/thread/video reduced to a file ready for the import pipeline."""
 
     filename: str
     data: bytes
     mode: str
-    structured: dict | None = None
 
 
 def validate_url(url: str) -> None:
@@ -188,12 +127,14 @@ def validate_url(url: str) -> None:
 
 
 def detect_mode(url: str, mode: str = "auto") -> str:
-    """Resolve the ``auto`` mode from the hostname."""
+    """Resolve the ``auto`` mode from the hostname.
+
+    Reddit links have no dedicated scraper anymore — they fall through to
+    the generic ``article`` path (see the module docstring).
+    """
     if mode and mode != "auto":
         return mode
     host = urlparse(url).netloc.lower()
-    if host == "reddit.com" or host.endswith(".reddit.com"):
-        return "reddit"
     if host == "youtu.be" or host.endswith("youtube.com"):
         return "youtube"
     return "article"
@@ -211,10 +152,9 @@ def fetch_url(
     """Fetch a URL (redirects followed), mapping HTTP/network failures to
     ``ScrapeError`` (with the status ``code`` and response ``headers``).
 
-    ``user_agent`` overrides the default browser-like UA (Reddit's
-    ``.json`` endpoint requires a unique descriptive app UA);
+    ``user_agent`` overrides the default browser-like UA;
     ``extra_headers`` are merged over the defaults; ``method``/``data``
-    build custom requests (the OAuth token POST).
+    build custom requests.
     """
     headers = {
         "User-Agent": user_agent,
@@ -291,355 +231,6 @@ def _format_duration(seconds: object) -> str:
 
 
 # ----------------------------------------------------------------------
-# Reddit
-# ----------------------------------------------------------------------
-
-#: Every subdomain variant serves the same anonymous ``.json`` API —
-#: normalize to the canonical host so old/np/m links behave identically.
-_REDDIT_CANONICAL_HOST = "www.reddit.com"
-
-#: Host order for the anonymous path: ``www`` first, ``old`` as the
-#: fallback — the two surfaces Reddit's network-policy block hits least.
-_REDDIT_ANON_HOSTS = ("www.reddit.com", "old.reddit.com")
-
-#: App-only OAuth endpoints (Reddit OAuth2 wiki, August 2026).
-_REDDIT_TOKEN_URL = "https://www.reddit.com/api/v1/access_token"
-_REDDIT_OAUTH_HOST = "oauth.reddit.com"
-
-#: 429 default/cap: Reddit usually sends a numeric ``Retry-After``; a
-#: missing/unparseable value falls back to the default, and a hostile
-#: value cannot stall the scrape beyond the cap.
-_REDDIT_RETRY_DEFAULT_SECONDS = 60
-_REDDIT_RETRY_MAX_SECONDS = 60
-
-_REDDIT_403_MESSAGE = (
-    "Reddit blocked anonymous access (403) — configure Reddit API "
-    "credentials in Settings for reliable access, or retry later."
-)
-_REDDIT_429_MESSAGE = (
-    "Reddit rate-limited (429) — wait a moment and try again, or "
-    "configure Reddit API credentials in Settings"
-)
-_REDDIT_CREDENTIALS_MESSAGE = (
-    "Reddit rejected the API credentials (HTTP {code}) — check the "
-    "client ID and secret in Settings"
-)
-
-
-def _reddit_normalize_host(url: str) -> str:
-    """Map old/m/np/new/wwww reddit hosts onto www.reddit.com."""
-    parsed = urlparse(url)
-    host = (parsed.netloc or "").lower()
-    if host in REDDIT_HOSTS:
-        return parsed._replace(netloc=_REDDIT_CANONICAL_HOST).geturl()
-    return url
-
-
-def _reddit_json_url(url: str) -> str:
-    """Append ``.json`` to the path, keeping the query string and fragment."""
-    parsed = urlparse(url)
-    path = parsed.path.rstrip("/") or "/"
-    if not path.endswith(".json"):
-        path += ".json"
-    return parsed._replace(path=path).geturl()
-
-
-def _reddit_anon_candidates(url: str) -> list[str]:
-    """The thread URL on each anonymous host as a ``.json`` URL.
-
-    Host order is ``www`` first, ``old`` second — the fallback surface
-    for the network-policy 403 block.
-    """
-    parsed = urlparse(url)
-    return [
-        _reddit_json_url(parsed._replace(netloc=host).geturl())
-        for host in _REDDIT_ANON_HOSTS
-    ]
-
-
-def _reddit_retry_after_seconds(headers: Mapping[str, str] | None) -> int:
-    """Seconds to wait before a 429 retry, from the ``Retry-After`` header.
-
-    Reddit sends a numeric number of seconds; an unparseable value (e.g.
-    the rare HTTP-date form) falls back to the default, and the value is
-    capped so a hostile/erroneous header cannot stall the scrape.
-    """
-    if headers:
-        value = headers.get("retry-after") or headers.get("Retry-After") or ""
-        try:
-            return min(max(1, int(value)), _REDDIT_RETRY_MAX_SECONDS)
-        except (TypeError, ValueError):
-            pass
-    return _REDDIT_RETRY_DEFAULT_SECONDS
-
-
-def _reddit_fetch_with_429_retry(url: str) -> bytes:
-    """Fetch an anonymous Reddit URL with one Retry-After-aware 429 retry.
-
-    The first 429 sleeps for the ``Retry-After`` duration and retries
-    once; a second 429 surfaces the clear rate-limit error (other errors
-    propagate untouched).
-    """
-    try:
-        return fetch_url(url, user_agent=REDDIT_USER_AGENT)
-    except ScrapeError as first:
-        if first.code != 429:
-            raise
-        delay = _reddit_retry_after_seconds(first.headers)
-        logger.warning("Reddit rate-limited (429) %s — retrying in %ss", url, delay)
-        time.sleep(delay)
-        try:
-            return fetch_url(url, user_agent=REDDIT_USER_AGENT)
-        except ScrapeError as second:
-            if second.code == 429:
-                raise ScrapeError(_REDDIT_429_MESSAGE) from second
-            raise
-
-
-def _reddit_fetch_anonymous(url: str) -> bytes:
-    """Fetch an anonymous ``.json`` thread: ``www`` then ``old`` host.
-
-    A 403 (Reddit's network-policy block) moves on to the next host; any
-    other error propagates. When every host is blocked the final error
-    mentions the optional OAuth configuration.
-    """
-    blocked: list[ScrapeError] = []
-    for candidate in _reddit_anon_candidates(url):
-        try:
-            return _reddit_fetch_with_429_retry(candidate)
-        except ScrapeError as err:
-            if err.code != 403:
-                raise
-            blocked.append(err)
-    raise ScrapeError(_REDDIT_403_MESSAGE) from (blocked[-1] if blocked else None)
-
-
-def _reddit_oauth_token(client_id: str, client_secret: str) -> str:
-    """App-only access token via the ``client_credentials`` grant.
-
-    ``POST https://www.reddit.com/api/v1/access_token`` with HTTP Basic
-    auth (``client_id:client_secret``) and a form-encoded
-    ``grant_type=client_credentials`` body. Per Reddit's OAuth2 wiki no
-    ``scope`` parameter is sent for app-only tokens — the app's
-    configured scopes apply (script apps get ``read``). Tokens live one
-    hour and app-only tokens never receive a refresh token, so one is
-    fetched per scrape (cheap).
-    """
-    auth = base64.b64encode(f"{client_id}:{client_secret}".encode()).decode("ascii")
-    body = urllib.parse.urlencode({"grant_type": "client_credentials"}).encode("ascii")
-    try:
-        raw = fetch_url(
-            _REDDIT_TOKEN_URL,
-            user_agent=REDDIT_USER_AGENT,
-            method="POST",
-            data=body,
-            extra_headers={
-                "Authorization": f"Basic {auth}",
-                "Content-Type": "application/x-www-form-urlencoded",
-            },
-        )
-    except ScrapeError as err:
-        if err.code in (400, 401, 403):
-            raise ScrapeError(
-                _REDDIT_CREDENTIALS_MESSAGE.format(code=err.code)
-            ) from err
-        if err.code == 429:
-            raise ScrapeError(_REDDIT_429_MESSAGE) from err
-        raise
-    try:
-        payload = json.loads(raw.decode("utf-8", errors="replace"))
-    except ValueError as err:
-        raise ScrapeError("Reddit token response is not JSON") from err
-    token = payload.get("access_token") if isinstance(payload, dict) else None
-    if not isinstance(token, str) or not token:
-        detail = payload.get("error") if isinstance(payload, dict) else None
-        raise ScrapeError(
-            "Reddit rejected the API credentials "
-            f"({detail or 'no access_token in response'}) — check the "
-            "client ID and secret in Settings"
-        )
-    return token
-
-
-def _reddit_oauth_url(url: str) -> str:
-    """The thread URL on ``oauth.reddit.com`` (no ``.json`` suffix needed)."""
-    parsed = urlparse(_reddit_normalize_host(url))
-    path = parsed.path.rstrip("/") or "/"
-    if path.endswith(".json"):
-        path = path[: -len(".json")] or "/"
-    return parsed._replace(netloc=_REDDIT_OAUTH_HOST, path=path).geturl()
-
-
-def _reddit_fetch_oauth(url: str, token: str) -> bytes:
-    """Fetch an authenticated thread listing with ``Authorization: Bearer``."""
-    try:
-        return fetch_url(
-            url,
-            user_agent=REDDIT_USER_AGENT,
-            extra_headers={"Authorization": f"Bearer {token}"},
-        )
-    except ScrapeError as err:
-        if err.code == 403:
-            raise ScrapeError(
-                "Reddit rejected the OAuth request (403) — the API token "
-                "may lack the read scope, or the subreddit is private"
-            ) from err
-        if err.code == 429:
-            raise ScrapeError(_REDDIT_429_MESSAGE) from err
-        raise
-
-
-def _reddit_listing_payload(payload: object) -> tuple[dict, dict]:
-    """Split a Reddit JSON payload into (post listing, comments listing).
-
-    Reddit serves the comments endpoint either as a two-element array
-    ``[post_listing, comments_listing]`` (www/old/m.reddit, including the
-    new reddit API) or as a single listing object
-    ``{"data": {"children": [...]}}`` on some API paths.
-    """
-    if isinstance(payload, list):
-        post = payload[0] if payload and isinstance(payload[0], dict) else {}
-        comments = payload[1] if len(payload) > 1 and isinstance(payload[1], dict) else {}
-        return post, comments
-    if isinstance(payload, dict) and "data" in payload:
-        return payload, {}
-    raise ScrapeError("unexpected Reddit response shape")
-
-
-def _first_child(listing: object) -> dict:
-    children = (
-        listing.get("data", {}).get("children", [])
-        if isinstance(listing, dict)
-        else []
-    )
-    for child in children:
-        data = child.get("data") if isinstance(child, dict) else None
-        if isinstance(data, dict):
-            return data
-    return {}
-
-
-def _reddit_comments(comments_listing: object) -> list[str]:
-    """Flatten the comment tree, indenting by depth (``u/<author>: body``)."""
-    lines: list[str] = []
-
-    def walk(children: object, depth: int) -> None:
-        for child in children if isinstance(children, list) else []:
-            data = child.get("data") if isinstance(child, dict) else None
-            if not isinstance(data, dict):
-                continue
-            body = (data.get("body") or "").strip()
-            if body and not body.startswith("[deleted]") and not body.startswith("[removed]"):
-                author = data.get("author") or "unknown"
-                prefix = f"u/{author}: " if author != "[deleted]" else ""
-                lines.append("  " * depth + prefix + body)
-            replies = data.get("replies")
-            if isinstance(replies, dict):
-                kids = replies.get("data", {}).get("children", [])
-                if kids:
-                    walk(kids, depth + 1)
-
-    root = (
-        comments_listing.get("data", {}).get("children", [])
-        if isinstance(comments_listing, dict)
-        else []
-    )
-    walk(root, 0)
-    return lines
-
-
-def _reddit_block_reason(payload: object) -> str | None:
-    """A clear error for banned/quarantined/blocked JSON bodies.
-
-    Reddit answers some blocked requests with HTTP 200 plus a small JSON
-    object (``{"reason": "banned", "error": 403}``, ``{"reason":
-    "quarantined"}``) instead of an HTTP error — surface those instead of
-    failing on the generic "unexpected Reddit response shape" path.
-    """
-    if not isinstance(payload, dict) or "data" in payload:
-        return None
-    reason = payload.get("reason")
-    if isinstance(reason, str):
-        return (
-            f"Reddit reports this page as {reason} — it cannot be "
-            "fetched anonymously"
-        )
-    if payload.get("error") == 403:
-        return "subreddit may be private or blocked"
-    return None
-
-
-def scrape_reddit(url: str) -> ScrapedContent:
-    """Fetch a Reddit submission + comments (anonymous ``.json`` or OAuth).
-
-    When ``reddit_client_id`` AND ``reddit_client_secret`` are configured
-    in the user settings the scraper uses Reddit's app-only
-    ``client_credentials`` OAuth flow (token via HTTP Basic auth, then
-    ``oauth.reddit.com`` with a Bearer token). Otherwise the anonymous
-    path runs: ``www.reddit.com`` then ``old.reddit.com`` ``.json`` with
-    a unique descriptive User-Agent, a single Retry-After-aware 429
-    retry, and a 403 mapped to a message that points at the optional
-    credentials.
-    """
-    from qualcoder_api.services.user_settings import get_reddit_credentials
-
-    credentials = get_reddit_credentials()
-    client_id = credentials.get("client_id") or ""
-    client_secret = credentials.get("client_secret") or ""
-    if client_id and client_secret:
-        raw = _reddit_fetch_oauth(
-            _reddit_oauth_url(url), _reddit_oauth_token(client_id, client_secret)
-        )
-    else:
-        raw = _reddit_fetch_anonymous(url)
-    return _reddit_parse(raw, url)
-
-
-def _reddit_parse(raw: bytes, url: str) -> ScrapedContent:
-    """Parse a fetched Reddit JSON payload into the thread text source."""
-    try:
-        payload = json.loads(raw.decode("utf-8", errors="replace"))
-    except ValueError as err:
-        raise ScrapeError("Reddit response is not JSON") from err
-
-    blocked = _reddit_block_reason(payload)
-    if blocked is not None:
-        raise ScrapeError(blocked)
-
-    post_listing, comments_listing = _reddit_listing_payload(payload)
-    post = _first_child(post_listing)
-    if not post:
-        raise ScrapeError("unexpected Reddit response shape")
-
-    title = (post.get("title") or "").strip()
-    author = post.get("author") or "unknown"
-    selftext = (post.get("selftext") or "").strip()
-
-    lines: list[str] = [title] if title else []
-    lines.append(f"Posted by u/{author}, {post.get('score') or 0} points")
-    lines.append(f"URL: {url}")
-    if selftext:
-        lines.append("")
-        lines.append(selftext)
-
-    comment_lines = _reddit_comments(comments_listing)
-    if comment_lines:
-        lines.append("")
-        lines.append("Comments")
-        lines.append("")
-        lines.extend(comment_lines)
-
-    text = "\n".join(lines).strip()
-    if not text:
-        raise ScrapeError("Reddit thread contains no text")
-    return ScrapedContent(
-        filename=f"{sanitize_name(title, 'reddit-post')}.txt",
-        data=text.encode("utf-8"),
-        mode="reddit",
-    )
-
-
-# ----------------------------------------------------------------------
 # YouTube (yt-dlp)
 # ----------------------------------------------------------------------
 
@@ -651,21 +242,6 @@ _YT_DLP_COMMENTS_MIN_VERSION = (2021, 12, 17)
 #: is done by the stdlib ``csv`` module so the file opens directly in any
 #: spreadsheet.
 _COMMENT_HEADER = ("author", "likes", "date", "comment")
-
-#: Structured import layout: the four CSV contract columns become one case
-#: column (unique per comment) plus three case attributes and the
-#: qualitative ``comment`` column — one text source per row, coded with a
-#: code named after the column (the survey row-import core names codes
-#: after their column and has no code-name option, so the column name is
-#: kept and documented).
-_YT_STRUCTURED_HEADERS = ("case", "author", "likes", "date", "comment")
-_YT_QUALITATIVE_HEADER = "comment"
-
-#: Cap for the structured import — YouTube comment threads can run into
-#: the thousands; importing all of them would swamp the project with
-#: cases and sources. Only the FIRST comments (in the order yt-dlp
-#: returned them) are imported; the result note names the total.
-_YT_COMMENT_CAP = 300
 
 
 def _yt_dlp_comments_supported() -> bool:
@@ -1235,175 +811,41 @@ def _yt_dlp_extract(url: str, getcomments: bool) -> dict:
     return info
 
 
-# ----------------------------------------------------------------------
-# YouTube — structured import (cases + attributes + coded comment sources)
-# ----------------------------------------------------------------------
-
-def _run_async_guarded(make_coro: Callable[[], Coroutine[Any, Any, _T]]) -> _T:
-    """Run ``make_coro()`` on a private event loop, safe from any context.
-
-    ``scrape_youtube`` runs inside the API's ``asyncio.to_thread`` worker
-    or a plain test call — neither has a running loop, so ``asyncio.run``
-    drives the async import there. When a loop IS running (defensive
-    call), the coroutine is created inside a worker thread so it still
-    completes on its own loop. aiosqlite connections are loop-agnostic,
-    so sessions created on a private loop stay usable afterwards.
-    """
-    try:
-        asyncio.get_running_loop()
-    except RuntimeError:
-        return asyncio.run(make_coro())
-    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-        return pool.submit(lambda: asyncio.run(make_coro())).result()
-
-
-async def _import_youtube_comments(
-    session_factory: async_sessionmaker,
-    rows: list[tuple[str, str, str, str]],
-    *,
-    title_base: str,
-    project_path: str,
-) -> dict:
-    """Import comment rows through the survey row-import core.
-
-    The table carries the four CSV contract columns as its fields: the
-    ``case`` column (first — holds the unique case name), then ``author``,
-    ``likes``, ``date`` and the qualitative ``comment`` column. The survey
-    core turns every row into a case, the non-qualitative columns into
-    case attribute types (text), and the ``comment`` column into one text
-    source per row (``<case name>_comment``) linked to the case and coded
-    with a code named after the column — ``comment`` — because the core
-    names codes after their column and has no code-name option (the code
-    is gray, no category). Replies carry their ``→ `` nesting prefix in
-    the author column; missing likes/dates render as ``-``.
-    """
-    from qualcoder_api.interchange.importers import _import_survey_rows
-    from qualcoder_api.services.user_settings import resolve_owner
-
-    headers = list(_YT_STRUCTURED_HEADERS)
-    data = [
-        [f"{title_base} — Comment {index}", author, likes, date, text]
-        for index, (author, likes, date, text) in enumerate(rows, start=1)
-    ]
-    return await _import_survey_rows(
-        session_factory,
-        headers,
-        data,
-        resolve_owner(None),
-        qualitative_headers=[_YT_QUALITATIVE_HEADER],
-        pseudonyms_dir=str(project_path),
-    )
-
-
-def _record_scrape_audit(session_factory: async_sessionmaker, detail: dict) -> None:
-    """Record the structured-import outcome in the project's audit log.
-
-    One ``scrape.import`` row carrying the full result dict (mode + counts,
-    or the fallback marker) — the same pattern the interchange importers
-    use for their result dicts.
-    """
-
-    def _make() -> Coroutine[Any, Any, None]:
-        async def _record() -> None:
-            from qualcoder_api.services import audit
-            from qualcoder_api.services.user_settings import get_codername
-
-            async with session_factory() as session:
-                await audit.record(
-                    session,
-                    user=get_codername(),
-                    action="scrape.import",
-                    entity="source",
-                    detail=detail,
-                )
-
-        return _record()
-
-    return _run_async_guarded(_make)
-
-
-def _youtube_csv_fallback(
-    title_base: str,
-    text: str,
-    *,
-    session_factory: async_sessionmaker | None,
-    fallback: str | None,
-) -> ScrapedContent:
-    """Assemble a CSV-mode result — the legacy plain-text source.
-
-    When ``session_factory`` is given the structured import was attempted;
-    the result dict then carries the ``fallback`` marker and is recorded
-    in the project's audit log so the reason is never silent.
-    """
-    structured = None
-    if session_factory is not None and fallback:
-        structured = {"mode": "youtube", "fallback": fallback}
-        _record_scrape_audit(session_factory, structured)
+def _youtube_scraped(title_base: str, text: str) -> ScrapedContent:
+    """Assemble the single CSV-mode result: ONE source file named after the
+    video (``<title>.csv``) holding the four-column comment table — or the
+    note/caption fallback rows — as its complete content."""
     return ScrapedContent(
         filename=f"{sanitize_name(title_base, 'youtube-video')}.csv",
         data=text.encode("utf-8"),
         mode="youtube",
-        structured=structured,
     )
 
 
-def _structured_project() -> dict:
-    """Keyword args of the currently OPEN project for the structured import.
+def scrape_youtube(url: str) -> ScrapedContent:
+    """Extract the comment thread as ONE four-column CSV text source.
 
-    ``{}`` when no project is open — the scraper then falls back to the
-    plain CSV text source. The project service lives in
-    ``qualcoder_api.main`` (the same process-wide lookup the API's
-    ``ServiceDep`` uses); the import is lazy so this module never creates
-    an import cycle.
-    """
-    from qualcoder_api.main import service
+    The result is always a single ``<video title>.csv`` file: the
+    ``author,likes,date,comment`` header row plus one row per comment —
+    ALL comments yt-dlp returned (no cap, no per-comment cases/sources).
+    Replies are their own rows with a ``→ `` nesting prefix in the author
+    column only; missing likes/dates render as ``-``. The file is written
+    through the stdlib ``csv`` module (RFC-4180 quoting, embedded quotes
+    doubled, tabs/newlines inside cells collapsed), so it opens directly
+    in any spreadsheet, and the source contains ONLY the comments table —
+    no title/uploader/duration/description header block. Comments are the
+    primary content; caption tracks are NEVER substituted silently.
 
-    if service.session_factory is not None and service.project_path:
-        return {
-            "session_factory": service.session_factory,
-            "project_path": service.project_path,
-        }
-    return {}
-
-
-def scrape_youtube(
-    url: str,
-    *,
-    session_factory: async_sessionmaker | None = None,
-    project_path: str | None = None,
-) -> ScrapedContent:
-    """Extract the comment thread as STRUCTURED data, or as a CSV text source.
-
-    Structured mode is the default when a project is open — ``scrape_url``
-    passes the open project's ``session_factory`` + ``project_path`` (the
-    API runs the scrape in an ``asyncio.to_thread`` worker; a plain call
-    without them keeps the legacy CSV behavior). Every comment becomes a
-    case named ``<video title> — Comment <n>`` with the ``author``,
-    ``likes`` and ``date`` case attributes (text; ``-`` when missing), and
-    the comment text becomes an analyzable text source
-    (``<case name>_comment``) linked to the case and coded with a code
-    named ``comment`` (the survey row-import core names codes after their
-    column — it has no code-name option — and renders the code gray,
-    without a category). Replies are their own rows with the ``→ `` nesting
-    prefix in the author column only. Only the first ``_YT_COMMENT_CAP``
-    comments are imported; the result note says e.g. ``first 300 of 512
-    comments imported``. The result dict (``ScrapedContent.structured``
-    and the project's audit log) carries ``mode: "youtube-structured"``
-    plus the counts (``cases``, ``attributes``, ``files``, ``codings``,
-    ``comments_total``, ``comments_imported``, ``attribute_types``).
-
-    FALLBACKS — the legacy CSV-text source (``_render_csv``) with a clear
-    fallback marker in the result/audit whenever the structured import
-    cannot run:
-    - the comment list is empty (captions-only / no comments / extraction
-      aborted or unsupported) — the existing caption- or note-CSV;
-    - the structured import itself fails — the comment table stays the CSV
-      so no comments are lost.
-
-    When the structured import succeeds the returned ``data`` is empty
-    (the API's file-import pipeline still registers the empty ``.csv``
-    row, but the comments themselves live in the structured
-    cases/sources — never in a text file).
+    When comments were REQUESTED but could not be retrieved (extraction
+    timed out or aborted, or an empty comment list) and no captions exist,
+    the table keeps its header row plus a ``-,-,-,<note>`` row explaining
+    the missing columns; when caption text exists it is shown instead of
+    the table as a ``# Comments unavailable (<reason>) — captions shown
+    below`` note row followed by one row per transcript line (no header).
+    When the video provably has no comments the table keeps the header row
+    and a ``-,-,-,No comments`` row. If the installed yt-dlp predates
+    comment extraction (2021.12.17) the header + ``-,-,-,<note>`` row is
+    printed and captions are not fetched either.
 
     Extraction runs in a SEPARATE yt-dlp subprocess (the in-process path
     is the PyInstaller-frozen fallback only), so yt-dlp's internal abort
@@ -1440,11 +882,7 @@ def scrape_youtube(
         # captions silently.
         logger.warning("YouTube comment extraction timed out for %s", url)
         text = _render_csv([("-", "-", "-", _YT_COMMENTS_TIMEOUT_NOTE)])
-        return _youtube_csv_fallback(
-            "", text,
-            session_factory=session_factory,
-            fallback="extraction timed out",
-        )
+        return _youtube_scraped("", text)
     if not isinstance(info, dict):
         raise ScrapeError("YouTube returned no metadata")
 
@@ -1459,47 +897,6 @@ def scrape_youtube(
     if comments_requested:
         rows = _youtube_comments(info)
 
-    # Structured import: every comment becomes a case with attributes and a
-    # coded text source through the survey row-import core.
-    if rows and session_factory is not None and project_path:
-        capped = rows[:_YT_COMMENT_CAP]
-        note = (
-            f"first {len(capped)} of {len(rows)} comments imported"
-            if len(capped) < len(rows)
-            else None
-        )
-        try:
-            result = _run_async_guarded(
-                lambda: _import_youtube_comments(
-                    session_factory, capped, title_base=title_base, project_path=project_path
-                )
-            )
-        except Exception as err:  # the CSV fallback keeps the comments
-            logger.warning("YouTube structured import failed for %s: %s", url, err)
-            return _youtube_csv_fallback(
-                title_base, _render_csv(rows),
-                session_factory=session_factory,
-                fallback=f"structured import failed: {err}",
-            )
-        result.update(
-            {
-                "mode": "youtube-structured",
-                "comments_total": len(rows),
-                "comments_imported": len(capped),
-                "attribute_types": len(_YT_STRUCTURED_HEADERS) - 2,
-            }
-        )
-        if note:
-            result["note"] = note
-        _record_scrape_audit(session_factory, result)
-        return ScrapedContent(
-            filename=f"{title_base}.csv",
-            data=b"",
-            mode="youtube-structured",
-            structured=result,
-        )
-
-    fallback: str | None = None
     if rows:
         text = _render_csv(rows)
     elif _YT_DLP_COMMENTS_SUPPORTED:
@@ -1513,30 +910,20 @@ def scrape_youtube(
                 (_normalize_column(line), "", "", "") for line in caption_text.splitlines()
             )
             text = _render_csv(caption_rows, header=False)
-            fallback = (
-                f"comments unavailable ({reason})"
-                if comments_failure
-                else "the video has no comments"
-            )
         elif comments_failure:
             rows = [("-", "-", "-", _YT_COMMENTS_ABORT_NOTE)]
             text = _render_csv(rows)
-            fallback = "extraction aborted"
         else:
             rows = [("-", "-", "-", "No comments")]
             text = _render_csv(rows)
-            fallback = "the video has no comments"
     else:
         logger.warning("YouTube comment extraction unsupported for %s", url)
         rows = [("-", "-", "-", _YT_COMMENTS_UNSUPPORTED_NOTE)]
         text = _render_csv(rows)
-        fallback = "yt-dlp comment extraction unsupported"
 
     if not text.strip():
         raise ScrapeError("YouTube video contains no text")
-    return _youtube_csv_fallback(
-        title_base, text, session_factory=session_factory, fallback=fallback
-    )
+    return _youtube_scraped(title_base, text)
 
 
 # ----------------------------------------------------------------------
@@ -1972,18 +1359,17 @@ def scrape_pdf(url: str) -> ScrapedContent:
 def scrape_url(url: str, mode: str = "auto") -> ScrapedContent:
     """Fetch + parse a URL into (filename, file bytes, resolved mode).
 
-    YouTube comments are imported as STRUCTURED data when a project is
-    open (see ``scrape_youtube``): every comment becomes a case with
-    author/likes/date attributes and a coded text source instead of a
-    plain CSV file.
+    YouTube URLs resolve to a single four-column comment CSV
+    (``scrape_youtube``). ``reddit.com`` links no longer have a dedicated
+    scraper — auto-detection routes them to the generic article
+    extraction, so they still produce a source (plain page text) instead
+    of failing.
     """
     url = url.strip()
     validate_url(url)
     resolved = detect_mode(url, mode)
-    if resolved == "reddit":
-        return scrape_reddit(url)
     if resolved == "youtube":
-        return scrape_youtube(url, **_structured_project())
+        return scrape_youtube(url)
     if resolved == "html":
         return scrape_html(url)
     if resolved == "pdf":

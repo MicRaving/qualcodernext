@@ -7,15 +7,19 @@
  * GitHub issue: title, body (prefilled with the environment block: app
  * version, OS, last action, last error), labels, assignee, milestone.
  *
- * Submission: with a GitHub token configured the screenshot is uploaded
- * through the issues web editor's attachment endpoint and the issue is
- * created via the REST API; without a token the prefilled `issues/new` page
- * opens in the default browser (screenshot pasted manually).
+ * Submission: the DEFAULT flow (no token) opens a prefilled GitHub
+ * `issues/new` page in the system browser (via the Tauri opener plugin in
+ * the packaged app) — no account/token needed inside QCnext; the user
+ * completes and submits the issue there, attaching the downloaded
+ * screenshot. With a GitHub token configured (optional) the screenshot is
+ * uploaded through the issues web editor's attachment endpoint and the
+ * issue is created via the REST API instead.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   Bug,
   CheckCircle2,
+  Download,
   Eraser,
   ExternalLink,
   LoaderCircle,
@@ -31,6 +35,7 @@ import { errorDetail } from "@/features/ai/format";
 import {
   createGitHubIssue,
   githubNewIssueUrl,
+  openExternal,
   splitRepo,
   uploadIssueAttachment,
 } from "@/features/bugreport/github";
@@ -305,6 +310,7 @@ export function BugReportView() {
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [attachNote, setAttachNote] = useState<string | null>(null);
   const [fallbackUrl, setFallbackUrl] = useState<string | null>(null);
+  const [downloadStatus, setDownloadStatus] = useState<string | null>(null);
 
   // Seed the issue body with the environment block once per open (the user's
   // edits are never overwritten — a re-open keeps what they typed).
@@ -331,6 +337,7 @@ export function BugReportView() {
     setSubmitError(null);
     setAttachNote(null);
     setFallbackUrl(null);
+    setDownloadStatus(null);
   };
 
   const labelsText = labels.join(", ");
@@ -417,7 +424,7 @@ export function BugReportView() {
             : "");
         const url = githubNewIssueUrl(st.githubRepo, title.trim(), pageBody);
         setFallbackUrl(url);
-        window.open(url, "_blank");
+        await openExternal(url);
         setSubmitStatus("browser");
       }
     } catch (e) {
@@ -432,6 +439,30 @@ export function BugReportView() {
     const { owner, name } = splitRepo(githubRepo);
     return owner && name ? `${owner}/${name}` : githubRepo;
   })();
+
+  // Download the annotated screenshot as a PNG so the user can attach it to
+  // the issue on GitHub (the token-less flow cannot upload it for them).
+  const downloadScreenshot = async () => {
+    const dataUrl = paintRef.current ?? screenshot;
+    if (!dataUrl) {
+      setDownloadStatus(t("bugReport.noScreenshot"));
+      return;
+    }
+    try {
+      const blob = await (await fetch(dataUrl)).blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "qcnext-screenshot.png";
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+      setDownloadStatus(t("bugReport.screenshotDownloaded"));
+    } catch {
+      setDownloadStatus(t("bugReport.downloadFailed"));
+    }
+  };
 
   return (
     <Modal
@@ -517,7 +548,11 @@ export function BugReportView() {
                   </button>
                 ))}
               </div>
-              <p className="text-xs text-text-secondary">{t("bugReport.permissionsHint")}</p>
+              {githubToken.trim() ? (
+                <p className="text-xs text-text-secondary">{t("bugReport.permissionsHint")}</p>
+              ) : (
+                <p className="text-xs text-text-secondary">{t("bugReport.noTokenHint")}</p>
+              )}
             </div>
           </div>
 
@@ -535,7 +570,14 @@ export function BugReportView() {
               <p className="flex items-center gap-1.5 text-xs text-success" role="status">
                 <CheckCircle2 size={13} aria-hidden />
                 {t("bugReport.created")}{" "}
-                <a href={resultUrl} target="_blank" rel="noreferrer" className="inline-flex items-center gap-0.5 text-accent underline">
+                <a
+                  href={resultUrl}
+                  onClick={(e) => {
+                    e.preventDefault();
+                    void openExternal(resultUrl);
+                  }}
+                  className="inline-flex items-center gap-0.5 text-accent underline"
+                >
                   {resultUrl}
                   <ExternalLink size={11} aria-hidden />
                 </a>
@@ -551,6 +593,11 @@ export function BugReportView() {
                 {attachNote}
               </p>
             )}
+            {downloadStatus && (
+              <p className="text-xs text-text-secondary" role="status">
+                {downloadStatus}
+              </p>
+            )}
             {submitStatus === "error" && (
               <div className="flex items-center gap-2">
                 <p className="min-w-0 truncate text-xs text-danger" role="alert">
@@ -561,7 +608,7 @@ export function BugReportView() {
                     variant="secondary"
                     className="shrink-0"
                     icon={<ExternalLink size={12} aria-hidden />}
-                    onClick={() => window.open(fallbackUrl, "_blank")}
+                    onClick={() => void openExternal(fallbackUrl)}
                   >
                     {t("bugReport.openBrowser")}
                   </Button>
@@ -570,14 +617,25 @@ export function BugReportView() {
             )}
           </div>
           <Button
+            variant="secondary"
+            disabled={!screenshot || submitting}
+            onClick={() => void downloadScreenshot()}
+            icon={<Download size={13} aria-hidden />}
+            data-testid="bugreport-download"
+          >
+            {t("bugReport.downloadScreenshot")}
+          </Button>
+          <Button
             variant="primary"
             disabled={submitting || title.trim() === ""}
             onClick={() => void onSubmit()}
             icon={
               submitting ? (
                 <LoaderCircle size={13} className="animate-spin" aria-hidden />
-              ) : (
+              ) : githubToken.trim() ? (
                 <Send size={13} aria-hidden />
+              ) : (
+                <ExternalLink size={13} aria-hidden />
               )
             }
           >

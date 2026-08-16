@@ -1,8 +1,8 @@
 /**
- * UrlImportDialog — import a web resource as a new source: Reddit thread,
- * YouTube video (metadata, captions, comments), article text, raw HTML,
- * or a PDF rendering of a page. The backend fetches and parses the URL;
- * this dialog only submits it.
+ * UrlImportDialog — import a web resource as a new source: YouTube video
+ * (comments as a single CSV file), article text, raw HTML, or a PDF
+ * rendering of a page. The backend fetches and parses the URL; this
+ * dialog only submits it.
  */
 import { useRef, useState, type FormEvent } from "react";
 import { Globe, LoaderCircle } from "lucide-react";
@@ -22,7 +22,6 @@ interface ScrapeResult {
 }
 
 const MODE_OPTIONS: { value: ScrapeMode; labelKey: string }[] = [
-  { value: "reddit", labelKey: "files.urlImportModeReddit" },
   { value: "youtube", labelKey: "files.urlImportModeYoutube" },
   { value: "article", labelKey: "files.urlImportModeArticle" },
   { value: "html", labelKey: "files.urlImportModeHtml" },
