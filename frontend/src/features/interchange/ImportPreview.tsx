@@ -16,6 +16,7 @@
  * the finished task stays in the queue flyout. After a successful import
  * the classic result card stays visible (counts per entity).
  */
+import { errorMessage } from "@/lib/utils";
 import { useRef, useState, type ChangeEvent, type DragEvent } from "react";
 import {
   CircleCheck,
@@ -24,7 +25,7 @@ import {
   Trash2,
   Upload,
 } from "lucide-react";
-import { ApiError, type InterchangeResult } from "@/lib/api";
+import { type InterchangeResult } from "@/lib/api";
 import { Button, Field, IconButton, Input, Select } from "@/components/ui/orchestrator";
 import { importLabel } from "@/features/interchange/format";
 import {
@@ -122,11 +123,6 @@ function destinationLine(
   return dest.note ?? (formatHelp(t, format) || t("interchange.previewNone"));
 }
 
-function errorDetail(e: unknown): string {
-  if (e instanceof ApiError && typeof e.detail === "string") return e.detail;
-  return e instanceof Error ? e.message : "Import failed";
-}
-
 /** True when the client fetch was cancelled (the timeout aborted it) —
  *  Chromium surfaces this as "signal is aborted without reason". */
 function isAbortError(e: unknown): boolean {
@@ -205,7 +201,7 @@ export function ImportPreview() {
       })
       .catch((e) => {
         if (detectSeq.current[id] !== seq) return;
-        patchItem(id, { detecting: false, error: errorDetail(e) });
+        patchItem(id, { detecting: false, error: errorMessage(e, "Import failed") });
       });
   }
 
@@ -317,7 +313,7 @@ export function ImportPreview() {
           patchItem(item.id, { status: "error", error: t("interchange.importAborted") });
           void reconcileImport(item.id, item.file.name, before);
         } else {
-          patchItem(item.id, { status: "error", error: errorDetail(e) });
+          patchItem(item.id, { status: "error", error: errorMessage(e, "Import failed") });
         }
       }
       const done = i + 1;

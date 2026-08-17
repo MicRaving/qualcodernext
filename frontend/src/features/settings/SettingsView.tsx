@@ -6,7 +6,8 @@
  * added by editing one section; the shell below only owns the scroll
  * container and the fixed R/About footer order.
  */
-import { useEffect, useState } from "react";
+import { useState } from "react";
+import { useAsyncEffect } from "@/lib/useAsync";
 import { CircleAlert, CircleCheck, LoaderCircle } from "lucide-react";
 import { useI18n } from "@/lib/i18n";
 import { api, type RStatus } from "@/lib/api";
@@ -22,17 +23,10 @@ export function SettingsView() {
   // R integration status (probe runs in the backend without any console
   // window — the app itself never spawns one).
   const [rStatus, setRStatus] = useState<RStatus | null>(null);
-  useEffect(() => {
-    let cancelled = false;
-    api
-      .rStatus()
-      .then((s) => {
-        if (!cancelled) setRStatus(s);
-      })
-      .catch(() => undefined);
-    return () => {
-      cancelled = true;
-    };
+  useAsyncEffect(async (signal) => {
+    const s = await api.rStatus();
+    signal.throwIfAborted();
+    setRStatus(s);
   }, []);
 
   return (

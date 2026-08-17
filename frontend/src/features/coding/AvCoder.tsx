@@ -4,6 +4,7 @@
  * Segment positions (pos0/pos1) are stored in milliseconds.
  */
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useAsyncEffect } from "@/lib/useAsync";
 import {
   Bookmark,
   BookmarkCheck,
@@ -36,11 +37,11 @@ import {
   invalidateApiBase,
   sourceFileUrl,
   type AVCoding,
-  type CodeTreeItem,
   type Coding,
   type Source,
 } from "@/lib/api";
-import { patchCodingWeight } from "@/features/coding/codingApi";
+import { patchCodingWeight, useCodeMaps } from "@/features/coding/codingApi";
+import { useCoder } from "@/features/coding/useCoder";
 import { CodePicker, type PickedCode } from "@/features/coding/CodePicker";
 import { AutocodeDialog } from "@/features/coding/AutocodeDialog";
 import { TranscribeDialog } from "@/features/coding/TranscribeDialog";
@@ -54,7 +55,7 @@ import {
   type LinkSpanTarget,
 } from "@/features/coding/links";
 import { canTranscribeSource } from "@/lib/media";
-import { cn } from "@/lib/utils";
+import { cn, errorMessage } from "@/lib/utils";
 import { useI18n } from "@/lib/i18n";
 import {
   Button,
@@ -66,6 +67,9 @@ import {
   Textarea,
   ViewHeader,
 } from "@/components/ui/orchestrator";
+import { useCoderStore } from "@/stores/coder";
+import { usePrefsStore } from "@/stores/prefs";
+import { useWorkspaceStore } from "@/stores/workspace";
 import { useProjectStore } from "@/stores/project";
 import { cls } from "@/components/ui/tokens";
 
@@ -120,11 +124,11 @@ export function AvCoder({ source }: { source: Source }) {
   const { t } = useI18n();
   const storeCodeTree = useProjectStore((s) => s.codeTree);
   const [transcribeOpen, setTranscribeOpen] = useState(false);
-  const activeCodeId = useProjectStore((s) => s.activeCodeId);
-  const hiddenCodes = useProjectStore((s) => s.hiddenCodes);
+  const activeCodeId = useCoderStore((s) => s.activeCodeId);
+  const hiddenCodes = useCoderStore((s) => s.hiddenCodes);
   /** When OFF, creating a coding does NOT auto-select it in the details
    *  footer (clicking a segment still views it). */
-  const autoShowDetails = useProjectStore((s) => s.autoShowSegmentDetails);
+  const autoShowDetails = usePrefsStore((s) => s.autoShowSegmentDetails);
   const mediaRef = useRef<HTMLVideoElement & HTMLAudioElement>(null);
   const timelineRef = useRef<HTMLDivElement>(null);
 
@@ -146,10 +150,11 @@ export function AvCoder({ source }: { source: Source }) {
   const transcribeIdRef = useRef(transcriptId);
   transcribeIdRef.current = transcriptId;
 
-  const [codings, setCodings] = useState<AVCoding[]>([]);
-  const [codes, setCodes] = useState<CodeTreeItem[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const { loading, error, setError, codings, codes, reload } = useCoder(
+    source,
+    api.avCodings,
+    t("coder.loadCodingsError"),
+  );
 
   const [durationMs, setDurationMs] = useState(0);
   const [currentMs, setCurrentMs] = useState(0);
@@ -251,20 +256,15 @@ export function AvCoder({ source }: { source: Source }) {
   const [avBookmarkMs, setAvBookmarkMs] = useState<number | null>(null);
   const [avBookmarkFile, setAvBookmarkFile] = useState<number | null>(null);
 
-  useEffect(() => {
-    let cancelled = false;
-    void api
-      .bookmarks()
-      .then((b) => {
-        if (!cancelled) {
-          setAvBookmarkFile(b.av_bookmark_file_id);
-          setAvBookmarkMs(b.av_bookmark_msec);
-        }
-      })
-      .catch(() => undefined);
-    return () => {
-      cancelled = true;
-    };
+  useAsyncEffect(async (signal) => {
+    try {
+      const b = await api.bookmarks();
+      signal.throwIfAborted();
+      setAvBookmarkFile(b.av_bookmark_file_id);
+      setAvBookmarkMs(b.av_bookmark_msec);
+    } catch {
+      /* a bookmark fetch failure should not disturb the AV coder */
+    }
   }, [source.id]);
 
   async function setAvBookmark() {
@@ -282,7 +282,7 @@ export function AvCoder({ source }: { source: Source }) {
     if (avBookmarkFile === source.id && avBookmarkMs != null) {
       seekToMs(avBookmarkMs);
     } else {
-      useProjectStore.getState().setView({ kind: "coding", sourceId: avBookmarkFile });
+      useWorkspaceStore.getState().setView({ kind: "coding", sourceId: avBookmarkFile });
     }
   }
 
@@ -368,14 +368,10 @@ export function AvCoder({ source }: { source: Source }) {
   const [linkCopied, setLinkCopied] = useState(false);
   const linkCopiedTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  useEffect(() => {
-    let cancelled = false;
-    void readLinkPayload().then((target) => {
-      if (!cancelled) setClipboardLink(target);
-    });
-    return () => {
-      cancelled = true;
-    };
+  useAsyncEffect(async (signal) => {
+    const target = await readLinkPayload();
+    signal.throwIfAborted();
+    setClipboardLink(target);
   }, [tSel]);
 
   async function copyTranscriptLink() {
@@ -390,7 +386,7 @@ export function AvCoder({ source }: { source: Source }) {
       if (linkCopiedTimer.current) clearTimeout(linkCopiedTimer.current);
       linkCopiedTimer.current = setTimeout(() => setLinkCopied(false), 1500);
     } catch (e) {
-      setTError(e instanceof Error ? e.message : t("coder.linkCopyError"));
+      setTError(errorMessage(e, t("coder.linkCopyError")));
     }
   }
 
@@ -413,7 +409,7 @@ export function AvCoder({ source }: { source: Source }) {
       });
       await useProjectStore.getState().refreshProject();
     } catch (e) {
-      setTError(e instanceof Error ? e.message : t("coder.linkCreateError"));
+      setTError(errorMessage(e, t("coder.linkCreateError")));
     }
   }
 
@@ -464,7 +460,7 @@ export function AvCoder({ source }: { source: Source }) {
         setMemoDraft(null);
       }
     } catch (e) {
-      setTError(e instanceof Error ? e.message : t("coder.createError"));
+      setTError(errorMessage(e, t("coder.createError")));
     }
   }
 
@@ -502,7 +498,7 @@ export function AvCoder({ source }: { source: Source }) {
         setMemoDraft(null);
       }
     } catch (e) {
-      setTError(e instanceof Error ? e.message : t("coder.inVivoCreateError"));
+      setTError(errorMessage(e, t("coder.inVivoCreateError")));
     } finally {
       setTInVivoBusy(false);
     }
@@ -544,7 +540,7 @@ export function AvCoder({ source }: { source: Source }) {
       });
       await useProjectStore.getState().refreshProject();
     } catch (e) {
-      setTError(e instanceof Error ? e.message : t("coder.annotationCreateError"));
+      setTError(errorMessage(e, t("coder.annotationCreateError")));
     }
   }
 
@@ -629,17 +625,7 @@ export function AvCoder({ source }: { source: Source }) {
     pendingStartRef.current = pendingStart;
   }, [pendingStart]);
 
-  const colorByCid = useMemo(() => {
-    const map = new Map<number, string>();
-    for (const c of codes) if (c.kind === "code" && c.color) map.set(c.id, c.color);
-    return map;
-  }, [codes]);
-
-  const nameByCid = useMemo(() => {
-    const map = new Map<number, string>();
-    for (const c of codes) if (c.kind === "code") map.set(c.id, c.name);
-    return map;
-  }, [codes]);
+  const { colorByCid, nameByCid } = useCodeMaps(codes);
 
   /** Top-level code categories for the in-vivo popover's optional target. */
   const categories = useMemo(
@@ -648,22 +634,6 @@ export function AvCoder({ source }: { source: Source }) {
   );
 
   const codeColor = (coding: AVCoding) => colorByCid.get(coding.cid) ?? "rgba(0,0,0,0.15)";
-
-  const load = useCallback(async (): Promise<AVCoding[]> => {
-    setLoading(true);
-    setError(null);
-    try {
-      const [cs, flat] = await Promise.all([api.avCodings(source.id), api.codesFlat()]);
-      setCodings(cs);
-      setCodes(flat);
-      return cs;
-    } catch (e) {
-      setError(e instanceof Error ? e.message : t("coder.loadCodingsError"));
-      return [];
-    } finally {
-      setLoading(false);
-    }
-  }, [source.id, t]);
 
   const loadTranscript = useCallback(async () => {
     if (!transcriptId) {
@@ -695,9 +665,8 @@ export function AvCoder({ source }: { source: Source }) {
   }, [source.id, loadTranscript]);
 
   useEffect(() => {
-    void load();
     void loadTranscript();
-  }, [load, loadTranscript]);
+  }, [loadTranscript]);
 
   // --- transcript codings (highlight the already coded text) ---
   const [transcriptCodings, setTranscriptCodings] = useState<Coding[]>([]);
@@ -922,7 +891,7 @@ export function AvCoder({ source }: { source: Source }) {
       createdTranscriptRef.current = companion.id;
       await useProjectStore.getState().refreshProject();
     } catch (e) {
-      setTError(e instanceof Error ? e.message : t("avCoder.transcribeCreateError"));
+      setTError(errorMessage(e, t("avCoder.transcribeCreateError")));
     } finally {
       transcribeCreatingRef.current = false;
       setTranscribeBusy(false);
@@ -1001,7 +970,7 @@ export function AvCoder({ source }: { source: Source }) {
       setTranscribeDraft("");
       await useProjectStore.getState().refreshProject();
     } catch (e) {
-      setTError(e instanceof Error ? e.message : t("avCoder.deleteTranscriptError"));
+      setTError(errorMessage(e, t("avCoder.deleteTranscriptError")));
     } finally {
       setTranscribeBusy(false);
     }
@@ -1045,7 +1014,7 @@ export function AvCoder({ source }: { source: Source }) {
       }
       void loadTranscriptCodings();
     } catch (e) {
-      setTError(e instanceof Error ? e.message : t("coder.saveError"));
+      setTError(errorMessage(e, t("coder.saveError")));
     } finally {
       transcribeSavingRef.current = false;
       setTranscribeSaving(false);
@@ -1217,7 +1186,7 @@ export function AvCoder({ source }: { source: Source }) {
         owner: "default",
       });
       setPendingStart(null);
-      const fresh = await load();
+      const fresh = await reload();
       // Show the details of the freshly assigned segment automatically
       // (gated on the "Auto-show segment details" pref).
       if (autoShowDetails) {
@@ -1228,7 +1197,7 @@ export function AvCoder({ source }: { source: Source }) {
       setSelectedText(null);
       setMemoDraft(null);
     } catch (e) {
-      setError(e instanceof Error ? e.message : t("coder.createError"));
+      setError(errorMessage(e, t("coder.createError")));
     }
   }
 
@@ -1262,10 +1231,10 @@ export function AvCoder({ source }: { source: Source }) {
     void (async () => {
       try {
         await patchCodingWeight("av", coding.avid, weight);
-        const fresh = await load();
+        const fresh = await reload();
         setSelected(fresh.find((c) => c.avid === coding.avid) ?? null);
       } catch (e) {
-        setError(e instanceof Error ? e.message : t("coder.weightError"));
+        setError(errorMessage(e, t("coder.weightError")));
       }
     })();
   }
@@ -1282,9 +1251,9 @@ export function AvCoder({ source }: { source: Source }) {
     try {
       await api.deleteAvCoding(coding.avid);
       setSelected(null);
-      await load();
+      await reload();
     } catch (e) {
-      setError(e instanceof Error ? e.message : t("coder.deleteSegmentError"));
+      setError(errorMessage(e, t("coder.deleteSegmentError")));
     }
   }
 
@@ -1297,7 +1266,7 @@ export function AvCoder({ source }: { source: Source }) {
         await patchCodingWeight("text", row.ctid, weight);
         await loadTranscriptCodings();
       } catch (e) {
-        setTError(e instanceof Error ? e.message : t("coder.weightError"));
+        setTError(errorMessage(e, t("coder.weightError")));
       }
     })();
   }
@@ -1318,7 +1287,7 @@ export function AvCoder({ source }: { source: Source }) {
         await patchTextCodingRow(selectedText.ctid, { memo: draft });
         await loadTranscriptCodings();
       } catch (e) {
-        setTError(e instanceof Error ? e.message : t("htmlCoder.updateError"));
+        setTError(errorMessage(e, t("htmlCoder.updateError")));
       }
     })();
   }
@@ -1332,7 +1301,7 @@ export function AvCoder({ source }: { source: Source }) {
         await patchTextCodingRow(selectedText.ctid, { important: next });
         await loadTranscriptCodings();
       } catch (e) {
-        setTError(e instanceof Error ? e.message : t("htmlCoder.updateError"));
+        setTError(errorMessage(e, t("htmlCoder.updateError")));
       }
     })();
   }
@@ -1355,7 +1324,7 @@ export function AvCoder({ source }: { source: Source }) {
         setMemoDraft(null);
         await loadTranscriptCodings();
       } catch (e) {
-        setTError(e instanceof Error ? e.message : t("coder.removeError"));
+        setTError(errorMessage(e, t("coder.removeError")));
       }
     })();
   }
@@ -1382,7 +1351,7 @@ export function AvCoder({ source }: { source: Source }) {
       <div className="flex h-full items-center justify-center bg-bg">
         <div className="text-center">
           <p className="text-danger">{error}</p>
-          <Button variant="secondary" className="mt-3" onClick={() => void load()}>
+          <Button variant="secondary" className="mt-3" onClick={() => void reload()}>
             {t("common.retry")}
           </Button>
         </div>
@@ -1745,7 +1714,7 @@ export function AvCoder({ source }: { source: Source }) {
                   icon={<Code size={12} aria-hidden />}
                   className="max-w-56"
                   onClick={() => {
-                    const activeCodeId = useProjectStore.getState().activeCodeId;
+                    const activeCodeId = useCoderStore.getState().activeCodeId;
                     if (activeCodeId != null) void codeTranscriptSelection(activeCodeId);
                     else setTPickerOpen(true);
                   }}

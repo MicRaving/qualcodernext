@@ -5,6 +5,7 @@
  * files, free text, memos); relation lines with labels and arrow modes;
  * and the six analytical model generators.
  */
+import { errorMessage } from "@/lib/utils";
 import {
   useCallback,
   useEffect,
@@ -36,6 +37,7 @@ import { useI18n } from "@/lib/i18n";
 import { Button, ErrorBanner, Field, IconButton, Input, LeftBar, BarHeader, Menu, MenuItem, Modal, Select } from "@/components/ui/orchestrator";
 import { cls } from "@/components/ui/tokens";
 
+import { useGraphStore } from "@/stores/graph";
 import { useProjectStore } from "@/stores/project";
 
 const NODE_W = 150;
@@ -312,10 +314,10 @@ function ConfirmDialog({
  *  Models / zoom / connect / delete. The dialogs are owned here. */
 export function GraphsMenuBar() {
   const { t } = useI18n();
-  const graphsUi = useProjectStore((s) => s.graphsUi);
-  const setGraphsUi = useProjectStore((s) => s.setGraphsUi);
-  const selectedNode = useProjectStore((s) => s.graphsUi.selectedNode);
-  const connectFrom = useProjectStore((s) => s.graphsUi.connectFrom);
+  const graphsUi = useGraphStore((s) => s.graphsUi);
+  const setGraphsUi = useGraphStore((s) => s.setGraphsUi);
+  const selectedNode = useGraphStore((s) => s.graphsUi.selectedNode);
+  const connectFrom = useGraphStore((s) => s.graphsUi.connectFrom);
   const dialog = graphsUi.dialog;
   const zoom = graphsUi.zoom;
 
@@ -324,7 +326,7 @@ export function GraphsMenuBar() {
       const res = await api.graphs();
       // Read the CURRENT selection from the store — closures go stale after
       // a delete, and re-selecting the removed grid would 404 on load.
-      const current = useProjectStore.getState().graphsUi.grid;
+      const current = useGraphStore.getState().graphsUi.grid;
       const grid =
         preferredGrid !== undefined
           ? preferredGrid
@@ -472,12 +474,12 @@ export function GraphsMenuBar() {
 
 export function GraphsView() {
   const { t } = useI18n();
-  const graphsUi = useProjectStore((s) => s.graphsUi);
-  const setGraphsUi = useProjectStore((s) => s.setGraphsUi);
-  const data = useProjectStore((s) => s.graphsData);
-  const loading = useProjectStore((s) => s.graphsLoading);
-  const loadGraphData = useProjectStore((s) => s.loadGraphData);
-  const graphConnect = useProjectStore((s) => s.graphConnect);
+  const graphsUi = useGraphStore((s) => s.graphsUi);
+  const setGraphsUi = useGraphStore((s) => s.setGraphsUi);
+  const data = useGraphStore((s) => s.graphsData);
+  const loading = useGraphStore((s) => s.graphsLoading);
+  const loadGraphData = useGraphStore((s) => s.loadGraphData);
+  const graphConnect = useGraphStore((s) => s.graphConnect);
   const graphs = graphsUi.list;
   const grid = graphsUi.grid;
   const selectedNode = graphsUi.selectedNode;
@@ -514,7 +516,7 @@ export function GraphsView() {
       const res = await api.graphs();
       // Read the CURRENT selection from the store — the closure goes stale
       // after a delete (re-selecting the removed grid would 404 on load).
-      const current = useProjectStore.getState().graphsUi.grid;
+      const current = useGraphStore.getState().graphsUi.grid;
       setGraphsUi({
         list: res.graphs.map((g) => ({ grid: g.grid, name: g.name })),
         grid:
@@ -526,7 +528,7 @@ export function GraphsView() {
         tick: graphsUi.tick + 1,
       });
     } catch (e) {
-      setGraphsUi({ error: e instanceof Error ? e.message : "Failed to load graphs" });
+      setGraphsUi({ error: errorMessage(e, "Failed to load graphs")});
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -615,7 +617,7 @@ export function GraphsView() {
       }
       await loadGraphData(data.graph.grid);
     } catch (e) {
-      setGraphsUi({ error: e instanceof Error ? e.message : "Could not add node" });
+      setGraphsUi({ error: errorMessage(e, "Could not add node")});
     }
   }
 
@@ -1001,7 +1003,7 @@ function ModelDialog({
       );
       onCreated(res.grid);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Could not generate model");
+      setError(errorMessage(e, "Could not generate model"));
     } finally {
       setBusy(false);
     }
@@ -1087,12 +1089,12 @@ function ModelDialog({
 /** Left bar for the graphs view: the graph list + New graph / Models. */
 export function GraphsInspector() {
   const { t } = useI18n();
-  const graphsUi = useProjectStore((s) => s.graphsUi);
-  const data = useProjectStore((s) => s.graphsData);
-  const graphPatchNode = useProjectStore((s) => s.graphPatchNode);
-  const graphDeleteNode = useProjectStore((s) => s.graphDeleteNode);
-  const graphPatchLine = useProjectStore((s) => s.graphPatchLine);
-  const graphDeleteLine = useProjectStore((s) => s.graphDeleteLine);
+  const graphsUi = useGraphStore((s) => s.graphsUi);
+  const data = useGraphStore((s) => s.graphsData);
+  const graphPatchNode = useGraphStore((s) => s.graphPatchNode);
+  const graphDeleteNode = useGraphStore((s) => s.graphDeleteNode);
+  const graphPatchLine = useGraphStore((s) => s.graphPatchLine);
+  const graphDeleteLine = useGraphStore((s) => s.graphDeleteLine);
 
   const nodes = useMemo(() => (data ? buildNodes(data) : []), [data]);
   const lines = useMemo(() => (data ? buildLines(data, nodes) : []), [data, nodes]);

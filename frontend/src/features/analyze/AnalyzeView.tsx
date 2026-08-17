@@ -10,13 +10,13 @@ import { useState, type ReactNode } from "react";
 import { ANALYSIS, TOOLS, REPORT_COMPONENTS } from "@/features/analyze/registry";
 import { PublishButton } from "@/features/analyze/PublishDialog";
 import { useI18n } from "@/lib/i18n";
-import { useProjectStore } from "@/stores/project";
+import { useWorkspaceStore } from "@/stores/workspace";
 import { ViewHeader } from "@/components/ui/orchestrator";
 import { ReportMenuBarProvider } from "@/features/analyze/reportKit";
 
 export function AnalyzeView() {
   const { t } = useI18n();
-  const selectedId = useProjectStore((s) => s.analyzeUi.selectedId);
+  const selectedId = useWorkspaceStore((s) => s.analyzeUi.selectedId);
   const meta = [...ANALYSIS, ...TOOLS].find((r) => r.id === selectedId);
   const ReportComponent = selectedId ? REPORT_COMPONENTS[selectedId] : null;
   const [menuActions, setMenuActions] = useState<ReactNode>(null);

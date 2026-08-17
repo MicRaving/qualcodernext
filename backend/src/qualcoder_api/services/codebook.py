@@ -16,7 +16,8 @@ from pathlib import Path
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
-from qualcoder_api.persistence.repositories import random_code_color
+from qualcoder_api.core.palette import random_code_color
+from qualcoder_api.core.timeutil import now as _now
 
 logger = logging.getLogger(__name__)
 
@@ -150,9 +151,3 @@ async def import_codebook(
         "codes": imported_codes,
         "duplicates": duplicates,
     }
-
-
-def _now() -> str:
-    import datetime
-
-    return datetime.datetime.now().astimezone().strftime("%Y-%m-%d %H:%M:%S")

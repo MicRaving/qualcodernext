@@ -10,15 +10,15 @@
  */
 import { ANALYSIS, TOOLS, type NavEntry } from "@/features/analyze/registry";
 import { useI18n } from "@/lib/i18n";
-import { useProjectStore } from "@/stores/project";
+import { useWorkspaceStore } from "@/stores/workspace";
 import { BarHeader, LeftBar, SectionLabel } from "@/components/ui/orchestrator";
 import { cn } from "@/lib/utils";
 import { Network } from "lucide-react";
 
 export function ReportsList() {
   const { t } = useI18n();
-  const selectedId = useProjectStore((s) => s.analyzeUi.selectedId);
-  const setAnalyzeUi = useProjectStore((s) => s.setAnalyzeUi);
+  const selectedId = useWorkspaceStore((s) => s.analyzeUi.selectedId);
+  const setAnalyzeUi = useWorkspaceStore((s) => s.setAnalyzeUi);
 
   const renderRow = (entry: NavEntry) => {
     const active = selectedId === entry.id;

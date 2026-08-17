@@ -1,59 +1,64 @@
-# Notes — journal, annotations, memos
+# Notes — Journal, Annotations, and Memos
 
-Three note types in one workspace: the journal (research log), annotations
-(text spans) and memos (code/file notes). The left bar has a per-type list,
-the center the editor; the type is stored in `notesUi.tab`.
+The Notes area gathers three kinds of writing:
+
+- **Journal** — a dated research log (the classic methodological notebook).
+- **Annotations** — notes attached to specific passages of files.
+- **Memos** — analytical notes attached to **codes** (and files).
+
+The left bar holds a per-type list; the center shows the editor for the
+selected item. The three tabs are independent.
+
+![Notes — journal](screenshots/10-notes-journal.png)
 
 ## How to reach it
 
-Ribbon → Notes (journal tab; the ribbon resets the tab to Journal when
-re-entered). The annotations and memos tabs are also opened from the file
-inspector / coder context menus.
+- Ribbon → **Journal** (the notes screen; the ribbon label is "Journal").
+  Re-entering from the ribbon resets to the journal tab.
+- The annotations and memos tabs are also opened from the file inspector and
+  coder context menus.
 
-## Layout slots used
+## The layout on this screen
 
-- Left bar: `NotesList` (w-72) — header with type-dependent Add button, a
+- **Left bar**: `NotesList` — a header with a type-dependent Add button, a
   search box, and the per-type list.
-- Center: `NotesEditor` — per-tab editor.
-- Right bar: Inspector.
+- **Center**: the editor for the selected item.
+- **Right bar**: the Inspector.
 
-## Features
+## Journal
 
-### Journal
-- **JournalList**: entries with name + date; search matches name and entry
-  text; inline rename (Tab cycles), delete (confirm); context menu
-  (Details / Rename / Delete); Add button creates an untitled entry.
-- **JournalEditor**: inline name input in the header (Enter saves), full
-  textarea for the entry, Save (disabled when clean) and Delete; the draft
-  survives background refreshes (unsaved edits are never overwritten).
+- **List**: entries with name + date; search matches name and entry text;
+  inline rename (Tab cycles); delete (confirm); context menu (Details /
+  Rename / Delete). Add creates an untitled entry.
+- **Editor**: the name is editable inline in the header (Enter saves); the
+  body is a full textarea with **Save** (disabled when clean) and **Delete**.
+  Unsaved drafts survive background refreshes — your typing is never
+  overwritten.
 
-### Annotations
-- **AnnotationItems**: list of all annotations (memo preview, file name,
+## Annotations
+
+- **List**: every annotation in the project (memo preview, file name,
   pos0–pos1, date); search matches file name and memo; inline memo editing;
   delete; context menu (Details / Open file / Rename / Delete).
-- **AnnotationDetails**: header with a file picker (moving an annotation to
-  another file is create+delete), position badge, Open file, Save (in edit
-  mode), Delete. The memo is a click-to-edit button; new annotations open in
-  edit mode automatically (`newAnnotation` flag). Add button in the list
-  header creates an annotation at the start of the first source.
+- **Details**: a file picker (moving an annotation to another file is
+  create + delete), a position badge, **Open file**, Save (in edit mode),
+  Delete. New annotations open in edit mode automatically. The Add button in
+  the list header creates an annotation at the start of the first source.
 
-### Memos
-- **MemoItems**: code memos as a collapsible tree (namespace-aware, depth
-  cap 64; color swatches, "memo" badge) plus a "Files with memos" section;
-  search matches name/memo; context menu (Details / Open file / Rename);
-  Add button selects the current selection or the first code without a memo.
-- **MemoEditor**: target name + kind badge (code/file), Open file button for
-  files, Save, Delete (clears the memo, confirm); draft survives refreshes.
+## Memos
 
-## API endpoints used
+- **List**: code memos as a **collapsible tree** (mirroring the codebook,
+  namespace-aware, depth-capped) plus a **"Files with memos"** section; search
+  matches name/memo; context menu (Details / Open file / Rename). Add selects
+  the current selection or the first code without a memo.
+- **Editor**: target name + a kind badge (code/file), **Open file** for file
+  memos, Save, Delete (clears the memo, confirm). Drafts survive refreshes.
 
-- `GET /journals`, `POST /journals`, `PATCH /journals/{jid}`,
-  `DELETE /journals/{jid}`
-- `GET /annotations` (all), `GET /annotations/{fid}`, `POST /annotations`,
-  `PATCH /annotations/{anid}`, `DELETE /annotations/{anid}`
-- `PATCH /codes/{cid}` and `PATCH /sources/{id}` (memo fields)
-- `GET /sources`, `GET /codes` (lists backing the memo tree)
+## High-level logic
 
-## Screenshot:
-
-(to be inserted)
+Journal entries, annotations and memos are distinct data, but they share a
+single mental model: **write a note attached to something**. Annotations are
+tied to a file passage (position offsets); memos are tied to a code or file;
+journal entries are standalone dated notes. Editing a memo from anywhere
+(the Inspector, the sidebar context menu, or here) opens the **same inline
+editor** — there is only ever one memo-editing UI.

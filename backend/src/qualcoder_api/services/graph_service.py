@@ -11,7 +11,6 @@ relation ``label`` and ``arrow_mode`` (v17 columns).
 
 from __future__ import annotations
 
-import datetime
 import json
 import math
 from collections import defaultdict, deque
@@ -20,11 +19,8 @@ from typing import Any
 from sqlalchemy import delete, insert, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from qualcoder_api.core.timeutil import now as _now
 from qualcoder_api.persistence import tables
-
-
-def _now() -> str:
-    return datetime.datetime.now().astimezone().strftime("%Y-%m-%d %H:%M:%S")
 
 
 def _row_dict(row) -> dict:

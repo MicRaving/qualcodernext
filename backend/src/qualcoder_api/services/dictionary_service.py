@@ -11,7 +11,6 @@ source, using the same tokenization the word-frequency report uses.
 
 from __future__ import annotations
 
-import datetime
 import re
 from collections import Counter, defaultdict
 from typing import Any
@@ -20,16 +19,13 @@ from sqlalchemy import delete, func, insert, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from qualcoder_api.core.timeutil import now as _now
 from qualcoder_api.persistence import tables
 from qualcoder_api.persistence.repositories import _inserted_pk
 
 # Same tokenization as the word-frequency report (report_service.py): words
 # may carry one embedded apostrophe or hyphen (e.g. "don't", "e-mail").
 _TOKEN_RE = re.compile(r"[^\W\d_]+(?:[''-][^\W\d_]+)*")
-
-
-def _now() -> str:
-    return datetime.datetime.now().astimezone().strftime("%Y-%m-%d %H:%M:%S")
 
 
 def _rowdict(row: Any) -> dict:

@@ -8,7 +8,6 @@ for the pattern).
 
 from __future__ import annotations
 
-import datetime
 from typing import Any, cast
 
 from fastapi import APIRouter, HTTPException
@@ -18,15 +17,12 @@ from sqlalchemy import update as sa_update
 from sqlalchemy.engine import CursorResult, Result
 
 from qualcoder_api.api.v1.deps import DbDep
+from qualcoder_api.core.timeutil import now as _now
 from qualcoder_api.persistence import tables
 from qualcoder_api.services import audit
 from qualcoder_api.services.user_settings import get_codername, resolve_owner
 
 router = APIRouter(prefix="/code-sets", tags=["code-sets"])
-
-
-def _now() -> str:
-    return datetime.datetime.now().astimezone().strftime("%Y-%m-%d %H:%M:%S")
 
 
 def _inserted_pk(result: Result) -> int:

@@ -1,3 +1,4 @@
+import { errorMessage } from "@/lib/utils";
 import { ApiError } from "@/lib/api";
 
 /** Score as a 2-decimal string; NaN/Infinity degrade to "0.00". */
@@ -15,5 +16,5 @@ export function welcomeMessage(enabled: boolean): string {
 /** Human-readable detail from an API error (falls back to the message). */
 export function errorDetail(e: unknown, fallback = "AI request failed"): string {
   if (e instanceof ApiError && typeof e.detail === "string") return e.detail;
-  return e instanceof Error ? e.message : fallback;
+  return errorMessage(e, fallback);
 }

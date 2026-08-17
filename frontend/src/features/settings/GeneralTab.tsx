@@ -10,15 +10,15 @@ import { errorDetail } from "@/features/ai/format";
 import { A11yControls } from "@/features/accessibility/A11yControls";
 import { useI18n, LOCALE_NAMES, type Locale } from "@/lib/i18n";
 import { Button, Field, IconButton, Input, SectionLabel, Select, Toggle } from "@/components/ui/orchestrator";
-import { useProjectStore } from "@/stores/project";
+import { usePrefsStore } from "@/stores/prefs";
 import { InterchangeView } from "@/features/interchange/InterchangeView";
 
 export function GeneralTab() {
   const { t, locale, setLocale } = useI18n();
-  const themeMode = useProjectStore((s) => s.themeMode);
-  const setThemeMode = useProjectStore((s) => s.setThemeMode);
-  const autoShowSegmentDetails = useProjectStore((s) => s.autoShowSegmentDetails);
-  const setAutoShowSegmentDetails = useProjectStore((s) => s.setAutoShowSegmentDetails);
+  const themeMode = usePrefsStore((s) => s.themeMode);
+  const setThemeMode = usePrefsStore((s) => s.setThemeMode);
+  const autoShowSegmentDetails = usePrefsStore((s) => s.autoShowSegmentDetails);
+  const setAutoShowSegmentDetails = usePrefsStore((s) => s.setAutoShowSegmentDetails);
 
   // Auto-load project on start (packaged app only; harmless elsewhere).
   const [autoLoadProject, setAutoLoadProject] = useState(true);

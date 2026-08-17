@@ -6,13 +6,14 @@
  * downloadCsv, chartPng.downloadChartPng): the backend bytes arrive as a
  * blob and a temporary <a download> click saves them under the chosen name.
  */
+import { errorMessage } from "@/lib/utils";
 import { useState, type FormEvent } from "react";
 import { Share2 } from "lucide-react";
 import { Button, Field, Input, Modal, Select } from "@/components/ui/orchestrator";
 import { ApiError, fetchWithTimeout, initApiBase } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
-import type { ReportId } from "@/stores/project";
-import { useProjectStore } from "@/stores/project";
+import type { ReportId } from "@/stores/workspace";
+import { useWorkspaceStore } from "@/stores/workspace";
 
 export type PublishFormat = "docx" | "pptx" | "xlsx";
 
@@ -88,7 +89,7 @@ function downloadBlob(blob: Blob, filename: string): void {
 
 export function PublishDialog({ onClose }: { onClose: () => void }) {
   const { t } = useI18n();
-  const selectedId = useProjectStore((s) => s.analyzeUi.selectedId);
+  const selectedId = useWorkspaceStore((s) => s.analyzeUi.selectedId);
   const reportName = selectedId ? PUBLISHABLE[selectedId] : undefined;
   const supported = reportName != null;
   const pptxSupported = reportName != null && PPTX_REPORTS.has(reportName);
@@ -108,7 +109,7 @@ export function PublishDialog({ onClose }: { onClose: () => void }) {
       downloadBlob(blob, withExtension(fileName, format));
       onClose();
     } catch (err) {
-      setError(t("analyze.publishError", { message: err instanceof Error ? err.message : String(err) }));
+      setError(t("analyze.publishError", { message: errorMessage(err, String(err))}));
     } finally {
       setBusy(false);
     }

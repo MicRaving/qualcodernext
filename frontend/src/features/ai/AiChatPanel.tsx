@@ -9,6 +9,7 @@
  * selection is sent with the chat request.
  */
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
+import { useAsyncEffect } from "@/lib/useAsync";
 import { Eraser, LoaderCircle, Send } from "lucide-react";
 import { ApiError, api, fetchWithTimeout, initApiBase, type AiStatus } from "@/lib/api";
 import { errorDetail, welcomeMessage } from "@/features/ai/format";
@@ -96,27 +97,22 @@ export function AiChatPanel({
     });
   }
 
-  useEffect(() => {
-    let cancelled = false;
-    api
-      .aiStatus()
-      .then((s) => {
-        if (cancelled) return;
-        setStatus(s);
-        // Only seed the welcome message on a fresh thread — a restored
-        // conversation (mode switch / pane reopen) keeps its history.
-        if (s.enabled) {
-          commitMessages((m) =>
-            m.length > 0 ? m : [{ role: "assistant", text: welcomeMessage(true) }],
-          );
-        }
-      })
-      .catch(() => {
-        if (!cancelled) setStatus(null);
-      });
-    return () => {
-      cancelled = true;
-    };
+  useAsyncEffect(async (signal) => {
+    try {
+      const s = await api.aiStatus();
+      signal.throwIfAborted();
+      setStatus(s);
+      // Only seed the welcome message on a fresh thread — a restored
+      // conversation (mode switch / pane reopen) keeps its history.
+      if (s.enabled) {
+        commitMessages((m) =>
+          m.length > 0 ? m : [{ role: "assistant", text: welcomeMessage(true) }],
+        );
+      }
+    } catch {
+      signal.throwIfAborted();
+      setStatus(null);
+    }
   }, []);
 
   useEffect(() => {

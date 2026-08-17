@@ -4,7 +4,8 @@
  * the pane's top bar; the "Semantic search" mode renders the search panel
  * in the main area, every other mode renders the chat panel.
  */
-import { useEffect, useState } from "react";
+import { useState } from "react";
+import { useAsyncEffect } from "@/lib/useAsync";
 import { HelpCircle } from "lucide-react";
 import { api, type AiPromptInfo } from "@/lib/api";
 import {
@@ -55,17 +56,10 @@ export function AiView() {
   const [promptId, setPromptId] = useState<string>("");
   const [helpAnchor, setHelpAnchor] = useState<HTMLElement | null>(null);
 
-  useEffect(() => {
-    let cancelled = false;
-    api
-      .aiPrompts()
-      .then((res) => {
-        if (!cancelled) setPrompts(res.prompts);
-      })
-      .catch(() => undefined);
-    return () => {
-      cancelled = true;
-    };
+  useAsyncEffect(async (signal) => {
+    const res = await api.aiPrompts();
+    signal.throwIfAborted();
+    setPrompts(res.prompts);
   }, []);
 
   const isSearch = mode === "search";

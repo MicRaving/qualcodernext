@@ -41,6 +41,7 @@ from qualcoder_api.api.v1.sql_reports import router as sql_router
 from qualcoder_api.api.v1.sync_api import router as sync_router
 from qualcoder_api.api.v1.tools import router as tools_router
 from qualcoder_api.api.v1.transcribe import router as transcribe_router
+from qualcoder_api.core import APP_VERSION
 from qualcoder_api.services.project_service import OpenResult
 
 logger = logging.getLogger(__name__)
@@ -83,7 +84,7 @@ router.include_router(r_scripts_router)
 
 class HealthResponse(BaseModel):
     status: str = "ok"
-    version: str = "0.2.0"
+    version: str = APP_VERSION
 
 
 class CreateProjectRequest(BaseModel):

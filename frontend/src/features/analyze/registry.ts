@@ -36,7 +36,7 @@ import { SummaryTableReportView } from "@/features/analyze/SummaryTableReport";
 import { SentimentReportView } from "@/features/analyze/SentimentReport";
 import { DocumentCompareView } from "@/features/analyze/DocumentCompareReport";
 import { RConsoleView } from "@/features/analyze/RConsole";
-import type { ReportId } from "@/stores/project";
+import type { ReportId } from "@/stores/workspace";
 
 export interface NavEntry {
   id: ReportId;

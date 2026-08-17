@@ -1,43 +1,53 @@
-# Image coder
+# Image Coder — code rectangular regions of images
 
-View an image and create rectangular code regions on it.
+View an image and mark meaningful regions with codes — e.g. the area of a
+photo that shows a particular activity, or a diagram element.
+
+![Image coder](screenshots/06-coder-image.png)
 
 ## How to reach it
 
-Files table → click an image source (`media_type == "image"`).
+- File manager → click an image file (PNG, JPG, GIF, WebP, …).
 
-## Layout slots used
+## The layout on this screen
 
-- Center: `ImageCoder` — `ViewHeader` (file name + "drag to mark" hint) +
-  zoom toolbar + scrollable canvas.
-- Left bar: Sidebar code tree; clicking a code assigns the pending
-  rectangle (`qc:assign-code`).
-- Right bar: Inspector.
+- **Center**: the image with a zoom toolbar and a scrollable canvas.
+- **Left bar**: the code tree; clicking a code assigns it to a pending
+  rectangle.
+- **Right bar**: the Inspector.
 
 ## Features
 
-- **Region coding**: drag a rectangle over the image (crosshair cursor); a
-  live preview rect shows while dragging. Region coordinates are stored in
-  image pixel space (`x1/y1/width/height` relative to the natural size).
-  With an active sidebar code the region is created immediately; otherwise
-  the CodePicker opens (search + create-new-code).
-- **Coded regions**: colored overlays (code tint + code-color border),
-  clickable; hidden codes are dimmed (`qc-seg-hidden`).
-- **Zoom**: zoom out / zoom in buttons (10–300 %, step 10 %) with a live
-  percentage readout, and Fit (scales to the container width on load too).
-- **Details panel** (after selecting a region): code color swatch, code
-  name, memo · size in px, Edit region (prompt for `x1,y1,width,height`),
-  Delete (confirm), Close.
-- **Save overlay**: a spinner overlay while a region coding is being saved.
-- **Error states**: load error with Retry; image load error banner.
+### Region coding
 
-## API endpoints used
+- **Drag a rectangle** over the image (crosshair cursor); a live preview rect
+  shows while dragging. With an active sidebar code the region is created
+  immediately; otherwise the CodePicker opens (search + create-new code).
+- Region coordinates are stored in **image pixel space** (`x1/y1/width/height`
+  relative to the natural image size), so the region stays anchored no matter
+  how you zoom or scroll.
 
-- `GET /sources/{id}`, `GET /sources/{id}/file` (image bytes)
-- `GET /codings/image/{source_id}`, `POST /codings/image`,
-  `PATCH /codings/image/{imid}`, `DELETE /codings/image/{imid}`
-- `GET /codes` (flat)
+### Coded regions
 
-## Screenshot:
+- Colored overlays (code tint + a border in the code's color). Clicking a
+  region opens its **details panel**: code swatch, code name, memo · size in
+  px, **Edit region** (prompt for `x1,y1,width,height`), **Delete** (confirm),
+  Close.
+- Regions of hidden codes are dimmed.
 
-(to be inserted)
+### Zoom
+
+- Zoom out / zoom in buttons (10–300 %, step 10 %) with a live percentage
+  readout, and **Fit** (scales to the container width — also applied on load).
+
+### States
+
+- Loading spinner while a region coding is being saved.
+- Load-error state with a **Retry** button; image-load error banner.
+
+## High-level logic
+
+Regions are rectangles in pixel coordinates, stored per source. This is the
+same model used for PDF page regions (which add a page number). Because the
+coordinates are relative to the image's natural size, the same coding renders
+correctly at any zoom level.

@@ -7,12 +7,12 @@ UI (Phase 9).
 
 from __future__ import annotations
 
-import datetime
 import json
 import logging
 import os
 from pathlib import Path
 
+from qualcoder_api.core.timeutil import now
 from qualcoder_api.services.transcription import TRANSCRIPTION_DEFAULTS
 
 logger = logging.getLogger(__name__)
@@ -167,7 +167,7 @@ def get_last_compact(settings: dict | None = None) -> str:
 def set_last_compact(settings: dict | None = None) -> str:
     """Stamp the maintenance settings with the time a compaction ran."""
     settings = settings or load_settings()
-    timestamp = datetime.datetime.now().astimezone().strftime("%Y-%m-%d %H:%M:%S")
+    timestamp = now()
     maintenance = get_maintenance_settings(settings)
     maintenance["last_compact"] = timestamp
     save_maintenance_settings(maintenance, settings)
@@ -446,12 +446,12 @@ def get_color_scheme(settings: dict | None = None) -> dict:
     settings = settings or load_settings()
     scheme = settings.get("color_scheme")
     if not isinstance(scheme, dict) or not isinstance(scheme.get("colors"), list):
-        from qualcoder_api.persistence.repositories import CODE_COLORS, COLOUR_RANGES
+        from qualcoder_api.core.palette import CODE_COLORS, COLOUR_RANGES
 
         return {"colors": list(CODE_COLORS), "ranges": [dict(r) for r in COLOUR_RANGES]}
     colors = [c for c in scheme["colors"] if isinstance(c, str) and c.startswith("#")]
     if len(colors) < 10:  # too few — fall back to the default palette
-        from qualcoder_api.persistence.repositories import CODE_COLORS, COLOUR_RANGES
+        from qualcoder_api.core.palette import CODE_COLORS, COLOUR_RANGES
 
         return {"colors": list(CODE_COLORS), "ranges": [dict(r) for r in COLOUR_RANGES]}
     ranges = scheme.get("ranges") or []

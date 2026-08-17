@@ -9,18 +9,14 @@ sees them.
 
 from __future__ import annotations
 
-import datetime
 from typing import Any, cast
 
 from sqlalchemy import delete, insert, select
 from sqlalchemy.engine import CursorResult, Result, RowMapping
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from qualcoder_api.core.timeutil import now as _now
 from qualcoder_api.persistence import tables
-
-
-def _now() -> str:
-    return datetime.datetime.now().astimezone().strftime("%Y-%m-%d %H:%M:%S")
 
 
 def _rowdict(mapping) -> dict:

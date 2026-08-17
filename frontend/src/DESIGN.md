@@ -305,7 +305,35 @@ With a project open:
   items-center gap-2 px-2 py-1.5 text-left text-sm hover:bg-surface-higher`.
   Right-click context menus use `position="fixed"`.
 
-## 13. Cross-cutting rules
+## 13. Motion & interaction (implemented system)
+
+Defined once in `index.css` (consuming the `tokens.json` motion tokens) and in the
+orchestrator. Every new screen inherits these automatically — never add a
+per-file transition/animation class.
+
+| Rule | Implementation |
+|---|---|
+| Motion tokens | `--qc-motion-fast: 150ms`, `--qc-motion-base: 250ms`, `--qc-ease: cubic-bezier(0.16, 1, 0.3, 1)` (light/dark aware via the token block) |
+| Shared transition layer | `.qc-motion` — transitions background-color / border-color / color / box-shadow / transform at fast + ease. Applied by `Button`, `IconButton`, `Input`/`Select`/`Textarea`, `MenuItem`, `Card` |
+| Modal entry | `.qc-modal-backdrop` = fade-in 150ms; `.qc-modal-panel` = pop (fade + `translateY(6px) scale(0.985)`) 250ms |
+| Menu / popover entry | `.qc-popover` = rise (fade + `translateY(4px)`) 150ms |
+| Toast entry/exit | `.qc-toast` = slide-in from right 150ms; `.qc-toast-out` = fade-out 150ms |
+| Hover / press | `.qc-btn-lift:hover:not(:disabled)` → `translateY(-1px)`; `.qc-btn-primary:active:not(:disabled)` → `scale(0.98)`; `.qc-card:hover` → `translateY(-1px)`. **Hover lifts are 1px, never more** |
+| Focus ring | Global `:focus-visible { outline: 2px solid var(--qc-accent); outline-offset: 1px }`; form fields use `.qc-field:focus` instead — `outline: none`, `border-color: var(--qc-accent)`, plus a 2px `box-shadow` ring (`color-mix(in srgb, var(--qc-accent) 30%, transparent)`) |
+| `Toggle` primitive | Orchestrator `Toggle`: `role="switch"` + `aria-checked`, track `h-4 w-8 rounded-full` (`bg-accent` when on / `bg-border` off), knob `h-3 w-3 rounded-full bg-white` at `left: 2`/`18`, `transition-colors`/`transition-all`. Optional label + hint. **The only switch component — never hand-roll a switch** |
+| Reduced motion | `.a11y-reduced-motion` kills all animation/transition (a11y mode); `@media (prefers-reduced-motion: reduce)` also neutralizes them (0.01ms durations). Motion is opacity/transform/color only — nothing that shifts layout |
+| Colorblind / high-contrast | `.a11y-colorblind` never lets accent carry information alone (underline + inset accent bar); `.a11y-high-contrast` outlines switches/segments |
+
+Rule: micro-interactions are **subtle and non-intrusive** — no springs, no
+staggered list reveals, no colored glow shadows. The `Card` component carries
+the hover lift automatically.
+
+Remaining UI-consistency sweep work is tracked in
+[`docs/ui-polish-plan.md`](../../docs/ui-polish-plan.md) (Phase B): the ad-hoc
+`h-6`/`h-7` toolbar clusters, a `cls.toolbarBtn` token, and the
+`--qc-shadow-sm/md/lg` elevation tokens are not yet done.
+
+## 14. Cross-cutting rules
 
 - Text selection: UI chrome (ribbon, left/right bars, status bar, views
   without a selectable document) is `user-select: none` via CSS; the coder

@@ -3,12 +3,14 @@
  * codebook export and the references manager. (The merged analytical
  * screens live in merged.tsx.)
  */
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState, useEffect } from "react";
+import { useAsyncEffect } from "@/lib/useAsync";
 import { Download, Paperclip, Trash2, X } from "lucide-react";
 import { api, type ReferenceEntry } from "@/lib/api";
 import { downloadCsv } from "@/lib/csv";
-import { cn } from "@/lib/utils";
+import { cn, errorMessage } from "@/lib/utils";
 import { useI18n } from "@/lib/i18n";
+import { useWorkspaceStore } from "@/stores/workspace";
 import { useProjectStore } from "@/stores/project";
 import {
   Button,
@@ -55,24 +57,20 @@ export function WordCloudReport() {
   const [error, setError] = useState<string | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
 
-  useEffect(() => {
-    let cancelled = false;
+  useAsyncEffect(async (signal) => {
     setLoading(true);
     setError(null);
-    api.reports
-      .wordFrequencies(sourceId === "" ? null : sourceId, 120)
-      .then((d) => {
-        if (!cancelled) setRows(d);
-      })
-      .catch((e) => {
-        if (!cancelled) setError(e instanceof Error ? e.message : "Failed to load");
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
+    try {
+      const d = await api.reports.wordFrequencies(sourceId === "" ? null : sourceId, 120);
+      signal.throwIfAborted();
+      setRows(d);
+    } catch (e) {
+      signal.throwIfAborted();
+      setError(errorMessage(e, "Failed to load"));
+    } finally {
+      signal.throwIfAborted();
+      setLoading(false);
+    }
   }, [sourceId, attempt]);
 
   useEffect(() => {
@@ -254,24 +252,20 @@ export function ReferencesReport() {
   const [error, setError] = useState<string | null>(null);
   const [attempt, setAttempt] = useState(0);
 
-  useEffect(() => {
-    let cancelled = false;
+  useAsyncEffect(async (signal) => {
     setLoading(true);
     setError(null);
-    api
-      .references()
-      .then((res) => {
-        if (!cancelled) setReferences(res.references);
-      })
-      .catch((e) => {
-        if (!cancelled) setError(e instanceof Error ? e.message : "Failed to load");
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
+    try {
+      const res = await api.references();
+      signal.throwIfAborted();
+      setReferences(res.references);
+    } catch (e) {
+      signal.throwIfAborted();
+      setError(errorMessage(e, "Failed to load"));
+    } finally {
+      signal.throwIfAborted();
+      setLoading(false);
+    }
   }, [attempt]);
 
   async function remove(risid: number) {
@@ -290,7 +284,7 @@ export function ReferencesReport() {
         await api.attachReferenceFile(risid, file);
         setAttempt((a) => a + 1);
       } catch (err) {
-        setError(err instanceof Error ? err.message : "Could not attach file");
+        setError(errorMessage(err, "Could not attach file"));
       }
     };
     input.click();
@@ -301,7 +295,7 @@ export function ReferencesReport() {
       await api.detachReferenceFile(risid, sourceId);
       setAttempt((a) => a + 1);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not detach file");
+      setError(errorMessage(err, "Could not detach file"));
     }
   }
 
@@ -359,7 +353,7 @@ export function ReferencesReport() {
                           type="button"
                           title={`Open ${s.name} in the coder`}
                           onClick={() =>
-                            useProjectStore.getState().setView({ kind: "coding", sourceId: s.id })
+                            useWorkspaceStore.getState().setView({ kind: "coding", sourceId: s.id })
                           }
                           className="rounded-sm px-1 py-0.5 text-xs text-accent hover:bg-accent/10"
                         >

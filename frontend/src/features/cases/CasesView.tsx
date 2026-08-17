@@ -33,16 +33,17 @@ import {
   Select,
   ViewHeader,
 } from "@/components/ui/orchestrator";
-import { cn } from "@/lib/utils";
+import { cn, errorMessage } from "@/lib/utils";
 import { useI18n } from "@/lib/i18n";
+import { useWorkspaceStore } from "@/stores/workspace";
 import { useProjectStore } from "@/stores/project";
 
 /** Left bar: the case list with search + add actions. */
 export function CasesList() {
   const { t } = useI18n();
   const cases = useProjectStore((s) => s.cases);
-  const casesUi = useProjectStore((s) => s.casesUi);
-  const setCasesUi = useProjectStore((s) => s.setCasesUi);
+  const casesUi = useWorkspaceStore((s) => s.casesUi);
+  const setCasesUi = useWorkspaceStore((s) => s.setCasesUi);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
@@ -56,7 +57,7 @@ export function CasesList() {
       const list = await api.cases();
       useProjectStore.setState({ cases: list });
     } catch (e) {
-      setLoadError(e instanceof Error ? e.message : t("cases.loadError"));
+      setLoadError(errorMessage(e, t("cases.loadError")));
     } finally {
       setLoading(false);
     }
@@ -82,7 +83,7 @@ export function CasesList() {
       await useProjectStore.getState().refreshProject();
       setEditingId(created.caseid);
     } catch (e) {
-      setActionError(e instanceof Error ? e.message : t("cases.createError"));
+      setActionError(errorMessage(e, t("cases.createError")));
     }
   }
 
@@ -94,7 +95,7 @@ export function CasesList() {
       await api.updateCase(caseid, { name });
       await useProjectStore.getState().refreshProject();
     } catch (e) {
-      setActionError(e instanceof Error ? e.message : t("cases.renameError"));
+      setActionError(errorMessage(e, t("cases.renameError")));
     }
   }
 
@@ -106,7 +107,7 @@ export function CasesList() {
       if (casesUi.selectedId === c.caseid) setCasesUi({ selectedId: null });
       await useProjectStore.getState().refreshProject();
     } catch (e) {
-      setActionError(e instanceof Error ? e.message : t("cases.deleteError"));
+      setActionError(errorMessage(e, t("cases.deleteError")));
     }
   }
 
@@ -291,7 +292,7 @@ export function CaseDetails() {
   const { t } = useI18n();
   const cases = useProjectStore((s) => s.cases);
   const sources = useProjectStore((s) => s.sources);
-  const casesUi = useProjectStore((s) => s.casesUi);
+  const casesUi = useWorkspaceStore((s) => s.casesUi);
   const selectedId = casesUi.selectedId;
 
   const [actionError, setActionError] = useState<string | null>(null);
@@ -312,7 +313,7 @@ export function CaseDetails() {
     try {
       setFiles(await api.caseFiles(caseid));
     } catch (e) {
-      setActionError(e instanceof Error ? e.message : t("cases.loadFilesError"));
+      setActionError(errorMessage(e, t("cases.loadFilesError")));
     } finally {
       setFilesLoading(false);
     }
@@ -360,7 +361,7 @@ export function CaseDetails() {
       await api.updateCase(selected.caseid, { memo });
       await refreshAll();
     } catch (e) {
-      setActionError(e instanceof Error ? e.message : t("cases.memoSaveError"));
+      setActionError(errorMessage(e, t("cases.memoSaveError")));
     } finally {
       setMemoSaving(false);
     }
@@ -373,7 +374,7 @@ export function CaseDetails() {
       await api.unlinkFileFromCase(selected.caseid, fid);
       await refreshAll();
     } catch (e) {
-      setActionError(e instanceof Error ? e.message : t("cases.unlinkError"));
+      setActionError(errorMessage(e, t("cases.unlinkError")));
     }
   }
 
@@ -385,7 +386,7 @@ export function CaseDetails() {
       setLinkFid("");
       await refreshAll();
     } catch (e) {
-      setActionError(e instanceof Error ? e.message : t("cases.linkError"));
+      setActionError(errorMessage(e, t("cases.linkError")));
     }
   }
 

@@ -10,7 +10,6 @@ existing same-named sources are imported under the existing ids).
 
 from __future__ import annotations
 
-import datetime
 import logging
 import shutil
 from pathlib import Path
@@ -19,13 +18,11 @@ import aiosqlite
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
+from qualcoder_api.core.palette import CODE_COLORS
+from qualcoder_api.core.timeutil import now as _now
 from qualcoder_api.persistence import tables
 
 logger = logging.getLogger(__name__)
-
-
-def _now() -> str:
-    return datetime.datetime.now().astimezone().strftime("%Y-%m-%d %H:%M:%S")
 
 
 def _pick(cols: set[str], *candidates: str | None) -> list[str]:
@@ -229,7 +226,7 @@ async def _merge(
                         "owner": code.get("owner") or codername,
                         "date": code.get("date") or _now(),
                         "catid": catid,
-                        "color": code.get("color") or "#F5F6CE",
+                        "color": code.get("color") or CODE_COLORS[0],
                     },
                 )
                 row = await session.execute(

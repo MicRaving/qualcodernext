@@ -7,7 +7,26 @@
  * packaged backend may have restarted on a new port).
  */
 
+import { useMemo } from "react";
+import type { CodeTreeItem } from "@/lib/api";
 import { ApiError, fetchWithTimeout, initApiBase } from "@/lib/api";
+
+/** Build color-by-id and name-by-id maps from a flat code tree. */
+export function useCodeMaps(codes: CodeTreeItem[]) {
+  const colorByCid = useMemo(() => {
+    const map = new Map<number, string>();
+    for (const c of codes) if (c.kind === "code" && c.color) map.set(c.id, c.color);
+    return map;
+  }, [codes]);
+
+  const nameByCid = useMemo(() => {
+    const map = new Map<number, string>();
+    for (const c of codes) if (c.kind === "code") map.set(c.id, c.name);
+    return map;
+  }, [codes]);
+
+  return { colorByCid, nameByCid };
+}
 
 export type CodingKind = "text" | "image" | "av";
 

@@ -9,7 +9,6 @@ name ``📌 Speaker coding`` so they stay out of the regular coders' counts.
 
 from __future__ import annotations
 
-import datetime
 import re
 from collections import defaultdict
 
@@ -17,16 +16,13 @@ from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from qualcoder_api.core.models import Code
+from qualcoder_api.core.timeutil import now as _now
 from qualcoder_api.persistence import tables
 
 SPEAKER_CODER_NAME = "📌 Speaker coding"
 SPEAKERS_CATEGORY_NAME = "📌 " + "Speakers"
 SPEAKER_CODE_COLOR = "#B8B8B8"
 MAX_NAME_LEN = 63
-
-
-def _now() -> str:
-    return datetime.datetime.now().astimezone().strftime("%Y-%m-%d %H:%M:%S")
 
 # Uppercase letters (ASCII + accented Latin-1) for mid-paragraph "Name:"
 # detection; re has no \\p{Lu}.

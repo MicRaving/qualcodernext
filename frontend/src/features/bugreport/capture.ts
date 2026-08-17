@@ -19,6 +19,7 @@
  * text snapshot (app version, view, last action, last error, timestamp)
  * drawn on a canvas. A bug report NEVER ships a blank placeholder.
  */
+import { errorMessage } from "@/lib/utils";
 import html2canvas from "html2canvas";
 import { t } from "@/lib/i18n";
 
@@ -406,9 +407,7 @@ export async function captureAppScreenshot(): Promise<CaptureResult> {
       canvas = await render();
     } catch (second) {
       throw new Error(
-        `Screenshot capture failed: ${
-          second instanceof Error ? second.message : String(second)
-        }`,
+        `Screenshot capture failed: ${errorMessage(second, String(second))}`,
       );
     }
   }
@@ -417,7 +416,7 @@ export async function captureAppScreenshot(): Promise<CaptureResult> {
     dataUrl = canvas.toDataURL("image/png");
   } catch (err) {
     // Tainted canvas (external image): no pixels can be read.
-    throw new Error(err instanceof Error ? err.message : "Canvas export failed");
+    throw new Error(errorMessage(err, "Canvas export failed"));
   }
   return { dataUrl, blob: dataUrlToBlob(dataUrl) };
 }
@@ -435,11 +434,10 @@ async function snapshotContext(): Promise<SnapshotContext> {
   let lastAction: string | null = null;
   let lastError: string | null = null;
   try {
-    const { useProjectStore } = await import("@/stores/project");
-    const store = useProjectStore.getState();
-    view = store.view.kind;
-    lastAction = store.bugReport.lastAction;
-    lastError = store.bugReport.lastError;
+    const { useWorkspaceStore, useProjectStore } = await import("@/stores/project");
+    view = useWorkspaceStore.getState().view.kind;
+    lastAction = useProjectStore.getState().bugReport.lastAction;
+    lastError = useProjectStore.getState().bugReport.lastError;
   } catch {
     /* store unreachable (e.g. bare unit test) — keep the unknowns */
   }

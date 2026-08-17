@@ -4,6 +4,7 @@
  * The job runs in the queue; progress is shown in the top bar (the dialog
  * closes immediately after starting).
  */
+import { errorMessage } from "@/lib/utils";
 import { useEffect, useState, type FormEvent } from "react";
 import { Captions, CircleAlert, LoaderCircle, Mic, Users } from "lucide-react";
 import { api, type SpeakerInfo, type TranscribeStatus } from "@/lib/api";
@@ -79,7 +80,7 @@ export function TranscribeDialog({ sourceId, sourceIds, onClose }: Props) {
         setVad(s.settings.vad);
         setSegmentCoding(s.settings.segment_coding);
       })
-      .catch((e: unknown) => setError(e instanceof Error ? e.message : t("transcribe.loadError")));
+      .catch((e: unknown) => setError(errorMessage(e, t("transcribe.loadError"))));
   }, [t]);
 
   async function handleStart(e: FormEvent) {
@@ -129,7 +130,7 @@ export function TranscribeDialog({ sourceId, sourceIds, onClose }: Props) {
             toast.error(
               t("transcribe.batchError", {
                 name,
-                message: err instanceof Error ? err.message : t("transcribe.startError"),
+                message: errorMessage(err, t("transcribe.startError")),
               }),
             );
             return;
@@ -162,10 +163,10 @@ export function TranscribeDialog({ sourceId, sourceIds, onClose }: Props) {
     } catch (err) {
       setBusy(false);
       if (batchMode) {
-        toast.error(err instanceof Error ? err.message : t("transcribe.startError"));
+        toast.error(errorMessage(err, t("transcribe.startError")));
         return;
       }
-      setError(err instanceof Error ? err.message : t("transcribe.startError"));
+      setError(errorMessage(err, t("transcribe.startError")));
     }
   }
 
@@ -180,7 +181,7 @@ export function TranscribeDialog({ sourceId, sourceIds, onClose }: Props) {
       setSpeakerTurns(res.turns);
       setSpeakerSelected(Object.fromEntries(res.speakers.map((s) => [s.name, true])));
     } catch (e) {
-      setSpeakerError(e instanceof Error ? e.message : "Failed to detect speakers");
+      setSpeakerError(errorMessage(e, "Failed to detect speakers"));
     } finally {
       setSpeakerBusy(false);
     }
@@ -207,7 +208,7 @@ export function TranscribeDialog({ sourceId, sourceIds, onClose }: Props) {
       );
       setTab("transcribe");
     } catch (e) {
-      setSpeakerError(e instanceof Error ? e.message : "Failed to mark speakers");
+      setSpeakerError(errorMessage(e, "Failed to mark speakers"));
     } finally {
       setSpeakerBusy(false);
     }

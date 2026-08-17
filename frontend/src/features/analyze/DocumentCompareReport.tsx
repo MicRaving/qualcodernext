@@ -25,7 +25,9 @@ import {
   MousePointerClick,
 } from "lucide-react";
 import { ApiError, fetchWithTimeout, initApiBase } from "@/lib/api";
-import { cn } from "@/lib/utils";
+import { cn, errorMessage } from "@/lib/utils";
+import { useWorkspaceStore } from "@/stores/workspace";
+import { useInspectorStore } from "@/stores/inspector";
 import { useProjectStore } from "@/stores/project";
 import { useI18n } from "@/lib/i18n";
 import { Button, EmptyState, Input, SectionLabel } from "@/components/ui/orchestrator";
@@ -144,8 +146,8 @@ function layoutChart(rows: CompareRow[], span1: number, span2: number): { items:
 export function DocumentCompareView() {
   const { t } = useI18n();
   const sources = useProjectStore((s) => s.sources);
-  const setView = useProjectStore((s) => s.setView);
-  const setGotoSegment = useProjectStore((s) => s.setGotoSegment);
+  const setView = useWorkspaceStore((s) => s.setView);
+  const setGotoSegment = useInspectorStore((s) => s.setGotoSegment);
   const [nameA, setNameA] = useState("");
   const [nameB, setNameB] = useState("");
   const [result, setResult] = useState<CompareResult | null>(null);
@@ -184,7 +186,7 @@ export function DocumentCompareView() {
       .catch((err) => {
         if (seq === requestSeq.current) {
           setResult(null);
-          setError(err instanceof Error ? err.message : "Failed to compare");
+          setError(errorMessage(err, "Failed to compare"));
         }
       })
       .finally(() => {

@@ -11,12 +11,8 @@
  *  - Text & corpus      = word cloud + exact matches + file summary + attributes
  * (Codebook / References / SQL live under the Tools group in the left bar.)
  */
-import {
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-} from "react";
+import { useMemo, useRef, useState, useEffect } from "react";
+import { useAsyncEffect } from "@/lib/useAsync";
 import { CircleAlert, FileImage, LoaderCircle } from "lucide-react";
 import {
   api,
@@ -32,7 +28,8 @@ import {
   type CooccurrenceTable,
   type InterraterResult,
 } from "@/lib/api";
-import { cn } from "@/lib/utils";
+import { cn, errorMessage } from "@/lib/utils";
+import { useCoderStore } from "@/stores/coder";
 import { useProjectStore } from "@/stores/project";
 import { useI18n } from "@/lib/i18n";
 import { downloadChartPng } from "@/features/analyze/chartPng";
@@ -454,7 +451,7 @@ function segmentPosition(r: CodeSegmentRow): string {
 
 export function CodeSegmentsView() {
   const { t } = useI18n();
-  const coders = useProjectStore((state) => state.coders).map((c) => c.name);
+  const coders = useCoderStore((state) => state.coders).map((c) => c.name);
   const [cid, setCid] = useState<number | "">("");
   const [owner, setOwner] = useState("");
   const [compare, setCompare] = useState(false);
@@ -828,8 +825,8 @@ export function FileCodeView() {
 
 export function CodeRelationsView() {
   const { t } = useI18n();
-  const coders = useProjectStore((state) => state.coders).map((c) => c.name);
-  const current = useProjectStore((state) => state.coderName);
+  const coders = useCoderStore((state) => state.coders).map((c) => c.name);
+  const current = useCoderStore((state) => state.coderName);
   const [mode, setMode] = useState<"cooccurrence" | "crossover">("cooccurrence");
   const [owner, setOwner] = useState("");
   useEffect(() => {
@@ -1039,7 +1036,7 @@ export function InterraterView() {
   const { t } = useI18n();
   const { data, loading, error, retry } = useReport(api.reports.coderComparison);
   const volume = data?.rows ?? [];
-  const coders = useProjectStore((state) => state.coders).map((c) => c.name);
+  const coders = useCoderStore((state) => state.coders).map((c) => c.name);
   const [selected, setSelected] = useState<string[]>([]);
   const [result, setResult] = useState<InterraterReport | null>(null);
   const [computing, setComputing] = useState(false);
@@ -1061,30 +1058,24 @@ export function InterraterView() {
   }, [coders]);
 
   // Recompute whenever the selection settles on two or more coders.
-  useEffect(() => {
+  useAsyncEffect(async (signal) => {
     if (selected.length < 2) {
       setResult(null);
       return;
     }
     const seq = ++requestSeq.current;
-    let cancelled = false;
     setComputing(true);
     setComputeError(null);
-    postInterrater({ coder_a: selected[0], coder_b: selected[1], coders: selected })
-      .then((r) => {
-        if (!cancelled && seq === requestSeq.current) setResult(r);
-      })
-      .catch((err) => {
-        if (!cancelled && seq === requestSeq.current) {
-          setComputeError(err instanceof Error ? err.message : "Failed to compute");
-        }
-      })
-      .finally(() => {
-        if (seq === requestSeq.current) setComputing(false);
-      });
-    return () => {
-      cancelled = true;
-    };
+    try {
+      const r = await postInterrater({ coder_a: selected[0], coder_b: selected[1], coders: selected });
+      signal.throwIfAborted();
+      if (seq === requestSeq.current) setResult(r);
+    } catch (err) {
+      signal.throwIfAborted();
+      if (seq === requestSeq.current) setComputeError(errorMessage(err, "Failed to compute"));
+    } finally {
+      if (seq === requestSeq.current) setComputing(false);
+    }
   }, [selected]);
 
   function toggleCoder(name: string) {

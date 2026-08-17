@@ -10,7 +10,8 @@
  *
  * Registered by the analysis registry (suggested id: "sentiment").
  */
-import { useEffect, useState } from "react";
+import { useState } from "react";
+import { useAsyncEffect } from "@/lib/useAsync";
 import { api, ApiError, fetchWithTimeout, initApiBase, type AiStatus } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
@@ -135,19 +136,14 @@ export function SentimentReportView() {
   const [fid, setFid] = useState<number | "">("");
   const [aiStatus, setAiStatus] = useState<AiStatus | null>(null);
 
-  useEffect(() => {
-    let cancelled = false;
-    api
-      .aiStatus()
-      .then((status) => {
-        if (!cancelled) setAiStatus(status);
-      })
-      .catch(() => {
-        /* best-effort: the backend still guards AI mode with a 409 */
-      });
-    return () => {
-      cancelled = true;
-    };
+  useAsyncEffect(async (signal) => {
+    try {
+      const status = await api.aiStatus();
+      signal.throwIfAborted();
+      setAiStatus(status);
+    } catch {
+      /* best-effort: the backend still guards AI mode with a 409 */
+    }
   }, []);
 
   const aiAvailable = aiStatus === null ? true : aiStatus.enabled && aiStatus.configured;

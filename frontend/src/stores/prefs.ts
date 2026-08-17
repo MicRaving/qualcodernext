@@ -1,0 +1,187 @@
+/**
+ * UI preferences + collaboration sync state (Zustand).
+ *
+ * Owns the theme mode, the accessibility display modes, the
+ * auto-show-segment-details pref and the collaboration sync status/actions.
+ * UI components call these actions; the store never renders.
+ */
+import { create } from "zustand";
+import { api, type SyncStatus } from "@/lib/api";
+import { useProjectStore } from "./project";
+
+export type ThemeMode = "light" | "dark";
+
+/** Persist + apply the theme: toggle `.dark` on <html> and store in localStorage. */
+function applyThemeMode(mode: ThemeMode) {
+  if (typeof document !== "undefined") {
+    document.documentElement.classList.toggle("dark", mode === "dark");
+  }
+  if (typeof window !== "undefined") {
+    localStorage.setItem("qc-theme", mode);
+  }
+}
+
+/** Seed the theme from localStorage; fall back to the OS preference. */
+function initialThemeMode(): ThemeMode {
+  if (typeof window !== "undefined") {
+    const saved = localStorage.getItem("qc-theme");
+    if (saved === "dark" || saved === "light") return saved;
+    if (
+      typeof window.matchMedia === "function" &&
+      window.matchMedia("(prefers-color-scheme: dark)").matches
+    ) {
+      return "dark";
+    }
+  }
+  return "light";
+}
+
+const INITIAL_THEME_MODE = initialThemeMode();
+applyThemeMode(INITIAL_THEME_MODE);
+
+/** Accessibility display modes (visual impairments / screen readers). */
+export type A11yMode =
+  | "off"
+  | "screenreader"
+  | "high-contrast"
+  | "large-text"
+  | "reduced-motion"
+  | "colorblind";
+
+/** Apply the a11y mode class on <html> and persist it. */
+function applyA11yMode(mode: A11yMode) {
+  if (typeof document !== "undefined") {
+    const root = document.documentElement;
+    for (const m of [
+      "screenreader",
+      "high-contrast",
+      "large-text",
+      "reduced-motion",
+      "colorblind",
+    ] as const) {
+      root.classList.toggle(`a11y-${m}`, mode === m);
+    }
+  }
+  if (typeof window !== "undefined") {
+    localStorage.setItem("qc-a11y", mode);
+  }
+}
+
+function initialA11yMode(): A11yMode {
+  if (typeof window !== "undefined") {
+    const saved = localStorage.getItem("qc-a11y");
+    if (
+      saved === "screenreader" ||
+      saved === "high-contrast" ||
+      saved === "large-text" ||
+      saved === "reduced-motion" ||
+      saved === "colorblind"
+    ) {
+      return saved;
+    }
+  }
+  return "off";
+}
+
+const INITIAL_A11Y_MODE = initialA11yMode();
+applyA11yMode(INITIAL_A11Y_MODE);
+
+/** UI pref: whether creating a coding auto-selects it in the coder's
+ *  segment-details bar (DEFAULT ON). */
+function applyAutoShowSegmentDetails(v: boolean) {
+  if (typeof window !== "undefined") {
+    localStorage.setItem("qc-auto-show-segment-details", v ? "1" : "0");
+  }
+}
+
+function initialAutoShowSegmentDetails(): boolean {
+  if (typeof window !== "undefined") {
+    const saved = localStorage.getItem("qc-auto-show-segment-details");
+    if (saved === "1") return true;
+    if (saved === "0") return false;
+  }
+  return true;
+}
+
+const INITIAL_AUTO_SHOW_SEGMENT_DETAILS = initialAutoShowSegmentDetails();
+applyAutoShowSegmentDetails(INITIAL_AUTO_SHOW_SEGMENT_DETAILS);
+
+interface PrefsState {
+  themeMode: ThemeMode;
+  setThemeMode: (mode: ThemeMode) => void;
+
+  a11yMode: A11yMode;
+  setA11yMode: (mode: A11yMode) => void;
+
+  /** Auto-select a freshly created coding in the segment-details bar. */
+  autoShowSegmentDetails: boolean;
+  setAutoShowSegmentDetails: (v: boolean) => void;
+
+  /** Collaboration sync (Option B: sidecar change files over folder sync). */
+  syncStatus: SyncStatus | null;
+  setSyncStatus: (v: SyncStatus | null) => void;
+  /** Enable/disable the sync cycle. A manual toggle (remember: true) also
+   *  writes the per-project override so the decision survives reopens;
+   *  the shared-folder auto-enable passes remember: false. */
+  setSyncEnabled: (enabled: boolean, opts?: { remember?: boolean }) => Promise<boolean>;
+  runSyncNow: () => Promise<boolean>;
+  /** Set by the store when the backend reported a shared folder on open;
+   *  the shell shows a transient notice and clears it. */
+  syncAutoNotice: boolean;
+  setSyncAutoNotice: (v: boolean) => void;
+}
+
+export const usePrefsStore = create<PrefsState>((set) => ({
+  themeMode: INITIAL_THEME_MODE,
+  setThemeMode: (mode) => {
+    applyThemeMode(mode);
+    set({ themeMode: mode });
+  },
+
+  a11yMode: INITIAL_A11Y_MODE,
+  setA11yMode: (mode) => {
+    applyA11yMode(mode);
+    set({ a11yMode: mode });
+  },
+
+  autoShowSegmentDetails: INITIAL_AUTO_SHOW_SEGMENT_DETAILS,
+  setAutoShowSegmentDetails: (v) => {
+    applyAutoShowSegmentDetails(v);
+    set({ autoShowSegmentDetails: v });
+  },
+
+  syncStatus: null,
+  setSyncStatus: (v) => set({ syncStatus: v }),
+  setSyncEnabled: async (enabled, opts) => {
+    try {
+      await api.setSyncEnabled(enabled);
+      // A manual toggle (the coder flyout) becomes the remembered
+      // per-project override; the shared-folder auto-enable must NOT
+      // write it, so the next open re-detects.
+      if (opts?.remember !== false) {
+        const path = useProjectStore.getState().projectPath;
+        if (path) {
+          void api.syncSetOverride(path, enabled ? "on" : "off").catch(() => {});
+        }
+      }
+      const status = await api.syncStatus();
+      set({ syncStatus: status });
+      return true;
+    } catch {
+      return false;
+    }
+  },
+  syncAutoNotice: false,
+  setSyncAutoNotice: (v) => set({ syncAutoNotice: v }),
+  runSyncNow: async () => {
+    try {
+      const res = await api.syncNow();
+      if (!res.ok) return false;
+      const status = await api.syncStatus();
+      set({ syncStatus: status });
+      return true;
+    } catch {
+      return false;
+    }
+  },
+}));

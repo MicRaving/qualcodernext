@@ -2,9 +2,10 @@
  * SqlReport — run ad-hoc read-only SQL against the project database and
  * manage saved queries.
  */
+import { errorMessage } from "@/lib/utils";
 import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { LoaderCircle, Play, Save, Trash2 } from "lucide-react";
-import { api, ApiError, type SavedQuery, type SqlResult } from "@/lib/api";
+import { api, type SavedQuery, type SqlResult } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 import { useToast } from "@/lib/toast";
 import {
@@ -14,11 +15,6 @@ import {
   TableHead,
   Textarea,
 } from "@/components/ui/orchestrator";
-
-function errorDetail(e: unknown): string {
-  if (e instanceof ApiError && typeof e.detail === "string") return e.detail;
-  return e instanceof Error ? e.message : "Request failed";
-}
 
 export function SqlReport() {
   const { t } = useI18n();
@@ -37,7 +33,7 @@ export function SqlReport() {
       setSaved(res.rows);
       setSavedError(null);
     } catch (e) {
-      setSavedError(e instanceof Error ? e.message : "Failed to load saved queries");
+      setSavedError(errorMessage(e, "Failed to load saved queries"));
     }
   }, []);
 
@@ -52,7 +48,7 @@ export function SqlReport() {
     try {
       setResult(await api.sqlRun(query));
     } catch (e) {
-      const detail = errorDetail(e);
+      const detail = errorMessage(e, "Request failed");
       setResult(null);
       setError(detail);
       toast.error(detail);
@@ -71,7 +67,7 @@ export function SqlReport() {
       await loadSaved();
       toast.success(`Saved query "${name}"`);
     } catch (err) {
-      const detail = errorDetail(err);
+      const detail = errorMessage(err, "Request failed");
       setError(detail);
       toast.error(detail);
     }
@@ -90,7 +86,7 @@ export function SqlReport() {
       await loadSaved();
       toast.info(`Deleted query "${q.title}"`);
     } catch (e) {
-      const detail = errorDetail(e);
+      const detail = errorMessage(e, "Request failed");
       setError(detail);
       toast.error(detail);
     }

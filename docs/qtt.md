@@ -1,53 +1,69 @@
-# Crafter — Questions-Themes-Theories workspace
+# Crafter — the Questions-Themes-Theories (QTT) workspace
 
-MAXQDA-style worksheets that collect insights (segments, notes, chart
-references, links) under themed sections. The name and the workflow mirror
-the classic QTT analysis approach: a worksheet defines the research
-question, purpose and framework, then gathers evidence.
+**Crafter** is a MAXQDA-style analysis workspace built on the classic
+**QTT (Questions-Themes-Theories)** approach. It provides **worksheets**: each
+one collects your insights — evidence quotes, notes, chart references and
+links — under themed sections, guided by a research question, purpose and
+framework. A worksheet is where you start turning coded data into an argument.
+
+![Crafter (QTT)](screenshots/11-qtt.png)
 
 ## How to reach it
 
-Ribbon → QTT. Worksheet selection is shared via the store (`qttUi`).
+- Ribbon → **Crafter**.
 
-## Layout slots used
+## The layout on this screen
 
-- Left bar: `QttList` (w-72) — worksheet list with total item count badge.
-- Center: `QttView` — the selected worksheet (info block + section cards).
-- Right bar: Inspector.
+- **Left bar**: the worksheet list (name, kind badge, item count).
+- **Center**: the selected worksheet — an info block (research question,
+  purpose, framework) plus the section cards.
+- **Right bar**: the Inspector.
 
 ## Features
 
-- **Worksheet list**: rows show name, kind badge (Qual / Mixed), and item
-  count; context menu (Details / Rename / Delete); inline rename input.
-- **Create worksheet**: Add opens a dialog with a name input and a template
-  kind selector — **Qualitative** (single-column sections) or **Mixed**
-  (two-column grid). The template seeds the sections (14 steps modeled on
-  the classic QTT procedure).
-- **Worksheet info block**: research question, purpose and framework editors
-  (Save enabled when dirty; drafts survive reloads).
-- **Section cards**: each card has a header (name + item count badge), a
+### Worksheets
+
+- **Create**: Add opens a dialog with a name and a **template kind**:
+  - **Qualitative** — single-column sections (seeded with a default
+    "Insights" section).
+  - **Mixed** — a two-column grid seeded with the **14 Creswell
+    mixed-methods steps** (Research Questions, Qualitative/Quantitative Data
+    Collection & Analysis, Joint Display Planning, Data Integration,
+    Meta-Inferences, Validity & Reliability, Limitations, Reporting, Ethical
+    Considerations, Reflexivity, Conclusions & Implications).
+- **List**: rows show name, kind badge (Qual / Mixed) and item count; inline
+  rename; context menu (Details / Rename / Delete).
+
+### The worksheet editor
+
+- **Info block**: research question, purpose and framework editors (Save
+  enabled when dirty; drafts survive reloads).
+- **Section cards**: each card has a header (name + item-count badge), a
   "new note" input (Enter or + to add), and the item list.
-- **Item kinds**:
-  - *Segment* (quote): quote text plus a source chip; clicking it jumps into
-    the coder and flashes the span (`jumpToSpan`).
-  - *Note*: free text.
-  - *Chart*: a report reference (report name + params JSON).
-  - *Link*: an external URL (opens in a new tab).
-- **Item actions**: a section dropdown moves an item to another section
-  (same sheet); a delete button removes it.
-- **Send-to-QTT from the coders**: the text coder's selection toolbar offers
-  "Send to QTT" → pick a worksheet → the selected span is stored as a
-  segment item (with the source text). An open QTT workspace refreshes
-  automatically (store tick).
 
-## API endpoints used
+### Items (the content of a worksheet)
 
-- `GET /qtt`, `POST /qtt`, `PATCH /qtt/{sheet_id}`, `DELETE /qtt/{sheet_id}`,
-  `GET /qtt/{sheet_id}`
-- `POST /qtt/{sheet_id}/items`, `PATCH /qtt/items/{item_id}`,
-  `DELETE /qtt/items/{item_id}`
-- `POST /qtt/{sheet_id}/send-segment` (from the coders)
+| Kind | What it is | Action |
+|---|---|---|
+| **Segment** | A quote from your data (with a source chip) | Clicking it jumps into the coder and flashes the passage |
+| **Note** | Free text | — |
+| **Chart** | A reference to a report (report name + parameters) | — |
+| **Link** | An external URL | Opens in a new tab |
 
-## Screenshot:
+Each item has a section dropdown (move it to another section of the same
+sheet) and a delete button.
 
-(to be inserted)
+### Send-to-QTT from the coders
+
+The text coder's selection toolbar offers **Send to QTT** → pick a worksheet →
+the selected passage is stored as a segment item (with the source text). An
+open Crafter workspace refreshes automatically when something arrives.
+
+## High-level logic
+
+A worksheet is defined by its research question, purpose and framework; the
+sections are a fixed scaffold (template-dependent). Items are typed payloads
+attached to a section. **Segment items keep a live reference to the source
+passage**, so the worksheet is not a copy — it is a curated index into your
+coded data: click a quote and you are back in the document. This is the
+bridge between "I coded everything" and "here is my analysis".

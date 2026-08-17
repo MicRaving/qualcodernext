@@ -58,6 +58,7 @@ import {
   useState,
   type MouseEvent as ReactMouseEvent,
 } from "react";
+import { useAsyncEffect } from "@/lib/useAsync";
 import {
   Check,
   CircleAlert,
@@ -101,11 +102,13 @@ import {
 } from "@/features/coding/htmlHighlight";
 import { CodePicker } from "@/features/coding/CodePicker";
 import { TextCoder } from "@/features/coding/TextCoder";
-import { cn } from "@/lib/utils";
+import { FALLBACK_CODE_COLOR } from "@/features/coding/tint";
+import { cn, errorMessage } from "@/lib/utils";
 import { useI18n } from "@/lib/i18n";
 import { cls } from "@/components/ui/tokens";
 import { Menu, MenuItem } from "@/components/ui/orchestrator";
-import { useProjectStore } from "@/stores/project";
+import { useCoderStore } from "@/stores/coder";
+import { usePrefsStore } from "@/stores/prefs";
 import {
   Button,
   ErrorBanner,
@@ -116,7 +119,6 @@ import {
 } from "@/components/ui/orchestrator";
 
 /** Fallback color for codings whose code has no stored color. */
-const FALLBACK_CODE_COLOR = "var(--qc-accent)";
 
 /** PATCH a text coding's memo/important with a local fetch, mirroring
  *  codingApi's pattern — no lib/api.ts additions needed. */
@@ -746,10 +748,10 @@ export function HtmlCoder({ source }: { source: Source }) {
    *  not editing). */
   const [memoDraft, setMemoDraft] = useState<string | null>(null);
 
-  const activeCodeId = useProjectStore((s) => s.activeCodeId);
+  const activeCodeId = useCoderStore((s) => s.activeCodeId);
   /** When OFF, creating a coding does NOT auto-select it in the details
    *  footer (clicking a segment still views it). */
-  const autoShowDetails = useProjectStore((s) => s.autoShowSegmentDetails);
+  const autoShowDetails = usePrefsStore((s) => s.autoShowSegmentDetails);
 
   const containerRef = useRef<HTMLDivElement | null>(null);
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
@@ -914,7 +916,7 @@ export function HtmlCoder({ source }: { source: Source }) {
           setSelectedCtid(null);
         }
       } catch (e) {
-        setErrMsg(e instanceof Error ? e.message : t("coder.createError"));
+        setErrMsg(errorMessage(e, t("coder.createError")));
       } finally {
         clearFrameSelection();
       }
@@ -930,7 +932,7 @@ export function HtmlCoder({ source }: { source: Source }) {
         await api.deleteTextCoding(row.ctid);
         await refreshCodings();
       } catch (e) {
-        setErrMsg(e instanceof Error ? e.message : t("coder.removeError"));
+        setErrMsg(errorMessage(e, t("coder.removeError")));
       } finally {
         setCtxMenu(null);
       }
@@ -958,7 +960,7 @@ export function HtmlCoder({ source }: { source: Source }) {
         await patchCodingWeight("text", selectedCoding.ctid, weight);
         await refreshCodings();
       } catch (e) {
-        setErrMsg(e instanceof Error ? e.message : t("coder.weightError"));
+        setErrMsg(errorMessage(e, t("coder.weightError")));
       }
     })();
   }
@@ -979,7 +981,7 @@ export function HtmlCoder({ source }: { source: Source }) {
         await patchHtmlCodingRow(selectedCoding.ctid, { memo: draft });
         await refreshCodings();
       } catch (e) {
-        setErrMsg(e instanceof Error ? e.message : t("htmlCoder.updateError"));
+        setErrMsg(errorMessage(e, t("htmlCoder.updateError")));
       }
     })();
   }
@@ -993,7 +995,7 @@ export function HtmlCoder({ source }: { source: Source }) {
         await patchHtmlCodingRow(selectedCoding.ctid, { important: next });
         await refreshCodings();
       } catch (e) {
-        setErrMsg(e instanceof Error ? e.message : t("htmlCoder.updateError"));
+        setErrMsg(errorMessage(e, t("htmlCoder.updateError")));
       }
     })();
   }
@@ -1017,7 +1019,7 @@ export function HtmlCoder({ source }: { source: Source }) {
         setMemoDraft(null);
         await refreshCodings();
       } catch (e) {
-        setErrMsg(e instanceof Error ? e.message : t("coder.removeError"));
+        setErrMsg(errorMessage(e, t("coder.removeError")));
       }
     })();
   }
@@ -1269,8 +1271,11 @@ export function HtmlCoder({ source }: { source: Source }) {
 
   /* ---------------------------------------------------------------- load */
 
-  useEffect(() => {
-    let cancelled = false;
+  // NOTE: this coder deliberately does NOT use the shared `useCoder` hook —
+  // its load fetches codings + annotations + code tree + source fulltext in
+  // one atomic Promise.all (the fulltext anchors iframe selections) and
+  // resets frame-selection state on every run, so it stays bespoke here.
+  useAsyncEffect(async (signal) => {
     setLoading(true);
     setLoadError(null);
     setCodings([]);
@@ -1281,30 +1286,27 @@ export function HtmlCoder({ source }: { source: Source }) {
     setCtxMenu(null);
     setSelectedCtid(null);
     setMemoDraft(null);
-    void (async () => {
-      try {
-        const [cod, anns, flat, src] = await Promise.all([
-          api.sourceCoding(source.id),
-          api.fileAnnotations(source.id),
-          api.codesFlat(),
-          api.getSource(source.id),
-        ]);
-        if (cancelled) return;
-        setCodings(cod);
-        setAnnotations(anns);
-        setCodes(flat);
-        // The extraction the plain-text pane codes against — the anchor for
-        // validating webpage selections (the prop may already carry it).
-        setFulltext(src.fulltext ?? source.fulltext ?? null);
-      } catch (e) {
-        if (!cancelled) setLoadError(e instanceof Error ? e.message : t("htmlCoder.loadCodingsError"));
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
+    try {
+      const [cod, anns, flat, src] = await Promise.all([
+        api.sourceCoding(source.id),
+        api.fileAnnotations(source.id),
+        api.codesFlat(),
+        api.getSource(source.id),
+      ]);
+      signal.throwIfAborted();
+      setCodings(cod);
+      setAnnotations(anns);
+      setCodes(flat);
+      // The extraction the plain-text pane codes against — the anchor for
+      // validating webpage selections (the prop may already carry it).
+      setFulltext(src.fulltext ?? source.fulltext ?? null);
+    } catch (e) {
+      signal.throwIfAborted();
+      setLoadError(errorMessage(e, t("htmlCoder.loadCodingsError")));
+    } finally {
+      signal.throwIfAborted();
+      setLoading(false);
+    }
   }, [source.id, source.fulltext, reloadTick, t, clearFrameSelection]);
 
   // Fetch the raw .html file through the file-serving endpoint. When it is
@@ -1314,30 +1316,24 @@ export function HtmlCoder({ source }: { source: Source }) {
   // gate holds the UI until initApiBase() settles) and re-resolves +
   // retries a transport failure once, so an ephemeral-port backend cannot
   // surface as a spurious "Failed to fetch".
-  useEffect(() => {
-    let cancelled = false;
+  useAsyncEffect(async (signal) => {
     setHtmlLoading(true);
-    void (async () => {
-      try {
-        const res = await fetchSourceFile(source.id);
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const bytes = new Uint8Array(await res.arrayBuffer());
-        if (cancelled) return;
-        const scanLen = Math.min(bytes.length, HTML_CHARSET_SCAN_BYTES);
-        const declared = detectHtmlCharset(res.headers, bytes.subarray(0, scanLen));
-        setHtml(decodeHtmlBytes(bytes, declared));
-      } catch (e) {
-        if (!cancelled) {
-          setHtml(null);
-          console.warn("[html coder] snapshot load failed:", e);
-        }
-      } finally {
-        if (!cancelled) setHtmlLoading(false);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
+    try {
+      const res = await fetchSourceFile(source.id);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const bytes = new Uint8Array(await res.arrayBuffer());
+      signal.throwIfAborted();
+      const scanLen = Math.min(bytes.length, HTML_CHARSET_SCAN_BYTES);
+      const declared = detectHtmlCharset(res.headers, bytes.subarray(0, scanLen));
+      setHtml(decodeHtmlBytes(bytes, declared));
+    } catch (e) {
+      signal.throwIfAborted();
+      setHtml(null);
+      console.warn("[html coder] snapshot load failed:", e);
+    } finally {
+      signal.throwIfAborted();
+      setHtmlLoading(false);
+    }
   }, [source.id, htmlReloadTick, t]);
 
   // History undo/redo: reload codings/annotations when the audit log reverts

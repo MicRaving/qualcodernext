@@ -5,6 +5,9 @@
  */
 import { colorFor } from "@/lib/tokens";
 
+/** Fallback color when a code has no explicit color. */
+export const FALLBACK_CODE_COLOR = "var(--qc-accent)";
+
 export const CODING_ALPHA = parseFloat(colorFor("light", "coding_alpha"));
 
 /** Code color at the shared coding alpha over the background. */

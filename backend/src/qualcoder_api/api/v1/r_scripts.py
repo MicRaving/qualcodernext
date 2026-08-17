@@ -11,7 +11,6 @@ reads them back. Mutations are audit-recorded like every other domain
 from __future__ import annotations
 
 import csv
-import datetime
 import io
 from pathlib import Path
 from typing import Any, cast
@@ -23,6 +22,7 @@ from sqlalchemy import update as sa_update
 from sqlalchemy.engine import CursorResult, Result
 
 from qualcoder_api.api.v1.deps import DbDep, ServiceDep
+from qualcoder_api.core.timeutil import now as _now
 from qualcoder_api.persistence import tables
 from qualcoder_api.services import audit, report_service, sync
 from qualcoder_api.services.user_settings import get_codername, resolve_owner
@@ -35,10 +35,6 @@ REPORTS = (
     "coder-comparison",
     "summary-table",
 )
-
-
-def _now() -> str:
-    return datetime.datetime.now().astimezone().strftime("%Y-%m-%d %H:%M:%S")
 
 
 def _inserted_pk(result: Result) -> int:

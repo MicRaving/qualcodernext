@@ -2,7 +2,9 @@
  * Shared report data-loading + table scaffolding (constants and the hook;
  * the presentational parts live in reportKit.tsx).
  */
-import { useCallback, useEffect, useRef, useState } from "react";
+import { errorMessage } from "@/lib/utils";
+import { useAsyncEffect } from "@/lib/useAsync";
+import { useCallback, useRef, useState } from "react";
 import { cls } from "@/components/ui/tokens";
 
 export const thCls = cls.tableHead;
@@ -29,27 +31,20 @@ export function useReport<T>(load: () => Promise<T>, deps: unknown[] = []): Repo
   const loadRef = useRef(load);
   loadRef.current = load;
 
-  useEffect(() => {
-    let cancelled = false;
+  useAsyncEffect(async (signal) => {
     setLoading(true);
     setError(null);
-    loadRef
-      .current()
-      .then((d) => {
-        if (!cancelled) setData(d);
-      })
-      .catch((e) => {
-        if (!cancelled) {
-          setError(e instanceof Error ? e.message : "Failed to load report");
-        }
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    try {
+      const d = await loadRef.current();
+      signal.throwIfAborted();
+      setData(d);
+    } catch (e) {
+      signal.throwIfAborted();
+      setError(errorMessage(e, "Failed to load report"));
+    } finally {
+      signal.throwIfAborted();
+      setLoading(false);
+    }
   }, [attempt, ...deps]);
 
   const retry = useCallback(() => setAttempt((a) => a + 1), []);

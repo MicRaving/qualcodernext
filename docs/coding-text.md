@@ -1,72 +1,107 @@
-# Text coder
+# Text Coder — read, code, annotate and edit plain-text sources
 
-Code, annotate, link and edit plain-text sources.
+The text coder is the central workspace for plain-text material: interview
+transcripts, field notes, survey responses, any `.txt`/`.md`/`.docx`/… file.
+Select text → code it, annotate it, link it, or send it to a worksheet.
+
+![Text coder](screenshots/04-coder-text.png)
 
 ## How to reach it
 
-Files table → click a text file (non-PDF), or via Inspector → "Open in
-coder", segment jumps, bookmarks, etc. `CodingWorkspace` dispatches
-`media_type == "text"` (non-PDF) to `TextCoder`.
+- File manager → click a text file (anything that isn't a PDF/HTML/CSV).
+- Or from the Inspector's "Open in coder", a bookmark, or a segment jump.
 
-## Layout slots used
+## The layout on this screen
 
-- Center: `TextCoder` — wrapping `ViewHeader` (file name + memo meta +
-  controls) + scrollable document.
-- Left bar: Sidebar in code mode (code tree); clicking a code assigns it to
-  the pending selection (`qc:assign-code` event).
-- Right bar: Inspector (file details; code details' recent segments jump
-  here via `gotoSegment`).
+- **Center**: the document. The header shows the file name, its memo, and the
+  coder controls.
+- **Left bar**: the **code tree** in code mode. Clicking a code makes it the
+  *active code* and assigns it to any pending selection.
+- **Right bar**: the Inspector (file details; code details' recent segments
+  jump here).
 
-## Features
+## Core workflow: coding
 
-- **Selection toolbar** (floating, appears on text selection): Code (primary;
-  uses the active code from the sidebar, else opens the `CodePicker`),
-  Annotate (inline memo popover → creates an annotation), Copy segment link
-  (writes a qcnext link payload to the clipboard), Paste link here (if a
-  link payload is on the clipboard), Send to QTT (pick a worksheet → store
-  the span as a segment item).
-- **Coded-segment rendering**: code-colored soft highlights (code tint),
-  stacked colors for overlapping codes, per-segment hover title
-  ("code — memo"), wavy-underline markers for outgoing segment links
-  (click → jump to target file+span, flashing the span).
-- **Segment details panel**: clicking a coded segment shows its coding rows —
-  code color swatch, name, star for `important` codings, code memo, date,
-  and a delete button (deleted codings go to the undo stack).
-- **Unmark last**: restores the most recently deleted coding (undo stack of
-  the last 20 removals via `POST /codings/undo`).
-- **Annotations**: dashed-underline annotated fragments; clicking shows an
-  annotation details panel with memo editing (inline textarea) and delete;
-  annotations can also be managed from the Notes view.
-- **Edit mode**: a transparent textarea over a live highlighted overlay —
-  typing shifts coding/annotation positions in real time (debounced
-  `POST /codings/shift-positions`); Save commits the text
-  (`POST /codings/commit-edit`) and re-anchors everything; Ctrl/Cmd+S saves;
-  Escape / Cancel discards (with confirm when dirty).
-- **Autocode**: opens the shared `AutocodeDialog` (natural-language coding
-  prompt, multi-code selection, suggest-new-codes option, dictionary
-  autocode tab).
-- **Bookmarks**: set bookmark at the current scroll ratio (one per project);
-  go-to bookmark opens the bookmarked file (or scrolls if it's this file).
-- **Hidden codes**: clicking a code label in the sidebar toggles that code's
-  segments hidden in the document (`qc-seg-hidden`), several at once.
-- **Flash/jump**: `gotoSegment` from the Inspector's recent segments and
-  `qc:jump-span` events from segment links scroll the target into view and
-  flash it; jumps to another file switch the coder view automatically.
-- **Keyboard**: Escape closes the floating UI in order (QTT menu → picker →
-  annotate → toolbar/selection). Ctrl+S in edit mode saves.
-- **Code colors**: segments tinted with the code's color (fallback accent).
+1. **Select text** in the document. A floating **toolbar** appears.
+2. The toolbar offers:
+   - **Code** (primary) — codes the selection with the **active code** from
+     the sidebar; if none is active, the CodePicker opens (search + create-new
+     code).
+   - **In-vivo** — create a new code directly from the selected text (with an
+     optional category) and code it immediately.
+   - **Pick code** — open the CodePicker.
+   - **Annotate** — add a note to the passage (a memo popover).
+   - **Copy segment link** — copies a `qcnext-link://` payload for the passage
+     to the clipboard.
+   - **Paste link here** — if a link payload is on the clipboard, creates a
+     link from this passage to the target.
+   - **Send to QTT** — pick a worksheet; the passage is stored there as a
+     segment item (see [qtt.md](qtt.md)).
+3. The coded passage gets a **soft highlight** in the code's color; multiple
+   overlapping codes stack their colors.
 
-## API endpoints used
+You can also **click a code in the sidebar** to code the pending selection
+without touching the toolbar.
 
-- `GET /sources/{id}`, `GET /codings/text/{fid}`, `GET /annotations/{fid}`,
-  `GET /codes` (flat)
-- `POST /codings/text`, `DELETE /codings/text/{ctid}`, `POST /codings/undo`
-- `POST /annotations`, `PATCH /annotations/{anid}`, `DELETE /annotations/{anid}`
-- `POST /codings/shift-positions`, `POST /codings/commit-edit`
-- `POST /codings/autocode`, `POST /codings/dictionary-autocode`
-- `GET/PUT /bookmarks`, `GET/POST/DELETE /links`, `GET /links/source/{fid}`
-- QTT send: `GET /qtt`, `POST /qtt/{sheet_id}/send-segment`
+## Understanding the coded document
 
-## Screenshot:
+- **Coded segments**: code-colored highlights. Hovering shows
+  "code — memo"; clicking opens the **segment details** panel: code color
+  swatch, name, a star for important codings, code memo, date, and a delete
+  button (deletions go to the undo stack).
+- **Annotations**: passages with a dashed underline; clicking opens an
+  annotation panel with an inline memo editor and delete.
+- **Outgoing segment links**: passages show a wavy underline; clicking jumps
+  to the target file+passage and flashes it. If the target is in another
+  file, QCnext switches to that file automatically.
+- **Bookmarks**: set a bookmark at the current scroll position (one per
+  project); go-to scrolls to it (or opens the bookmarked file).
 
-(to be inserted)
+## Working with the code tree
+
+- Click a code → sets active code + opens its Inspector details.
+- Click a code's **color swatch** → toggles hiding/showing that code's
+  segments in the document (several at once).
+- Add code / category, rename, delete, merge, promote/demote, drag & drop —
+  all from the tree (see [shell.md](shell.md) → Inspector and the sidebar
+  context menu).
+
+## Editing a document
+
+The **Edit mode** overlays a transparent textarea on a live highlighted
+preview:
+
+- Typing **shifts coding/annotation positions in real time** (debounced).
+- **Save** (or Ctrl/Cmd+S) commits the text; every coding and annotation is
+  re-anchored.
+- **Escape / Cancel** discards (with a confirm when the draft is dirty).
+
+This is how you fix typos in a transcript without losing your coding.
+
+## Autocode
+
+The **Autocode** button opens the shared autocode dialog, with two tabs:
+
+- **Natural language**: a coding prompt (e.g. `"happy"` as a quoted literal, or
+  a free-form instruction), a target code (or several), and an optional
+  "suggest new codes" option. On a single source this runs directly; in batch
+  mode it queues one background job per file.
+- **Dictionary**: MAXDictio-style word dictionaries (see
+  [analyze.md](analyze.md) → Dictionary) — pick a dictionary and QCnext codes
+  every occurrence of its terms with the mapped codes.
+
+## Keyboard shortcuts
+
+- **Escape** closes the floating UI in order (QTT menu → picker → annotate →
+  toolbar/selection).
+- **Ctrl/Cmd+S** saves while editing.
+- Clicking the document dismisses floating toolbars.
+
+## High-level logic
+
+- Coding positions are stored as **character offsets** (`pos0`–`pos1`) into
+  the raw file text. That is why editing the text requires re-anchoring, and
+  why QCnext can jump precisely between files and reports.
+- "Unmark last" restores the most recently deleted coding from a small undo
+  stack; the project-wide History pane (see [history.md](history.md)) can undo
+  far more.

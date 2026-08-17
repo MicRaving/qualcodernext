@@ -9,6 +9,7 @@
  * notes, chart references and links). Items can be moved between sections
  * and deleted; each section has a "new note" input.
  */
+import { errorMessage } from "@/lib/utils";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowUpRight,
@@ -40,7 +41,7 @@ import {
 import { RowContextMenu } from "@/features/shell/RowContextMenu";
 import { jumpToSpan } from "@/features/coding/links";
 import { useI18n } from "@/lib/i18n";
-import { useProjectStore } from "@/stores/project";
+import { useWorkspaceStore } from "@/stores/workspace";
 import {
   createQttItem,
   createQttSheet,
@@ -62,7 +63,7 @@ function jumpToSegment(item: QttItem) {
   const pos0 = Number(item.payload.pos0);
   const pos1 = Number(item.payload.pos1);
   if (!Number.isFinite(fid) || !Number.isFinite(pos0) || !Number.isFinite(pos1)) return;
-  useProjectStore.getState().setView({ kind: "coding", sourceId: fid });
+  useWorkspaceStore.getState().setView({ kind: "coding", sourceId: fid });
   jumpToSpan(fid, pos0, pos1);
 }
 
@@ -72,8 +73,8 @@ function jumpToSegment(item: QttItem) {
 
 export function QttList() {
   const { t } = useI18n();
-  const qttUi = useProjectStore((s) => s.qttUi);
-  const setQttUi = useProjectStore((s) => s.setQttUi);
+  const qttUi = useWorkspaceStore((s) => s.qttUi);
+  const setQttUi = useWorkspaceStore((s) => s.setQttUi);
 
   const [sheets, setSheets] = useState<QttSheet[]>([]);
   const [loading, setLoading] = useState(true);
@@ -91,7 +92,7 @@ export function QttList() {
     try {
       setSheets(await listQttSheets());
     } catch (e) {
-      setError(e instanceof Error ? e.message : t("qtt.loadError"));
+      setError(errorMessage(e, t("qtt.loadError")));
     } finally {
       setLoading(false);
     }
@@ -115,7 +116,7 @@ export function QttList() {
       setQttUi({ selectedId: sheet.id, tick: qttUi.tick + 1 });
       await load();
     } catch (e) {
-      setError(e instanceof Error ? e.message : t("qtt.createError"));
+      setError(errorMessage(e, t("qtt.createError")));
     } finally {
       setCreateBusy(false);
     }
@@ -126,7 +127,7 @@ export function QttList() {
       await patchQttSheet(sheet.id, { name });
       await load();
     } catch (e) {
-      setError(e instanceof Error ? e.message : t("qtt.renameError"));
+      setError(errorMessage(e, t("qtt.renameError")));
     }
   }
 
@@ -139,7 +140,7 @@ export function QttList() {
       else setQttUi({ tick: qttUi.tick + 1 });
       await load();
     } catch (e) {
-      setError(e instanceof Error ? e.message : t("qtt.deleteError"));
+      setError(errorMessage(e, t("qtt.deleteError")));
     }
   }
 
@@ -386,7 +387,7 @@ function SheetInfo({ sheet, onChange }: { sheet: QttSheetDetail; onChange: () =>
       dirtyRef.current = false;
       onChange();
     } catch (e) {
-      setError(e instanceof Error ? e.message : t("qtt.infoSaveError"));
+      setError(errorMessage(e, t("qtt.infoSaveError")));
     } finally {
       setSaving(false);
     }
@@ -459,7 +460,7 @@ function ItemCard({
       await patchQttItem(item.id, { section });
       onReload();
     } catch (e) {
-      setError(e instanceof Error ? e.message : t("qtt.moveError"));
+      setError(errorMessage(e, t("qtt.moveError")));
     }
   }
 
@@ -469,7 +470,7 @@ function ItemCard({
       await deleteQttItem(item.id);
       onReload();
     } catch (e) {
-      setError(e instanceof Error ? e.message : t("qtt.itemDeleteError"));
+      setError(errorMessage(e, t("qtt.itemDeleteError")));
     }
   }
 
@@ -589,7 +590,7 @@ function SectionCard({
       setNewNote("");
       onReload();
     } catch (e) {
-      setError(e instanceof Error ? e.message : t("qtt.noteAddError"));
+      setError(errorMessage(e, t("qtt.noteAddError")));
     } finally {
       setBusy(false);
     }
@@ -645,7 +646,7 @@ function SectionCard({
 
 export function QttView() {
   const { t } = useI18n();
-  const qttUi = useProjectStore((s) => s.qttUi);
+  const qttUi = useWorkspaceStore((s) => s.qttUi);
   const [sheet, setSheet] = useState<QttSheetDetail | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -660,7 +661,7 @@ export function QttView() {
     try {
       setSheet(await getQttSheet(qttUi.selectedId));
     } catch (e) {
-      setError(e instanceof Error ? e.message : t("qtt.loadSheetError"));
+      setError(errorMessage(e, t("qtt.loadSheetError")));
       setSheet(null);
     } finally {
       setLoading(false);

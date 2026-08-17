@@ -1,6 +1,7 @@
 /**
  * Left sidebar — Files / Codes / Cases trees built from the API.
  */
+import { errorMessage } from "@/lib/utils";
 import { useEffect, useMemo, useRef, useState, type DragEvent as ReactDragEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import {
   Check,
@@ -57,6 +58,9 @@ import { InlineNameEdit } from "@/components/ui/InlineNameEdit";
 import { isPdf } from "@/lib/media";
 import { useToast } from "@/lib/toast";
 import { useI18n } from "@/lib/i18n";
+import { useCoderStore } from "@/stores/coder";
+import { useInspectorStore } from "@/stores/inspector";
+import { useWorkspaceStore } from "@/stores/workspace";
 import { useProjectStore } from "@/stores/project";
 import { clampToViewport } from "@/features/sidebar/codeActions";
 
@@ -153,14 +157,14 @@ export function Sidebar() {
   const codeTree = useProjectStore((s) => s.codeTree);
   const projectOpen = useProjectStore((s) => s.projectOpen);
   
-  const setView = useProjectStore((s) => s.setView);
-  const selectCode = useProjectStore((s) => s.selectCode);
-  const selectFile = useProjectStore((s) => s.selectFile);
-  const activeCodeId = useProjectStore((s) => s.activeCodeId);
-  const setActiveCode = useProjectStore((s) => s.setActiveCode);
-  const hiddenCodes = useProjectStore((s) => s.hiddenCodes);
-  const toggleHiddenCode = useProjectStore((s) => s.toggleHiddenCode);
-  const view = useProjectStore((s) => s.view);
+  const setView = useWorkspaceStore((s) => s.setView);
+  const selectCode = useInspectorStore((s) => s.selectCode);
+  const selectFile = useInspectorStore((s) => s.selectFile);
+  const activeCodeId = useCoderStore((s) => s.activeCodeId);
+  const setActiveCode = useCoderStore((s) => s.setActiveCode);
+  const hiddenCodes = useCoderStore((s) => s.hiddenCodes);
+  const toggleHiddenCode = useCoderStore((s) => s.toggleHiddenCode);
+  const view = useWorkspaceStore((s) => s.view);
 
   // Refresh the set list whenever a project opens/closes. The applied
   // filter is a client-side snapshot and is dropped on close.
@@ -179,7 +183,7 @@ export function Sidebar() {
         );
       })
       .catch((e) => {
-        const detail = e instanceof Error ? e.message : t("codeSets.loadError");
+        const detail = errorMessage(e, t("codeSets.loadError"));
         setToolbarError(detail);
       });
   }, [projectOpen, t]);
@@ -348,7 +352,7 @@ export function Sidebar() {
       await selectCode(res.cid);
       setEditing({ kind: "code", id: res.cid });
     } catch (e) {
-      const detail = e instanceof Error ? e.message : t("codePicker.createError");
+      const detail = errorMessage(e, t("codePicker.createError"));
       setToolbarError(detail);
       toast.error(detail);
     }
@@ -361,7 +365,7 @@ export function Sidebar() {
       await useProjectStore.getState().refreshProject();
       setEditing({ kind: "category", id: res.catid });
     } catch (e) {
-      const detail = e instanceof Error ? e.message : t("sidebar.createCategoryError");
+      const detail = errorMessage(e, t("sidebar.createCategoryError"));
       setToolbarError(detail);
       toast.error(detail);
     }
@@ -393,12 +397,8 @@ export function Sidebar() {
     } catch (e) {
       const detail =
         kind === "file"
-          ? e instanceof Error
-            ? e.message
-            : t("files.renameError")
-          : e instanceof Error
-            ? e.message
-            : t("sidebar.renameCodeError");
+          ? errorMessage(e, t("files.renameError"))
+          : errorMessage(e, t("sidebar.renameCodeError"));
       setToolbarError(detail);
       toast.error(detail);
     }
@@ -418,7 +418,7 @@ export function Sidebar() {
       await useProjectStore.getState().refreshProject();
       toast.success(t("sidebar.codeColourSet"));
     } catch (e) {
-      const detail = e instanceof Error ? e.message : t("sidebar.colourError");
+      const detail = errorMessage(e, t("sidebar.colourError"));
       setToolbarError(detail);
       toast.error(detail);
     }
@@ -432,14 +432,14 @@ export function Sidebar() {
   async function editCodeMemo(item: CodeTreeItem) {
     // The details panel (right bar) hosts the inline memo editor; open it
     // straight in edit mode.
-    useProjectStore.getState().setInspectorMemoEdit(true);
+    useInspectorStore.getState().setInspectorMemoEdit(true);
     void selectCode(item.id);
   }
 
   /** Add an annotation to the given file: opens the Inspector's inline
    *  new-annotation editor (no system prompt). */
   function addAnnotation(fid: number) {
-    useProjectStore.getState().setInspectorNewAnnotation(true);
+    useInspectorStore.getState().setInspectorNewAnnotation(true);
     void selectFile(fid);
   }
 
@@ -462,11 +462,9 @@ export function Sidebar() {
       }
     } catch (e) {
       const detail =
-        e instanceof Error
-          ? friendlyTreeError(t, e.message)
-          : source.kind === "category"
-            ? t("sidebar.mergeCategoryError")
-            : t("sidebar.mergeCodeError");
+        source.kind === "category"
+          ? friendlyTreeError(t, errorMessage(e, t("sidebar.mergeCategoryError")))
+          : friendlyTreeError(t, errorMessage(e, t("sidebar.mergeCodeError")));
       setToolbarError(detail);
       toast.error(detail);
     }
@@ -480,9 +478,9 @@ export function Sidebar() {
   }
 
   function clearInspectorIfSelected(item: CodeTreeItem) {
-    const sel = useProjectStore.getState().inspectorSelection;
+    const sel = useInspectorStore.getState().inspectorSelection;
     if (sel?.kind === "code" && sel.id === item.id) {
-      useProjectStore.getState().clearInspector();
+      useInspectorStore.getState().clearInspector();
     }
   }
 
@@ -511,7 +509,7 @@ export function Sidebar() {
   async function editFileMemo(source: Source) {
     // The details panel (right bar) hosts the inline memo editor; open it
     // straight in edit mode.
-    useProjectStore.getState().setInspectorMemoEdit(true);
+    useInspectorStore.getState().setInspectorMemoEdit(true);
     void selectFile(source.id);
   }
 
@@ -523,7 +521,7 @@ export function Sidebar() {
       await useProjectStore.getState().refreshProject();
       toast.success(t("files.deleted", { name: source.name }));
     } catch (e) {
-      const detail = e instanceof Error ? e.message : t("files.deleteError");
+      const detail = errorMessage(e, t("files.deleteError"));
       setToolbarError(detail);
       toast.error(detail);
     }
@@ -547,7 +545,7 @@ export function Sidebar() {
       await api.linkFileToCase(match.caseid, source.id);
       toast.success(t("files.assignCaseDone", { file: source.name, case: match.name }));
     } catch (e) {
-      const detail = e instanceof Error ? e.message : t("files.assignCaseError");
+      const detail = errorMessage(e, t("files.assignCaseError"));
       setToolbarError(detail);
       toast.error(detail);
     }
@@ -562,7 +560,7 @@ export function Sidebar() {
       await useProjectStore.getState().refreshProject();
       toast.success(t("sidebar.codeDeleted", { name: item.name }));
     } catch (e) {
-      const detail = e instanceof Error ? e.message : t("sidebar.deleteCodeError");
+      const detail = errorMessage(e, t("sidebar.deleteCodeError"));
       setToolbarError(detail);
       toast.error(detail);
     }
@@ -577,7 +575,7 @@ export function Sidebar() {
       await useProjectStore.getState().refreshProject();
       toast.success(t("sidebar.categoryDeleted", { name: item.name }));
     } catch (e) {
-      const detail = e instanceof Error ? e.message : t("sidebar.deleteCategoryError");
+      const detail = errorMessage(e, t("sidebar.deleteCategoryError"));
       setToolbarError(detail);
       toast.error(detail);
     }
@@ -590,7 +588,7 @@ export function Sidebar() {
       await useProjectStore.getState().refreshProject();
       toast.success(t("sidebar.subcodeRemoved"));
     } catch (e) {
-      const detail = e instanceof Error ? e.message : t("sidebar.subcodeRemovalError");
+      const detail = errorMessage(e, t("sidebar.subcodeRemovalError"));
       setToolbarError(detail);
       toast.error(detail);
     }
@@ -604,7 +602,7 @@ export function Sidebar() {
       else await api.promoteCode(item.id);
       await useProjectStore.getState().refreshProject();
     } catch (e) {
-      const detail = e instanceof Error ? friendlyTreeError(t, e.message) : t("tree.promoteFail");
+      const detail = friendlyTreeError(t, errorMessage(e, t("tree.promoteFail")));
       setToolbarError(detail);
       toast.error(detail);
     }
@@ -618,7 +616,7 @@ export function Sidebar() {
       else await api.demoteCode(item.id);
       await useProjectStore.getState().refreshProject();
     } catch (e) {
-      const detail = e instanceof Error ? friendlyTreeError(t, e.message) : t("tree.demoteFail");
+      const detail = friendlyTreeError(t, errorMessage(e, t("tree.demoteFail")));
       setToolbarError(detail);
       toast.error(detail);
     }
@@ -636,7 +634,7 @@ export function Sidebar() {
       else await api.moveCode(drag.id, opts as CodeMoveOpts);
       await useProjectStore.getState().refreshProject();
     } catch (e) {
-      const detail = e instanceof Error ? friendlyTreeError(t, e.message) : t("tree.moveFail");
+      const detail = friendlyTreeError(t, errorMessage(e, t("tree.moveFail")));
       setToolbarError(detail);
       toast.error(detail);
     }
@@ -833,7 +831,7 @@ export function Sidebar() {
         if (e instanceof ApiError && e.status === 409) {
           dupes.push(file.name);
         } else {
-          failed = e instanceof Error ? e.message : t("files.importFailed", { name: file.name });
+          failed = errorMessage(e, t("files.importFailed", { name: file.name }));
         }
       }
       useProjectStore.getState().setImportState({ done: i + 1, total: files.length });
@@ -900,7 +898,7 @@ export function Sidebar() {
       setAppliedSet({ id: activeSetId, name, cids: new Set(detail.members.map((m) => m.cid)) });
       toast.success(t("codeSets.applied", { name }));
     } catch (e) {
-      const detail = e instanceof Error ? e.message : t("codeSets.applyError");
+      const detail = errorMessage(e, t("codeSets.applyError"));
       setToolbarError(detail);
       toast.error(detail);
     }
@@ -918,7 +916,7 @@ export function Sidebar() {
       setActiveSetId(created.id);
       toast.success(t("codeSets.created", { name: trimmed }));
     } catch (e) {
-      const detail = e instanceof Error ? e.message : t("codeSets.createError");
+      const detail = errorMessage(e, t("codeSets.createError"));
       setToolbarError(detail);
       toast.error(detail);
     }
@@ -938,7 +936,7 @@ export function Sidebar() {
       if (appliedSet?.id === set.id) setAppliedSet({ ...appliedSet, name: updated.name });
       toast.success(t("codeSets.renamed", { name: trimmed }));
     } catch (e) {
-      const detail = e instanceof Error ? e.message : t("codeSets.renameError");
+      const detail = errorMessage(e, t("codeSets.renameError"));
       setToolbarError(detail);
       toast.error(detail);
     }
@@ -956,7 +954,7 @@ export function Sidebar() {
       setActiveSetId(null);
       toast.success(t("codeSets.deleted", { name: set.name }));
     } catch (e) {
-      const detail = e instanceof Error ? e.message : t("codeSets.deleteError");
+      const detail = errorMessage(e, t("codeSets.deleteError"));
       setToolbarError(detail);
       toast.error(detail);
     }
@@ -971,7 +969,7 @@ export function Sidebar() {
       const detail = await getCodeSet(set.id);
       setMembersEditor({ set, members: new Set(detail.members.map((m) => m.cid)) });
     } catch (e) {
-      const detail = e instanceof Error ? e.message : t("codeSets.loadError");
+      const detail = errorMessage(e, t("codeSets.loadError"));
       setToolbarError(detail);
       toast.error(detail);
     }
@@ -1955,7 +1953,7 @@ function CodeSetMembersModal({
     try {
       await onSave([...draft]);
     } catch (e) {
-      setError(e instanceof Error ? e.message : t("codeSets.membersSaveError"));
+      setError(errorMessage(e, t("codeSets.membersSaveError")));
       setBusy(false);
     }
   };

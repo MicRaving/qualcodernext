@@ -15,6 +15,7 @@
  * uploaded through the issues web editor's attachment endpoint and the
  * issue is created via the REST API instead.
  */
+import { errorMessage } from "@/lib/utils";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   Bug,
@@ -395,7 +396,7 @@ export function BugReportView() {
           } catch (e) {
             setAttachNote(
               t("bugReport.attachFailed", {
-                detail: e instanceof Error ? e.message : String(e),
+                detail: errorMessage(e, String(e)),
               }),
             );
           }

@@ -12,6 +12,7 @@ import {
   type ChangeEvent,
   type MouseEvent as ReactMouseEvent,
 } from "react";
+import { useAsyncEffect } from "@/lib/useAsync";
 import * as pdfjsLib from "pdfjs-dist";
 import type { PDFDocumentProxy, RenderTask } from "pdfjs-dist";
 import {
@@ -43,7 +44,7 @@ import {
   type ImageCoding,
   type Source,
 } from "@/lib/api";
-import { patchCodingWeight } from "@/features/coding/codingApi";
+import { patchCodingWeight, useCodeMaps } from "@/features/coding/codingApi";
 import { CodePicker, type PickedCode } from "@/features/coding/CodePicker";
 import { AutocodeDialog } from "@/features/coding/AutocodeDialog";
 import { TextCoder } from "@/features/coding/TextCoder";
@@ -56,7 +57,7 @@ import {
   type PagePoint,
 } from "@/features/coding/pdf";
 import { codeTint } from "@/features/coding/tint";
-import { cn } from "@/lib/utils";
+import { cn, errorMessage } from "@/lib/utils";
 import { useI18n } from "@/lib/i18n";
 import {
   Button,
@@ -66,6 +67,8 @@ import {
   LoadingState,
   ViewHeader,
 } from "@/components/ui/orchestrator";
+import { useCoderStore } from "@/stores/coder";
+import { usePrefsStore } from "@/stores/prefs";
 import { useProjectStore } from "@/stores/project";
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
@@ -87,11 +90,6 @@ const DRAG_MIN_SIZE = 5;
 async function fetchPdfBytes(sourceId: number): Promise<ArrayBuffer> {
   const res = await fetchSourceFile(sourceId);
   return res.arrayBuffer();
-}
-
-/** Error → display message with a non-Error fallback. */
-function errorMessage(err: unknown, fallback: string): string {
-  return err instanceof Error && err.message ? err.message : fallback;
 }
 
 /** PATCH a segment row's memo/important (text or image) with a local fetch,
@@ -239,11 +237,11 @@ function buildSelectionText(items: TextItemData[]): string {
 export function PdfCoder({ source }: { source: Source }) {
   const { t } = useI18n();
   const storeCodeTree = useProjectStore((s) => s.codeTree);
-  const activeCodeId = useProjectStore((s) => s.activeCodeId);
-  const hiddenCodes = useProjectStore((s) => s.hiddenCodes);
+  const activeCodeId = useCoderStore((s) => s.activeCodeId);
+  const hiddenCodes = useCoderStore((s) => s.hiddenCodes);
   /** When OFF, creating a coding does NOT auto-select it in the details
    *  footer (clicking a segment still views it). */
-  const autoShowDetails = useProjectStore((s) => s.autoShowSegmentDetails);
+  const autoShowDetails = usePrefsStore((s) => s.autoShowSegmentDetails);
 
   const [pdfVisible, setPdfVisible] = useState(true);
   const [plainVisible, setPlainVisible] = useState(false);
@@ -342,8 +340,12 @@ export function PdfCoder({ source }: { source: Source }) {
 
   /* ---------------------------------------------------------------- load */
 
-  useEffect(() => {
-    let cancelled = false;
+  // NOTE: this coder deliberately does NOT use the shared `useCoder` hook —
+  // its load pairs imageCodings with sourceCoding/annotations via
+  // allSettled so a companion (text codings, annotations, code tree) failure
+  // degrades to a footer note instead of killing the PDF view, so it stays
+  // bespoke here.
+  useAsyncEffect(async (signal) => {
     setLoading(true);
     setLoadError(null);
     setFooterError(null);
@@ -354,100 +356,92 @@ export function PdfCoder({ source }: { source: Source }) {
     setPendingRect(null);
     setPickerOpen(false);
     setCurrentPage(1);
-    void (async () => {
-      try {
-        // imageCodings is the critical fetch — without it the page shows no
-        // overlays at all. The companions (plain-text codings, annotations,
-        // code tree) degrade gracefully: their failure must not replace the
-        // whole view with an error screen (a codes-tree 500, e.g. from a
-        // project with category/code id collisions, used to kill the PDF).
-        const [cod, textCod, anns, flat] = await Promise.allSettled([
-          api.imageCodings(source.id),
-          api.sourceCoding(source.id),
-          api.fileAnnotations(source.id),
-          api.codesFlat(),
-        ]);
-        if (cancelled) return;
-        if (cod.status === "fulfilled") {
-          setCodings(cod.value);
-        } else {
-          setLoadError(errorMessage(cod.reason, t("coder.loadCodingsError")));
-          return;
-        }
-        setTextCodings(textCod.status === "fulfilled" ? textCod.value : []);
-        setAnnotations(anns.status === "fulfilled" ? anns.value : []);
-        setCodes(flat.status === "fulfilled" ? flat.value : []);
-        if (textCod.status === "rejected" || anns.status === "rejected" || flat.status === "rejected") {
-          const reason = [textCod, anns, flat].find((r) => r.status === "rejected");
-          if (reason && reason.status === "rejected") {
-            setFooterError(errorMessage(reason.reason, t("coder.loadCodingsError")));
-          }
-        }
-      } catch (e) {
-        if (!cancelled) setLoadError(e instanceof Error ? e.message : t("coder.loadCodingsError"));
-      } finally {
-        if (!cancelled) setLoading(false);
+    try {
+      // imageCodings is the critical fetch — without it the page shows no
+      // overlays at all. The companions (plain-text codings, annotations,
+      // code tree) degrade gracefully: their failure must not replace the
+      // whole view with an error screen (a codes-tree 500, e.g. from a
+      // project with category/code id collisions, used to kill the PDF).
+      const [cod, textCod, anns, flat] = await Promise.allSettled([
+        api.imageCodings(source.id),
+        api.sourceCoding(source.id),
+        api.fileAnnotations(source.id),
+        api.codesFlat(),
+      ]);
+      signal.throwIfAborted();
+      if (cod.status === "fulfilled") {
+        setCodings(cod.value);
+      } else {
+        setLoadError(errorMessage(cod.reason, t("coder.loadCodingsError")));
+        return;
       }
-    })();
-    return () => {
-      cancelled = true;
-    };
+      setTextCodings(textCod.status === "fulfilled" ? textCod.value : []);
+      setAnnotations(anns.status === "fulfilled" ? anns.value : []);
+      setCodes(flat.status === "fulfilled" ? flat.value : []);
+      if (textCod.status === "rejected" || anns.status === "rejected" || flat.status === "rejected") {
+        const reason = [textCod, anns, flat].find((r) => r.status === "rejected");
+        if (reason && reason.status === "rejected") {
+          setFooterError(errorMessage(reason.reason, t("coder.loadCodingsError")));
+        }
+      }
+    } catch (e) {
+      signal.throwIfAborted();
+      setLoadError(errorMessage(e, t("coder.loadCodingsError")));
+    } finally {
+      signal.throwIfAborted();
+      setLoading(false);
+    }
   }, [source.id, reloadTick, t]);
 
-  useEffect(() => {
-    let cancelled = false;
+  useAsyncEffect(async (signal) => {
     setPdf(null);
     setPdfError(null);
     setPageSizes(new Map());
     setTextItems(new Map());
     setFittedScale(1);
-    void (async () => {
-      try {
-        // Fetch the raw bytes ourselves (with a timeout) and hand them to
-        // pdf.js as `data` — this avoids Range/streaming/mixed-content
-        // quirks of `url` loading inside WebView2/Tauri custom protocols.
-        // fetchPdfBytes resolves the API base first and retries transport
-        // failures once, so a still-booting/ephemeral-port backend cannot
-        // surface as a spurious "Failed to fetch".
-        const data = await fetchPdfBytes(source.id);
-        if (cancelled) return;
-        const task = pdfjsLib.getDocument({ data });
-        const doc = await task.promise;
-        if (cancelled) return;
-        setPdf(doc);
-        const sizes = new Map<number, PageSize>();
-        const items = new Map<number, TextItemData[]>();
-        for (let p = 1; p <= doc.numPages; p++) {
-          const page = await doc.getPage(p);
-          const vp = page.getViewport({ scale: 1 });
-          sizes.set(p, { width: vp.width, height: vp.height });
-          const content = await page.getTextContent();
-          const list: TextItemData[] = [];
-          for (const item of content.items) {
-            if (!("str" in item) || item.str === "") continue;
-            const tr = item.transform;
-            // pdf.js reports PDF units with y growing UPWARD; flip to the
-            // screen convention (top-left origin) for hit-testing.
-            list.push({
-              x: tr[4],
-              y: vp.height - (tr[5] + item.height),
-              w: item.width,
-              h: item.height,
-              str: item.str,
-            });
-          }
-          items.set(p, list);
+    try {
+      // Fetch the raw bytes ourselves (with a timeout) and hand them to
+      // pdf.js as `data` — this avoids Range/streaming/mixed-content
+      // quirks of `url` loading inside WebView2/Tauri custom protocols.
+      // fetchPdfBytes resolves the API base first and retries transport
+      // failures once, so a still-booting/ephemeral-port backend cannot
+      // surface as a spurious "Failed to fetch".
+      const data = await fetchPdfBytes(source.id);
+      signal.throwIfAborted();
+      const task = pdfjsLib.getDocument({ data });
+      const doc = await task.promise;
+      signal.throwIfAborted();
+      setPdf(doc);
+      const sizes = new Map<number, PageSize>();
+      const items = new Map<number, TextItemData[]>();
+      for (let p = 1; p <= doc.numPages; p++) {
+        const page = await doc.getPage(p);
+        const vp = page.getViewport({ scale: 1 });
+        sizes.set(p, { width: vp.width, height: vp.height });
+        const content = await page.getTextContent();
+        const list: TextItemData[] = [];
+        for (const item of content.items) {
+          if (!("str" in item) || item.str === "") continue;
+          const tr = item.transform;
+          // pdf.js reports PDF units with y growing UPWARD; flip to the
+          // screen convention (top-left origin) for hit-testing.
+          list.push({
+            x: tr[4],
+            y: vp.height - (tr[5] + item.height),
+            w: item.width,
+            h: item.height,
+            str: item.str,
+          });
         }
-        if (cancelled) return;
-        setPageSizes(sizes);
-        setTextItems(items);
-      } catch (e) {
-        if (!cancelled) setPdfError(e instanceof Error ? e.message : t("pdfCoder.loadDocumentError"));
+        items.set(p, list);
       }
-    })();
-    return () => {
-      cancelled = true;
-    };
+      signal.throwIfAborted();
+      setPageSizes(sizes);
+      setTextItems(items);
+    } catch (e) {
+      signal.throwIfAborted();
+      setPdfError(errorMessage(e, t("pdfCoder.loadDocumentError")));
+    }
   }, [source.id, pdfReloadTick, t]);
 
   /* ------------------------------------------------------------ pdf render */
@@ -482,7 +476,7 @@ export function PdfCoder({ source }: { source: Source }) {
           await task.promise;
         } catch (e) {
           if (!cancelled) {
-            setErrMsg(e instanceof Error ? e.message : t("pdfCoder.loadDocumentError"));
+            setErrMsg(errorMessage(e, t("pdfCoder.loadDocumentError")));
           }
         }
       })();
@@ -531,11 +525,7 @@ export function PdfCoder({ source }: { source: Source }) {
     return m;
   }, [codes]);
 
-  const colorByCid = useMemo(() => {
-    const m = new Map<number, string>();
-    for (const [id, c] of codeById) m.set(id, c.color ?? DEFAULT_CODING_COLOR);
-    return m;
-  }, [codeById]);
+  const { colorByCid } = useCodeMaps(codes);
 
   const pageNumbers = useMemo(() => {
     const out: number[] = [];
@@ -786,7 +776,7 @@ export function PdfCoder({ source }: { source: Source }) {
           flashTextCoding(created);
           await refreshTextCodings();
         } catch (e) {
-          setErrMsg(e instanceof Error ? e.message : t("coder.createError"));
+          setErrMsg(errorMessage(e, t("coder.createError")));
         } finally {
           pendingActionRef.current = null;
         }
@@ -828,7 +818,7 @@ export function PdfCoder({ source }: { source: Source }) {
           setFooterError(null);
           await refreshCodings();
         } catch (e) {
-          setErrMsg(e instanceof Error ? e.message : t("coder.createError"));
+          setErrMsg(errorMessage(e, t("coder.createError")));
         } finally {
           setPendingRect(null);
         }
@@ -883,7 +873,7 @@ export function PdfCoder({ source }: { source: Source }) {
             setPickerOpen(true);
           }
         } catch (e) {
-          setErrMsg(e instanceof Error ? e.message : t("pdfCoder.textLocateError"));
+          setErrMsg(errorMessage(e, t("pdfCoder.textLocateError")));
         }
       })();
       return;
@@ -981,7 +971,7 @@ export function PdfCoder({ source }: { source: Source }) {
           await refreshTextCodings();
         }
       } catch (e) {
-        setErrMsg(e instanceof Error ? e.message : t("coder.removeError"));
+        setErrMsg(errorMessage(e, t("coder.removeError")));
       }
     })();
   }
@@ -1002,7 +992,7 @@ export function PdfCoder({ source }: { source: Source }) {
           await refreshTextCodings();
         }
       } catch (e) {
-        setErrMsg(e instanceof Error ? e.message : t("coder.weightError"));
+        setErrMsg(errorMessage(e, t("coder.weightError")));
       }
     })();
   }
@@ -1028,7 +1018,7 @@ export function PdfCoder({ source }: { source: Source }) {
           await refreshTextCodings();
         }
       } catch (e) {
-        setErrMsg(e instanceof Error ? e.message : t("pdfCoder.updateError"));
+        setErrMsg(errorMessage(e, t("pdfCoder.updateError")));
       }
     })();
   }
@@ -1047,7 +1037,7 @@ export function PdfCoder({ source }: { source: Source }) {
           await refreshTextCodings();
         }
       } catch (e) {
-        setErrMsg(e instanceof Error ? e.message : t("pdfCoder.updateError"));
+        setErrMsg(errorMessage(e, t("pdfCoder.updateError")));
       }
     })();
   }
@@ -1075,7 +1065,7 @@ export function PdfCoder({ source }: { source: Source }) {
       setEditDraft(null);
       await refreshCodings();
     } catch (e) {
-      setErrMsg(e instanceof Error ? e.message : t("imageCoder.regionSaveError"));
+      setErrMsg(errorMessage(e, t("imageCoder.regionSaveError")));
     }
   }
 

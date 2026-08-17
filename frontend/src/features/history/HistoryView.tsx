@@ -2,6 +2,7 @@
  * HistoryView — the audit log as a right-bar pane: filterable by action and
  * coder, every change a small card with an undo icon (details are hidden).
  */
+import { errorMessage } from "@/lib/utils";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { History, RotateCw, Search, Undo2 } from "lucide-react";
 import { api, type AuditRow, type AuditStatsRow } from "@/lib/api";
@@ -87,7 +88,7 @@ export function HistoryView() {
       setStats(st);
     } catch (e) {
       if (seq !== loadSeqRef.current) return;
-      setError(e instanceof Error ? e.message : t("history.loadError"));
+      setError(errorMessage(e, t("history.loadError")));
     } finally {
       if (seq === loadSeqRef.current) setLoading(false);
     }
@@ -127,7 +128,7 @@ export function HistoryView() {
       window.dispatchEvent(new CustomEvent("qc:codings-changed"));
       await load();
     } catch (e) {
-      setError(e instanceof Error ? e.message : t("history.undoError"));
+      setError(errorMessage(e, t("history.undoError")));
     }
   }
 
@@ -144,7 +145,7 @@ export function HistoryView() {
       window.dispatchEvent(new CustomEvent("qc:codings-changed"));
       await load();
     } catch (e) {
-      setError(e instanceof Error ? e.message : t("history.redoError"));
+      setError(errorMessage(e, t("history.redoError")));
     }
   }
 

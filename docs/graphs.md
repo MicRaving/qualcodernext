@@ -1,58 +1,67 @@
-# Graphs — graph editor and models
+# Graphs — the code-map editor and model generators
 
-The code-map editor (upstream view_graph / graph models): an SVG canvas with
-draggable nodes, relation lines with labels and arrow styles, and six
-analytical model generators. Lives under the Analysis area ("Graphs" entry in
-the reports left bar).
+The Graphs workspace is a visual map of your analysis: an SVG canvas with
+draggable nodes (categories, codes, cases, files, free text, memos), relation
+lines with labels and arrow styles, and **six analytical model generators**
+that build a graph from your data automatically.
 
-## How to reach it
+It lives under the Analysis area: Ribbon → **Reports** → **Graphs** (left-bar
+entry).
 
-Ribbon → Reports → Graphs (left bar entry). The center becomes the graph
-editor; the right bar becomes the graph inspector.
+## The layout on this screen
 
-## Layout slots used
+- **Center**: the graph toolbar + the SVG canvas.
+- **Left bar**: the standard file-groups sidebar (the graph list moved into
+  the center toolbar).
+- **Right bar**: the **graph inspector** — node/line details.
 
-- Center: `GraphsView` — menu bar (the only view using the `menuBar`-style
-  toolbar, rendered as the first row of the center) + SVG canvas.
-- Left bar: the standard `Sidebar` (file groups) — the graph list moved into
-  the center toolbar.
-- Right bar: `GraphsInspector` (LeftBar borderSide="l") — node/line details.
+## The toolbar
 
-## Features
+- **Graph `<select>`**: all graphs in the project; **Add** (name dialog) and
+  **Delete** (confirm dialog).
+- **Models** (the generator dialog — see below).
+- **Zoom in/out + percentage** and **Connect** (link mode).
 
-- **Graph toolbar**: graph `<select>` (all graphs), Add (name dialog),
-  Delete (confirm dialog), spacer, Models (generator dialog), zoom in/out +
-  percentage, and Connect (link mode).
-- **Canvas**: pan by dragging the background; zoom via wheel or buttons
-  (25–250 %); dotted grid background matching the graph's scene size.
-- **Nodes**: categories, codes, cases, files, free text and memos — each a
-  colored rounded rect with label, font size, bold flag. Drag to move
-  (positions save automatically on mouseup). Double-click the canvas opens a
-  context menu to add a node (each kind opens a picker dialog; free text
-  takes a text input).
-- **Lines**: relation lines between nodes with color, width, dashed/solid,
-  arrow mode (solid/dotted × with/without arrow), and an optional label
-  rendered mid-line. Created via Connect mode (select a node → link button →
-  click a second node).
-- **Node details (right bar)**: label (inline edit on blur), Bold toggle,
-  Font +, Delete.
-- **Line details (right bar)**: relation label edit, arrow-mode select,
-  Delete.
-- **Models dialog**: generate a graph from the six models
-  (`GRAPH_MODELS`): category hierarchy, code hierarchy, file hierarchy,
-  file comparison, case hierarchy, case comparison — with a graph name and
-  optional comma-separated file/case id lists.
-- Errors surface in an ErrorBanner or the inspector footer.
+## The canvas
 
-## API endpoints used
+- **Pan** by dragging the background; **zoom** via the wheel or buttons
+  (25–250 %); a dotted grid matches the graph's scene size.
+- **Double-click** the canvas opens a context menu to add a node — each kind
+  (category, code, case, file, free text, memo) opens its picker dialog; free
+  text takes a text input.
 
-- `GET /graphs`, `POST /graphs`, `GET /graphs/{grid}`, `PATCH /graphs/{grid}`,
-  `DELETE /graphs/{grid}`
-- `POST /graphs/{grid}/items/cdct|case|file|free|memo`, PATCH/DELETE per item
-- `POST /graphs/{grid}/lines/cdct`, `POST /graphs/{grid}/lines/entity`,
-  PATCH/DELETE per line
-- `POST /graphs/models` (model generation)
+## Nodes and lines
 
-## Screenshot:
+- **Nodes** are colored rounded rectangles with a label; font size and bold
+  are per-node. **Drag to move** — positions save automatically on mouseup.
+- **Lines** connect nodes with color, width, dashed/solid, arrow mode
+  (solid/dotted × with/without arrow) and an optional mid-line label. Create
+  them in **Connect mode**: select a node → link button → click a second node.
+- The **right-bar inspector** edits the selection:
+  - Node: label (inline, saves on blur), Bold toggle, Font +, Delete.
+  - Line: relation label, arrow-mode select, Delete.
+- Errors surface in an error banner or the inspector footer.
 
-(to be inserted)
+## The Models dialog
+
+Generate a graph from one of six analytical models (`GRAPH_MODELS`):
+
+| Model | What it produces |
+|---|---|
+| Category hierarchy | Categories and codes as a tree |
+| File hierarchy | Files with the cases/codes beneath them |
+| File comparison | Files and the codes they use |
+| Case hierarchy | Cases with their files/codes |
+| Case comparison | Cases and the codes used in their files |
+| Co-occurrence network | Codes as nodes connected when they co-occur |
+
+Each generator takes a graph name and optional file/case id lists (comma
+separated) to restrict the map.
+
+## High-level logic
+
+Graphs are stored as data (nodes and lines referencing real project entities),
+not as rendered pictures — so a code node still points at its code, and the
+Inspector can show details. The model generators query the same coding data as
+the reports and lay the results out automatically; you then refine positions,
+labels and styling by hand.

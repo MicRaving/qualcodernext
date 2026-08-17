@@ -9,7 +9,7 @@ import { Button, IconButton, Textarea } from "@/components/ui/orchestrator";
 import type { Annotation, CodeTreeItem, Coding } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 
-const FALLBACK_CODE_COLOR = "var(--qc-accent)";
+import { FALLBACK_CODE_COLOR } from "@/features/coding/tint";
 
 /** Segment weight (backend rows carry it; 0 = no weight). */
 function weightOf(row: Coding & { weight?: number }): number {

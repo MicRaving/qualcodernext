@@ -5,6 +5,7 @@
  * (dev server / vitest) the Tauri internals are absent, so checks report a
  * friendly "desktop only" error instead of crashing.
  */
+import { errorMessage } from "@/lib/utils";
 import { create } from "zustand";
 import { api, type UpdatesSettings } from "@/lib/api";
 
@@ -92,7 +93,7 @@ export const useUpdatesStore = create<UpdatesState>((set, get) => ({
     } catch (e) {
       set({
         status: "error",
-        error: e instanceof Error ? e.message : String(e),
+        error: errorMessage(e, String(e)),
         lastCheckedAt: Date.now(),
       });
     }
@@ -127,7 +128,7 @@ export const useUpdatesStore = create<UpdatesState>((set, get) => ({
     } catch (e) {
       set({
         status: "error",
-        error: e instanceof Error ? e.message : String(e),
+        error: errorMessage(e, String(e)),
       });
     }
   },

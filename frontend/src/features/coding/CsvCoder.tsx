@@ -23,6 +23,7 @@
  *  keep working unchanged.
  */
 import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
+import { useAsyncEffect } from "@/lib/useAsync";
 import { FileText, Table2, Undo2 } from "lucide-react";
 import {
   Button,
@@ -42,8 +43,8 @@ import { patchCodingWeight } from "@/features/coding/codingApi";
 import { parseCsv } from "@/lib/csv";
 import { tdCls, thCls } from "@/features/analyze/reportData";
 import { getSelectionOffsets } from "@/features/coding/selection";
-import { codeTint } from "@/features/coding/tint";
-import { cn } from "@/lib/utils";
+import { FALLBACK_CODE_COLOR, codeTint } from "@/features/coding/tint";
+import { cn, errorMessage } from "@/lib/utils";
 import { useI18n } from "@/lib/i18n";
 import { useProjectStore } from "@/stores/project";
 
@@ -52,7 +53,6 @@ import { useProjectStore } from "@/stores/project";
 type CsvView = "table" | "plain";
 
 /** Fallback badge/tint color when a code carries none. */
-const FALLBACK_CODE_COLOR = "var(--qc-accent)";
 
 /** A cell's text range in the raw source (row/col resolved via spans). */
 interface CellSpan {
@@ -212,8 +212,11 @@ export function CsvCoder({ source }: { source: Source }) {
     await useProjectStore.getState().refreshProject();
   }, []);
 
-  useEffect(() => {
-    let cancelled = false;
+  // NOTE: this coder deliberately does NOT use the shared `useCoder` hook —
+  // its load fetches codings + annotations + source fulltext together and
+  // the code tree comes from the project store (no codesFlat), so it stays
+  // bespoke here.
+  useAsyncEffect(async (signal) => {
     setLoading(true);
     setLoadError(null);
     setCodings([]);
@@ -221,26 +224,23 @@ export function CsvCoder({ source }: { source: Source }) {
     setFulltext(null);
     setSelection(null);
     setToolbarAnchor(null);
-    void (async () => {
-      try {
-        const [cod, anns, src] = await Promise.all([
-          api.sourceCoding(source.id),
-          api.fileAnnotations(source.id),
-          api.getSource(source.id),
-        ]);
-        if (cancelled) return;
-        setCodings(cod);
-        setAnnotations(anns);
-        setFulltext(src.fulltext ?? source.fulltext ?? null);
-      } catch (e) {
-        if (!cancelled) setLoadError(e instanceof Error ? e.message : t("csvCoder.loadCodingsError"));
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
+    try {
+      const [cod, anns, src] = await Promise.all([
+        api.sourceCoding(source.id),
+        api.fileAnnotations(source.id),
+        api.getSource(source.id),
+      ]);
+      signal.throwIfAborted();
+      setCodings(cod);
+      setAnnotations(anns);
+      setFulltext(src.fulltext ?? source.fulltext ?? null);
+    } catch (e) {
+      signal.throwIfAborted();
+      setLoadError(errorMessage(e, t("csvCoder.loadCodingsError")));
+    } finally {
+      signal.throwIfAborted();
+      setLoading(false);
+    }
   }, [source.id, source.fulltext, reloadTick, t]);
 
   // History undo/redo: reload codings/annotations when the audit log
@@ -491,7 +491,7 @@ export function CsvCoder({ source }: { source: Source }) {
         setSelectedCodings(null);
         await refreshCodings();
       } catch (e) {
-        setErrMsg(e instanceof Error ? e.message : t("coder.removeError"));
+        setErrMsg(errorMessage(e, t("coder.removeError")));
       }
     })();
   }
@@ -503,7 +503,7 @@ export function CsvCoder({ source }: { source: Source }) {
         await patchCodingWeight("text", row.ctid, weight);
         await refreshCodings();
       } catch (e) {
-        setErrMsg(e instanceof Error ? e.message : t("coder.weightError"));
+        setErrMsg(errorMessage(e, t("coder.weightError")));
       }
     })();
   }
@@ -517,7 +517,7 @@ export function CsvCoder({ source }: { source: Source }) {
         await api.undoCodings([row]);
         await refreshCodings();
       } catch (e) {
-        setErrMsg(e instanceof Error ? e.message : t("coder.restoreError"));
+        setErrMsg(errorMessage(e, t("coder.restoreError")));
       }
     })();
   }
@@ -528,7 +528,7 @@ export function CsvCoder({ source }: { source: Source }) {
         await api.updateAnnotation(anid, memo);
         await refreshAnnotations();
       } catch (e) {
-        setErrMsg(e instanceof Error ? e.message : t("coder.annotationUpdateError"));
+        setErrMsg(errorMessage(e, t("coder.annotationUpdateError")));
       }
     })();
   }
@@ -540,7 +540,7 @@ export function CsvCoder({ source }: { source: Source }) {
         setSelectedAnnotations(null);
         await refreshAnnotations();
       } catch (e) {
-        setErrMsg(e instanceof Error ? e.message : t("coder.annotationDeleteError"));
+        setErrMsg(errorMessage(e, t("coder.annotationDeleteError")));
       }
     })();
   }

@@ -1,6 +1,7 @@
 /**
  * Inspector — right-side details panel for the selected code or file.
  */
+import { errorMessage } from "@/lib/utils";
 import { useCallback, useEffect, useState, type ReactNode } from "react";
 import {
   ChevronDown,
@@ -40,6 +41,9 @@ import {
   Textarea,
 } from "@/components/ui/orchestrator";
 import { useI18n } from "@/lib/i18n";
+import { useCoderStore } from "@/stores/coder";
+import { useInspectorStore } from "@/stores/inspector";
+import { useWorkspaceStore } from "@/stores/workspace";
 import { useProjectStore } from "@/stores/project";
 import {
   formatMediaLabel,
@@ -69,12 +73,12 @@ function MemoEditor({
   const [saveError, setSaveError] = useState<string | null>(null);
 
   // "Edit memo" actions (sidebar context menus) jump straight into edit mode.
-  const memoEditRequest = useProjectStore((s) => s.inspectorMemoEdit);
+  const memoEditRequest = useInspectorStore((s) => s.inspectorMemoEdit);
   useEffect(() => {
     if (memoEditRequest) {
       setEditing(true);
       setDraft(memo);
-      useProjectStore.getState().setInspectorMemoEdit(false);
+      useInspectorStore.getState().setInspectorMemoEdit(false);
     }
   }, [memoEditRequest, memo]);
 
@@ -87,7 +91,7 @@ function MemoEditor({
       setEditing(false);
       setDraft(null);
     } catch (e) {
-      setSaveError(e instanceof Error ? e.message : t("inspector.memoSaveError"));
+      setSaveError(errorMessage(e, t("inspector.memoSaveError")));
     } finally {
       setSaving(false);
     }
@@ -100,8 +104,8 @@ function MemoEditor({
           className="mb-1 flex items-center justify-between"
           onContextMenu={(e) => {
             e.preventDefault();
-            useProjectStore.getState().setNotesUi({ tab: "memos" });
-            useProjectStore.getState().setView({ kind: "notes" });
+            useWorkspaceStore.getState().setNotesUi({ tab: "memos" });
+            useWorkspaceStore.getState().setView({ kind: "notes" });
           }}
           title={t("inspector.openMemos")}
         >
@@ -200,7 +204,7 @@ function CommentsSection({
       setComments(await fetchComments(targetKind, targetId));
       setError(null);
     } catch (e) {
-      setError(e instanceof Error ? e.message : t("inspector.commentsLoadError"));
+      setError(errorMessage(e, t("inspector.commentsLoadError")));
     }
   }, [targetKind, targetId, t]);
 
@@ -218,7 +222,7 @@ function CommentsSection({
       setDraft("");
       await load();
     } catch (e) {
-      setError(e instanceof Error ? e.message : t("inspector.commentsAddError"));
+      setError(errorMessage(e, t("inspector.commentsAddError")));
     } finally {
       setBusy(false);
     }
@@ -231,7 +235,7 @@ function CommentsSection({
       await deleteComment(commentId);
       await load();
     } catch (e) {
-      setError(e instanceof Error ? e.message : t("inspector.commentsDeleteError"));
+      setError(errorMessage(e, t("inspector.commentsDeleteError")));
     }
   }
 
@@ -291,8 +295,8 @@ function CommentsSection({
 
 function CodeDetailsPanel({ details }: { details: CodeDetails }) {
   const { t } = useI18n();
-  const selectCode = useProjectStore((s) => s.selectCode);
-  const clearInspector = useProjectStore((s) => s.clearInspector);
+  const selectCode = useInspectorStore((s) => s.selectCode);
+  const clearInspector = useInspectorStore((s) => s.clearInspector);
   const [actionError, setActionError] = useState<string | null>(null);
 
   async function saveMemo(value: string) {
@@ -308,7 +312,7 @@ function CodeDetailsPanel({ details }: { details: CodeDetails }) {
       clearInspector();
       await useProjectStore.getState().refreshProject();
     } catch (e) {
-      setActionError(e instanceof Error ? e.message : t("inspector.deleteCodeError"));
+      setActionError(errorMessage(e, t("inspector.deleteCodeError")));
     }
   }
 
@@ -356,8 +360,8 @@ function CodeDetailsPanel({ details }: { details: CodeDetails }) {
                 <button
                   type="button"
                   onClick={() => {
-                    useProjectStore.getState().setView({ kind: "coding", sourceId: ex.fid });
-                    useProjectStore.getState().setGotoSegment({
+                    useWorkspaceStore.getState().setView({ kind: "coding", sourceId: ex.fid });
+                    useInspectorStore.getState().setGotoSegment({
                       ctid: ex.ctid,
                       pos0: ex.pos0,
                       pos1: ex.pos1,
@@ -393,9 +397,9 @@ function CodeDetailsPanel({ details }: { details: CodeDetails }) {
 
 function FileDetailsPanel({ details }: { details: SourceDetails }) {
   const { t } = useI18n();
-  const selectFile = useProjectStore((s) => s.selectFile);
-  const hiddenCodes = useProjectStore((s) => s.hiddenCodes);
-  const toggleHiddenCode = useProjectStore((s) => s.toggleHiddenCode);
+  const selectFile = useInspectorStore((s) => s.selectFile);
+  const hiddenCodes = useCoderStore((s) => s.hiddenCodes);
+  const toggleHiddenCode = useCoderStore((s) => s.toggleHiddenCode);
   const stats = formatStats(details);
   const src = details.source;
 
@@ -412,15 +416,15 @@ function FileDetailsPanel({ details }: { details: SourceDetails }) {
   const [annotations, setAnnotations] = useState<Annotation[]>([]);
   const [annError, setAnnError] = useState<string | null>(null);
   const [newAnnMemo, setNewAnnMemo] = useState("");
-  const inspectorNewAnnotation = useProjectStore((s) => s.inspectorNewAnnotation);
-  const setInspectorNewAnnotation = useProjectStore((s) => s.setInspectorNewAnnotation);
+  const inspectorNewAnnotation = useInspectorStore((s) => s.inspectorNewAnnotation);
+  const setInspectorNewAnnotation = useInspectorStore((s) => s.setInspectorNewAnnotation);
 
   const loadAnnotations = useCallback(async () => {
     try {
       setAnnotations(await api.fileAnnotations(src.id));
       setAnnError(null);
     } catch (e) {
-      setAnnError(e instanceof Error ? e.message : t("inspector.annotationsLoadError"));
+      setAnnError(errorMessage(e, t("inspector.annotationsLoadError")));
     }
   }, [src.id, t]);
 
@@ -437,7 +441,7 @@ function FileDetailsPanel({ details }: { details: SourceDetails }) {
       setInspectorNewAnnotation(false);
       await loadAnnotations();
     } catch (e) {
-      setAnnError(e instanceof Error ? e.message : t("inspector.annotationsLoadError"));
+      setAnnError(errorMessage(e, t("inspector.annotationsLoadError")));
     }
   }
 
@@ -447,7 +451,7 @@ function FileDetailsPanel({ details }: { details: SourceDetails }) {
       await api.unlinkFileFromCase(caseid, src.id);
       await selectFile(src.id);
     } catch (e) {
-      setCaseError(e instanceof Error ? e.message : t("inspector.assignCaseError"));
+      setCaseError(errorMessage(e, t("inspector.assignCaseError")));
     }
   }
 
@@ -459,7 +463,7 @@ function FileDetailsPanel({ details }: { details: SourceDetails }) {
       setAssignCaseId("");
       await selectFile(src.id);
     } catch (e) {
-      setCaseError(e instanceof Error ? e.message : t("inspector.assignCaseError"));
+      setCaseError(errorMessage(e, t("inspector.assignCaseError")));
     }
   }
 
@@ -474,7 +478,7 @@ function FileDetailsPanel({ details }: { details: SourceDetails }) {
       setEditingAnnId(null);
       await loadAnnotations();
     } catch (e) {
-      setAnnError(e instanceof Error ? e.message : t("inspector.annotationsLoadError"));
+      setAnnError(errorMessage(e, t("inspector.annotationsLoadError")));
     }
   }
 
@@ -485,7 +489,7 @@ function FileDetailsPanel({ details }: { details: SourceDetails }) {
       if (editingAnnId === anid) setEditingAnnId(null);
       await loadAnnotations();
     } catch (e) {
-      setAnnError(e instanceof Error ? e.message : t("inspector.annotationsLoadError"));
+      setAnnError(errorMessage(e, t("inspector.annotationsLoadError")));
     }
   }
 
@@ -505,7 +509,7 @@ function FileDetailsPanel({ details }: { details: SourceDetails }) {
       setIncomingLinks(incoming);
       setLinksError(null);
     } catch (e) {
-      setLinksError(e instanceof Error ? e.message : t("inspector.linksLoadError"));
+      setLinksError(errorMessage(e, t("inspector.linksLoadError")));
     }
   }, [src.id, t]);
 
@@ -519,7 +523,7 @@ function FileDetailsPanel({ details }: { details: SourceDetails }) {
       await deleteLink(linkId);
       await loadLinks();
     } catch (e) {
-      setLinksError(e instanceof Error ? e.message : t("inspector.linksLoadError"));
+      setLinksError(errorMessage(e, t("inspector.linksLoadError")));
     }
   }
 
@@ -558,8 +562,8 @@ function FileDetailsPanel({ details }: { details: SourceDetails }) {
           className="flex items-center justify-between"
           onContextMenu={(e) => {
             e.preventDefault();
-            useProjectStore.getState().setNotesUi({ tab: "memos" });
-            useProjectStore.getState().setView({ kind: "notes" });
+            useWorkspaceStore.getState().setNotesUi({ tab: "memos" });
+            useWorkspaceStore.getState().setView({ kind: "notes" });
           }}
           title={t("inspector.openMemos")}
         >
@@ -615,7 +619,7 @@ function FileDetailsPanel({ details }: { details: SourceDetails }) {
         <div
           onContextMenu={(e) => {
             e.preventDefault();
-            useProjectStore.getState().setView({ kind: "cases" });
+            useWorkspaceStore.getState().setView({ kind: "cases" });
           }}
           title={t("inspector.openCases")}
         >
@@ -676,8 +680,8 @@ function FileDetailsPanel({ details }: { details: SourceDetails }) {
           className="mb-1 flex items-center justify-between"
           onContextMenu={(e) => {
             e.preventDefault();
-            useProjectStore.getState().setNotesUi({ tab: "annotations" });
-            useProjectStore.getState().setView({ kind: "notes" });
+            useWorkspaceStore.getState().setNotesUi({ tab: "annotations" });
+            useWorkspaceStore.getState().setView({ kind: "notes" });
           }}
           title={t("inspector.openAnnotations")}
         >
@@ -864,13 +868,13 @@ function FileDetailsPanel({ details }: { details: SourceDetails }) {
 
 export function Inspector() {
   const { t } = useI18n();
-  const selection = useProjectStore((s) => s.inspectorSelection);
-  const details = useProjectStore((s) => s.inspectorDetails);
-  const loading = useProjectStore((s) => s.inspectorLoading);
-  const error = useProjectStore((s) => s.inspectorError);
-  const selectCode = useProjectStore((s) => s.selectCode);
-  const selectFile = useProjectStore((s) => s.selectFile);
-  const clearInspector = useProjectStore((s) => s.clearInspector);
+  const selection = useInspectorStore((s) => s.inspectorSelection);
+  const details = useInspectorStore((s) => s.inspectorDetails);
+  const loading = useInspectorStore((s) => s.inspectorLoading);
+  const error = useInspectorStore((s) => s.inspectorError);
+  const selectCode = useInspectorStore((s) => s.selectCode);
+  const selectFile = useInspectorStore((s) => s.selectFile);
+  const clearInspector = useInspectorStore((s) => s.clearInspector);
 
   function retry() {
     if (!selection) return;

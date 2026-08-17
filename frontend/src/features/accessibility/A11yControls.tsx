@@ -5,7 +5,7 @@
  */
 import { SlidersHorizontal } from "lucide-react";
 import { useI18n } from "@/lib/i18n";
-import { useProjectStore, type A11yMode } from "@/stores/project";
+import { usePrefsStore, type A11yMode } from "@/stores/prefs";
 import { Select } from "@/components/ui/orchestrator";
 
 const A11Y_MODES: { mode: A11yMode; labelKey: string; hintKey: string }[] = [
@@ -19,8 +19,8 @@ const A11Y_MODES: { mode: A11yMode; labelKey: string; hintKey: string }[] = [
 
 function A11yModePicker() {
   const { t } = useI18n();
-  const a11yMode = useProjectStore((s) => s.a11yMode);
-  const setA11yMode = useProjectStore((s) => s.setA11yMode);
+  const a11yMode = usePrefsStore((s) => s.a11yMode);
+  const setA11yMode = usePrefsStore((s) => s.setA11yMode);
   const current = A11Y_MODES.find((m) => m.mode === a11yMode) ?? A11Y_MODES[0];
   return (
     <div className="flex flex-col gap-1">
@@ -58,7 +58,7 @@ export function A11yControls() {
 /** Screen-reader-only focus helper: a visible skip link when SR mode is on. */
 export function A11ySkipLink() {
   const { t } = useI18n();
-  const a11yMode = useProjectStore((s) => s.a11yMode);
+  const a11yMode = usePrefsStore((s) => s.a11yMode);
   if (a11yMode !== "screenreader") return null;
   return (
     <a

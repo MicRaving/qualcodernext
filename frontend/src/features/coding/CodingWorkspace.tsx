@@ -2,7 +2,9 @@
  * CodingWorkspace — fetches the source for a coding view and dispatches to
  * the right coder based on media type / file extension.
  */
-import { lazy, Suspense, useEffect, useState } from "react";
+import { errorMessage } from "@/lib/utils";
+import { useAsyncEffect } from "@/lib/useAsync";
+import { lazy, Suspense, useState } from "react";
 import { CircleAlert } from "lucide-react";
 import { Button, LoadingState } from "@/components/ui/orchestrator";
 import { api, type Source } from "@/lib/api";
@@ -39,24 +41,21 @@ export function CodingWorkspace({ sourceId }: { sourceId: number }) {
   const [error, setError] = useState<string | null>(null);
   const [reloadTick, setReloadTick] = useState(0);
 
-  useEffect(() => {
-    let cancelled = false;
+  useAsyncEffect(async (signal) => {
     setLoading(true);
     setError(null);
     setSource(null);
-    void (async () => {
-      try {
-        const src = await api.getSource(sourceId);
-        if (!cancelled) setSource(src);
-      } catch (e) {
-        if (!cancelled) setError(e instanceof Error ? e.message : t("coder.loadError"));
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
+    try {
+      const src = await api.getSource(sourceId);
+      signal.throwIfAborted();
+      setSource(src);
+    } catch (e) {
+      signal.throwIfAborted();
+      setError(errorMessage(e, t("coder.loadError")));
+    } finally {
+      signal.throwIfAborted();
+      setLoading(false);
+    }
   }, [sourceId, reloadTick, t]);
 
   if (loading) {

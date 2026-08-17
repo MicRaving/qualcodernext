@@ -47,7 +47,10 @@ import { BugReportView } from "@/features/bugreport/BugReportView";
 import { api } from "@/lib/api";
 import { useToast } from "@/lib/toast";
 import { useI18n } from "@/lib/i18n";
-import { useProjectStore, type WorkspaceView } from "@/stores/project";
+import { useInspectorStore } from "@/stores/inspector";
+import { usePrefsStore } from "@/stores/prefs";
+import { useWorkspaceStore, type WorkspaceView } from "@/stores/workspace";
+import { useProjectStore } from "@/stores/project";
 import { A11ySkipLink } from "@/features/accessibility/A11yControls";
 import { useUpdatesStore } from "@/stores/updates";
 import { Button } from "@/components/ui/orchestrator";
@@ -132,7 +135,7 @@ function StatusBar() {
   const projectName = useProjectStore((s) => s.projectName);
   const cases = useProjectStore((s) => s.cases);
   const journals = useProjectStore((s) => s.journals);
-  const annotations = useProjectStore((s) => s.annotationsAll);
+  const annotations = useInspectorStore((s) => s.annotationsAll);
   const sources = useProjectStore((s) => s.sources);
   const codeTree = useProjectStore((s) => s.codeTree);
   const memoCount =
@@ -174,26 +177,26 @@ const RIGHT_ICON_BUTTONS: { pane: "history" | "ai" | "creative"; labelKey: strin
 export function ProjectShell() {
   const { t } = useI18n();
   const toast = useToast();
-  const view = useProjectStore((s) => s.view);
-  const setView = useProjectStore((s) => s.setView);
-  const analyzeUi = useProjectStore((s) => s.analyzeUi);
-  const rightPane = useProjectStore((s) => s.rightPane);
-  const setRightPane = useProjectStore((s) => s.setRightPane);
+  const view = useWorkspaceStore((s) => s.view);
+  const setView = useWorkspaceStore((s) => s.setView);
+  const analyzeUi = useWorkspaceStore((s) => s.analyzeUi);
+  const rightPane = useWorkspaceStore((s) => s.rightPane);
+  const setRightPane = useWorkspaceStore((s) => s.setRightPane);
   const projectOpen = useProjectStore((s) => s.projectOpen);
   const tasks = useProjectStore((s) => s.tasks);
   const tasksPaused = useProjectStore((s) => s.tasksPaused);
-  const syncAutoNotice = useProjectStore((s) => s.syncAutoNotice);
+  const syncAutoNotice = usePrefsStore((s) => s.syncAutoNotice);
   const [queueOpen, setQueueOpen] = useState(false);
   const [dragId, setDragId] = useState<string | null>(null);
   const announceRef = useRef<HTMLDivElement>(null);
-  const a11yMode = useProjectStore((s) => s.a11yMode);
+  const a11yMode = usePrefsStore((s) => s.a11yMode);
 
   // Shared-folder notice: shown for 3s after the backend auto-enabled
   // collaboration sync on project open (non-intrusive, self-clearing).
   useEffect(() => {
     if (!syncAutoNotice) return;
     const timer = window.setTimeout(() => {
-      useProjectStore.getState().setSyncAutoNotice(false);
+      usePrefsStore.getState().setSyncAutoNotice(false);
     }, 3000);
     return () => window.clearTimeout(timer);
   }, [syncAutoNotice]);
@@ -364,7 +367,7 @@ export function ProjectShell() {
                         // annotations/memos view (opened via the file
                         // inspector) always resets to the journal tab.
                         if (kind === "notes") {
-                          useProjectStore.getState().setNotesUi({ tab: "journal" });
+                          useWorkspaceStore.getState().setNotesUi({ tab: "journal" });
                         }
                       }
                     : undefined

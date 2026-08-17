@@ -8,6 +8,7 @@
  * (display label, stored raw value) with a free-text fallback for values
  * not in the list.
  */
+import { errorMessage } from "@/lib/utils";
 import { useCallback, useEffect, useState } from "react";
 import { Check, ChevronDown, LoaderCircle, Plus, X } from "lucide-react";
 import {
@@ -84,7 +85,7 @@ export function AttributeEditor({
       await api.setAttributeValue(name, scope, entityId, value);
       await onChange();
     } catch (e) {
-      setError(e instanceof Error ? e.message : t("inspector.attributesSaveError"));
+      setError(errorMessage(e, t("inspector.attributesSaveError")));
     } finally {
       setSaving(null);
     }
@@ -133,7 +134,7 @@ export function AttributeEditor({
       await reload();
       await onChange();
     } catch (e) {
-      setError(e instanceof Error ? e.message : t("inspector.attributesSaveError"));
+      setError(errorMessage(e, t("inspector.attributesSaveError")));
     }
   }
 

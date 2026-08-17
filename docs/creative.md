@@ -1,42 +1,41 @@
-# Creative — creative coding panel
+# Creative — the creative coding scratchpad
 
-A MAXQDA-style creative coding scratchpad as a right-bar pane: collect
-ideas, quotes and fragments, edit them inline, and promote an item into a
-new code (coding the referenced source span when the item carries one).
+A MAXQDA-style **creative coding** panel that opens in the right bar: collect
+ideas, quotes and fragments as you read, edit them inline, and **promote** an
+item into a real code (coding the referenced source passage when the item
+carries one). It is the place for half-formed thoughts that aren't codes yet.
 
 ## How to reach it
 
-Ribbon → Creative (lightbulb icon, right side). Toggles the right-bar pane;
-the center view stays whatever it showed.
-
-## Layout slots used
-
-- Right bar only: `CreativePanel` (LeftBar `borderSide="l"`), BarHeader +
-  add-note textarea + search box + item list.
-- Center/left bar: unchanged (the pane overlays the Inspector slot).
+- Ribbon → **Creative** (lightbulb icon, right side). Toggles the right-bar
+  pane; the center view stays whatever it showed.
 
 ## Features
 
-- **Add item**: textarea + Add button (Enter to submit); items are free-form
-  ideas, quotes or fragments.
-- **Item list**: each item shows its text and an optional note; sourced items
-  (created with a source reference) show a source chip with the source name
-  and quoted excerpt — clicking it jumps to the source file in the coder.
+- **Add item**: a textarea + Add button (Enter to submit). Items are
+  free-form ideas, quotes or fragments.
+- **Item list**: each item shows its text and an optional note. Items created
+  with a source reference show a **source chip** (source name + quoted
+  excerpt); clicking it jumps to the source file in the coder.
 - **Inline edit**: pencil button (or click the item) swaps the row into a
   text + note editor with Save/Cancel.
 - **Delete**: trash button per row.
 - **Search**: filters items by text, note and source name.
-- **Promote to code** (lightbulb button per row): dialog showing the item
-  (and its source reference when present) with a code-name input (pre-filled
-  from short items) and an optional parent category; promoting creates the
-  new code — and when the item is sourced, additionally codes the referenced
-  span with the new code. The project refreshes afterwards.
 
-## API endpoints used
+### Promote to code
 
-- `GET /creative`, `POST /creative`, `PATCH /creative/{item_id}`,
-  `DELETE /creative/{item_id}`, `POST /creative/{item_id}/promote`
+The lightbulb button per row opens the **promote dialog**:
 
-## Screenshot:
+- Shows the item (and its source reference when present).
+- A **code-name** input (pre-filled from short items) and an optional **parent
+  category**.
+- Promoting creates the new code — and when the item is sourced, additionally
+  **codes the referenced span** with the new code. The project refreshes
+  afterwards.
 
-(to be inserted)
+## High-level logic
+
+Creative items are lightweight records with an optional source-span
+attachment. Promoting converts a record into the durable project structures
+(a code row, and — when sourced — a coding), so the scratchpad is the
+"incubator" in front of the codebook rather than a parallel data store.

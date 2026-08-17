@@ -5,7 +5,8 @@
  * input are pinned at the bottom; the selected files restrict the search to
  * those sources.
  */
-import { useEffect, useState, type FormEvent } from "react";
+import { useState, type FormEvent } from "react";
+import { useAsyncEffect } from "@/lib/useAsync";
 import { CircleAlert, LoaderCircle, Search } from "lucide-react";
 import {
   ApiError,
@@ -18,7 +19,7 @@ import {
 } from "@/lib/api";
 import { errorDetail, formatScore, welcomeMessage } from "@/features/ai/format";
 import { Button, ErrorBanner, Input } from "@/components/ui/orchestrator";
-import { useProjectStore } from "@/stores/project";
+import { useWorkspaceStore } from "@/stores/workspace";
 import { useI18n } from "@/lib/i18n";
 import { ContextPickerArea } from "@/features/ai/ContextPickers";
 import { useContextPickers } from "@/features/ai/contextPickerData";
@@ -62,34 +63,26 @@ export function AiSearchPanel() {
   const [status, setStatus] = useState<AiStatus | null>(null);
   const [index, setIndex] = useState<AiIndexStatus | null>(null);
 
-  useEffect(() => {
-    let cancelled = false;
-    api
-      .aiStatus()
-      .then((s) => {
-        if (!cancelled) setStatus(s);
-      })
-      .catch(() => {
-        if (!cancelled) setStatus(null);
-      });
-    return () => {
-      cancelled = true;
-    };
+  useAsyncEffect(async (signal) => {
+    try {
+      const s = await api.aiStatus();
+      signal.throwIfAborted();
+      setStatus(s);
+    } catch {
+      signal.throwIfAborted();
+      setStatus(null);
+    }
   }, []);
 
-  useEffect(() => {
-    let cancelled = false;
-    api
-      .aiIndexStatus()
-      .then((s) => {
-        if (!cancelled) setIndex(s);
-      })
-      .catch(() => {
-        if (!cancelled) setIndex(null);
-      });
-    return () => {
-      cancelled = true;
-    };
+  useAsyncEffect(async (signal) => {
+    try {
+      const s = await api.aiIndexStatus();
+      signal.throwIfAborted();
+      setIndex(s);
+    } catch {
+      signal.throwIfAborted();
+      setIndex(null);
+    }
   }, []);
 
   const disabled = !status?.enabled;
@@ -137,7 +130,7 @@ export function AiSearchPanel() {
                   <button
                     type="button"
                     onClick={() =>
-                      useProjectStore
+                      useWorkspaceStore
                         .getState()
                         .setView({ kind: "coding", sourceId: r.source_id })
                     }

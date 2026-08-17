@@ -35,7 +35,8 @@ import {
   type RScript,
   type RStatus,
 } from "@/lib/api";
-import { cn } from "@/lib/utils";
+import { cn, errorMessage } from "@/lib/utils";
+import { useAsyncEffect } from "@/lib/useAsync";
 import { useI18n } from "@/lib/i18n";
 import { useToast } from "@/lib/toast";
 import { useProjectStore } from "@/stores/project";
@@ -193,22 +194,18 @@ export function RConsoleView() {
   const createdUrlsRef = useRef<string[]>([]);
 
   // R installation status (console + the Settings card share this call).
-  useEffect(() => {
-    let cancelled = false;
-    api
-      .rStatus()
-      .then((s) => {
-        if (!cancelled) setStatus(s);
-      })
-      .catch(() => {
-        if (!cancelled) setStatus({ available: false, path: null, version: null, error: null });
-      })
-      .finally(() => {
-        if (!cancelled) setStatusLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
+  useAsyncEffect(async (signal) => {
+    try {
+      const s = await api.rStatus();
+      signal.throwIfAborted();
+      setStatus(s);
+    } catch {
+      signal.throwIfAborted();
+      setStatus({ available: false, path: null, version: null, error: null });
+    } finally {
+      signal.throwIfAborted();
+      setStatusLoading(false);
+    }
   }, []);
 
   const loadScripts = useCallback(async () => {
@@ -343,7 +340,7 @@ export function RConsoleView() {
       });
       setJob(null);
     } catch (e) {
-      setJobError(e instanceof Error ? e.message : t("r.error"));
+      setJobError(errorMessage(e, t("r.error")));
     }
   }
 
@@ -359,7 +356,7 @@ export function RConsoleView() {
       await loadScripts();
       toast.success(t("r.scriptSaved", { name }));
     } catch (e) {
-      setJobError(e instanceof Error ? e.message : t("r.error"));
+      setJobError(errorMessage(e, t("r.error")));
     }
   }
 
@@ -371,7 +368,7 @@ export function RConsoleView() {
       await loadScripts();
       toast.info(t("r.scriptDeleted", { name }));
     } catch (e) {
-      setJobError(e instanceof Error ? e.message : t("r.error"));
+      setJobError(errorMessage(e, t("r.error")));
     }
   }
 
@@ -389,7 +386,7 @@ export function RConsoleView() {
       setScript((prev) => (prev.trim() ? `${prev}\n\n${res.stub}` : res.stub));
       setPreparedFiles(res.files);
     } catch (e) {
-      setJobError(e instanceof Error ? e.message : t("r.error"));
+      setJobError(errorMessage(e, t("r.error")));
     } finally {
       setPreparing(false);
     }

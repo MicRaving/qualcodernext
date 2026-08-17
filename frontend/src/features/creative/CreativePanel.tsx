@@ -4,6 +4,7 @@
  * an item into a new code. Promoting a sourced item additionally codes the
  * referenced span with the new code.
  */
+import { errorMessage } from "@/lib/utils";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   ArrowUpRight,
@@ -27,6 +28,7 @@ import {
   Textarea,
 } from "@/components/ui/orchestrator";
 import { useI18n } from "@/lib/i18n";
+import { useWorkspaceStore } from "@/stores/workspace";
 import { useProjectStore } from "@/stores/project";
 import {
   createCreativeItem,
@@ -65,7 +67,7 @@ export function CreativePanel() {
     try {
       setItems(await listCreativeItems());
     } catch (e) {
-      setError(e instanceof Error ? e.message : t("creative.loadError"));
+      setError(errorMessage(e, t("creative.loadError")));
     } finally {
       setLoading(false);
     }
@@ -104,7 +106,7 @@ export function CreativePanel() {
       setNewText("");
       await load();
     } catch (e) {
-      setError(e instanceof Error ? e.message : t("creative.addError"));
+      setError(errorMessage(e, t("creative.addError")));
     } finally {
       setNewBusy(false);
     }
@@ -129,7 +131,7 @@ export function CreativePanel() {
       setItems((prev) => prev.map((i) => (i.id === item.id ? updated : i)));
       setEditingId(null);
     } catch (e) {
-      setError(e instanceof Error ? e.message : t("creative.saveError"));
+      setError(errorMessage(e, t("creative.saveError")));
     } finally {
       setEditBusy(false);
     }
@@ -141,7 +143,7 @@ export function CreativePanel() {
       await deleteCreativeItem(item.id);
       setItems((prev) => prev.filter((i) => i.id !== item.id));
     } catch (e) {
-      setError(e instanceof Error ? e.message : t("creative.deleteError"));
+      setError(errorMessage(e, t("creative.deleteError")));
     }
   }
 
@@ -167,7 +169,7 @@ export function CreativePanel() {
       void useProjectStore.getState().refreshProject();
       await load();
     } catch (e) {
-      setPromoteError(e instanceof Error ? e.message : t("creative.promoteError"));
+      setPromoteError(errorMessage(e, t("creative.promoteError")));
     } finally {
       setPromoteBusy(false);
     }
@@ -175,7 +177,7 @@ export function CreativePanel() {
 
   function jumpToSource(item: CreativeItem) {
     if (item.source_fid == null) return;
-    useProjectStore.getState().setView({ kind: "coding", sourceId: item.source_fid });
+    useWorkspaceStore.getState().setView({ kind: "coding", sourceId: item.source_fid });
   }
 
   return (

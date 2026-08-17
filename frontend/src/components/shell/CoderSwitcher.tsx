@@ -8,6 +8,7 @@
  * the top bar, showing the time since the last successful sync (red on
  * errors); clicking it opens the flyout.
  */
+import { errorMessage } from "@/lib/utils";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   BarChart3,
@@ -26,6 +27,8 @@ import {
 } from "lucide-react";
 import { api, ApiError } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
+import { useCoderStore } from "@/stores/coder";
+import { usePrefsStore } from "@/stores/prefs";
 import { useProjectStore } from "@/stores/project";
 import { useToast } from "@/lib/toast";
 import { Button, HelpFlyout, IconButton, Menu, MenuItem, Modal } from "@/components/ui/orchestrator";
@@ -52,22 +55,17 @@ interface CoderStats {
   total: number;
 }
 
-function errorMessage(e: unknown): string {
-  if (e instanceof ApiError && typeof e.detail === "string") return e.detail;
-  return e instanceof Error ? e.message : "Operation failed";
-}
-
 export function CoderSwitcher() {
   const { t } = useI18n();
   const toast = useToast();
-  const coderName = useProjectStore((s) => s.coderName);
-  const coders = useProjectStore((s) => s.coders);
-  const switchCoder = useProjectStore((s) => s.switchCoder);
-  const createCoder = useProjectStore((s) => s.createCoder);
-  const syncStatus = useProjectStore((s) => s.syncStatus);
-  const setSyncStatus = useProjectStore((s) => s.setSyncStatus);
-  const setSyncEnabled = useProjectStore((s) => s.setSyncEnabled);
-  const runSyncNow = useProjectStore((s) => s.runSyncNow);
+  const coderName = useCoderStore((s) => s.coderName);
+  const coders = useCoderStore((s) => s.coders);
+  const switchCoder = useCoderStore((s) => s.switchCoder);
+  const createCoder = useCoderStore((s) => s.createCoder);
+  const syncStatus = usePrefsStore((s) => s.syncStatus);
+  const setSyncStatus = usePrefsStore((s) => s.setSyncStatus);
+  const setSyncEnabled = usePrefsStore((s) => s.setSyncEnabled);
+  const runSyncNow = usePrefsStore((s) => s.runSyncNow);
   const [open, setOpen] = useState(false);
   const [adding, setAdding] = useState(false);
   const [newName, setNewName] = useState("");
@@ -207,7 +205,7 @@ export function CoderSwitcher() {
   }
 
   async function refreshCoders() {
-    await useProjectStore.getState().loadCoders();
+    await useCoderStore.getState().loadCoders();
     try {
       const res = await api.coderVisibility();
       setVisibility(res.visibility);
@@ -226,7 +224,7 @@ export function CoderSwitcher() {
       toast.success(t("coder.renamed", { name: newName }));
       await refreshCoders();
     } catch (e) {
-      toast.error(errorMessage(e));
+      toast.error(errorMessage(e, "Operation failed"));
     }
   }
 
@@ -245,11 +243,11 @@ export function CoderSwitcher() {
         try {
           await api.deleteCoder(name, target.trim());
         } catch (err) {
-          toast.error(errorMessage(err));
+          toast.error(errorMessage(err, "Operation failed"));
           return;
         }
       } else {
-        toast.error(errorMessage(e));
+        toast.error(errorMessage(e, "Operation failed"));
         return;
       }
     }
@@ -264,7 +262,7 @@ export function CoderSwitcher() {
     try {
       setStats(await api.coderStats(name));
     } catch (e) {
-      toast.error(errorMessage(e));
+      toast.error(errorMessage(e, "Operation failed"));
     } finally {
       setStatsLoading(false);
     }

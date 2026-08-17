@@ -12,6 +12,7 @@ import {
   type ChangeEvent,
   type ReactNode,
 } from "react";
+import { useAsyncEffect } from "@/lib/useAsync";
 import {
   Bookmark,
   BookmarkCheck,
@@ -55,7 +56,7 @@ import {
   AnnotationDetailsBar,
   CodingDetailsBar,
 } from "@/features/coding/DetailsBars";
-import { codeTint } from "@/features/coding/tint";
+import { FALLBACK_CODE_COLOR, codeTint } from "@/features/coding/tint";
 import {
   consumePendingJump,
   fetchOutgoingLinks,
@@ -64,13 +65,16 @@ import {
   type SegmentLink,
 } from "@/features/coding/links";
 import { usesPdfCoder } from "@/lib/media";
-import { cn } from "@/lib/utils";
+import { cn, errorMessage } from "@/lib/utils";
 import { useI18n } from "@/lib/i18n";
+import { useCoderStore } from "@/stores/coder";
+import { useInspectorStore } from "@/stores/inspector";
+import { usePrefsStore } from "@/stores/prefs";
+import { useWorkspaceStore } from "@/stores/workspace";
 import { useProjectStore } from "@/stores/project";
 
 /** Shared font metrics so the edit-mode textarea and overlay align. */
 const DOC_FONT_CLS = "qc-selectable font-sans text-sm leading-6 whitespace-pre-wrap break-words";
-const FALLBACK_CODE_COLOR = "var(--qc-accent)";
 
 /** Soft highlight for coded segments: the code color, transparently. */
 function softBackground(color: string): string {
@@ -162,9 +166,9 @@ export function TextCoder({
 }) {
   const { t } = useI18n();
   const storeCodeTree = useProjectStore((s) => s.codeTree);
-  const hiddenCodes = useProjectStore((s) => s.hiddenCodes);
+  const hiddenCodes = useCoderStore((s) => s.hiddenCodes);
   /** When OFF, creating a coding does NOT auto-select it in the details bar. */
-  const autoShowDetails = useProjectStore((s) => s.autoShowSegmentDetails);
+  const autoShowDetails = usePrefsStore((s) => s.autoShowSegmentDetails);
 
   const [source, setSource] = useState<Source | null>(null);
   const [localCodings, setLocalCodings] = useState<Coding[]>([]);
@@ -227,7 +231,7 @@ export function TextCoder({
      a pending gotoSegment scrolls the segment into view and flashes it. */
   const [flashCtid, setFlashCtid] = useState<number | null>(null);
   const flashTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const gotoSegment = useProjectStore((s) => s.gotoSegment);
+  const gotoSegment = useInspectorStore((s) => s.gotoSegment);
 
   useEffect(() => {
     if (!gotoSegment) return;
@@ -243,7 +247,7 @@ export function TextCoder({
     requestAnimationFrame(() => setFlashCtid(gotoSegment.ctid));
     if (flashTimer.current) clearTimeout(flashTimer.current);
     flashTimer.current = setTimeout(() => setFlashCtid(null), 2000);
-    useProjectStore.getState().setGotoSegment(null);
+    useInspectorStore.getState().setGotoSegment(null);
   }, [gotoSegment, codings]);
 
   useEffect(
@@ -281,7 +285,7 @@ export function TextCoder({
       const detail = (e as CustomEvent<{ fid: number; pos0: number; pos1: number }>).detail;
       if (!detail) return;
       if (detail.fid !== sourceId) {
-        useProjectStore.getState().setView({ kind: "coding", sourceId: detail.fid });
+        useWorkspaceStore.getState().setView({ kind: "coding", sourceId: detail.fid });
         return;
       }
       setPendingFlash({ fid: detail.fid, pos0: detail.pos0, pos1: detail.pos1 });
@@ -309,8 +313,12 @@ export function TextCoder({
 
   /* ---------------------------------------------------------------- load */
 
-  useEffect(() => {
-    let cancelled = false;
+  // NOTE: this coder deliberately does NOT use the shared `useCoder` hook —
+  // its load owns the source fetch + annotations, is conditional in
+  // controlled mode, and resets most coder state on every run, so it stays
+  // bespoke here.
+
+  useAsyncEffect(async (signal) => {
     setLoading(true);
     setLoadError(null);
     setSource(null);
@@ -329,31 +337,28 @@ export function TextCoder({
       setLocalAnnotations([]);
       setLocalCodes([]);
     }
-    void (async () => {
-      try {
-        const src = await api.getSource(sourceId);
-        if (cancelled) return;
-        setSource(src);
-        if (!controlled) {
-          const [cod, anns, flat] = await Promise.all([
-            api.sourceCoding(sourceId),
-            api.fileAnnotations(sourceId),
-            api.codesFlat(),
-          ]);
-          if (cancelled) return;
-          setLocalCodings(cod);
-          setLocalAnnotations(anns);
-          setLocalCodes(flat);
-        }
-      } catch (e) {
-        if (!cancelled) setLoadError(e instanceof Error ? e.message : t("coder.loadError"));
-      } finally {
-        if (!cancelled) setLoading(false);
+    try {
+      const src = await api.getSource(sourceId);
+      signal.throwIfAborted();
+      setSource(src);
+      if (!controlled) {
+        const [cod, anns, flat] = await Promise.all([
+          api.sourceCoding(sourceId),
+          api.fileAnnotations(sourceId),
+          api.codesFlat(),
+        ]);
+        signal.throwIfAborted();
+        setLocalCodings(cod);
+        setLocalAnnotations(anns);
+        setLocalCodes(flat);
       }
-    })();
-    return () => {
-      cancelled = true;
-    };
+    } catch (e) {
+      signal.throwIfAborted();
+      setLoadError(errorMessage(e, t("coder.loadError")));
+    } finally {
+      signal.throwIfAborted();
+      setLoading(false);
+    }
   }, [sourceId, reloadTick, t, controlled]);
 
   const refreshCodings = useCallback(async (): Promise<Coding[]> => {
@@ -395,36 +400,26 @@ export function TextCoder({
   }, [sourceId]);
 
   // Outgoing links of this file — markers + jump targets.
-  useEffect(() => {
-    let cancelled = false;
-    void fetchOutgoingLinks(sourceId)
-      .then((ls) => {
-        if (!cancelled) setLinks(ls);
-      })
-      .catch(() => {
-        if (!cancelled) setLinks([]);
-      });
-    return () => {
-      cancelled = true;
-    };
+  useAsyncEffect(async (signal) => {
+    try {
+      setLinks(await fetchOutgoingLinks(sourceId));
+    } catch {
+      signal.throwIfAborted();
+      setLinks([]);
+    }
   }, [sourceId, reloadTick]);
 
   /* ------------------------------------------------------------- bookmark */
 
-  useEffect(() => {
-    let cancelled = false;
-    void api
-      .bookmarks()
-      .then((b) => {
-        if (!cancelled) {
-          setBookmarkFileId(b.bookmark_file_id);
-          setBookmarkPos(b.bookmark_pos);
-        }
-      })
-      .catch(() => undefined);
-    return () => {
-      cancelled = true;
-    };
+  useAsyncEffect(async (signal) => {
+    try {
+      const b = await api.bookmarks();
+      signal.throwIfAborted();
+      setBookmarkFileId(b.bookmark_file_id);
+      setBookmarkPos(b.bookmark_pos);
+    } catch {
+      /* a bookmark fetch failure should not disturb the coder */
+    }
   }, [sourceId]);
 
   async function setBookmark() {
@@ -453,7 +448,7 @@ export function TextCoder({
         scrollEl.scrollTop = ratio * (scrollEl.scrollHeight - scrollEl.clientHeight);
       }
     } else {
-      useProjectStore.getState().setView({ kind: "coding", sourceId: bookmarkFileId });
+      useWorkspaceStore.getState().setView({ kind: "coding", sourceId: bookmarkFileId });
     }
   }
 
@@ -605,7 +600,7 @@ export function TextCoder({
         await patchCodingWeight("text", row.ctid, weight);
         await refreshCodings();
       } catch (e) {
-        setErrMsg(e instanceof Error ? e.message : t("coder.weightError"));
+        setErrMsg(errorMessage(e, t("coder.weightError")));
       }
     })();
   }
@@ -618,7 +613,7 @@ export function TextCoder({
         setSelectedSeg(null);
         await refreshCodings();
       } catch (e) {
-        setErrMsg(e instanceof Error ? e.message : t("coder.removeError"));
+        setErrMsg(errorMessage(e, t("coder.removeError")));
       }
     })();
   }
@@ -632,7 +627,7 @@ export function TextCoder({
         await api.undoCodings([row]);
         await refreshCodings();
       } catch (e) {
-        setErrMsg(e instanceof Error ? e.message : t("coder.restoreError"));
+        setErrMsg(errorMessage(e, t("coder.restoreError")));
       }
     })();
   }
@@ -645,7 +640,7 @@ export function TextCoder({
         await api.updateAnnotation(anid, memo);
         await refreshAnnotations();
       } catch (e) {
-        setErrMsg(e instanceof Error ? e.message : t("coder.annotationUpdateError"));
+        setErrMsg(errorMessage(e, t("coder.annotationUpdateError")));
       }
     })();
   }
@@ -657,7 +652,7 @@ export function TextCoder({
         setSelectedAnnSeg(null);
         await refreshAnnotations();
       } catch (e) {
-        setErrMsg(e instanceof Error ? e.message : t("coder.annotationDeleteError"));
+        setErrMsg(errorMessage(e, t("coder.annotationDeleteError")));
       }
     })();
   }
@@ -773,7 +768,7 @@ export function TextCoder({
         await refreshCodings();
         await refreshAnnotations();
       } catch (e) {
-        setErrMsg(e instanceof Error ? e.message : t("coder.saveError"));
+        setErrMsg(errorMessage(e, t("coder.saveError")));
       } finally {
         setSaving(false);
       }

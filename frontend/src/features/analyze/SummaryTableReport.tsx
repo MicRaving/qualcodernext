@@ -7,7 +7,7 @@
  */
 import { useEffect, useState } from "react";
 import { useI18n } from "@/lib/i18n";
-import { cn } from "@/lib/utils";
+import { cn, errorMessage } from "@/lib/utils";
 import { Button, EmptyState, Pill, Select } from "@/components/ui/orchestrator";
 import { cardCls, tdCls, thCls, useReport } from "@/features/analyze/reportData";
 import { ColorSwatch, ReportCsvButton, ReportMenuBar, ReportStatus } from "@/features/analyze/reportKit";
@@ -93,7 +93,7 @@ export function SummaryTableReportView() {
         };
       });
     } catch (err) {
-      setSaveError(err instanceof Error ? err.message : String(err));
+      setSaveError(errorMessage(err, String(err)));
     } finally {
       setSavingKey(null);
     }

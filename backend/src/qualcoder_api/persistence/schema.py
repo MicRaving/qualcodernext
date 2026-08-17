@@ -6,10 +6,9 @@ connection so the SQL is byte-identical to the legacy chain.
 
 from __future__ import annotations
 
-import datetime
-
 import aiosqlite
 
+from qualcoder_api.core.timeutil import now
 from qualcoder_api.persistence import tables
 
 _SCHEMA_SQL: list[str] = [
@@ -166,7 +165,7 @@ async def create_new_project_schema(
         "INSERT INTO project VALUES(?,?,?,?,?,?,?,?,?,?,?)",
         (
             "v31",
-            datetime.datetime.now().astimezone().strftime("%Y-%m-%d %H:%M:%S"),
+            now(),
             "",
             app_version,
             0,

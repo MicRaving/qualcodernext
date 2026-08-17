@@ -4,6 +4,7 @@
  * rendering of a page. The backend fetches and parses the URL; this
  * dialog only submits it.
  */
+import { errorMessage } from "@/lib/utils";
 import { useRef, useState, type FormEvent } from "react";
 import { Globe, LoaderCircle } from "lucide-react";
 import { ApiError, fetchWithTimeout, initApiBase } from "@/lib/api";
@@ -108,7 +109,7 @@ export function UrlImportDialog({ onClose }: Props) {
       if (err instanceof DOMException && err.name === "AbortError") {
         setError(t("files.urlImportAborted"));
       } else {
-        setError(err instanceof Error ? err.message : t("files.urlImportError"));
+        setError(errorMessage(err, t("files.urlImportError")));
       }
       setBusy(false);
     }

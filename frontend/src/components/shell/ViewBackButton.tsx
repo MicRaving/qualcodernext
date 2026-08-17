@@ -4,12 +4,12 @@
  */
 import { ArrowLeft } from "lucide-react";
 import { useI18n } from "@/lib/i18n";
-import { useProjectStore } from "@/stores/project";
+import { useWorkspaceStore } from "@/stores/workspace";
 import { cls } from "@/components/ui/tokens";
 
 export function ViewBackButton() {
   const { t } = useI18n();
-  const setView = useProjectStore((s) => s.setView);
+  const setView = useWorkspaceStore((s) => s.setView);
   return (
     <button
       type="button"

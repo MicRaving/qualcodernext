@@ -12,19 +12,20 @@ import {
   Trash2,
 } from "lucide-react";
 import { api } from "@/lib/api";
-import { cn } from "@/lib/utils";
+import { cn, errorMessage } from "@/lib/utils";
 import { useI18n } from "@/lib/i18n";
 import { Button, ErrorBanner, IconButton, Input, ViewHeader } from "@/components/ui/orchestrator";
 import { InlineNameEdit } from "@/components/ui/InlineNameEdit";
 import { RowContextMenu } from "@/features/shell/RowContextMenu";
+import { useWorkspaceStore } from "@/stores/workspace";
 import { useProjectStore } from "@/stores/project";
 
 /** Left bar: the journal entry list (header lives in the notes left bar). */
 export function JournalList() {
   const { t } = useI18n();
   const journals = useProjectStore((s) => s.journals);
-  const notesUi = useProjectStore((s) => s.notesUi);
-  const setNotesUi = useProjectStore((s) => s.setNotesUi);
+  const notesUi = useWorkspaceStore((s) => s.notesUi);
+  const setNotesUi = useWorkspaceStore((s) => s.setNotesUi);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
 
@@ -34,7 +35,7 @@ export function JournalList() {
     try {
       useProjectStore.setState({ journals: await api.journals() });
     } catch (e) {
-      setLoadError(e instanceof Error ? e.message : t("journal.loadError"));
+      setLoadError(errorMessage(e, t("journal.loadError")));
     } finally {
       setLoading(false);
     }
@@ -194,8 +195,8 @@ export function JournalList() {
 export function JournalEditor() {
   const { t } = useI18n();
   const journals = useProjectStore((s) => s.journals);
-  const selectedId = useProjectStore((s) => s.notesUi.selectedId);
-  const setNotesUi = useProjectStore((s) => s.setNotesUi);
+  const selectedId = useWorkspaceStore((s) => s.notesUi.selectedId);
+  const setNotesUi = useWorkspaceStore((s) => s.setNotesUi);
 
   const [actionError, setActionError] = useState<string | null>(null);
   const [name, setName] = useState("");
@@ -211,7 +212,7 @@ export function JournalEditor() {
     try {
       useProjectStore.setState({ journals: await api.journals() });
     } catch (e) {
-      setActionError(e instanceof Error ? e.message : t("journal.loadError"));
+      setActionError(errorMessage(e, t("journal.loadError")));
     }
   }, [t]);
 
@@ -257,7 +258,7 @@ export function JournalEditor() {
       await api.updateJournal(selected.jid, { name, jentry: entry });
       await load();
     } catch (e) {
-      setActionError(e instanceof Error ? e.message : t("journal.saveError"));
+      setActionError(errorMessage(e, t("journal.saveError")));
     } finally {
       setSaving(false);
     }
@@ -272,7 +273,7 @@ export function JournalEditor() {
       setNotesUi({ selectedId: null });
       await load();
     } catch (e) {
-      setActionError(e instanceof Error ? e.message : t("journal.deleteError"));
+      setActionError(errorMessage(e, t("journal.deleteError")));
     }
   }
 

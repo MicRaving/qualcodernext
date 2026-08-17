@@ -6,7 +6,6 @@ links. Faithful port of the legacy ``import_files`` workflow.
 from __future__ import annotations
 
 import asyncio
-import datetime
 import logging
 import shutil
 import zipfile
@@ -26,6 +25,7 @@ from qualcoder_api.core.enums import (
     MediaType,
 )
 from qualcoder_api.core.models import Source
+from qualcoder_api.core.timeutil import now as _now
 from qualcoder_api.persistence import tables
 
 logger = logging.getLogger(__name__)
@@ -328,7 +328,7 @@ class ImportService:
                 text("caseOrFile = 'file'")
             )
         )
-        now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        now = _now()
         for (attr_name,) in rows:
             await session.execute(
                 text(

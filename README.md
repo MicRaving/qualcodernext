@@ -2,11 +2,11 @@
 
 This is a rework of [QualCoder](https://github.com/ccbogel/QualCoder), the open-source qualitative data analysis (QDA) tool. The central focus of the software is to load text and multimedia files for qualitative coding. It can transcribe audio/video files, organize codes and files, generate reports like coding graphs and coder comparisons, and integrates LLMs to explore the data, support coding, and analyze the results.
 
-> **Current development branch: `alpha-0.2.0`** — the roadmap wave described below
-> (dictionary autocode, stats/sentiment reports, QTT, creative coding, ...) is
-> implemented and covered by the e2e suite (`frontend/tests-e2e`).
+## Documentation
 
-
+Full user documentation for every screen, dialog and feature lives in
+[`docs/`](docs/README.md) (includes screenshots). The authoritative UI design
+spec for developers is [`frontend/src/DESIGN.md`](frontend/src/DESIGN.md).
 
 ### Scope of the Rework
 
@@ -55,17 +55,17 @@ All releases are available on: [https://github.com/MicRaving/QCnext/releases](ht
 
 ## License
 
-QualCoder is distributed under the GNU LGPL-3.0 (see the upstream project). QCnext follows the same licensing intent; the upstream reference checkout carries
-its own license text in `upstreamQualcoder/`.
+QualCoder is distributed under the GNU LGPL-3.0 (see the upstream project). QCnext follows the same licensing intent; the upstream reference checkout carries its own license text in `upstreamQualcoder/`.
 
 ## Future
 
 Here is a non-exhaustive list of planned features
 
+* Improve documentation and tutorials
 * Fully implement client-server architecture
 * Implement more use cases for LLMs
 * Further refine the UI
-* Improve documentation and tutorials
+* Organize History in hierarchical structure: Right now, every action can be undone regardless of whether it destroys other actions, too.
 * Bug-fixing - You tell me!
 
 ## What will (likely) not be implemented

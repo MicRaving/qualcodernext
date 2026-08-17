@@ -3,6 +3,7 @@
  * (NotesEditor). A dropdown in the left bar's header picks the note type;
  * the per-type list and editor fill the left/center slots.
  */
+import { errorMessage } from "@/lib/utils";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   BookOpen,
@@ -44,6 +45,8 @@ import { RowContextMenu } from "@/features/shell/RowContextMenu";
 import { InlineNameEdit } from "@/components/ui/InlineNameEdit";
 import { JournalEditor, JournalList } from "@/features/journals/JournalView";
 import { useI18n } from "@/lib/i18n";
+import { useInspectorStore } from "@/stores/inspector";
+import { useWorkspaceStore } from "@/stores/workspace";
 import { useProjectStore } from "@/stores/project";
 
 const MAX_TREE_DEPTH = 64;
@@ -123,12 +126,12 @@ function MemoTypeIcon({ type, size }: { type: MemoTypeId; size: number }) {
  *  right-click (their lists fill this bar while active). */
 export function NotesList() {
   const { t } = useI18n();
-  const notesUi = useProjectStore((s) => s.notesUi);
-  const setNotesUi = useProjectStore((s) => s.setNotesUi);
+  const notesUi = useWorkspaceStore((s) => s.notesUi);
+  const setNotesUi = useWorkspaceStore((s) => s.setNotesUi);
 
   const loadAnnotations = useCallback(async () => {
     try {
-      useProjectStore.setState({ annotationsAll: await api.annotationsAll() });
+      useInspectorStore.setState({ annotationsAll: await api.annotationsAll() });
     } catch {
       /* the list shows whatever is cached */
     }
@@ -154,7 +157,7 @@ export function NotesList() {
     if (!first) return;
     try {
       const created = await api.createAnnotation({ fid: first.id, pos0: 0, pos1: 1, memo: "" });
-      useProjectStore.setState({ annotationsAll: await api.annotationsAll() });
+      useInspectorStore.setState({ annotationsAll: await api.annotationsAll() });
       setNotesUi({
         tab: "annotations",
         selectedId: created.anid,
@@ -264,7 +267,7 @@ export function NotesList() {
 
 /** Center: the per-tab editor (journal entry / annotation / memo). */
 export function NotesEditor() {
-  const tab = useProjectStore((s) => s.notesUi.tab);
+  const tab = useWorkspaceStore((s) => s.notesUi.tab);
   return (
     <div className="flex h-full flex-col">
       <div className="min-h-0 flex-1">
@@ -286,10 +289,10 @@ export function NotesEditor() {
 
 function AnnotationItems() {
   const { t } = useI18n();
-  const annotations = useProjectStore((s) => s.annotationsAll);
-  const notesUi = useProjectStore((s) => s.notesUi);
-  const setNotesUi = useProjectStore((s) => s.setNotesUi);
-  const setView = useProjectStore((s) => s.setView);
+  const annotations = useInspectorStore((s) => s.annotationsAll);
+  const notesUi = useWorkspaceStore((s) => s.notesUi);
+  const setNotesUi = useWorkspaceStore((s) => s.setNotesUi);
+  const setView = useWorkspaceStore((s) => s.setView);
   const [rowMenu, setRowMenu] = useState<{ x: number; y: number; a: (typeof annotations)[number] } | null>(null);
   /** Inline memo editing (journal-style): which row is being edited. */
   const [editingId, setEditingId] = useState<number | null>(null);
@@ -319,7 +322,7 @@ function AnnotationItems() {
     if (!memo || memo === a.memo) return;
     try {
       await api.updateAnnotation(a.anid, memo);
-      useProjectStore.setState({ annotationsAll: await api.annotationsAll() });
+      useInspectorStore.setState({ annotationsAll: await api.annotationsAll() });
     } catch {
       /* surface via the editor's error state */
     }
@@ -329,7 +332,7 @@ function AnnotationItems() {
     if (!window.confirm(t("coder.deleteAnnotation"))) return;
     try {
       await api.deleteAnnotation(a.anid);
-      useProjectStore.setState({ annotationsAll: await api.annotationsAll() });
+      useInspectorStore.setState({ annotationsAll: await api.annotationsAll() });
       if (notesUi.selectedId === a.anid) setNotesUi({ selectedId: null });
     } catch {
       /* surface via the editor's error state */
@@ -458,11 +461,11 @@ function AnnotationItems() {
 
 function AnnotationDetails() {
   const { t } = useI18n();
-  const setView = useProjectStore((s) => s.setView);
-  const annotations = useProjectStore((s) => s.annotationsAll);
+  const setView = useWorkspaceStore((s) => s.setView);
+  const annotations = useInspectorStore((s) => s.annotationsAll);
   const sources = useProjectStore((s) => s.sources);
-  const notesUi = useProjectStore((s) => s.notesUi);
-  const setNotesUi = useProjectStore((s) => s.setNotesUi);
+  const notesUi = useWorkspaceStore((s) => s.notesUi);
+  const setNotesUi = useWorkspaceStore((s) => s.setNotesUi);
   const [draft, setDraft] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -511,9 +514,9 @@ function AnnotationDetails() {
     setError(null);
     try {
       await api.updateAnnotation(selected.anid, draft);
-      useProjectStore.setState({ annotationsAll: await api.annotationsAll() });
+      useInspectorStore.setState({ annotationsAll: await api.annotationsAll() });
     } catch (e) {
-      setError(e instanceof Error ? e.message : t("coder.annotationUpdateError"));
+      setError(errorMessage(e, t("coder.annotationUpdateError")));
     } finally {
       setSaving(false);
     }
@@ -525,10 +528,10 @@ function AnnotationDetails() {
     setError(null);
     try {
       await api.deleteAnnotation(selected.anid);
-      useProjectStore.setState({ annotationsAll: await api.annotationsAll() });
+      useInspectorStore.setState({ annotationsAll: await api.annotationsAll() });
       setNotesUi({ selectedId: null });
     } catch (e) {
-      setError(e instanceof Error ? e.message : t("coder.annotationDeleteError"));
+      setError(errorMessage(e, t("coder.annotationDeleteError")));
     }
   }
 
@@ -549,10 +552,10 @@ function AnnotationDetails() {
         memo: draft,
       });
       await api.deleteAnnotation(selected.anid);
-      useProjectStore.setState({ annotationsAll: await api.annotationsAll() });
+      useInspectorStore.setState({ annotationsAll: await api.annotationsAll() });
       setNotesUi({ selectedId: created.anid, newAnnotation: true });
     } catch (e) {
-      setError(e instanceof Error ? e.message : t("coder.annotationUpdateError"));
+      setError(errorMessage(e, t("coder.annotationUpdateError")));
     } finally {
       setSaving(false);
     }
@@ -667,9 +670,9 @@ function MemoItems() {
   const { t } = useI18n();
   const codeTree = useProjectStore((s) => s.codeTree);
   const sources = useProjectStore((s) => s.sources);
-  const notesUi = useProjectStore((s) => s.notesUi);
-  const setNotesUi = useProjectStore((s) => s.setNotesUi);
-  const setView = useProjectStore((s) => s.setView);
+  const notesUi = useWorkspaceStore((s) => s.notesUi);
+  const setNotesUi = useWorkspaceStore((s) => s.setNotesUi);
+  const setView = useWorkspaceStore((s) => s.setView);
   const [rowMenu, setRowMenu] = useState<
     | { x: number; y: number; kind: "code"; item: { id: number; name: string; memo: string | null } }
     | { x: number; y: number; kind: "file"; item: Source }
@@ -897,7 +900,7 @@ function MemoEditor() {
   const refreshProject = useProjectStore((s) => s.refreshProject);
   const codeTree = useProjectStore((s) => s.codeTree);
   const sources = useProjectStore((s) => s.sources);
-  const notesUi = useProjectStore((s) => s.notesUi);
+  const notesUi = useWorkspaceStore((s) => s.notesUi);
   const [draft, setDraft] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -946,7 +949,7 @@ function MemoEditor() {
       else if (selectedFile) await api.patchSource(selectedFile.id, { memo: draft });
       await refreshProject();
     } catch (e) {
-      setError(e instanceof Error ? e.message : t("notes.memoError"));
+      setError(errorMessage(e, t("notes.memoError")));
     } finally {
       setSaving(false);
     }
@@ -963,7 +966,7 @@ function MemoEditor() {
       else if (selectedFile) await api.patchSource(selectedFile.id, { memo: "" });
       await refreshProject();
     } catch (e) {
-      setError(e instanceof Error ? e.message : t("notes.memoError"));
+      setError(errorMessage(e, t("notes.memoError")));
     } finally {
       setSaving(false);
     }
@@ -981,7 +984,7 @@ function MemoEditor() {
       await patchMemoType(kind, targetId, typeId);
       await refreshProject();
     } catch (e) {
-      setError(e instanceof Error ? e.message : t("notes.memoError"));
+      setError(errorMessage(e, t("notes.memoError")));
     } finally {
       setSaving(false);
     }
@@ -1017,7 +1020,7 @@ function MemoEditor() {
               <Button
                 variant="secondary"
                 icon={<FileText size={12} aria-hidden />}
-                onClick={() => useProjectStore.getState().setView({ kind: "coding", sourceId: selected.id })}
+                onClick={() => useWorkspaceStore.getState().setView({ kind: "coding", sourceId: selected.id })}
               >
                 {t("notes.openFile")}
               </Button>

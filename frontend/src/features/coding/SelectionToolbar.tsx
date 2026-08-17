@@ -15,7 +15,9 @@
  *   host state) so `onCoded` can highlight the just-created segment.
  * - `onChanged` reloads annotations/codes/links after non-coding mutations.
  */
+import { errorMessage } from "@/lib/utils";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useAsyncEffect } from "@/lib/useAsync";
 import {
   Check,
   Code,
@@ -35,7 +37,8 @@ import {
   readLinkPayload,
   type LinkSpanTarget,
 } from "@/features/coding/links";
-import { useProjectStore } from "@/stores/project";
+import { useCoderStore } from "@/stores/coder";
+import { useWorkspaceStore } from "@/stores/workspace";
 import { useI18n } from "@/lib/i18n";
 import { cls } from "@/components/ui/tokens";
 
@@ -77,7 +80,7 @@ export function SelectionToolbar({
   onError,
 }: SelectionToolbarProps) {
   const { t } = useI18n();
-  const activeCodeId = useProjectStore((s) => s.activeCodeId);
+  const activeCodeId = useCoderStore((s) => s.activeCodeId);
 
   const [pickerOpen, setPickerOpen] = useState(false);
   const [annotateOpen, setAnnotateOpen] = useState(false);
@@ -122,21 +125,15 @@ export function SelectionToolbar({
    *  (it was created while the coder was open) — the toolbar must still
    *  label its primary button correctly. */
   const [extraNames, setExtraNames] = useState<Map<number, string> | null>(null);
-  useEffect(() => {
+  useAsyncEffect(async (signal) => {
     if (activeCodeId == null || codeById.has(activeCodeId)) return;
-    let cancelled = false;
-    void api
-      .codesFlat()
-      .then((flat) => {
-        if (cancelled) return;
-        setExtraNames(
-          new Map(flat.filter((c) => c.kind === "code").map((c) => [c.id, c.name])),
-        );
-      })
-      .catch(() => undefined);
-    return () => {
-      cancelled = true;
-    };
+    try {
+      const flat = await api.codesFlat();
+      signal.throwIfAborted();
+      setExtraNames(new Map(flat.filter((c) => c.kind === "code").map((c) => [c.id, c.name])));
+    } catch {
+      /* a lazy-name fetch failure should not disturb the toolbar */
+    }
   }, [activeCodeId, codeById]);
 
   const activeCodeName =
@@ -170,7 +167,7 @@ export function SelectionToolbar({
         onClose();
       } catch (e) {
         // Keep the selection so the user can retry without re-selecting.
-        onError(e instanceof Error ? e.message : t("coder.createError"));
+        onError(errorMessage(e, t("coder.createError")));
       }
     })();
   }
@@ -198,7 +195,7 @@ export function SelectionToolbar({
         onClose();
       } catch (e) {
         // Keep the selection so the user can retry without re-selecting.
-        onError(e instanceof Error ? e.message : t("coder.inVivoCreateError"));
+        onError(errorMessage(e, t("coder.inVivoCreateError")));
       } finally {
         setInVivoBusy(false);
       }
@@ -220,7 +217,7 @@ export function SelectionToolbar({
         onClose();
       } catch (e) {
         // Keep the selection so the user can retry without re-selecting.
-        onError(e instanceof Error ? e.message : t("coder.annotationCreateError"));
+        onError(errorMessage(e, t("coder.annotationCreateError")));
       }
     })();
   }
@@ -236,7 +233,7 @@ export function SelectionToolbar({
         if (linkCopiedTimer.current) clearTimeout(linkCopiedTimer.current);
         linkCopiedTimer.current = setTimeout(() => setLinkCopied(false), 1500);
       } catch (e) {
-        onError(e instanceof Error ? e.message : t("coder.linkCopyError"));
+        onError(errorMessage(e, t("coder.linkCopyError")));
       }
     })();
   }
@@ -260,7 +257,7 @@ export function SelectionToolbar({
         onClose();
       } catch (e) {
         // Keep the selection so the user can retry without re-selecting.
-        onError(e instanceof Error ? e.message : t("coder.linkCreateError"));
+        onError(errorMessage(e, t("coder.linkCreateError")));
       }
     })();
   }
@@ -272,7 +269,7 @@ export function SelectionToolbar({
     void listQttSheets()
       .then((sheets) => setQttSheets(sheets))
       .catch((e) => {
-        onError(e instanceof Error ? e.message : t("qtt.sendError"));
+        onError(errorMessage(e, t("qtt.sendError")));
         setQttOpen(false);
       })
       .finally(() => setQttLoading(false));
@@ -296,10 +293,10 @@ export function SelectionToolbar({
         if (qttSentTimer.current) clearTimeout(qttSentTimer.current);
         qttSentTimer.current = setTimeout(() => setQttSent(false), 1500);
         // An open QTT workspace refreshes its sheets/items.
-        const { qttUi, setQttUi } = useProjectStore.getState();
+        const { qttUi, setQttUi } = useWorkspaceStore.getState();
         setQttUi({ tick: qttUi.tick + 1 });
       } catch (e) {
-        onError(e instanceof Error ? e.message : t("qtt.sendError"));
+        onError(errorMessage(e, t("qtt.sendError")));
       } finally {
         setQttSending(null);
       }
@@ -322,14 +319,10 @@ export function SelectionToolbar({
 
   // Track whether a qcnext-link payload is on the clipboard so the toolbar
   // can offer "Paste link here".
-  useEffect(() => {
-    let cancelled = false;
-    void readLinkPayload().then((target) => {
-      if (!cancelled) setClipboardLink(target);
-    });
-    return () => {
-      cancelled = true;
-    };
+  useAsyncEffect(async (signal) => {
+    const target = await readLinkPayload();
+    signal.throwIfAborted();
+    setClipboardLink(target);
   }, [selection]);
 
   // Escape closes the inner popovers FIRST — capture phase + stop

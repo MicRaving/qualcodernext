@@ -5,7 +5,8 @@
  * disabled until a project loads). Picking a folder in the Open browse
  * flow opens the project immediately — no second click.
  */
-import { useEffect, useState, type FormEvent } from "react";
+import { useState, type FormEvent } from "react";
+import { useAsyncEffect } from "@/lib/useAsync";
 import { BookOpen, FolderOpen, FolderTree, Hash, Layers, LoaderCircle, PlusCircle } from "lucide-react";
 import { api } from "@/lib/api";
 import { Button, Input, Modal, ViewHeader } from "@/components/ui/orchestrator";
@@ -174,21 +175,17 @@ export function DashboardView() {
     }
   }
 
-  useEffect(() => {
-    let cancelled = false;
-    // Recent projects are shown with and without a project (the dashboard
-    // is always visible).
-    api
-      .recentProjects()
-      .then((r) => {
-        if (!cancelled) setRecent(r.recent);
-      })
-      .catch(() => {
-        if (!cancelled) setRecent([]);
-      });
-    return () => {
-      cancelled = true;
-    };
+  // Recent projects are shown with and without a project (the dashboard
+  // is always visible).
+  useAsyncEffect(async (signal) => {
+    try {
+      const r = await api.recentProjects();
+      signal.throwIfAborted();
+      setRecent(r.recent);
+    } catch {
+      signal.throwIfAborted();
+      setRecent([]);
+    }
   }, []);
 
   // Without a project the same dashboard chrome is shown (stats read "—")

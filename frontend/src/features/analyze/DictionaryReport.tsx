@@ -5,9 +5,10 @@
  * code name), dictionary autocoding and the per-document x per-term
  * frequency matrix with CSV export.
  */
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useMemo, useRef, useState } from "react";
+import { useAsyncEffect } from "@/lib/useAsync";
 import { BookOpenText, Download, Plus, Trash2, Upload } from "lucide-react";
-import { cn } from "@/lib/utils";
+import { cn, errorMessage } from "@/lib/utils";
 import { useI18n } from "@/lib/i18n";
 import { downloadCsv } from "@/lib/csv";
 import { useProjectStore } from "@/stores/project";
@@ -71,50 +72,41 @@ export function DictionaryReport() {
     [dictionaries, selectedId],
   );
 
-  useEffect(() => {
-    let cancelled = false;
+  useAsyncEffect(async (signal) => {
     setLoadError(null);
-    dictionaryApi
-      .list()
-      .then((items) => {
-        if (cancelled) return;
-        setDictionaries(items);
-        setSelectedId((prev) =>
-          items.some((d) => d.id === prev) ? prev : (items[0]?.id ?? ""),
-        );
-      })
-      .catch((e) => {
-        if (!cancelled) setLoadError(e instanceof Error ? e.message : "Failed to load");
-      });
-    return () => {
-      cancelled = true;
-    };
+    try {
+      const items = await dictionaryApi.list();
+      signal.throwIfAborted();
+      setDictionaries(items);
+      setSelectedId((prev) =>
+        items.some((d) => d.id === prev) ? prev : (items[0]?.id ?? ""),
+      );
+    } catch (e) {
+      signal.throwIfAborted();
+      setLoadError(errorMessage(e, "Failed to load"));
+    }
   }, [attempt]);
 
   // Frequency matrix for the selected dictionary.
-  useEffect(() => {
+  useAsyncEffect(async (signal) => {
     if (selectedId === "") {
       setFreq(null);
       setFreqError(null);
       return;
     }
-    let cancelled = false;
     setFreqLoading(true);
     setFreqError(null);
-    dictionaryApi
-      .frequencies(selectedId, normalize)
-      .then((data) => {
-        if (!cancelled) setFreq(data);
-      })
-      .catch((e) => {
-        if (!cancelled) setFreqError(e instanceof Error ? e.message : "Failed to load");
-      })
-      .finally(() => {
-        if (!cancelled) setFreqLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
+    try {
+      const data = await dictionaryApi.frequencies(selectedId, normalize);
+      signal.throwIfAborted();
+      setFreq(data);
+    } catch (e) {
+      signal.throwIfAborted();
+      setFreqError(errorMessage(e, "Failed to load"));
+    } finally {
+      signal.throwIfAborted();
+      setFreqLoading(false);
+    }
   }, [selectedId, normalize, attempt]);
 
   async function refresh() {

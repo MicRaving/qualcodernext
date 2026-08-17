@@ -32,7 +32,7 @@ import {
   UserRound,
 } from "lucide-react";
 import { api, ApiError, type BadLink, type FileFilter, type Source } from "@/lib/api";
-import { cn } from "@/lib/utils";
+import { cn, errorMessage } from "@/lib/utils";
 import { cls } from "@/components/ui/tokens";
 import { useI18n } from "@/lib/i18n";
 import { useToast } from "@/lib/toast";
@@ -50,6 +50,8 @@ import {
   TableHead,
   ViewHeader,
 } from "@/components/ui/orchestrator";
+import { useInspectorStore } from "@/stores/inspector";
+import { useWorkspaceStore } from "@/stores/workspace";
 import { useProjectStore } from "@/stores/project";
 import { TranscribeDialog } from "@/features/coding/TranscribeDialog";
 import { AutocodeDialog } from "@/features/coding/AutocodeDialog";
@@ -152,8 +154,8 @@ function clampRowMenu(
 export function FileManager() {
   const { t } = useI18n();
   const toast = useToast();
-  const setView = useProjectStore((s) => s.setView);
-  const selectFile = useProjectStore((s) => s.selectFile);
+  const setView = useWorkspaceStore((s) => s.setView);
+  const selectFile = useInspectorStore((s) => s.selectFile);
   const sources = useProjectStore((s) => s.sources);
   const codeTree = useProjectStore((s) => s.codeTree);
 
@@ -162,8 +164,8 @@ export function FileManager() {
   // Sort column/direction and the active saved filter live in the store so
   // they survive view switches and remounts for the app session (they are
   // never persisted to disk).
-  const filesUi = useProjectStore((s) => s.filesUi);
-  const setFilesUi = useProjectStore((s) => s.setFilesUi);
+  const filesUi = useWorkspaceStore((s) => s.filesUi);
+  const setFilesUi = useWorkspaceStore((s) => s.setFilesUi);
   const sortKey = filesUi.sortKey;
   const sortDir = filesUi.sortDir;
   const activeFilter = filesUi.activeFilter;
@@ -198,7 +200,7 @@ export function FileManager() {
       const list = await api.sources();
       useProjectStore.setState({ sources: list });
     } catch (e) {
-      setLoadError(e instanceof Error ? e.message : t("files.loadError"));
+      setLoadError(errorMessage(e, t("files.loadError")));
     } finally {
       setLoading(false);
     }
@@ -245,7 +247,7 @@ export function FileManager() {
       await api.createFileFilter(name.trim(), filterJson);
       await loadFilters();
     } catch (e) {
-      setActionError(e instanceof Error ? e.message : t("files.filtersSave"));
+      setActionError(errorMessage(e, t("files.filtersSave")));
     }
   }
 
@@ -257,7 +259,7 @@ export function FileManager() {
       setFileQuery("");
       await loadFilters();
     } catch (e) {
-      setActionError(e instanceof Error ? e.message : t("files.filtersDelete"));
+      setActionError(errorMessage(e, t("files.filtersDelete")));
     }
   }
 
@@ -267,7 +269,7 @@ export function FileManager() {
       const res = await api.badLinks();
       setBadLinks(res.links);
     } catch (e) {
-      setActionError(e instanceof Error ? e.message : t("files.badLinksHint"));
+      setActionError(errorMessage(e, t("files.badLinksHint")));
       setBadLinks([]);
     }
   }
@@ -279,7 +281,7 @@ export function FileManager() {
       await api.fixLink(link.id, path);
       setBadLinks((list) => list.filter((l) => l.id !== link.id));
     } catch (e) {
-      setActionError(e instanceof Error ? e.message : t("files.badLinksHint"));
+      setActionError(errorMessage(e, t("files.badLinksHint")));
     }
   }
 
@@ -292,7 +294,7 @@ export function FileManager() {
       const res = await api.bulkRenamePath(old.trim(), next);
       setActionError(t("files.bulkRenameDone", { updated: String(res.updated) }));
     } catch (e) {
-      setActionError(e instanceof Error ? e.message : t("files.badLinksHint"));
+      setActionError(errorMessage(e, t("files.badLinksHint")));
     }
   }
 
@@ -302,7 +304,7 @@ export function FileManager() {
       await load();
       setActionError(t("files.replaced", { message: res.message }));
     } catch (e) {
-      setActionError(e instanceof Error ? e.message : t("files.replaceError"));
+      setActionError(errorMessage(e, t("files.replaceError")));
     }
   }
 
@@ -434,7 +436,7 @@ export function FileManager() {
           if (e instanceof ApiError && e.status === 409) {
             dupes.push(file.name);
           } else {
-            failed = e instanceof Error ? e.message : t("files.importFailed", { name: file.name });
+            failed = errorMessage(e, t("files.importFailed", { name: file.name }));
           }
         }
         useProjectStore.getState().setImportState({ done: i + 1, total: list.length });
@@ -538,7 +540,7 @@ export function FileManager() {
         sources: s.sources.map((x) => (x.id === updated.id ? updated : x)),
       }));
     } catch (e) {
-      setActionError(e instanceof Error ? e.message : t("files.renameError"));
+      setActionError(errorMessage(e, t("files.renameError")));
     }
   }
 
@@ -551,7 +553,7 @@ export function FileManager() {
         sources: s.sources.map((x) => (x.id === updated.id ? updated : x)),
       }));
     } catch (e) {
-      setActionError(e instanceof Error ? e.message : t("files.memoError"));
+      setActionError(errorMessage(e, t("files.memoError")));
     }
   }
 
@@ -561,7 +563,7 @@ export function FileManager() {
       await api.deleteSource(row.id);
       await load();
     } catch (e) {
-      setActionError(e instanceof Error ? e.message : t("files.deleteError"));
+      setActionError(errorMessage(e, t("files.deleteError")));
     }
   }
 
@@ -589,7 +591,7 @@ export function FileManager() {
           // A single failure must not abort the batch (the old code bailed
           // out of the loop and skipped the refresh, leaving already-deleted
           // rows visible). Record it and keep going.
-          if (!failed) failed = e instanceof Error ? e.message : t("files.deleteError");
+          if (!failed) failed = errorMessage(e, t("files.deleteError"));
         }
         setDeleting({ done: i + 1, total: n });
       }
@@ -660,7 +662,7 @@ export function FileManager() {
       await api.linkFileToCase(match.caseid, row.id);
       await load();
     } catch (e) {
-      setActionError(e instanceof Error ? e.message : t("files.assignCaseError"));
+      setActionError(errorMessage(e, t("files.assignCaseError")));
     }
   }
 

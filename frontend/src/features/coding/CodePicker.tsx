@@ -2,6 +2,7 @@
  * CodePicker — modal for picking an existing code (or creating a new one)
  * before applying a text selection coding.
  */
+import { errorMessage } from "@/lib/utils";
 import { useEffect, useMemo, useState } from "react";
 import { LoaderCircle, Plus, Search, X } from "lucide-react";
 import { api, type CodeTreeItem } from "@/lib/api";
@@ -70,7 +71,7 @@ export function CodePicker({ open, codes, onClose, onPick }: CodePickerProps) {
       const res = await api.createCode(name);
       onPick({ cid: res.cid, name, color: null });
     } catch (e) {
-      setError(e instanceof Error ? e.message : t("codePicker.createError"));
+      setError(errorMessage(e, t("codePicker.createError")));
     } finally {
       setBusy(false);
     }

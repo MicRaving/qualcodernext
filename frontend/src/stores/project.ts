@@ -1,161 +1,41 @@
 /**
- * Project + workspace state (Zustand).
+ * Project lifecycle + background jobs + bug report (Zustand).
  *
- * Owns the open project lifecycle and the current workspace view. UI
- * components call these actions; the store never renders.
+ * Owns the open-project lifecycle (open/close/create, summary, sources,
+ * code tree, cases, journals), the background task queue, the file search
+ * query and the bug-report composer state. Workspace view, coder identity,
+ * inspector, graph and preference state live in their own slices — this
+ * store re-exports their hooks so `@/stores/project` imports keep working.
  */
+import { errorMessage } from "@/lib/utils";
 import { create } from "zustand";
 import {
   api,
-  ApiError,
   type Case,
-  type CodeDetails,
   type CodeTreeItem,
-  type GraphData,
   type ProjectSummary,
   type Source,
   type Journal,
-  type SourceDetails,
-  type SyncStatus,
 } from "@/lib/api";
-import type { SortDir, SortKey } from "@/features/manage/files";
 import { blankScreenshot, captureAppScreenshot } from "@/features/bugreport/capture";
 import { DEFAULT_GITHUB_REPO } from "@/features/bugreport/github";
+import { useCoderStore } from "./coder";
+import { useInspectorStore } from "./inspector";
+import { usePrefsStore } from "./prefs";
+import { useWorkspaceStore, type WorkspaceView } from "./workspace";
 
-export type ThemeMode = "light" | "dark";
+// --- Re-exports so existing `@/stores/project` imports keep working ------
 
-/** Persist + apply the theme: toggle `.dark` on <html> and store in localStorage. */
-function applyThemeMode(mode: ThemeMode) {
-  if (typeof document !== "undefined") {
-    document.documentElement.classList.toggle("dark", mode === "dark");
-  }
-  if (typeof window !== "undefined") {
-    localStorage.setItem("qc-theme", mode);
-  }
-}
+export { useWorkspaceStore } from "./workspace";
+export type { WorkspaceView, RightPane, ReportId } from "./workspace";
+export { useCoderStore } from "./coder";
+export { useInspectorStore } from "./inspector";
+export type { InspectorSelection } from "./inspector";
+export { useGraphStore } from "./graph";
+export { usePrefsStore } from "./prefs";
+export type { ThemeMode, A11yMode } from "./prefs";
 
-/** Seed the theme from localStorage; fall back to the OS preference. */
-function initialThemeMode(): ThemeMode {
-  if (typeof window !== "undefined") {
-    const saved = localStorage.getItem("qc-theme");
-    if (saved === "dark" || saved === "light") return saved;
-    if (
-      typeof window.matchMedia === "function" &&
-      window.matchMedia("(prefers-color-scheme: dark)").matches
-    ) {
-      return "dark";
-    }
-  }
-  return "light";
-}
-
-const INITIAL_THEME_MODE = initialThemeMode();
-applyThemeMode(INITIAL_THEME_MODE);
-
-/** Accessibility display modes (visual impairments / screen readers). */
-export type A11yMode =
-  | "off"
-  | "screenreader"
-  | "high-contrast"
-  | "large-text"
-  | "reduced-motion"
-  | "colorblind";
-
-/** Apply the a11y mode class on <html> and persist it. */
-function applyA11yMode(mode: A11yMode) {
-  if (typeof document !== "undefined") {
-    const root = document.documentElement;
-    for (const m of [
-      "screenreader",
-      "high-contrast",
-      "large-text",
-      "reduced-motion",
-      "colorblind",
-    ] as const) {
-      root.classList.toggle(`a11y-${m}`, mode === m);
-    }
-  }
-  if (typeof window !== "undefined") {
-    localStorage.setItem("qc-a11y", mode);
-  }
-}
-
-function initialA11yMode(): A11yMode {
-  if (typeof window !== "undefined") {
-    const saved = localStorage.getItem("qc-a11y");
-    if (
-      saved === "screenreader" ||
-      saved === "high-contrast" ||
-      saved === "large-text" ||
-      saved === "reduced-motion" ||
-      saved === "colorblind"
-    ) {
-      return saved;
-    }
-  }
-  return "off";
-}
-
-const INITIAL_A11Y_MODE = initialA11yMode();
-applyA11yMode(INITIAL_A11Y_MODE);
-
-/** UI pref: whether creating a coding auto-selects it in the coder's
- *  segment-details bar (DEFAULT ON). */
-function applyAutoShowSegmentDetails(v: boolean) {
-  if (typeof window !== "undefined") {
-    localStorage.setItem("qc-auto-show-segment-details", v ? "1" : "0");
-  }
-}
-
-function initialAutoShowSegmentDetails(): boolean {
-  if (typeof window !== "undefined") {
-    const saved = localStorage.getItem("qc-auto-show-segment-details");
-    if (saved === "1") return true;
-    if (saved === "0") return false;
-  }
-  return true;
-}
-
-const INITIAL_AUTO_SHOW_SEGMENT_DETAILS = initialAutoShowSegmentDetails();
-applyAutoShowSegmentDetails(INITIAL_AUTO_SHOW_SEGMENT_DETAILS);
-
-export type WorkspaceView =
-  | { kind: "dashboard" }
-  | { kind: "files" }
-  | { kind: "coding"; sourceId: number }
-  | { kind: "cases" }
-  | { kind: "notes" }
-  | { kind: "qtt" }
-  | { kind: "analyze" }
-  | { kind: "graphs" }
-  | { kind: "history" }
-  | { kind: "settings" }
-  | { kind: "ai" };
-
-/** Which panel the right bar shows. Inspector is the default; AI, Settings,
- *  History and Creative are toggleable panes driven from the top bar. */
-export type RightPane = "inspector" | "ai" | "settings" | "history" | "creative";
-
-/** The report screens of the Analysis area (see analyze/registry.ts). */
-export type ReportId =
-  | "code-frequencies"
-  | "code-segments"
-  | "file-code"
-  | "code-relations"
-  | "interrater"
-  | "text-corpus"
-  | "codebook"
-  | "references"
-  | "sql"
-  | "graphs"
-  | "dictionary"
-  | "stats"
-  | "summary-table"
-  | "sentiment"
-  | "doc-compare"
-  | "r-console";
-
-export type InspectorSelection = { kind: "code" | "file"; id: number } | null;
+// --- Shared task / bug-report types ---------------------------------------
 
 /** A background job as tracked by the UI (transcription, autocode, R or
  *  a local file import). */
@@ -175,7 +55,28 @@ export interface TaskInfo {
   resultCount?: number | null;
 }
 
-interface ProjectState {
+/** The bug-report composer state (screenshot + draft + GitHub config). */
+export interface BugReportState {
+  open: boolean;
+  /** PNG data-URL of the RAW screenshot (without paint marks). */
+  rawScreenshot: string | null;
+  /** True when the capture failed and the fallback blank canvas was used. */
+  captureFailed: boolean;
+  /** Last uncaught runtime error ("" / null when none). */
+  lastError: string | null;
+  /** Last action label (view or newest audit row), shown in the env block. */
+  lastAction: string | null;
+  title: string;
+  body: string;
+  labels: string[];
+  assignee: string;
+  milestone: string;
+  /** GitHub integration config read from the app settings on open. */
+  githubToken: string;
+  githubRepo: string;
+}
+
+interface ProjectLifecycleState {
   projectOpen: boolean;
   projectName: string;
   /** Absolute path of the open project ("" when none). Used by the sync
@@ -190,10 +91,6 @@ interface ProjectState {
   codeTree: CodeTreeItem[];
   cases: Case[];
   journals: Journal[];
-  view: WorkspaceView;
-  /** The panel shown in the right bar (Inspector by default). */
-  rightPane: RightPane;
-  setRightPane: (pane: RightPane) => void;
   busy: boolean;
   error: string | null;
 
@@ -202,35 +99,6 @@ interface ProjectState {
   autoOpenStage: "backend" | "open";
   setAutoOpening: (v: boolean) => void;
   setAutoOpenStage: (v: "backend" | "open") => void;
-
-  themeMode: ThemeMode;
-  setThemeMode: (mode: ThemeMode) => void;
-
-  a11yMode: A11yMode;
-  setA11yMode: (mode: A11yMode) => void;
-
-  /** Auto-select a freshly created coding in the segment-details bar. */
-  autoShowSegmentDetails: boolean;
-  setAutoShowSegmentDetails: (v: boolean) => void;
-
-  /** Code the user picked in the left sidebar; used as the target code for
-   *  selections/rects across coders (and highlighted in the sidebar). */
-  activeCodeId: number | null;
-  setActiveCode: (cid: number | null) => void;
-
-  /** Codes whose codings are HIDDEN in the open coder (click a code label
-   *  to hide its codings until clicked again; multiple can be hidden). */
-  hiddenCodes: number[];
-  toggleHiddenCode: (cid: number) => void;
-
-
-  /** Current coder identity (owner for new codings). */
-  coderName: string;
-  coders: { name: string; coding_count: number }[];
-  loadCoders: () => Promise<void>;
-  createCoder: (name: string) => Promise<boolean>;
-  switchCoder: (name: string) => Promise<boolean>;
-  deleteCoder: (name: string, reassignTo?: string) => Promise<boolean>;
 
   /** Background tasks (transcription + autocode + R jobs; the shell polls
    *  them and shows a progress chip in the top bar). The queue runs
@@ -274,134 +142,10 @@ interface ProjectState {
   importTick: number;
   requestImport: () => void;
 
-  /** Collaboration sync (Option B: sidecar change files over folder sync). */
-  syncStatus: SyncStatus | null;
-  setSyncStatus: (v: SyncStatus | null) => void;
-  /** Enable/disable the sync cycle. A manual toggle (remember: true) also
-   *  writes the per-project override so the decision survives reopens;
-   *  the shared-folder auto-enable passes remember: false. */
-  setSyncEnabled: (enabled: boolean, opts?: { remember?: boolean }) => Promise<boolean>;
-  runSyncNow: () => Promise<boolean>;
-  /** Set by the store when the backend reported a shared folder on open;
-   *  the shell shows a transient notice and clears it. */
-  syncAutoNotice: boolean;
-  setSyncAutoNotice: (v: boolean) => void;
-
-  inspectorSelection: InspectorSelection;
-  inspectorDetails: CodeDetails | SourceDetails | null;
-  inspectorLoading: boolean;
-  inspectorError: string | null;
-  /** Set by "Edit memo" actions to make the Inspector's memo editor open
-   *  directly in edit mode. */
-  inspectorMemoEdit: boolean;
-  setInspectorMemoEdit: (v: boolean) => void;
-  /** Set by "Add annotation" actions to open the Inspector's new-annotation
-   *  editor inline. */
-  inspectorNewAnnotation: boolean;
-  setInspectorNewAnnotation: (v: boolean) => void;
-
-  /** Per-view workspace UI state (left bar / center coordination). */
-  casesUi: { selectedId: number | null; query: string; tick: number };
-  setCasesUi: (patch: Partial<{ selectedId: number | null; query: string; tick: number }>) => void;
-  /** Files view workspace UI state: the table's sort column/direction and
-   *  the active saved filter. Session-only: survives view remounts (and
-   *  view switches) but is never persisted to disk. The search query is
-   *  already session-stable via `fileQuery`. */
-  filesUi: { sortKey: SortKey; sortDir: SortDir; activeFilter: number | "" };
-  setFilesUi: (
-    patch: Partial<{ sortKey: SortKey; sortDir: SortDir; activeFilter: number | "" }>,
-  ) => void;
-  /** QTT workspace state: the selected worksheet + reload tick. */
-  qttUi: { selectedId: number | null; tick: number };
-  setQttUi: (patch: Partial<{ selectedId: number | null; tick: number }>) => void;
-  notesUi: {
-    tab: "journal" | "annotations" | "memos";
-    query: string;
-    selectedId: number | null;
-    selectedKind: "code" | "file" | null;
-    /** Set by "add annotation" so the center editor opens in edit mode. */
-    newAnnotation: boolean;
-    tick: number;
-  };
-  setNotesUi: (
-    patch: Partial<{
-      tab: "journal" | "annotations" | "memos";
-      query: string;
-      selectedId: number | null;
-      selectedKind: "code" | "file" | null;
-      newAnnotation: boolean;
-      tick: number;
-    }>,
-  ) => void;
-  /** Analysis area UI state (reports left bar / center coordination). */
-  analyzeUi: { selectedId: ReportId | null };
-  setAnalyzeUi: (patch: Partial<{ selectedId: ReportId | null }>) => void;
-  annotationsAll: {
-    anid: number;
-    fid: number;
-    file_name: string;
-    memo: string;
-    pos0: number;
-    pos1: number;
-    date: string;
-    owner: string;
-  }[];
-
-  /** Graph workspace state (shared between the left list, the canvas and
-   *  the details inspector). */  graphsUi: {
-    grid: number | null;
-    list: { grid: number; name: string }[];
-    tick: number;
-    selectedNode: string | null;
-    selectedLine: string | null;
-    connectFrom: string | null;
-    zoom: number;
-    /** Which modal the graph chrome opens (owned by the center toolbar). */
-    dialog: null | "name" | "models" | "delete";
-    error: string | null;
-  };
-  setGraphsUi: (
-    patch: Partial<{
-      grid: number | null;
-      list: { grid: number; name: string }[];
-      tick: number;
-      selectedNode: string | null;
-      selectedLine: string | null;
-      connectFrom: string | null;
-      zoom: number;
-      dialog: null | "name" | "models" | "delete";
-      error: string | null;
-    }>,
-  ) => void;
-
-  /** Graph canvas data + actions (shared by the center canvas and the
-   *  details inspector in the right bar). */
-  graphsData: GraphData | null;
-  graphsLoading: boolean;
-  loadGraphData: (grid: number) => Promise<void>;
-  graphPatchNode: (kind: string, id: number, body: Record<string, unknown>) => Promise<void>;
-  graphDeleteNode: (kind: string, id: number) => Promise<void>;
-  graphPatchLine: (kind: string, id: number, body: Record<string, unknown>) => Promise<void>;
-  graphDeleteLine: (kind: string, id: number) => Promise<void>;
-  graphConnect: (
-    from: { kind: string; id: number },
-    to: { kind: string; id: number },
-  ) => Promise<void>;
-
   createProject: (path: string) => Promise<boolean>;
   openProject: (path: string) => Promise<boolean>;
   closeProject: () => Promise<void>;
   refreshProject: () => Promise<void>;
-  setView: (view: WorkspaceView) => void;
-  selectCode: (id: number | null) => Promise<void>;
-  selectFile: (id: number | null) => Promise<void>;
-  clearInspector: () => void;
-
-  /** Pending "show this segment in the coder" request (set by the code
-   *  inspector's recent-segment click; consumed by the TextCoder once the
-   *  segment's codings are loaded). */
-  gotoSegment: { ctid: number | null; pos0: number | null; pos1: number | null } | null;
-  setGotoSegment: (goto: { ctid: number | null; pos0: number | null; pos1: number | null } | null) => void;
 
   // --- Bug report (screenshot + GitHub issue composer) ----------------
 
@@ -420,31 +164,6 @@ interface ProjectState {
    *  installed below feed this). */
   setLastError: (error: string | null) => void;
 }
-
-/** The bug-report composer state (screenshot + draft + GitHub config). */
-export interface BugReportState {
-  open: boolean;
-  /** PNG data-URL of the RAW screenshot (without paint marks). */
-  rawScreenshot: string | null;
-  /** True when the capture failed and the fallback blank canvas was used. */
-  captureFailed: boolean;
-  /** Last uncaught runtime error ("" / null when none). */
-  lastError: string | null;
-  /** Last action label (view or newest audit row), shown in the env block. */
-  lastAction: string | null;
-  title: string;
-  body: string;
-  labels: string[];
-  assignee: string;
-  milestone: string;
-  /** GitHub integration config read from the app settings on open. */
-  githubToken: string;
-  githubRepo: string;
-}
-
-/** Monotonic guard for the inspector detail fetches (only the LATEST
- *  selection may write the result — see selectCode/selectFile). */
-let inspectorSelectSeq = 0;
 
 /** Human-readable label of the current view (last-action recorder). */
 function viewLabelOf(view: WorkspaceView): string {
@@ -483,7 +202,7 @@ if (typeof window !== "undefined") {
   });
 }
 
-export const useProjectStore = create<ProjectState>((set, get) => ({
+export const useProjectStore = create<ProjectLifecycleState>((set, get) => ({
   projectOpen: false,
   projectName: "",
   projectPath: "",
@@ -494,7 +213,6 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   codeTree: [],
   cases: [],
   journals: [],
-  view: { kind: "dashboard" },
   busy: false,
   error: null,
   autoOpening: false,
@@ -502,82 +220,9 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   setAutoOpening: (v) => set({ autoOpening: v }),
   setAutoOpenStage: (v) => set({ autoOpenStage: v }),
 
-  themeMode: INITIAL_THEME_MODE,
-  setThemeMode: (mode) => {
-    applyThemeMode(mode);
-    set({ themeMode: mode });
-  },
-
-  a11yMode: INITIAL_A11Y_MODE,
-  setA11yMode: (mode) => {
-    applyA11yMode(mode);
-    set({ a11yMode: mode });
-  },
-
-  autoShowSegmentDetails: INITIAL_AUTO_SHOW_SEGMENT_DETAILS,
-  setAutoShowSegmentDetails: (v) => {
-    applyAutoShowSegmentDetails(v);
-    set({ autoShowSegmentDetails: v });
-  },
-
-  activeCodeId: null,
-  setActiveCode: (cid) => set({ activeCodeId: cid }),
-
-  hiddenCodes: [],
-  toggleHiddenCode: (cid) =>
-    set((s) => ({
-      hiddenCodes: s.hiddenCodes.includes(cid)
-        ? s.hiddenCodes.filter((c) => c !== cid)
-        : [...s.hiddenCodes, cid],
-    })),
-
-
-  coderName: "default",
-  coders: [],
-  loadCoders: async () => {
-    try {
-      const res = await api.coders();
-      set({ coderName: res.current, coders: res.coders });
-    } catch {
-      /* backend may be unavailable; keep the current state */
-    }
-  },
-  createCoder: async (name) => {
-    try {
-      const res = await api.createCoder(name);
-      set({ coderName: res.current, coders: res.coders });
-      return true;
-    } catch (e) {
-      set({ error: e instanceof Error ? e.message : "Could not create coder" });
-      return false;
-    }
-  },
-  switchCoder: async (name) => {
-    try {
-      const res = await api.switchCoder(name);
-      set({ coderName: res.current, coders: res.coders });
-      return true;
-    } catch (e) {
-      set({ error: e instanceof Error ? e.message : "Could not switch coder" });
-      return false;
-    }
-  },
-  deleteCoder: async (name, reassignTo) => {
-    try {
-      const res = await api.deleteCoder(name, reassignTo);
-      set({ coderName: res.current, coders: res.coders });
-      return true;
-    } catch (e) {
-      set({ error: e instanceof Error ? e.message : "Could not delete coder" });
-      return false;
-    }
-  },
-
   tasks: [],
   tasksPaused: false,
   setTasksPaused: (paused) => set({ tasksPaused: paused }),
-  rightPane: "inspector",
-  setRightPane: (pane) => set({ rightPane: pane }),
   enqueueTranscribe: (job) =>
     set((s) => ({
       tasks: [
@@ -719,50 +364,6 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     }
   },
 
-  syncStatus: null,
-  setSyncStatus: (v) => set({ syncStatus: v }),
-  setSyncEnabled: async (enabled, opts) => {
-    try {
-      await api.setSyncEnabled(enabled);
-      // A manual toggle (the coder flyout) becomes the remembered
-      // per-project override; the shared-folder auto-enable must NOT
-      // write it, so the next open re-detects.
-      if (opts?.remember !== false) {
-        const path = useProjectStore.getState().projectPath;
-        if (path) {
-          void api.syncSetOverride(path, enabled ? "on" : "off").catch(() => {});
-        }
-      }
-      const status = await api.syncStatus();
-      set({ syncStatus: status });
-      return true;
-    } catch {
-      return false;
-    }
-  },
-  syncAutoNotice: false,
-  setSyncAutoNotice: (v) => set({ syncAutoNotice: v }),
-  runSyncNow: async () => {
-    try {
-      const res = await api.syncNow();
-      if (!res.ok) return false;
-      const status = await api.syncStatus();
-      set({ syncStatus: status });
-      return true;
-    } catch {
-      return false;
-    }
-  },
-
-  inspectorSelection: null,
-  inspectorDetails: null,
-  inspectorLoading: false,
-  inspectorError: null,
-  inspectorMemoEdit: false,
-  setInspectorMemoEdit: (v) => set({ inspectorMemoEdit: v }),
-  inspectorNewAnnotation: false,
-  setInspectorNewAnnotation: (v) => set({ inspectorNewAnnotation: v }),
-
   createProject: async (path) => {
     set({ busy: true, error: null });
     try {
@@ -778,10 +379,10 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
         projectPath: res.project_path,
         busy: false,
       });
-      void get().loadCoders();
+      void useCoderStore.getState().loadCoders();
       return true;
     } catch (e) {
-      set({ busy: false, error: e instanceof Error ? e.message : "Project creation failed" });
+      set({ busy: false, error: errorMessage(e, "Project creation failed")});
       return false;
     }
   },
@@ -801,17 +402,17 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
         projectPath: res.project_path,
         busy: false,
       });
-      void get().loadCoders();
+      void useCoderStore.getState().loadCoders();
       if (res.sync_auto_enabled) {
         // Shared folder: enable the collaboration sync cycle and let the
         // shell show the transient notice. The override is NOT written —
         // the decision stays "auto" so the next open re-detects.
-        set({ syncAutoNotice: true });
-        void get().setSyncEnabled(true, { remember: false });
+        usePrefsStore.setState({ syncAutoNotice: true });
+        void usePrefsStore.getState().setSyncEnabled(true, { remember: false });
       }
       return true;
     } catch (e) {
-      set({ busy: false, error: e instanceof Error ? e.message : "Could not open project" });
+      set({ busy: false, error: errorMessage(e, "Could not open project")});
       return false;
     }
   },
@@ -826,18 +427,20 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       projectOpen: false,
       projectName: "",
       projectPath: "",
-          summary: null,
+      summary: null,
       sources: [],
       codeTree: [],
-      view: { kind: "dashboard" },
       error: null,
+    });
+    useWorkspaceStore.setState({ view: { kind: "dashboard" } });
+    useInspectorStore.setState({
       inspectorSelection: null,
       inspectorDetails: null,
       inspectorLoading: false,
       inspectorError: null,
-      activeCodeId: null,
-      syncAutoNotice: false,
     });
+    useCoderStore.setState({ activeCodeId: null });
+    usePrefsStore.setState({ syncAutoNotice: false });
   },
 
   refreshProject: async () => {
@@ -851,250 +454,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       ]);
       set({ summary: summary.summary, sources, codeTree, cases, journals });
     } catch (e) {
-      set({ error: e instanceof Error ? e.message : "Failed to load project data" });
-    }
-  },
-
-  setView: (view) => {
-    set({ view });
-    // Opening a file in the coder shows its details in the right bar.
-    if (view.kind === "coding" && "sourceId" in view) {
-      set({ rightPane: "inspector" });
-      void get().selectFile(view.sourceId);
-    }
-  },
-
-  casesUi: { selectedId: null, query: "", tick: 0 },
-  setCasesUi: (patch) => set((s) => ({ casesUi: { ...s.casesUi, ...patch } })),
-  filesUi: { sortKey: "name", sortDir: "asc", activeFilter: "" },
-  setFilesUi: (patch) => set((s) => ({ filesUi: { ...s.filesUi, ...patch } })),
-  qttUi: { selectedId: null, tick: 0 },
-  setQttUi: (patch) => set((s) => ({ qttUi: { ...s.qttUi, ...patch } })),
-  notesUi: { tab: "journal", query: "", selectedId: null, selectedKind: null, newAnnotation: false, tick: 0 },
-  setNotesUi: (patch) => set((s) => ({ notesUi: { ...s.notesUi, ...patch } })),
-  analyzeUi: { selectedId: "code-frequencies" },
-  setAnalyzeUi: (patch) => set((s) => ({ analyzeUi: { ...s.analyzeUi, ...patch } })),
-  annotationsAll: [],
-  graphsUi: {
-    grid: null,
-    list: [],
-    tick: 0,
-    selectedNode: null,
-    selectedLine: null,
-    connectFrom: null,
-    zoom: 1,
-    dialog: null,
-    error: null,
-  },
-  setGraphsUi: (patch) => set((s) => ({ graphsUi: { ...s.graphsUi, ...patch } })),
-
-  graphsData: null,
-  graphsLoading: false,
-  loadGraphData: async (grid) => {
-    set({ graphsLoading: true, graphsUi: { ...get().graphsUi, error: null } });
-    try {
-      set({ graphsData: await api.graphData(grid) });
-    } catch (e) {
-      set({
-        graphsUi: {
-          ...get().graphsUi,
-          error: e instanceof Error ? e.message : "Failed to load graph",
-        },
-      });
-    } finally {
-      set({ graphsLoading: false });
-    }
-  },
-  graphPatchNode: async (kind, id, body) => {
-    const grid = get().graphsUi.grid;
-    if (grid == null) return;
-    const url =
-      kind === "category" || kind === "code"
-        ? `/graphs/${grid}/items/cdct/${id}`
-        : kind === "case"
-          ? `/graphs/${grid}/items/case/${id}`
-          : kind === "file"
-            ? `/graphs/${grid}/items/file/${id}`
-            : kind === "free"
-              ? `/graphs/${grid}/items/free/${id}`
-              : `/graphs/${grid}/items/memo/${id}`;
-    try {
-      await api.patchPath(url, body);
-    } catch {
-      /* keep local state; the next save retries */
-    }
-  },
-  graphDeleteNode: async (kind, id) => {
-    const grid = get().graphsUi.grid;
-    if (grid == null) return;
-    try {
-      if (kind === "category" || kind === "code") await api.graphDeleteCdctItem(grid, id);
-      else if (kind === "case") await api.graphDeleteCaseItem(grid, id);
-      else if (kind === "file") await api.graphDeleteFileItem(grid, id);
-      else if (kind === "free") await api.graphDeleteFreeItem(grid, id);
-      set({ graphsUi: { ...get().graphsUi, selectedNode: null } });
-      await get().loadGraphData(grid);
-    } catch (e) {
-      set({
-        graphsUi: {
-          ...get().graphsUi,
-          error: e instanceof Error ? e.message : "Could not delete node",
-        },
-      });
-    }
-  },
-  graphPatchLine: async (kind, id, body) => {
-    const grid = get().graphsUi.grid;
-    if (grid == null) return;
-    const url =
-      kind === "cdct"
-        ? `/graphs/${grid}/lines/cdct/${id}`
-        : `/graphs/${grid}/lines/entity/${id}`;
-    try {
-      await api.patchPath(url, body);
-      await get().loadGraphData(grid);
-    } catch (e) {
-      set({
-        graphsUi: {
-          ...get().graphsUi,
-          error: e instanceof Error ? e.message : "Could not update line",
-        },
-      });
-    }
-  },
-  graphDeleteLine: async (kind, id) => {
-    const grid = get().graphsUi.grid;
-    if (grid == null) return;
-    try {
-      if (kind === "cdct") await api.graphDeleteCdctLine(grid, id);
-      else await api.graphDeleteEntityLine(grid, id);
-      set({ graphsUi: { ...get().graphsUi, selectedLine: null } });
-      await get().loadGraphData(grid);
-    } catch (e) {
-      set({
-        graphsUi: {
-          ...get().graphsUi,
-          error: e instanceof Error ? e.message : "Could not delete line",
-        },
-      });
-    }
-  },
-  graphConnect: async (from, to) => {
-    const grid = get().graphsUi.grid;
-    if (grid == null) return;
-    try {
-      if (from.kind === "code" || from.kind === "category") {
-        if (to.kind === "code" || to.kind === "category") {
-          await api.graphAddCdctLine(grid, { from_node: from.id, to_node: to.id });
-        } else {
-          await api.graphAddEntityLine(grid, {
-            from_kind: from.kind,
-            from_id: from.id,
-            to_kind: to.kind,
-            to_id: to.id,
-          });
-        }
-      } else {
-        await api.graphAddEntityLine(grid, {
-          from_kind: from.kind,
-          from_id: from.id,
-          to_kind: to.kind,
-          to_id: to.id,
-        });
-      }
-      set({ graphsUi: { ...get().graphsUi, connectFrom: null } });
-      await get().loadGraphData(grid);
-    } catch (e) {
-      set({
-        graphsUi: {
-          ...get().graphsUi,
-          error: e instanceof Error ? e.message : "Could not connect nodes",
-        },
-      });
-    }
-  },
-
-  clearInspector: () =>
-    set({
-      inspectorSelection: null,
-      inspectorDetails: null,
-      inspectorLoading: false,
-      inspectorError: null,
-    }),
-
-  gotoSegment: null,
-  setGotoSegment: (goto) => set({ gotoSegment: goto }),
-
-  selectCode: async (id) => {
-    if (id == null) {
-      set({
-        inspectorSelection: null,
-        inspectorDetails: null,
-        inspectorLoading: false,
-        inspectorError: null,
-      });
-      return;
-    }
-    set({ inspectorSelection: { kind: "code", id }, inspectorLoading: true, inspectorError: null });
-    // Sequence-guard: only the LATEST selection may write the details —
-    // otherwise a slow response for item A overwrites the details of the
-    // item B the user switched to.
-    const seq = ++inspectorSelectSeq;
-    try {
-      const details = await api.codeDetails(id);
-      if (seq === inspectorSelectSeq) {
-        set({ inspectorDetails: details, inspectorLoading: false });
-      }
-    } catch (e) {
-      if (seq !== inspectorSelectSeq) return;
-      if (e instanceof ApiError && e.status === 404) {
-        set({
-          inspectorSelection: null,
-          inspectorDetails: null,
-          inspectorLoading: false,
-          inspectorError: null,
-        });
-        return;
-      }
-      set({
-        inspectorLoading: false,
-        inspectorError: e instanceof Error ? e.message : "Failed to load code details",
-      });
-    }
-  },
-
-  selectFile: async (id) => {
-    if (id == null) {
-      set({
-        inspectorSelection: null,
-        inspectorDetails: null,
-        inspectorLoading: false,
-        inspectorError: null,
-      });
-      return;
-    }
-    set({ inspectorSelection: { kind: "file", id }, inspectorLoading: true, inspectorError: null });
-    const seq = ++inspectorSelectSeq;
-    try {
-      const details = await api.sourceDetails(id);
-      if (seq === inspectorSelectSeq) {
-        set({ inspectorDetails: details, inspectorLoading: false });
-      }
-    } catch (e) {
-      if (seq !== inspectorSelectSeq) return;
-      if (e instanceof ApiError && e.status === 404) {
-        set({
-          inspectorSelection: null,
-          inspectorDetails: null,
-          inspectorLoading: false,
-          inspectorError: null,
-        });
-        return;
-      }
-      set({
-        inspectorLoading: false,
-        inspectorError: e instanceof Error ? e.message : "Failed to load file details",
-      });
+      set({ error: errorMessage(e, "Failed to load project data")});
     }
   },
 
@@ -1123,7 +483,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     const store = useProjectStore.getState();
     // 1. Last action: the current view, upgraded to the newest audit row
     //    when one exists (that is the last thing the app persisted).
-    let lastAction = viewLabelOf(store.view);
+    let lastAction = viewLabelOf(useWorkspaceStore.getState().view);
     try {
       const { rows } = await api.audit({ limit: 1 });
       const row = rows[0];

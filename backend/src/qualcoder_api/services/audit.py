@@ -7,11 +7,12 @@ edits). Bulk import paths record a single entry instead of one per row.
 
 from __future__ import annotations
 
-import datetime
 import json
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
+
+from qualcoder_api.core.timeutil import now
 
 
 async def record(
@@ -25,7 +26,7 @@ async def record(
     detail: dict | None = None,
 ) -> None:
     """Insert one audit row and commit (callers have varying commit habits)."""
-    ts = datetime.datetime.now().astimezone().strftime("%Y-%m-%d %H:%M:%S")
+    ts = now()
     await session.execute(
         text(
             "INSERT INTO audit_log (ts, user, action, entity, entity_id, source_id, detail) "

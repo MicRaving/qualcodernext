@@ -5,11 +5,13 @@
  * relative to the natural image size). The zoom transform maps image pixels
  * to screen pixels: screen = image * zoom.
  */
+import { errorMessage } from "@/lib/utils";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { LoaderCircle, Minus, Pencil, Plus, Trash2, ZoomIn, ZoomOut } from "lucide-react";
-import { api, fetchSourceFile, type CodeTreeItem, type ImageCoding, type Source } from "@/lib/api";
+import { api, fetchSourceFile, type ImageCoding, type Source } from "@/lib/api";
+import { useCoder } from "@/features/coding/useCoder";
 import { CodePicker, type PickedCode } from "@/features/coding/CodePicker";
-import { patchCodingWeight } from "@/features/coding/codingApi";
+import { patchCodingWeight, useCodeMaps } from "@/features/coding/codingApi";
 import { codeTint } from "@/features/coding/tint";
 import { useI18n } from "@/lib/i18n";
 import {
@@ -21,7 +23,8 @@ import {
   ViewHeader,
 } from "@/components/ui/orchestrator";
 import { cls } from "@/components/ui/tokens";
-import { useProjectStore } from "@/stores/project";
+import { useCoderStore } from "@/stores/coder";
+import { usePrefsStore } from "@/stores/prefs";
 
 interface DragState {
   startX: number;
@@ -54,15 +57,16 @@ function parseDraftRect(draft: RectDraft): RectState | null {
 
 export function ImageCoder({ source }: { source: Source }) {
   const { t } = useI18n();
-  const activeCodeId = useProjectStore((s) => s.activeCodeId);
-  const hiddenCodes = useProjectStore((s) => s.hiddenCodes);
+  const activeCodeId = useCoderStore((s) => s.activeCodeId);
+  const hiddenCodes = useCoderStore((s) => s.hiddenCodes);
   /** When OFF, creating a coding does NOT auto-select it in the details
    *  panel (clicking a region still views it). */
-  const autoShowDetails = useProjectStore((s) => s.autoShowSegmentDetails);
-  const [codings, setCodings] = useState<ImageCoding[]>([]);
-  const [codes, setCodes] = useState<CodeTreeItem[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const autoShowDetails = usePrefsStore((s) => s.autoShowSegmentDetails);
+  const { loading, error, setError, codings, codes, reload } = useCoder(
+    source,
+    api.imageCodings,
+    t("coder.loadCodingsError"),
+  );
   const [zoom, setZoom] = useState(1);
   const [imageLoaded, setImageLoaded] = useState(false);
   const [naturalSize, setNaturalSize] = useState<{ w: number; h: number } | null>(null);
@@ -82,37 +86,7 @@ export function ImageCoder({ source }: { source: Source }) {
     pendingRectRef.current = pendingRect;
   }, [pendingRect]);
 
-  const colorByCid = useMemo(() => {
-    const map = new Map<number, string>();
-    for (const c of codes) if (c.kind === "code" && c.color) map.set(c.id, c.color);
-    return map;
-  }, [codes]);
-
-  const nameByCid = useMemo(() => {
-    const map = new Map<number, string>();
-    for (const c of codes) if (c.kind === "code") map.set(c.id, c.name);
-    return map;
-  }, [codes]);
-
-  const load = useCallback(async (): Promise<ImageCoding[]> => {
-    setLoading(true);
-    setError(null);
-    try {
-      const [cs, flat] = await Promise.all([api.imageCodings(source.id), api.codesFlat()]);
-      setCodings(cs);
-      setCodes(flat);
-      return cs;
-    } catch (e) {
-      setError(e instanceof Error ? e.message : t("coder.loadCodingsError"));
-      return [];
-    } finally {
-      setLoading(false);
-    }
-  }, [source.id, t]);
-
-  useEffect(() => {
-    void load();
-  }, [load]);
+  const { colorByCid, nameByCid } = useCodeMaps(codes);
 
   // Fetch the full-resolution image through the shared base-resolving
   // helper (the raw URL builders are the sync dev fallback until the App
@@ -132,14 +106,14 @@ export function ImageCoder({ source }: { source: Source }) {
         objectUrl = URL.createObjectURL(blob);
         setImgSrc(objectUrl);
       } catch (e) {
-        if (!cancelled) setError(e instanceof Error ? e.message : t("imageCoder.loadFileError"));
+        if (!cancelled) setError(errorMessage(e, t("imageCoder.loadFileError")));
       }
     })();
     return () => {
       cancelled = true;
       if (objectUrl) URL.revokeObjectURL(objectUrl);
     };
-  }, [source.id, t]);
+  }, [source.id, t, setError]);
 
   const codeColor = (coding: ImageCoding) => colorByCid.get(coding.cid) ?? "rgba(0,0,0,0.15)";
 
@@ -194,7 +168,7 @@ export function ImageCoder({ source }: { source: Source }) {
           owner: "default",
         });
         setPendingRect(null);
-        const fresh = await load();
+        const fresh = await reload();
         setEditDraft(null);
         // Show the details of the freshly assigned region automatically
         // (gated on the "Auto-show segment details" pref — when OFF the
@@ -205,12 +179,12 @@ export function ImageCoder({ source }: { source: Source }) {
           setSelected(null);
         }
       } catch (e) {
-        setError(e instanceof Error ? e.message : t("coder.createError"));
+        setError(errorMessage(e, t("coder.createError")));
       } finally {
         setSaving(false);
       }
     },
-    [source.id, load, t, autoShowDetails],
+    [source.id, reload, t, autoShowDetails, setError],
   );
 
   // Clicking a code in the left sidebar assigns it to the pending rectangle.
@@ -283,9 +257,9 @@ export function ImageCoder({ source }: { source: Source }) {
       await api.deleteImageCoding(coding.imid);
       setSelected(null);
       setEditDraft(null);
-      await load();
+      await reload();
     } catch (e) {
-      setError(e instanceof Error ? e.message : t("coder.deleteError"));
+      setError(errorMessage(e, t("coder.deleteError")));
     }
   }
 
@@ -298,10 +272,10 @@ export function ImageCoder({ source }: { source: Source }) {
     void (async () => {
       try {
         await patchCodingWeight("image", coding.imid, weight);
-        const fresh = await load();
+        const fresh = await reload();
         setSelected(fresh.find((c) => c.imid === coding.imid) ?? null);
       } catch (e) {
-        setError(e instanceof Error ? e.message : t("coder.weightError"));
+        setError(errorMessage(e, t("coder.weightError")));
       }
     })();
   }
@@ -326,11 +300,11 @@ export function ImageCoder({ source }: { source: Source }) {
     setError(null);
     try {
       await api.patchImageCoding(selected.imid, rect);
-      const fresh = await load();
+      const fresh = await reload();
       setEditDraft(null);
       setSelected(fresh.find((c) => c.imid === selected.imid) ?? null);
     } catch (e) {
-      setError(e instanceof Error ? e.message : t("imageCoder.regionSaveError"));
+      setError(errorMessage(e, t("imageCoder.regionSaveError")));
     } finally {
       setSaving(false);
     }
@@ -355,7 +329,7 @@ export function ImageCoder({ source }: { source: Source }) {
       <div className="flex h-full items-center justify-center bg-bg">
         <div className="text-center">
           <p className="text-danger">{error}</p>
-          <Button variant="secondary" className="mt-3" onClick={() => void load()}>
+          <Button variant="secondary" className="mt-3" onClick={() => void reload()}>
             {t("common.retry")}
           </Button>
         </div>

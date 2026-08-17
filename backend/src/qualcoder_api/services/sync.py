@@ -34,6 +34,7 @@ from sqlalchemy import delete, text, update
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from qualcoder_api.core.timeutil import now
 from qualcoder_api.persistence import tables
 
 logger = logging.getLogger(__name__)
@@ -132,10 +133,9 @@ async def capture(
         return
     if row is None or pk_value is None:
         return
-    import datetime
 
     if ts is None:
-        ts = datetime.datetime.now().astimezone().strftime("%Y-%m-%d %H:%M:%S")
+        ts = now()
     actor = user or current_user()
     # Atomic per-user sequence: the SELECT-then-INSERT pair could race on
     # concurrent requests, so the counter is computed inside the INSERT.
