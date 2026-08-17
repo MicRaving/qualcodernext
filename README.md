@@ -4,7 +4,7 @@ This is a rework of [QualCoder](https://github.com/ccbogel/QualCoder), the open-
 
 ### Scope of the Rework
 
-I really love QualCoder but always felt like it had some shortcomings. Based on the upstream QualCoder as per 10.08.2026, I tried to rework the codebase with the following major goals
+I really love QualCoder but always felt like it had some shortcomings. Based on the upstream QualCoder as per 10.08.2026, I tried to rework the codebase with the following major goals:
 
 
 
@@ -28,7 +28,7 @@ All releases are available on: [https://github.com/MicRaving/QCnext/releases](ht
 
 ## Documentation
 
-There's an LLM-generated user documentation in [`docs/`](docs/README.md) that I'm currently reworking and refining:
+You can find the documentation here:
 
 * [**Documentation Hub**](docs/README.md) — Start screen, workflow diagrams, and glossary.
 * [**Workspace Shell \& Collaboration Guide**](docs/workspace-and-shell.md) — Layout, projects, real-time sync, audit history \& bug reporter.
@@ -38,8 +38,6 @@ There's an LLM-generated user documentation in [`docs/`](docs/README.md) that I'
 * [**Notes, Worksheets \& Synthesis Guide**](docs/notes-and-synthesis.md) — Journal, annotations, code memos, Crafter (QTT), and Creative Coding.
 * [**Analysis, Reports \& Graphs Guide**](docs/analysis-and-reports.md) — 11 analytical reports, interrater agreement, publishing (Word/Excel/PPT), SQL/R console \& visual code maps.
 * [**AI Assistant \& Settings Guide**](docs/ai-and-settings.md) — Local/Cloud LLM config, semantic vector search, MCP endpoints, and app preferences.
-
-For developers: The authoritative UI design spec is [`frontend/src/DESIGN.md`](frontend/src/DESIGN.md), and backend developer refactoring plans live in [`docs/developer/`](docs/developer/).
 
 ## License
 

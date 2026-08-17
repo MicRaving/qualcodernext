@@ -1,6 +1,6 @@
 # QCnext — User Documentation
 
-Disclaimer: As of 17.08.2026, most of this text is LLM-generated based on my notes. I will rework this in the coming weeks.
+Disclaimer: As of 17.08.2026, most of this text (except for this Hub an the Workspace \& Shell Guide) is LLM-generated based on my notes. I will rework this in the coming weeks.
 
 
 
@@ -22,27 +22,50 @@ Welcome to the official documentation for **QCnext**, the open-source Qualitativ
 
 \---
 
-## What is Qualitative Coding?
+## General Overview
 
-In qualitative research, a **project** in QCnext is a self-contained `.qda` directory holding your raw source material (interview transcripts, PDFs, images, field notes, survey spreadsheets, audio/video recordings, and web captures) along with an integrated database that records your analysis.
+A **project** in QCnext is a self-contained directory holding your raw source material (interview transcripts, PDFs, images, field notes, survey spreadsheets, audio/video recordings, and web captures) along with an integrated database that records your analysis.
 
 The core activity is **coding**: highlighting a segment of text, drawing a region on an image or PDF, or marking a timestamp interval on audio/video, and attaching a **code** (a category, concept, or theme label) to it.
 
+
+
+QCnext uses a single-window **Workspace Layout** organized into four primary slots:
+
 ```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                            TYPICAL WORKFLOW                                 │
-│                                                                             │
-│ 1. Import Material   ──>  2. Build Codebook   ──>  3. Code \& Annotate       │
-│ (Text, PDF, Media)        (Codes \& Categories)      (Select text \& mark)    │
-│                                                                             │
-│ 6. Export \& Publish  <──  5. Explore Reports   <──  4. Synthesize Notes       │
-│ (Word, Excel, REFI)       (Graphs, Interrater)      (Memos, Journal, QTT)   │
-└─────────────────────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────────────────────┐
+│ Ribbon (Navigation · Active Coder Switcher · Background Task Queue · Pane Toggles)│
+├─────────────────┬──────────────────────────────────────────────┬─────────────────┤
+│ LEFT BAR        │ CENTER VIEW                                  │ RIGHT BAR       │
+│ (Code Tree,     │ (Active Screen: Coder, File Manager,          │ (Inspector, AI, │
+│  File List,     │  Reports, Crafter, Cases, Dashboard)         │  Settings,      │
+│  Report List)   │                                              │  History)       │
+└──────────────────────────────────────────────────────────────────────────────────┘
 ```
+
+* **Ribbon**: Top bar for navigating main views (*Dashboard*, *Coding*, *Cases*, *Journal*, *Crafter*, *Reports*) and toggling utility panes (*History*, *AI*, *Creative*, *Bug Reporter, Settings*).
+* **Left Bar**: Displays contextual sidebars such as the codebook tree, file explorer, case list, or report navigation list.
+* **Center View**: The primary workspace where documents are read and coded, reports are generated, or worksheets are edited.
+* **Right Bar**: Displays the **Inspector** (showing details of the currently selected element) or an active side-pane (AI Chat, Settings, Audit History, Creative Scratchpad).
+
+
+
+The typical workflow will look similar to this:
+
+1. **Start QCnext**: Launch the application to view the [Dashboard](workspace-and-shell.md#dashboard--start-screen).
+2. **Create a Project**: Click **New project** and specify a `.qda` location or open an existing project.
+3. **(optional) Collaborate**: Save the file in a shared location and enable [Collaboration Sync](workspace-and-shell.md#collaboration-sync) in the ribbon to work simultaneously with team members via shared cloud folders.
+4. **Import Material**: Open the [File Manager](files-and-import.md) and import your interview transcripts, PDFs, images, or media files.
+5. **Define Codes**: Create codes and categories in the left-bar Code Tree.
+6. **Code Your Data**: Open a source file in one of the specialized [Coders](coders.md), select passages or regions, and assign codes.
+7. **Synthesize \& Memos**: Write analytical memos and synthesize findings in [Crafter (QTT)](notes-and-synthesis.md#crafter-qtt-worksheets).
+8. **Analyze \& Export**: Generate [Reports \& Visual Code Maps](analysis-and-reports.md), test interrater reliability, and publish reports to Word, Excel, or REFI-QDA.
+
+
 
 \---
 
-## Key Concepts Glossary
+## Glossary
 
 |Term|Description|
 |-|-|
@@ -54,52 +77,8 @@ The core activity is **coding**: highlighting a segment of text, drawing a regio
 |**Coder**|A registered researcher name. Every coding, note, and modification records the coder who created it.|
 |**Memo**|Analytical commentary attached to a code, file, or project entity.|
 |**Annotation**|A targeted note attached to a specific passage of a document (distinct from a code).|
-|**Case**|A unit of analysis (e.g., participant, organisation, school) linked to files/spans and carrying structured **Attributes**.|
+|**Case**|A unit of analysis (e.g., participant, organization, school) linked to files/spans and carrying structured **Attributes**.|
 |**QTT Worksheet**|A Crafter workspace for synthesizing Questions, Themes, and Theories into structured analytical arguments.|
 
-\---
 
-## Application Layout Overview
-
-QCnext uses a single-window **Workspace Layout** organized into five primary slots:
-
-```
-┌──────────────────────────────────────────────────────────────────────────────────┐
-│ Ribbon (Navigation · Active Coder Switcher · Background Task Queue · Pane Toggles)│
-├─────────────────┬──────────────────────────────────────────────┬─────────────────┤
-│ LEFT BAR        │ CENTER VIEW                                  │ RIGHT BAR       │
-│ (Code Tree,     │ (Active Screen: Coder, File Manager,          │ (Inspector, AI, │
-│  File List,     │  Reports, Crafter, Cases, Dashboard)         │  Settings,      │
-│  Report List)   │                                              │  History)       │
-├─────────────────┴──────────────────────────────────────────────┴─────────────────┤
-│ Status Bar (Project Name · Entity Counts · Sync Status · App Version)            │
-└──────────────────────────────────────────────────────────────────────────────────┘
-```
-
-* **Ribbon**: Top bar for navigating main views (*Dashboard*, *Coding*, *Cases*, *Journal*, *Crafter*, *Reports*) and toggling utility panes (*History*, *AI*, *Creative*, *Settings*, *Bug Reporter*).
-* **Left Bar**: Displays contextual sidebars such as the codebook tree, file explorer, case list, or report navigation list.
-* **Center View**: The primary workspace where documents are read and coded, reports are generated, or worksheets are edited.
-* **Right Bar**: Displays the **Inspector** (showing details of the currently selected element) or a active side-pane (AI Chat, Settings, Audit History, Creative Scratchpad).
-* **Status Bar**: Bottom bar displaying current project stats, active coder name, sync indicator, and app version.
-
-\---
-
-## Typical First Session
-
-1. **Start QCnext**: Launch the application to view the [Dashboard](workspace-and-shell.md#dashboard--start-screen).
-2. **Create a Project**: Click **New project** and specify a `.qda` location.
-3. **Import Material**: Open the [File Manager](files-and-import.md) and import your interview transcripts, PDFs, images, or media files.
-4. **Define Codes**: Create codes and categories in the left-bar Code Tree.
-5. **Code Your Data**: Open a source file in one of the specialized [Coders](coders.md), select passages or regions, and assign codes.
-6. **Synthesize \& Memos**: Write analytical memos and synthesize findings in [Crafter (QTT)](notes-and-synthesis.md#crafter-qtt-worksheets).
-7. **Analyze \& Export**: Generate [Reports \& Visual Code Maps](analysis-and-reports.md), test interrater reliability, and publish reports to Word, Excel, or REFI-QDA.
-8. **Collaborate**: Enable [Collaboration Sync](workspace-and-shell.md#collaboration-sync) in the ribbon to work simultaneously with team members via shared cloud folders.
-
-\---
-
-## Technical \& Developer Documentation
-
-* **UI Design System**: [`frontend/src/DESIGN.md`](../frontend/src/DESIGN.md) — Authoritative layout, typography, and component specifications.
-* **Codebase Architecture**: [`AGENTS.md`](../AGENTS.md) — Repository structure, backend FastAPI architecture, Tauri packaging, and build scripts.
-* **Developer Refactoring Audits**: [`docs/developer/`](developer/) — Internal wave plans and modularity analysis.
 
