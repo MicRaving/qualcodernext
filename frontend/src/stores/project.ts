@@ -94,6 +94,13 @@ interface ProjectLifecycleState {
   busy: boolean;
   error: string | null;
 
+  /** Another live instance is already open as the current coder (set from
+   *  the open-project result). The shell shows a blocking warning; the user
+   *  can acknowledge and proceed (offline work is valid). Cleared on
+   *  acknowledge or close. */
+  duplicateCoder: string;
+  acknowledgeDuplicateCoder: () => void;
+
   /** True while the packaged app is auto-opening the last project. */
   autoOpening: boolean;
   autoOpenStage: "backend" | "open";
@@ -201,6 +208,8 @@ export const useProjectStore = create<ProjectLifecycleState>((set, get) => ({
   journals: [],
   busy: false,
   error: null,
+  duplicateCoder: "",
+  acknowledgeDuplicateCoder: () => set({ duplicateCoder: "" }),
   autoOpening: false,
   autoOpenStage: "backend",
   setAutoOpening: (v) => set({ autoOpening: v }),
@@ -386,6 +395,7 @@ export const useProjectStore = create<ProjectLifecycleState>((set, get) => ({
         projectOpen: true,
         projectName: res.project_name,
         projectPath: res.project_path,
+        duplicateCoder: res.duplicate_coder ?? "",
         busy: false,
       });
       void useCoderStore.getState().loadCoders();

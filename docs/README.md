@@ -12,7 +12,7 @@ Welcome to the official documentation for **QCnext**, the open-source Qualitativ
 
 |Documentation Guide|Description|
 |-|-|
-|[**Workspace \& Shell Guide**](workspace-and-shell.md)|Start screen, workspace layout, project management, audit history, task queue \& real-time collaboration sync.|
+|[**Workspace \& Shell Guide**](workspace-and-shell.md)|Start screen, workspace layout, project management, audit history, task queue \& asynchronous collaboration sync.|
 |[**Files \& Material Import Guide**](files-and-import.md)|Importing documents, batch imports, web scraping, and QDA interchange (REFI-QDA, NVivo, RQDA, SPSS, RIS/Zotero).|
 |[**The Qualitative Coders Guide**](coders.md)|Full guide to coding Plain Text, PDFs, Images, CSV/Spreadsheet cells, Webpages, and Audio/Video timelines with transcription.|
 |[**Cases \& Attributes Guide**](cases-and-attributes.md)|Organizing study entities (participants, sites, schools), member files, and mixed-methods attribute variables.|

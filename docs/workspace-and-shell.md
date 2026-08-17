@@ -2,7 +2,7 @@
 
 [← Back to Documentation Hub](README.md)
 
-This guide covers the core application structure of QCnext: project creation and management, the 5-slot workspace layout, background job execution, real-time multi-coder collaboration sync, the full audit history with per-row undo/redo, and the integrated bug reporter.
+This guide covers the core application structure of QCnext: project creation and management, the 5-slot workspace layout, background job execution, asynchronous multi-coder collaboration sync, the full audit history with per-row undo/redo, and the integrated bug reporter.
 
 \---
 
@@ -40,12 +40,10 @@ It also contains a **Task Queue Indicator** that displays background execution s
 
 The **Collaboration** flyout allows switching the active coder and toggling collaboration sync. Multiple raters can work on the **same project simultaneously** without requiring a dedicated server. QCnext automatically detects potential shared folders and turns sync on/off, but you can always override this setting.
 
-When turned on, raters work as **different coders on separate copies of the same `.qda` project folder**, shared through any folder-sync tool (Nextcloud, ownCloud, Sync\&Share, Syncthing, Dropbox, ...). Instead of merging the SQLite database via the sync tool, every instance creates their own sync log. One instance takes the lead, locks the database for changes by other instances, and merges all changes every 60s.
-
-
+When turned on, raters work as **different coders on separate copies of the same `.qda` project folder**, shared through any folder-sync tool (Nextcloud, ownCloud, Sync\&Share, Syncthing, Dropbox, ...). Instead of merging the SQLite database via the sync tool, every instance writes its own change journal (`changes/<coder>/changes.jsonl`) and merges each other's changes on an **asynchronous ~60-second cycle** (plus on demand via the "Sync now" button). Changes converge eventually — this is *not* real-time editing: two raters editing the same segment within one cycle can overwrite each other, and conflicts are reported in the flyout and retried on later cycles.
 
 > \\\[!WARNING]
-> Give every rater a **unique coder name**; **NEVER** work as the same coder on multiple instances simultaneously - you WILL lose data!
+> Give every rater a **unique coder name**; **NEVER** work as the same coder on multiple instances simultaneously - you WILL lose data! When you open a project that another instance already has open under the same coder name, QCnext shows a warning — switch to a unique coder name before continuing.
 
 
 

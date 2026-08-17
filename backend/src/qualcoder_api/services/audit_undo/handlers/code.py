@@ -52,15 +52,33 @@ async def _revert_code_create(session: AsyncSession, row: dict, *, undo: bool, *
     cid = _ensure(detail, "cid")
     if undo:
         # Mirror delete_code: remove the code AND its codings so the undo
-        # of a code.create does not orphan segments.
+        # of a code.create does not orphan segments. Also drop the comments
+        # attached to the code and its codings so none are orphaned.
+        coding_ids: list[int] = []
         for tbl, col, pk in (
-            ("code_name", "cid", "cid"),
             ("code_text", "cid", "ctid"),
             ("code_av", "cid", "avid"),
             ("code_image", "cid", "imid"),
         ):
+            ids = (
+                await session.execute(text(f"SELECT {pk} FROM {tbl} WHERE {col} = :v"), {"v": cid})
+            ).scalars().all()
+            coding_ids.extend(ids)
             await session.execute(text(f"DELETE FROM {tbl} WHERE {col} = :v"), {"v": cid})
-            await _sync_capture(session, tbl, "delete", pk, cid)
+            for i in ids:
+                await _sync_capture(session, tbl, "delete", pk, i)
+        await session.execute(text("DELETE FROM code_name WHERE cid = :v"), {"v": cid})
+        await _sync_capture(session, "code_name", "delete", "cid", cid)
+        if coding_ids:
+            placeholders, params = _in_params(coding_ids)
+            await session.execute(
+                text(f"DELETE FROM comment WHERE target_kind = 'coding' AND target_id IN ({placeholders})"),
+                params,
+            )
+        await session.execute(
+            text("DELETE FROM comment WHERE target_kind = 'code' AND target_id = :v"),
+            {"v": cid},
+        )
         return f"deleted code #{cid} (and its codings)"
     await _insert_row(session, "code_name", detail)
     await _sync_capture(session, "code_name", "insert", "cid", cid)

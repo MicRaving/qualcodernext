@@ -567,14 +567,66 @@ export function CoderSwitcher() {
                     })}
                   </p>
                 )}
-                {syncStatus?.collaborators.map((c) => (
-                  <p key={c.user} className="truncate">
-                    {c.user} · {t("sync.lastSyncShort", { when: formatSince(c.last_sync) })}
-                    {c.pending_import > 0 && (
-                      <span className="text-warning"> · {t("sync.pending", { n: String(c.pending_import) })}</span>
-                    )}
-                  </p>
-                ))}
+                {syncStatus?.collaborators.map((c) => {
+                  const fresh = Date.now() / 1000 - c.last_sync < 120;
+                  const stale = Date.now() / 1000 - c.last_sync < 600;
+                  return (
+                    <p key={c.user} className="flex items-center gap-1.5 truncate">
+                      <span
+                        aria-hidden
+                        className={`h-1.5 w-1.5 shrink-0 rounded-full ${
+                          fresh ? "bg-[var(--qc-success)]" : stale ? "bg-warning" : "bg-border"
+                        }`}
+                      />
+                      <span className="truncate">
+                        {c.user} · {t("sync.lastSyncShort", { when: formatSince(c.last_sync) })}
+                      </span>
+                      {c.pending_import > 0 && (
+                        <span className="text-warning">
+                          · {t("sync.pending", { n: String(c.pending_import) })}
+                        </span>
+                      )}
+                      {c.pending_conflicts > 0 && (
+                        <span className="text-danger">
+                          · {t("sync.conflicts", { n: String(c.pending_conflicts) })}
+                        </span>
+                      )}
+                    </p>
+                  );
+                })}
+                {syncStatus && syncStatus.pending_conflicts > 0 && (
+                  <div className="space-y-1 rounded-sm border border-danger/30 bg-danger/5 p-1.5">
+                    <div className="flex items-center justify-between">
+                      <span className="font-medium text-text-primary">
+                        {t("sync.conflictList")}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => void syncNow()}
+                        disabled={syncBusy}
+                        className="rounded-sm bg-warning px-1.5 py-0.5 text-[10px] font-medium leading-none text-[var(--qc-bg)] hover:bg-warning/90 disabled:opacity-50"
+                      >
+                        {t("sync.retryAll")}
+                      </button>
+                    </div>
+                    <ul className="max-h-20 space-y-0.5 overflow-y-auto">
+                      {syncStatus.collaborators
+                        .flatMap((c) =>
+                          (c.conflicts ?? []).map((conf) => ({ ...conf, user: c.user })),
+                        )
+                        .slice(0, 8)
+                        .map((conf) => (
+                          <li key={`${conf.user}-${conf.seq}`} className="truncate text-danger/90">
+                            {t("sync.conflictItem", {
+                              entity: conf.entity,
+                              pk: conf.pk,
+                              reason: conf.reason,
+                            })}
+                          </li>
+                        ))}
+                    </ul>
+                  </div>
+                )}
                 {syncError && (
                   <p className="text-danger">{syncStatus?.last_error ?? t("sync.error")}</p>
                 )}

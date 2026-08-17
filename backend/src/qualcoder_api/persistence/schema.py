@@ -81,6 +81,7 @@ _SCHEMA_SQL: list[str] = [
     "entity text, entity_id integer, source_id integer, detail text);",
     "CREATE TABLE sync_log (id integer primary key autoincrement, ts text, user text, seq integer, "
     "entity text, action text, pk_name text, pk_value text, row_json text);",
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_sync_log_user_seq ON sync_log(user, seq);",
     "CREATE TABLE dictionary (id integer primary key autoincrement, name text, owner text, created text, "
     "unique(name));",
     "CREATE TABLE dictionary_entry (id integer primary key autoincrement, dict_id integer, code_name text, "
@@ -117,6 +118,7 @@ _INDEX_SQL: list[str] = [
     "CREATE INDEX IF NOT EXISTS idx_audit_log_action ON audit_log(action)",
     "CREATE INDEX IF NOT EXISTS idx_audit_log_user ON audit_log(user)",
     "CREATE INDEX IF NOT EXISTS idx_audit_log_source ON audit_log(source_id)",
+    "CREATE INDEX IF NOT EXISTS idx_audit_log_entity_id ON audit_log(entity, entity_id, id)",
     "CREATE INDEX IF NOT EXISTS idx_sync_log_user ON sync_log(user)",
     "CREATE INDEX IF NOT EXISTS idx_code_cat_super ON code_cat(supercatid)",
     "CREATE INDEX IF NOT EXISTS idx_code_name_cat ON code_name(catid)",

@@ -214,6 +214,43 @@ async def test_live_owner_lock_still_blocks(tmp_path):
         sleeper.kill()
 
 
+async def test_duplicate_coder_detection(tmp_path):
+    """Opening a project that another live instance already has open under
+    the SAME coder is reported via duplicate_coder; a different coder is not."""
+    import subprocess
+    import sys
+
+    target = tmp_path / "Dup.qda"
+    svc = ProjectService()
+    assert await svc.create_project(str(target), codername="anna") is True
+    await svc.close_project()
+
+    sleeper = subprocess.Popen(  # noqa: ASYNC220 - foreign-pid liveness check
+        [sys.executable, "-c", "import time; time.sleep(30)"]
+    )
+    try:
+        lock = target / LOCK_FILE_NAME
+        # A live foreign instance already open as coder "anna".
+        lock.write_text(
+            f"anna\tmarvi\t{sleeper.pid}\t{time.time()!s}\n", encoding="utf-8"
+        )
+
+        opener = ProjectService()
+        result = await opener.open_project(str(target), codername="anna")
+        assert result.ok is True
+        assert result.duplicate_coder == "anna"
+        await opener.close_project()
+
+        # A different coder is NOT flagged.
+        other = ProjectService()
+        result2 = await other.open_project(str(target), codername="berta")
+        assert result2.ok is True
+        assert result2.duplicate_coder == ""
+        await other.close_project()
+    finally:
+        sleeper.kill()
+
+
 async def test_save_backup_creates_copy(project_dir: Path, app_version: str):
     svc = ProjectService()
     await svc.create_project(str(project_dir), app_version=app_version, codername="tester")

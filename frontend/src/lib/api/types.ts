@@ -28,6 +28,10 @@ export interface OpenProjectResult {
   migrations_applied: string[];
   error: string;
   lock_user: string;
+  /** Another live instance is already open as the current coder (open only).
+   *  Non-empty triggers a blocking warning before sync is allowed to corrupt
+   *  the project. */
+  duplicate_coder?: string;
   /** Shared-folder detection: true when the collaboration sync cycle should
    *  be switched on for this project (respects the per-project override). */
   sync_auto_enabled?: boolean;
@@ -521,6 +525,9 @@ export interface AuditRow {
   entity_id: number | null;
   source_id: number | null;
   detail: Record<string, unknown>;
+  summary?: string;
+  undoable?: boolean;
+  undo_reason?: string | null;
 }
 
 export interface AuditResponse {
@@ -779,10 +786,22 @@ export const GRAPH_MODELS = [
 
 // --- Collaboration sync (Option B) ------------------------------------
 
+export interface SyncConflict {
+  seq: number;
+  entity: string;
+  pk: string;
+  action: string;
+  reason: string;
+}
+
 export interface SyncCollaborator {
   user: string;
   last_sync: number; // sidecar mtime (epoch seconds)
   pending_import: number;
+  /** Number of that rater's changes still blocked by conflicts. */
+  pending_conflicts: number;
+  /** Structured conflict summaries for that rater (empty when none). */
+  conflicts?: SyncConflict[];
 }
 
 export interface SyncStatus {
@@ -792,6 +811,8 @@ export interface SyncStatus {
   user?: string;
   pending_export: number;
   pending_import: number;
+  /** Total pending conflicts across collaborators (drives the warning UI). */
+  pending_conflicts: number;
   collaborators: SyncCollaborator[];
   last_sync: number; // epoch seconds of the last successful cycle (0 = never)
   last_error: string;
@@ -821,5 +842,5 @@ export interface SyncResult {
   ok: boolean;
   reason?: string;
   exported?: number;
-  imported?: Record<string, { applied: number; conflicts: string[] }>;
+  imported?: Record<string, { applied: number; conflicts: SyncConflict[] }>;
 }

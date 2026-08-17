@@ -1,10 +1,15 @@
 /**
  * HistoryView — the audit log as a right-bar pane: filterable by action and
  * coder, every change a small card with an undo icon (details are hidden).
+ *
+ * The list uses the ``summary`` projection (no huge ``detail`` JSON), the
+ * undo/redo buttons are gated by the backend ``/undoable`` predicate, and
+ * redo is driven by the server-side ``audit.undo``/``audit.redo`` markers so
+ * it survives a pane reload.
  */
 import { errorMessage } from "@/lib/utils";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { History, RotateCw, Search, Undo2 } from "lucide-react";
+import { Download, History, RotateCw, Search, Undo2 } from "lucide-react";
 import { api, type AuditRow, type AuditStatsRow } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 import { useProjectStore } from "@/stores/project";
@@ -23,36 +28,32 @@ import {
 
 const PAGE_SIZE = 100;
 
-/**
- * Actions the backend deliberately refuses to invert (it raises a clear
- * per-action message for these). Everything else shows the undo button and
- * lets the backend decide — the backend's message surfaces when an action
- * turns out to be non-invertible after all.
- */
-const KNOWN_UNSUPPORTED = new Set([
-  "interchange.import",
-  "scrape.import",
-  "project.compact",
-  "r_script.prepare_report",
+/** Actions that can silently wipe large amounts of work if mis-clicked. */
+const DESTRUCTIVE_ACTIONS = new Set([
+  "code.merge",
+  "code.delete",
+  "category.merge",
+  "category.delete",
+  "source.delete",
+  "source.replace",
+  "speakers.mark",
+  "coding.autocode",
 ]);
+
+/** Entity tables that back the coder views — only these need a coding refetch. */
+const CODING_ENTITIES = new Set(["code_text", "code_image", "code_av", "annotation"]);
 
 function actionLabel(action: string, t: (key: string) => string): string {
   const key = `history.action.${action}`;
-  return t(key);
-}
-
-function detailSummary(r: AuditRow, t: (key: string) => string): string {
-  if (r.action === "coding.create" && r.detail.cid != null) {
-    return `cid ${String(r.detail.cid)} · ${String(r.detail.pos0 ?? "")}–${String(r.detail.pos1 ?? "")}`;
+  const label = t(key);
+  if (label === key) {
+    // Safety net: prettify an action that has no i18n key yet.
+    return action
+      .split(".")
+      .map((part) => part.charAt(0).toUpperCase() + part.slice(1).replace(/_/g, " "))
+      .join(" · ");
   }
-  if (r.action === "source.edit") {
-    return `${String(r.detail.before_length ?? "?")} → ${String(r.detail.new_length ?? "?")} chars`;
-  }
-  if (r.action === "coding.autocode" && r.detail.count != null) {
-    return `${String(r.detail.count)} segments`;
-  }
-  if (r.action === "interchange.import") return t("history.importSummary");
-  return "";
+  return label;
 }
 
 export function HistoryView() {
@@ -60,92 +61,145 @@ export function HistoryView() {
   const [rows, setRows] = useState<AuditRow[]>([]);
   const [total, setTotal] = useState(0);
   const [stats, setStats] = useState<AuditStatsRow[]>([]);
+  const [users, setUsers] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [offset, setOffset] = useState(0);
   const [filterAction, setFilterAction] = useState("");
   const [filterUser, setFilterUser] = useState("");
   const [search, setSearch] = useState("");
+  const [q, setQ] = useState("");
   const [selected, setSelected] = useState<AuditRow | null>(null);
-  const [redoStack, setRedoStack] = useState<number[]>([]);
+  const [confirm, setConfirm] = useState<AuditRow | null>(null);
+  const [redoPending, setRedoPending] = useState<{ count: number; next_id: number | null }>({
+    count: 0,
+    next_id: null,
+  });
   const [actionMsg, setActionMsg] = useState<string | null>(null);
   const loadSeqRef = useRef(0);
+  const searchTimer = useRef<number | undefined>(undefined);
+
+  // Debounce the search input into the server query param (300ms).
+  useEffect(() => {
+    window.clearTimeout(searchTimer.current);
+    searchTimer.current = window.setTimeout(() => {
+      setQ(search.trim());
+      setOffset(0);
+    }, 300);
+    return () => window.clearTimeout(searchTimer.current);
+  }, [search]);
+
+  const refreshRedoPending = useCallback(async () => {
+    try {
+      const res = await api.auditRedoPending();
+      setRedoPending(res);
+    } catch {
+      // Redo availability is best-effort; ignore.
+    }
+  }, []);
 
   const load = useCallback(async () => {
     setLoading(true);
     setError(null);
-    // A stale response must not overwrite a newer page's rows (rapid
-    // pagination/filter switches race otherwise).
     const seq = ++loadSeqRef.current;
     try {
-      const [res, st] = await Promise.all([
-        api.audit({ limit: PAGE_SIZE, offset, action: filterAction || undefined, user: filterUser || undefined }),
+      const [res, st, us] = await Promise.all([
+        api.audit({
+          limit: PAGE_SIZE,
+          offset,
+          action: filterAction || undefined,
+          user: filterUser || undefined,
+          q: q || undefined,
+          summary: true,
+        }),
         api.auditStats(),
+        api.auditUsers(),
       ]);
       if (seq !== loadSeqRef.current) return;
       setRows(res.rows);
       setTotal(res.total);
       setStats(st);
+      setUsers(us);
     } catch (e) {
       if (seq !== loadSeqRef.current) return;
       setError(errorMessage(e, t("history.loadError")));
     } finally {
       if (seq === loadSeqRef.current) setLoading(false);
     }
-  }, [offset, filterAction, filterUser, t]);
+  }, [offset, filterAction, filterUser, q, t]);
 
   useEffect(() => {
     void load();
   }, [load]);
 
-  const users = useMemo(() => [...new Set(rows.map((r) => r.user).filter(Boolean))], [rows]);
-
-  /** Client-side text search over the loaded page. */
-  const visibleRows = useMemo(() => {
-    const q = search.trim().toLowerCase();
-    if (!q) return rows;
-    return rows.filter(
-      (r) =>
-        r.user.toLowerCase().includes(q) ||
-        r.entity.toLowerCase().includes(q) ||
-        actionLabel(r.action, t).toLowerCase().includes(q) ||
-        JSON.stringify(r.detail).toLowerCase().includes(q),
-    );
-  }, [rows, search, t]);
+  useEffect(() => {
+    void refreshRedoPending();
+  }, [refreshRedoPending]);
 
   function resetAndFilter() {
     setOffset(0);
   }
 
-  async function handleUndo(row: AuditRow) {
+  function notifyViewsChanged(entity: string, sourceId: number | null) {
+    // Only coding-backed entities need the coder views to refetch; everything
+    // else is handled by the project refresh below.
+    if (!CODING_ENTITIES.has(entity)) return;
+    window.dispatchEvent(
+      new CustomEvent("qc:codings-changed", {
+        detail: { entities: [entity], sourceIds: sourceId != null ? [sourceId] : [] },
+      }),
+    );
+  }
+
+  async function runUndo(row: AuditRow) {
     setError(null);
     setActionMsg(null);
     try {
       const res = await api.auditUndo(row.id);
-      setRedoStack((s) => [...s.slice(-9), row.id]);
       setActionMsg(res.message);
       await useProjectStore.getState().refreshProject();
-      window.dispatchEvent(new CustomEvent("qc:codings-changed"));
-      await load();
+      notifyViewsChanged(row.entity, row.source_id);
+      await Promise.all([load(), refreshRedoPending()]);
     } catch (e) {
       setError(errorMessage(e, t("history.undoError")));
     }
   }
 
-  async function handleRedo() {
-    const id = redoStack[redoStack.length - 1];
+  function handleUndo(row: AuditRow) {
+    if (DESTRUCTIVE_ACTIONS.has(row.action)) {
+      setConfirm(row);
+      return;
+    }
+    void runUndo(row);
+  }
+
+  function handleRedo() {
+    const id = redoPending.next_id;
     if (id == null) return;
     setError(null);
     setActionMsg(null);
+    void (async () => {
+      try {
+        const res = await api.auditRedo(id);
+        setActionMsg(res.message);
+        await useProjectStore.getState().refreshProject();
+        window.dispatchEvent(
+          new CustomEvent("qc:codings-changed", { detail: { entities: ["*"], sourceIds: [] } }),
+        );
+        await Promise.all([load(), refreshRedoPending()]);
+      } catch (e) {
+        setError(errorMessage(e, t("history.redoError")));
+      }
+    })();
+  }
+
+  async function openDetail(row: AuditRow) {
     try {
-      const res = await api.auditRedo(id);
-      setRedoStack((s) => s.slice(0, -1));
-      setActionMsg(res.message);
-      await useProjectStore.getState().refreshProject();
-      window.dispatchEvent(new CustomEvent("qc:codings-changed"));
-      await load();
+      const full = await api.auditGet(row.id);
+      setSelected(full);
     } catch (e) {
-      setError(errorMessage(e, t("history.redoError")));
+      setSelected(row);
+      setError(errorMessage(e, t("history.loadError")));
     }
   }
 
@@ -165,9 +219,13 @@ export function HistoryView() {
             actions={
               <IconButton
                 label={t("history.redoTitle")}
-                title={t("history.redoTitle")}
-                onClick={() => void handleRedo()}
-                disabled={redoStack.length === 0}
+                title={
+                  redoPending.count > 0
+                    ? `${t("history.redoTitle")} (${redoPending.count})`
+                    : t("history.redoTitle")
+                }
+                onClick={handleRedo}
+                disabled={redoPending.count === 0}
               >
                 <Undo2 size={14} className="scale-x-[-1]" aria-hidden />
               </IconButton>
@@ -244,13 +302,13 @@ export function HistoryView() {
       ) : (
         <>
           <ul className="divide-y divide-border">
-            {visibleRows.map((r) => {
-              const detail = detailSummary(r, t);
+            {rows.map((r) => {
+              const canUndo = r.undoable ?? true;
               return (
                 <li key={r.id} className="flex items-start gap-2 px-3 py-2">
                   <button
                     type="button"
-                    onClick={() => setSelected(r)}
+                    onClick={() => void openDetail(r)}
                     className="min-w-0 flex-1 text-left"
                     title={t("history.detailTitle")}
                   >
@@ -267,29 +325,23 @@ export function HistoryView() {
                           ? ` · ${r.entity}${r.entity_id != null ? ` #${r.entity_id}` : ""}`
                           : ""}
                       </span>
-                      {detail && <span className="truncate text-text-secondary/80">{detail}</span>}
+                      {r.summary && <span className="truncate text-text-secondary/80">{r.summary}</span>}
                     </div>
                   </button>
-                  {!KNOWN_UNSUPPORTED.has(r.action) && (
-                    <IconButton
-                      label={t("history.undoRowTitle")}
-                      title={t("history.undoRowTitle")}
-                      size="row"
-                      className="mt-0.5"
-                      onClick={() => void handleUndo(r)}
-                    >
-                      <Undo2 size={14} aria-hidden />
-                    </IconButton>
-                  )}
+                  <IconButton
+                    label={t("history.undoRowTitle")}
+                    title={canUndo ? t("history.undoRowTitle") : (r.undo_reason ?? t("history.undoRowTitle"))}
+                    size="row"
+                    className="mt-0.5"
+                    disabled={!canUndo}
+                    onClick={() => handleUndo(r)}
+                  >
+                    <Undo2 size={14} aria-hidden />
+                  </IconButton>
                 </li>
               );
             })}
           </ul>
-          {visibleRows.length === 0 && (
-            <p className="px-3 py-6 text-center text-sm text-text-secondary">
-              {t("history.noMatch")}
-            </p>
-          )}
           {total > PAGE_SIZE && (
             <div className="flex shrink-0 items-center justify-center gap-3 border-t border-border px-3 py-1.5 text-xs text-text-secondary">
               <Button
@@ -331,31 +383,94 @@ export function HistoryView() {
           ) : undefined
         }
       >
-        {selected && (
-          <div className="max-h-[60vh] overflow-y-auto p-3 text-sm">
-            {selected.action === "source.edit" ? (
-              <div className="space-y-3">
-                <div>
-                  <p className="text-xs font-medium text-danger">{t("history.before")}</p>
-                  <pre className="mt-1 whitespace-pre-wrap rounded-sm border border-border bg-bg p-2 text-xs text-text-primary">
-                    {String(selected.detail.before ?? "")}
-                  </pre>
-                </div>
-                <div>
-                  <p className="text-xs font-medium text-success">{t("history.after")}</p>
-                  <pre className="mt-1 whitespace-pre-wrap rounded-sm border border-border bg-bg p-2 text-xs text-text-primary">
-                    {String(selected.detail.after ?? "")}
-                  </pre>
-                </div>
-              </div>
-            ) : (
-              <pre className="whitespace-pre-wrap rounded-sm border border-border bg-bg p-2 text-xs text-text-primary">
-                {JSON.stringify(selected.detail, null, 2)}
-              </pre>
-            )}
+        {selected && <DetailContent row={selected} t={t} />}
+      </Modal>
+
+      {/* Confirm dialog for destructive undos */}
+      <Modal
+        open={confirm !== null}
+        onClose={() => setConfirm(null)}
+        size="sm"
+        ariaLabel={t("history.confirmTitle")}
+        title={confirm ? actionLabel(confirm.action, t) : ""}
+      >
+        {confirm && (
+          <div className="space-y-4 p-3 text-sm">
+            <p className="text-text-primary">{t("history.confirmBody")}</p>
+            <div className="flex justify-end gap-2">
+              <Button variant="secondary" onClick={() => setConfirm(null)}>
+                {t("common.cancel")}
+              </Button>
+              <Button
+                variant="danger"
+                onClick={() => {
+                  const row = confirm;
+                  setConfirm(null);
+                  void runUndo(row);
+                }}
+              >
+                {t("history.undo")}
+              </Button>
+            </div>
           </div>
         )}
       </Modal>
     </LeftBar>
+  );
+}
+
+function DetailContent({ row, t }: { row: AuditRow; t: (key: string) => string }) {
+  const [showAll, setShowAll] = useState(false);
+  const raw = useMemo(() => JSON.stringify(row.detail, null, 2), [row.detail]);
+  const isHuge = raw.length > 20000;
+  const display = showAll || !isHuge ? raw : `${raw.slice(0, 20000)}\n… (truncated)`;
+
+  function download() {
+    const blob = new Blob([raw], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `audit-${row.id}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  return (
+    <div className="max-h-[60vh] overflow-y-auto p-3 text-sm">
+      {row.action === "source.edit" ? (
+        <div className="space-y-3">
+          <div>
+            <p className="text-xs font-medium text-danger">{t("history.before")}</p>
+            <pre className="mt-1 whitespace-pre-wrap rounded-sm border border-border bg-bg p-2 text-xs text-text-primary">
+              {String(row.detail.before ?? "")}
+            </pre>
+          </div>
+          <div>
+            <p className="text-xs font-medium text-success">{t("history.after")}</p>
+            <pre className="mt-1 whitespace-pre-wrap rounded-sm border border-border bg-bg p-2 text-xs text-text-primary">
+              {String(row.detail.after ?? "")}
+            </pre>
+          </div>
+        </div>
+      ) : (
+        <>
+          <pre className="whitespace-pre-wrap rounded-sm border border-border bg-bg p-2 text-xs text-text-primary">
+            {display}
+          </pre>
+          {isHuge && (
+            <div className="mt-2 flex items-center justify-end gap-2">
+              {!showAll && (
+                <Button variant="secondary" onClick={() => setShowAll(true)}>
+                  {t("history.showAll")}
+                </Button>
+              )}
+              <Button variant="secondary" onClick={download}>
+                <Download size={14} aria-hidden /> {t("history.downloadDetail")}
+              </Button>
+            </div>
+          )}
+        </>
+      )}
+    </div>
   );
 }

@@ -15,6 +15,7 @@ import type {
   AutocodeJob,
   AutocodeResponse,
   AuditResponse,
+  AuditRow,
   AuditStatsRow,
   AiChatReply,
   AiIndexStatus,
@@ -585,7 +586,15 @@ export const api = {
 
   // --- Audit / history ---------------------------------------------------
 
-  audit: (params: { limit?: number; offset?: number; action?: string; user?: string } = {}) =>
+  audit: (params: {
+    limit?: number;
+    offset?: number;
+    action?: string;
+    user?: string;
+    entity?: string;
+    q?: string;
+    summary?: boolean;
+  } = {}) =>
     request<AuditResponse>(
       `/audit?${new URLSearchParams(
         Object.fromEntries(
@@ -594,6 +603,14 @@ export const api = {
       ).toString()}`,
     ),
   auditStats: () => request<AuditStatsRow[]>("/audit/stats"),
+  auditUsers: () => request<string[]>("/audit/users"),
+  auditGet: (id: number) => request<AuditRow>(`/audit/${id}`),
+  auditUndoable: (id: number, undo = true) =>
+    request<{ undoable: boolean; reason: string | null }>(
+      `/audit/${id}/undoable?undo=${undo ? "true" : "false"}`,
+    ),
+  auditRedoPending: () =>
+    request<{ count: number; next_id: number | null }>("/audit/redo-pending"),
   auditUndo: (id: number) =>
     request<{ ok: boolean; message: string }>("/audit/undo", {
       method: "POST",
@@ -784,6 +801,10 @@ export const api = {
 
   colorScheme: () => request<ColorScheme>("/color-scheme"),
   syncStatus: () => request<SyncStatus>("/sync/status"),
+  syncPresence: () =>
+    request<{ ok: boolean; presence: Array<{ user: string; coder: string; pid: number; ts: number }> }>(
+      "/sync/presence",
+    ),
   syncNow: () => request<SyncResult>("/sync/now", { method: "POST" }),
   setSyncEnabled: (enabled: boolean) =>
     request<{ enabled: boolean }>("/sync/settings", {

@@ -31,6 +31,11 @@ async def _revert_coding(session: AsyncSession, row: dict, *, undo: bool, **kwar
     row_id = _ensure(detail, pk)
     if (action == "coding.create") == undo:
         await _delete_by_id(session, table, pk, row_id)
+        # Do not orphan comments attached to the coding being removed.
+        await session.execute(
+            text("DELETE FROM comment WHERE target_kind = 'coding' AND target_id = :v"),
+            {"v": row_id},
+        )
         return f"deleted {table} #{row_id}"
     try:
         await _insert_row(session, table, detail)

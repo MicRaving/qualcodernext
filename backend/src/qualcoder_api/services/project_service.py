@@ -44,6 +44,7 @@ class OpenResult:
     migrations_applied: list[str] = field(default_factory=list)
     error: str = ""
     lock_user: str = ""
+    duplicate_coder: str = ""
 
 
 class ProjectService:
@@ -148,8 +149,9 @@ class ProjectService:
 
         # Presence registry: never blocks; other live openers are reported
         # for the UI (simultaneous work is supported).
-        self._acquire_lock(actual_path)
+        self._acquire_lock(actual_path, codername)
         lock_user = self._read_lock_user(actual_path)
+        duplicate_coder = self.detect_duplicate_coder(actual_path, codername)
 
         try:
             await self._dispose_engine_if_any()
@@ -189,6 +191,7 @@ class ProjectService:
             project_name=self.project_name,
             migrations_applied=applied,
             lock_user=lock_user,
+            duplicate_coder=duplicate_coder,
         )
 
     async def _get_header(self) -> Project | None:
@@ -299,26 +302,34 @@ class ProjectService:
     # treated as a single entry and pruned when their owner is gone.
 
     @staticmethod
-    def _parse_lock_file(path: str) -> list[tuple[str, int, float]]:
+    def _parse_lock_file(path: str) -> list[tuple[str, str, int, float]]:
+        """Parse the presence-registry lock file into (coder, os_user, pid, ts).
+
+        Supports the current 4-field format ``coder\\tos_user\\tpid\\tts``, the
+        older 3-field ``os_user\\tpid\\tts`` (coder falls back to the OS user),
+        and the legacy 3-line format (single entry).
+        """
         try:
             with open(path, encoding="utf-8") as f:
                 lines = f.read().splitlines()
         except OSError:
             return []
-        entries: list[tuple[str, int, float]] = []
+        entries: list[tuple[str, str, int, float]] = []
         if not lines:
             return entries
         if "\t" in lines[0]:
             for line in lines:
                 parts = line.split("\t")
-                if len(parts) < 3:
-                    continue
                 try:
-                    pid = int(parts[1])
-                    ts = float(parts[2])
-                except ValueError:
+                    pid = int(parts[-2])
+                    ts = float(parts[-1])
+                except (IndexError, ValueError):
                     continue
-                entries.append((parts[0], pid, ts))
+                if len(parts) >= 4:
+                    coder, os_user = parts[0], parts[1]
+                else:
+                    coder, os_user = parts[0], parts[0]
+                entries.append((coder, os_user, pid, ts))
         else:
             user = lines[0]
             try:
@@ -329,20 +340,22 @@ class ProjectService:
                 pid = int(lines[2]) if len(lines) > 2 else 0
             except ValueError:
                 pid = 0
-            entries.append((user, pid, ts))
+            entries.append((user, user, pid, ts))
         return entries
 
-    def _acquire_lock(self, proj_path: str) -> bool:
+    def _acquire_lock(self, proj_path: str, codername: str = "") -> bool:
         self.lock_file_path = os.path.normpath(
             os.path.join(proj_path, LOCK_FILE_NAME)
         )
         try:
             entries = self._parse_lock_file(self.lock_file_path)
-            live = [e for e in entries if e[1] > 0 and self._pid_alive(e[1])]
+            live = [e for e in entries if e[2] > 0 and self._pid_alive(e[2])]
             with open(self.lock_file_path, "w", encoding="utf-8") as f:
-                for user, pid, ts in live:
-                    f.write(f"{user}\t{pid}\t{ts}\n")
-                f.write(f"{getpass.getuser()}\t{os.getpid()}\t{time.time()}")
+                for coder, os_user, pid, ts in live:
+                    f.write(f"{coder}\t{os_user}\t{pid}\t{ts}\n")
+                f.write(
+                    f"{codername}\t{getpass.getuser()}\t{os.getpid()}\t{time.time()}"
+                )
             return True
         except OSError as err:
             if getattr(err, "errno", None) == 22:
@@ -381,11 +394,11 @@ class ProjectService:
                 self.lock_file_path = ""
                 return
             entries = self._parse_lock_file(self.lock_file_path)
-            mine = [e for e in entries if e[1] != os.getpid()]
+            mine = [e for e in entries if e[2] != os.getpid()]
             if mine:
                 with open(self.lock_file_path, "w", encoding="utf-8") as f:
-                    for user, pid, ts in mine:
-                        f.write(f"{user}\t{pid}\t{ts}\n")
+                    for coder, os_user, pid, ts in mine:
+                        f.write(f"{coder}\t{os_user}\t{pid}\t{ts}\n")
             else:
                 os.remove(self.lock_file_path)
         except OSError as err:
@@ -393,13 +406,29 @@ class ProjectService:
         self.lock_file_path = ""
 
     def _read_lock_user(self, proj_path: str) -> str:
-        """First OTHER live opener's user (informational only)."""
+        """First OTHER live opener's OS user (informational only)."""
         try:
-            for user, pid, _ts in self._parse_lock_file(
+            for _coder, os_user, pid, _ts in self._parse_lock_file(
                 os.path.join(proj_path, LOCK_FILE_NAME)
             ):
                 if pid != os.getpid() and self._pid_alive(pid):
-                    return user
+                    return os_user
+        except Exception:
+            return ""
+        return ""
+
+    def detect_duplicate_coder(self, proj_path: str, codername: str) -> str:
+        """Return the name of an OTHER live instance already working as the
+        given coder, or "" if none. Working as the same coder on two
+        instances corrupts sync, so the UI warns before it is possible."""
+        if not codername:
+            return ""
+        try:
+            for coder, _os_user, pid, _ts in self._parse_lock_file(
+                os.path.join(proj_path, LOCK_FILE_NAME)
+            ):
+                if pid != os.getpid() and self._pid_alive(pid) and coder == codername:
+                    return codername
         except Exception:
             return ""
         return ""
@@ -409,9 +438,9 @@ class ProjectService:
         if not self.lock_file_path or not os.path.exists(self.lock_file_path):
             return []
         out = []
-        for user, pid, ts in self._parse_lock_file(self.lock_file_path):
+        for coder, os_user, pid, ts in self._parse_lock_file(self.lock_file_path):
             if pid != os.getpid() and self._pid_alive(pid):
-                out.append({"user": user, "pid": pid, "ts": ts})
+                out.append({"user": os_user, "coder": coder, "pid": pid, "ts": ts})
         return out
 
     # ------------------------------------------------------------------

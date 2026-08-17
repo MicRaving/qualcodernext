@@ -471,6 +471,7 @@ sync_log = Table(
     Column("pk_name", String),
     Column("pk_value", String),  # primary key value (int or name string)
     Column("row_json", Text),  # full row snapshot (JSON)
+    UniqueConstraint("user", "seq", name="u_sync_log_user_seq"),
 )
 
 audit_log = Table(

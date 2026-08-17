@@ -290,7 +290,31 @@ class MigrationChain:
         applied += await self.migrate_v29(app_version)
         applied += await self.migrate_v30(app_version)
         applied += await self.migrate_v31(app_version)
+        applied += await self.migrate_v32(app_version)
+        applied += await self.migrate_v33(app_version)
         return applied
+
+    async def migrate_v33(self, app_version: str) -> list[str]:
+        """v33: composite index on audit_log(entity, entity_id, id) so the
+        history view's per-entity lookups and the undoable predicates stay
+        fast on long-running projects. No-op when the index is already
+        present (fresh projects create it in their schema)."""
+        if self.conn is None:
+            return []
+        cur = await self.conn.cursor()
+        if not await self._has_table(cur, "audit_log"):
+            return []
+        await cur.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = 'idx_audit_log_entity_id'"
+        )
+        if await cur.fetchone() is not None:
+            return []
+        await cur.execute(
+            "CREATE INDEX idx_audit_log_entity_id ON audit_log(entity, entity_id, id)"
+        )
+        await cur.execute('update project set databaseversion="v33", about=?', [app_version])
+        await self.conn.commit()
+        return ["v33"]
 
     async def migrate_v21(self, app_version: str) -> list[str]:
         """v21: the ``link`` table — segment hyperlinks between source spans."""
@@ -599,10 +623,43 @@ class MigrationChain:
                 "user text, seq integer, entity text, action text, pk_name text, "
                 "pk_value text, row_json text)"
             )
+            await cur.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_sync_log_user_seq "
+                "ON sync_log(user, seq)"
+            )
             await cur.execute('update project set databaseversion="v19", about=?', [app_version])
             await self.conn.commit()
             return ["v19"]
         return []
+
+    async def migrate_v32(self, app_version: str) -> list[str]:
+        """v32: enforce a unique (user, seq) on sync_log so the per-user
+        sequence counter can never collide (atomic sequence). Existing rows
+        with duplicate (user, seq) — produced by a pre-v32 race — are
+        deduplicated, keeping the lowest id. No-op when the index is already
+        present (fresh v31 projects create it in their schema)."""
+        if self.conn is None:
+            return []
+        cur = await self.conn.cursor()
+        if not await self._has_table(cur, "sync_log"):
+            return []
+        await cur.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = 'idx_sync_log_user_seq'"
+        )
+        if await cur.fetchone() is not None:
+            return []
+        # Deduplicate (user, seq), keeping the earliest row per pair.
+        await cur.execute(
+            "DELETE FROM sync_log WHERE id NOT IN ("
+            "SELECT MIN(id) FROM sync_log GROUP BY user, seq)"
+        )
+        await cur.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_sync_log_user_seq "
+            "ON sync_log(user, seq)"
+        )
+        await cur.execute('update project set databaseversion="v32", about=?', [app_version])
+        await self.conn.commit()
+        return ["v32"]
 
     async def migrate_v15(self) -> list[str]:
         """v15: audit_log table + legacy-data backfill (idempotent)."""

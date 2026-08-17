@@ -71,6 +71,19 @@ async def sync_status(svc: ServiceDep) -> dict:
     )
 
 
+@router.get("/presence")
+async def sync_presence(svc: ServiceDep) -> dict:
+    """Live presence entries (other instances on the open project) read from
+    the presence-registry lock file — who is working as which coder."""
+    if svc.project_path == "":
+        return {"ok": False, "reason": "no project open"}
+    try:
+        openers = svc.openers()
+    except Exception as err:  # pragma: no cover - defensive
+        return {"ok": False, "reason": str(err)}
+    return {"ok": True, "presence": openers}
+
+
 @router.get("/auto-detect")
 async def sync_auto_detect(project_path: str) -> dict:
     """Report whether a project path looks like a shared/synced folder

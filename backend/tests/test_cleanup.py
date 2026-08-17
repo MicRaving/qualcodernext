@@ -144,8 +144,11 @@ async def test_compact_reclaims_space_and_preserves_data(client, open_project):
     assert stats["ok"] is True
     assert stats["before_bytes"] > stats["after_bytes"], "file must shrink"
     assert stats["freed_bytes"] == stats["before_bytes"] - stats["after_bytes"]
-    assert stats["indexes_dropped"] == len(_INDEX_SQL)
-    assert stats["indexes_recreated"] == len(_INDEX_SQL)
+    # Every dropped index (canonical _INDEX_SQL plus any extra idx_* like the
+    # sync_log unique index) is recreated either from _INDEX_SQL or the
+    # safety-net restore, so dropped == recreated and covers _INDEX_SQL.
+    assert stats["indexes_dropped"] == stats["indexes_recreated"]
+    assert stats["indexes_dropped"] >= len(_INDEX_SQL)
 
     # The open project keeps working right after the compaction...
     res = await client.get("/api/v1/projects/current/summary")

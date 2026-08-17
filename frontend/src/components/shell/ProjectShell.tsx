@@ -53,7 +53,7 @@ import { useWorkspaceStore, type WorkspaceView } from "@/stores/workspace";
 import { useProjectStore } from "@/stores/project";
 import { A11ySkipLink } from "@/features/accessibility/A11yControls";
 import { useUpdatesStore } from "@/stores/updates";
-import { Button } from "@/components/ui/orchestrator";
+import { Button, Modal } from "@/components/ui/orchestrator";
 import { cls } from "@/components/ui/tokens";
 import { Menu, MenuItem } from "@/components/ui/orchestrator";
 
@@ -185,6 +185,8 @@ export function ProjectShell() {
   const projectOpen = useProjectStore((s) => s.projectOpen);
   const tasks = useProjectStore((s) => s.tasks);
   const tasksPaused = useProjectStore((s) => s.tasksPaused);
+  const duplicateCoder = useProjectStore((s) => s.duplicateCoder);
+  const acknowledgeDuplicateCoder = useProjectStore((s) => s.acknowledgeDuplicateCoder);
   const syncAutoNotice = usePrefsStore((s) => s.syncAutoNotice);
   const [queueOpen, setQueueOpen] = useState(false);
   const [dragId, setDragId] = useState<string | null>(null);
@@ -349,6 +351,28 @@ export function ProjectShell() {
             {t("sync.autoEnabled")}
           </div>
         </div>
+      )}
+      {duplicateCoder && (
+        <Modal
+          open
+          onClose={acknowledgeDuplicateCoder}
+          size="sm"
+          title={t("coder.duplicateWarningTitle")}
+        >
+          <div className="space-y-4 p-4">
+            <p className="text-sm leading-relaxed text-text-primary">
+              {t("coder.duplicateWarning", { name: duplicateCoder })}
+            </p>
+            <div className="flex justify-end gap-2">
+              <Button variant="secondary" onClick={acknowledgeDuplicateCoder}>
+                {t("coder.duplicateSwitch")}
+              </Button>
+              <Button variant="primary" onClick={acknowledgeDuplicateCoder}>
+                {t("coder.duplicateContinue")}
+              </Button>
+            </div>
+          </div>
+        </Modal>
       )}
       <WorkspaceLayout
       ribbon={

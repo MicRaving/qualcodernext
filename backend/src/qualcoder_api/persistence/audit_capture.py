@@ -16,11 +16,15 @@ from __future__ import annotations
 import contextlib
 import contextvars
 import json
+import logging
 
 from sqlalchemy import text
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from qualcoder_api.core.timeutil import now
+
+logger = logging.getLogger(__name__)
 
 
 def table_row(mapping) -> dict:
@@ -82,27 +86,38 @@ async def capture(
     if ts is None:
         ts = now()
     actor = user or current_user()
-    # Atomic per-user sequence: the SELECT-then-INSERT pair could race on
-    # concurrent requests, so the counter is computed inside the INSERT.
-    await session.execute(
-        text(
-            "INSERT INTO sync_log (ts, user, seq, entity, action, pk_name, pk_value, row_json) "
-            "VALUES (:ts, :user, "
-            "(SELECT COALESCE(MAX(seq), 0) + 1 FROM sync_log WHERE user = :user2), "
-            ":entity, :action, :pk_name, :pk_value, :row_json)"
-        ),
-        {
-            "ts": ts,
-            "user": actor,
-            "user2": actor,
-            "entity": entity,
-            "action": action,
-            "pk_name": pk_name,
-            "pk_value": str(pk_value),
-            "row_json": json.dumps(row, ensure_ascii=False, default=str),
-        },
-    )
-    await session.flush()
+    # Atomic per-user sequence. The (user, seq) unique constraint
+    # (idx_sync_log_user_seq / u_sync_log_user_seq) makes a collision
+    # impossible to slip through; on the rare race we re-run the counter
+    # inside a savepoint so the surrounding domain mutation is never rolled
+    # back with it.
+    for _attempt in range(3):
+        try:
+            async with session.begin_nested():
+                await session.execute(
+                    text(
+                        "INSERT INTO sync_log (ts, user, seq, entity, action, pk_name, pk_value, row_json) "
+                        "VALUES (:ts, :user, "
+                        "(SELECT COALESCE(MAX(seq), 0) + 1 FROM sync_log WHERE user = :user2), "
+                        ":entity, :action, :pk_name, :pk_value, :row_json)"
+                    ),
+                    {
+                        "ts": ts,
+                        "user": actor,
+                        "user2": actor,
+                        "entity": entity,
+                        "action": action,
+                        "pk_name": pk_name,
+                        "pk_value": str(pk_value),
+                        "row_json": json.dumps(row, ensure_ascii=False, default=str),
+                    },
+                )
+            return
+        except IntegrityError:
+            # seq already taken by a concurrent writer — recompute and retry.
+            continue
+    # Defensive: give up rather than block the caller.
+    logger.warning("sync_log seq collision for user %s after retries", actor)
 
 
 async def capture_delete(

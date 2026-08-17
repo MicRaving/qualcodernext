@@ -106,6 +106,9 @@ class ProjectResponse(BaseModel):
     migrations_applied: list[str] = Field(default_factory=list)
     error: str = ""
     lock_user: str = ""
+    #: Another live instance already open as the same coder (open only) —
+    #: the UI warns before this is allowed to corrupt sync.
+    duplicate_coder: str = ""
     #: Shared-folder detection result (open only): the frontend enables the
     #: collaboration sync cycle when this is true (respects the per-project
     #: override).
@@ -309,6 +312,8 @@ async def open_project(req: OpenProjectRequest, svc: ServiceDep) -> ProjectRespo
         project_path=result.project_path,
         project_name=result.project_name,
         migrations_applied=result.migrations_applied,
+        lock_user=result.lock_user,
+        duplicate_coder=result.duplicate_coder,
         sync_auto_enabled=decision["sync_auto_enabled"],
         sync_auto_reason=decision["reason"],
     )

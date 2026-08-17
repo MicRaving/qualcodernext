@@ -65,7 +65,7 @@ SYNC_ENTITIES = {
     "gr_free_text_item", "gr_memo_item", "gr_cdct_line_item",
     "gr_free_line_item", "gr_pix_item", "gr_av_item",
     "link", "dictionary", "dictionary_entry", "qtt_sheet", "qtt_item",
-    "creative_item", "comment", "code_set", "code_set_member",
+    "creative_item", "comment", "code_set", "code_set_member", "r_script",
 }
 
 # Map model/dict attribute names to raw table columns for rows that differ.
@@ -127,6 +127,38 @@ def _imported_seq(state: dict, user: str) -> int:
     return int(state.get("imports", {}).get(user, 0))
 
 
+def _recorded_conflicts(state: dict, rater: str) -> dict[str, dict]:
+    """Per-rater entries that conflicted and must be retried next cycle,
+    keyed by str(seq). Stored outside the sidecar so a conflict no longer
+    blocks later entries (the watermark advances past it). Each value holds
+    the original sidecar entry plus the last recorded reason."""
+    return state.setdefault("conflicts", {}).setdefault(rater, {})
+
+
+def _remember_conflict(state: dict, rater: str, seq: int, entry: dict, reason: str) -> None:
+    _recorded_conflicts(state, rater)[str(seq)] = {"entry": entry, "reason": reason}
+
+
+def _forget_conflict(state: dict, rater: str, seq: int) -> None:
+    _recorded_conflicts(state, rater).pop(str(seq), None)
+
+
+def _conflict_summary(state: dict, rater: str) -> list[dict]:
+    """Structured summaries of a rater's pending conflicts for the UI."""
+    out: list[dict] = []
+    for seq in sorted(_recorded_conflicts(state, rater), key=lambda s: int(s)):
+        rec = _recorded_conflicts(state, rater)[seq]
+        entry = rec.get("entry", {})
+        out.append({
+            "seq": int(seq),
+            "entity": entry.get("entity", ""),
+            "pk": str(entry.get("pk_value", "")),
+            "action": entry.get("action", ""),
+            "reason": rec.get("reason", ""),
+        })
+    return out
+
+
 # ----------------------------------------------------------------------
 # Export
 # ----------------------------------------------------------------------
@@ -151,8 +183,7 @@ async def export_pending(session: AsyncSession, project_path: str, user: str) ->
     sidecar_dir = Path(project_path) / SYNC_DIR_NAME / user
     sidecar_dir.mkdir(parents=True, exist_ok=True)
     sidecar = sidecar_dir / "changes.jsonl"
-    tmp = sidecar_dir / "changes.jsonl.tmp"
-    lines = [
+    lines = "\n".join(
         json.dumps(
             {
                 "id": r[0],
@@ -168,17 +199,35 @@ async def export_pending(session: AsyncSession, project_path: str, user: str) ->
             ensure_ascii=False,
         )
         for r in rows
-    ]
-    # Append to the existing sidecar (the sync tool only carries new bytes).
-    existing = b""
-    if sidecar.exists():
-        existing = sidecar.read_bytes()
-    tmp.write_bytes(existing + ("\n".join(lines) + "\n").encode("utf-8"))
-    tmp.replace(sidecar)
+    ) + "\n"
+    await asyncio.to_thread(_append_sidecar, sidecar, lines)
 
     state.setdefault("exports", {})[user] = int(rows[-1][0])
     save_state(project_path, state)
     return {"exported": len(rows)}
+
+
+def _append_sidecar(sidecar: Path, lines: str) -> None:
+    """Append exported JSONL lines to a sidecar file.
+
+    Append-only: the sync tool only carries new bytes, and an append never
+    re-reads/rewrites the whole file (a crash mid-write cannot corrupt the
+    previously-exported lines — only the tail may be partial, which
+    _parse_sidecar drops). No read-modify-write means no torn full-file
+    upload on interrupted syncs. A torn tail (no trailing newline) is
+    separated from the new batch with a newline so it drops on its own
+    instead of swallowing the next entries.
+    """
+    if sidecar.exists() and sidecar.stat().st_size > 0:
+        with open(sidecar, "rb") as rf:
+            rf.seek(-1, os.SEEK_END)
+            if rf.read(1) != b"\n":
+                with open(sidecar, "ab") as wf:
+                    wf.write(b"\n")
+    with open(sidecar, "ab") as f:
+        f.write(lines.encode("utf-8"))
+        f.flush()
+        os.fsync(f.fileno())
 
 
 # ----------------------------------------------------------------------
@@ -282,35 +331,47 @@ def _as_pk(value) -> int | str:
     return str(value)
 
 
-async def _replay_one(session: AsyncSession, entry: dict, state: dict) -> str:
-    """Apply a single change; returns "applied" or a conflict description."""
+async def _replay_one(session: AsyncSession, entry: dict, state: dict) -> dict:
+    """Apply a single change; returns a structured outcome dict.
+
+    Outcome shapes:
+    - ``{"status": "applied", "detail": "..."}``
+    - ``{"status": "conflict", "entity", "pk", "action", "reason"}``
+    - ``{"status": "skipped", "reason": "..."}``
+    """
     entity = entry.get("entity")
     action = entry.get("action")
     pk_name = entry.get("pk_name")
     pk_value = entry.get("pk_value")
     row = entry.get("row")
     if not entity or not action or not pk_name or pk_value is None:
-        return "skipped (malformed)"
+        return {"status": "skipped", "reason": "malformed"}
     if entity not in SYNC_ENTITIES:
-        return f"skipped (unknown table {entity})"
+        return {"status": "skipped", "reason": f"unknown table {entity}",
+                "entity": entity, "pk": str(pk_value), "action": action}
     table = getattr(tables, entity, None)
     if table is None:
-        return f"skipped (unknown table {entity})"
+        return {"status": "skipped", "reason": f"unknown table {entity}",
+                "entity": entity, "pk": str(pk_value), "action": action}
 
     original_pk = str(pk_value)
     local_pk = _resolve_pk(state, entity, original_pk)
+
+    def _conflict(reason: str) -> dict:
+        return {"status": "conflict", "entity": entity, "pk": original_pk,
+                "action": action, "reason": reason}
 
     try:
         if action == "insert":
             insert_row = dict(row) if row else None
             if not insert_row:
-                return "skipped (no row)"
+                return {"status": "skipped", "reason": "no row"}
             # Force the pk column so identity follows the origin rater.
             insert_row[pk_name] = _as_pk(local_pk)
             try:
                 if await _insert_row(session, entity, insert_row):
-                    return "applied"
-                return "skipped (no-op)"
+                    return {"status": "applied", "detail": "applied"}
+                return {"status": "skipped", "reason": "no-op"}
             except Exception:
                 # PK collision with a DIFFERENT local row: natural-key merge
                 # first, else a fresh local PK + permanent remap. The pk
@@ -319,18 +380,18 @@ async def _replay_one(session: AsyncSession, entry: dict, state: dict) -> str:
                 # every reference to the local pk).
                 natural_row = {k: v for k, v in insert_row.items() if k != pk_name}
                 if await _update_by_natural_key(session, entity, natural_row):
-                    return "applied (merged by natural key)"
+                    return {"status": "applied", "detail": "merged by natural key"}
                 new_pk = await _fresh_pk(session, entity, pk_name)
                 insert_row[pk_name] = new_pk
                 if await _insert_row(session, entity, insert_row):
                     _record_pk_map(state, entity, original_pk, str(new_pk))
-                    return "applied (remapped)"
-                return "conflict (insert)"
+                    return {"status": "applied", "detail": "remapped"}
+                return _conflict("insert")
 
         if action == "update":
             update_row = dict(row) if row else None
             if not update_row:
-                return "skipped (no row)"
+                return {"status": "skipped", "reason": "no row"}
             update_row[pk_name] = _as_pk(local_pk)
             result = cast(CursorResult[Any], await session.execute(
                 update(table).where(text(f"{pk_name} = :pk")).values(**update_row),
@@ -339,30 +400,37 @@ async def _replay_one(session: AsyncSession, entry: dict, state: dict) -> str:
             if result.rowcount == 0:
                 natural_row = {k: v for k, v in update_row.items() if k != pk_name}
                 if await _update_by_natural_key(session, entity, natural_row):
-                    return "applied (merged by natural key)"
+                    return {"status": "applied", "detail": "merged by natural key"}
                 # Row vanished locally (e.g. replaced) — re-insert the state.
                 try:
                     if await _insert_row(session, entity, update_row):
-                        return "applied"
+                        return {"status": "applied", "detail": "re-inserted"}
                 except Exception:
-                    return "conflict (update)"
-            return "applied"
+                    return _conflict("update")
+            return {"status": "applied", "detail": "applied"}
 
         if action == "delete":
             result = cast(CursorResult[Any], await session.execute(
                 delete(table).where(text(f"{pk_name} = :pk")), {"pk": _as_pk(local_pk)}
             ))
             if result.rowcount == 0 and not await _delete_by_natural_key(session, entity, row):
-                return "skipped (already gone)"
-            return "applied"
+                return {"status": "skipped", "reason": "already gone"}
+            return {"status": "applied", "detail": "applied"}
     except Exception as err:
-        return f"conflict ({type(err).__name__})"
-    return "skipped (unknown action)"
+        return _conflict(type(err).__name__)
+    return {"status": "skipped", "reason": "unknown action"}
 
 
 async def import_pending(session: AsyncSession, project_path: str, user: str) -> dict:
     """Read every other rater's sidecar file and replay rows newer than the
-    per-user high-water seq. Returns a per-user report."""
+    per-user high-water seq, plus any recorded conflicts. Returns a per-user
+    report.
+
+    A conflicted entry no longer blocks the rest of the sidecar: later
+    entries are still applied, the watermark advances past them, and the
+    conflicted entry is recorded in per-machine state and retried on the next
+    cycle (see ``retry_conflicts`` / the ``conflicts`` state key).
+    """
     state = load_state(project_path)
     changes_root = Path(project_path) / SYNC_DIR_NAME
     report: dict[str, dict] = {}
@@ -373,31 +441,37 @@ async def import_pending(session: AsyncSession, project_path: str, user: str) ->
         rater = sidecar.parent.name
         if rater == user:
             continue
-        entries = [e for e in _parse_sidecar(sidecar) if e.get("seq", 0) > _imported_seq(state, rater)]
-        if not entries:
+        # Combine previously-recorded conflicts (which may sit below the
+        # watermark) with brand-new sidecar entries, then replay in seq order.
+        pending: dict[int, dict] = {
+            int(seq): rec.get("entry", {})
+            for seq, rec in _recorded_conflicts(state, rater).items()
+        }
+        for e in _parse_sidecar(sidecar):
+            if e.get("seq", 0) > _imported_seq(state, rater):
+                pending[int(e["seq"])] = e
+        if not pending:
             continue
         applied = 0
-        conflicts: list[str] = []
-        first_conflict_seq: int | None = None
+        conflicts: list[dict] = []
+        highest_applied: int = _imported_seq(state, rater)
         async with suspended():
-            for entry in sorted(entries, key=lambda e: (e.get("seq", 0),)):
+            for seq in sorted(pending):
+                entry = pending[seq]
                 outcome = await _replay_one(session, entry, state)
-                if outcome == "applied" or outcome.startswith("applied"):
+                if outcome.get("status") == "applied":
                     applied += 1
-                else:
-                    conflicts.append(outcome)
-                    if first_conflict_seq is None:
-                        first_conflict_seq = entry.get("seq", 0)
+                    _forget_conflict(state, rater, seq)
+                    highest_applied = max(highest_applied, int(seq))
+                elif outcome.get("status") == "conflict":
+                    reason = outcome.get("reason", "conflict")
+                    conflicts.append(
+                        {k: outcome[k] for k in ("entity", "pk", "action")} | {"reason": reason}
+                    )
+                    _remember_conflict(state, rater, int(seq), entry, reason)
             await session.commit()
-        if conflicts:
-            # Conflicted entries (and everything after them) must be retried
-            # next cycle — the watermark stops right before the first one
-            # instead of jumping past it.
-            watermark = (first_conflict_seq or 1) - 1
-        else:
-            watermark = max(e.get("seq", 0) for e in entries)
         state.setdefault("imports", {})[rater] = max(
-            _imported_seq(state, rater), watermark
+            _imported_seq(state, rater), highest_applied
         )
         save_state(project_path, state)
         report[rater] = {"applied": applied, "conflicts": conflicts}
@@ -441,6 +515,18 @@ def sync_enabled() -> bool:
 # Shared-folder detection (auto-enable on project open)
 # ----------------------------------------------------------------------
 
+# Known cloud-sync folder names whose presence in the path strongly implies a
+# synced (collaborative) location. Matched case-insensitively against path
+# components.
+CLOUD_SYNC_MARKERS = (
+    "onedrive", "dropbox", "google drive", "icloud", "mega", "pcloud",
+    "syncthing", "nextcloud", "owncloud", "seafile", "sugarsync",
+)
+
+# Maximum number of parent directories to scan for a Syncthing marker.
+SYNCTHING_MARKER_DEPTH = 5
+
+
 def detect_shared(project_path: str, user: str | None = None) -> dict:
     """Detect whether a project lives in a shared/synced folder.
 
@@ -449,7 +535,11 @@ def detect_shared(project_path: str, user: str | None = None) -> dict:
     1. a ``.qcnext-shared`` marker file inside the project folder;
     2. a UNC path (``\\\\server\\share`` — Windows network shares);
     3. a ``changes/`` directory holding sidecar change files from OTHER
-       raters (the project's own user is excluded).
+       raters (the project's own user is excluded);
+    4. the path contains a known cloud-sync folder name (OneDrive, Dropbox,
+       Google Drive, iCloud, Syncthing, Nextcloud, ...);
+    5. a parent directory (up to ``SYNCTHING_MARKER_DEPTH``) carries a
+       Syncthing ``.stfolder`` marker.
     """
     root = Path(project_path)
     if (root / ".qcnext-shared").exists():
@@ -462,6 +552,20 @@ def detect_shared(project_path: str, user: str | None = None) -> dict:
             if user and sidecar.parent.name == user:
                 continue
             return {"shared": True, "reason": "change sidecars from other raters"}
+    # Cloud-sync folder name in the path.
+    lower = project_path.lower()
+    for marker in CLOUD_SYNC_MARKERS:
+        if marker in lower:
+            return {"shared": True, "reason": f"cloud-sync folder ({marker})"}
+    # Syncthing marker in an ancestor directory.
+    cur = root
+    for _ in range(SYNCTHING_MARKER_DEPTH):
+        if (cur / ".stfolder").exists():
+            return {"shared": True, "reason": "Syncthing folder marker"}
+        parent = cur.parent
+        if parent == cur:
+            break
+        cur = parent
     return {"shared": False, "reason": "not a shared folder"}
 
 
@@ -516,8 +620,15 @@ async def sync_status(session_factory, project_path: str, user: str) -> dict:
             pending_import = sum(
                 1 for e in entries if e.get("seq", 0) > _imported_seq(state, rater)
             )
+            conflicts = _conflict_summary(state, rater)
             collaborators.append(
-                {"user": rater, "last_sync": mtime, "pending_import": pending_import}
+                {
+                    "user": rater,
+                    "last_sync": mtime,
+                    "pending_import": pending_import,
+                    "pending_conflicts": len(conflicts),
+                    "conflicts": conflicts,
+                }
             )
 
     return {
@@ -526,6 +637,7 @@ async def sync_status(session_factory, project_path: str, user: str) -> dict:
         "user": user,
         "pending_export": pending_export,
         "pending_import": sum(c["pending_import"] for c in collaborators),
+        "pending_conflicts": sum(c["pending_conflicts"] for c in collaborators),
         "collaborators": collaborators,
         "last_sync": _last_sync_ts,
         "last_error": _last_error,

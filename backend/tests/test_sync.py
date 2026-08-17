@@ -193,6 +193,146 @@ async def test_two_rater_roundtrip_converges(rater_a, rater_b):
         assert {c.owner for c in codings} == {"anna", "berta"}
 
 
+async def test_r_script_roundtrip_converges(rater_a, rater_b):
+    """Saved R scripts are journaled to sync_log AND travel through the
+    sidecar to collaborators (r_script must be in SYNC_ENTITIES)."""
+    sync.set_current_user("anna")
+    ts = "2026-01-01T00:00:00Z"
+    async with rater_a.session_factory() as session:
+        from sqlalchemy import insert
+        result = await session.execute(
+            insert(tables.r_script).values(
+                name="plot.R", script="plot(1:10)", owner="anna",
+                created=ts, updated=ts,
+            )
+        )
+        script_id = result.inserted_primary_key[0]
+        row = (
+            await session.execute(
+                tables.r_script.select().where(tables.r_script.c.id == script_id)
+            )
+        ).first()
+        data = dict(row._mapping)
+        await sync.capture_insert(session, entity="r_script", pk_name="id",
+                                  pk_value=script_id, row=data)
+        await session.commit()
+
+    await _export(rater_a, "anna")
+    _copy_changes(rater_a.project_path, rater_b.project_path)
+    sync.set_current_user("berta")
+    async with rater_b.session_factory() as session:
+        report = await sync.import_pending(session, rater_b.project_path, "berta")
+        assert report["anna"]["conflicts"] == []
+        scripts = (await session.execute(tables.r_script.select())).all()
+        assert len(scripts) == 1
+        assert scripts[0].name == "plot.R"
+
+    # A later change from anna must NOT be blocked by the r_script replay
+    # (the watermark advances past it).
+    sync.set_current_user("anna")
+    async with rater_a.session_factory() as session:
+        await CodeRepository(session).add_code(name="after-script", owner="anna")
+    await _export(rater_a, "anna")
+    _copy_changes(rater_a.project_path, rater_b.project_path)
+    sync.set_current_user("berta")
+    async with rater_b.session_factory() as session:
+        report = await sync.import_pending(session, rater_b.project_path, "berta")
+        assert report["anna"]["conflicts"] == []
+        codes = (await session.execute(tables.code_name.select())).all()
+        assert any(c.name == "after-script" for c in codes)
+
+
+async def test_conflict_does_not_block_later_entries(rater_b, tmp_path):
+    """A single conflicted entry must not freeze the rest of the sidecar:
+    later entries apply, the watermark advances past them, and the conflict
+    is recorded for retry on a later cycle."""
+    from sqlalchemy import insert as sa_insert
+
+    sync.set_current_user("berta")
+    async with rater_b.session_factory() as session:
+        # berta already owns an r_script named "shared.R" (id=1) — anna's
+        # insert of the same name collides on the UNIQUE constraint and
+        # cannot be natural-key-merged, so it must be a real conflict.
+        await session.execute(
+            sa_insert(tables.r_script).values(
+                name="shared.R", script="berta version", owner="berta",
+                created="t", updated="t",
+            )
+        )
+        await session.commit()
+
+    # Craft anna's sidecar: seq1 conflicts, seq2 must still apply.
+    sidecar = Path(rater_b.project_path) / sync.SYNC_DIR_NAME / "anna" / "changes.jsonl"
+    sidecar.parent.mkdir(parents=True, exist_ok=True)
+    lines = [
+        json.dumps({
+            "id": 1, "ts": "t", "user": "anna", "seq": 1, "entity": "r_script",
+            "action": "insert", "pk_name": "id", "pk_value": 1,
+            "row": {"id": 1, "name": "shared.R", "script": "anna version",
+                    "owner": "anna", "created": "t", "updated": "t"},
+        }),
+        json.dumps({
+            "id": 2, "ts": "t", "user": "anna", "seq": 2, "entity": "code_name",
+            "action": "insert", "pk_name": "cid", "pk_value": 1,
+            "row": {"cid": 1, "name": "clean", "owner": "anna", "date": "t", "color": "1"},
+        }),
+    ]
+    sidecar.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    sync.set_current_user("berta")
+    async with rater_b.session_factory() as session:
+        report = await sync.import_pending(session, rater_b.project_path, "berta")
+        assert report["anna"]["applied"] == 1
+        assert len(report["anna"]["conflicts"]) == 1
+        conflict = report["anna"]["conflicts"][0]
+        assert conflict["entity"] == "r_script"
+        assert conflict["action"] == "insert"
+        # The later, clean entry applied despite the conflict.
+        codes = (await session.execute(tables.code_name.select())).all()
+        assert any(c.name == "clean" for c in codes)
+        # The conflicting r_script was NOT applied (berta's stays).
+        scripts = (await session.execute(tables.r_script.select())).all()
+        assert len(scripts) == 1
+        assert scripts[0].script == "berta version"
+
+    # The watermark advanced past seq2, so a second import does NOT re-apply
+    # the clean entry — and the recorded conflict is still pending.
+    state = sync.load_state(rater_b.project_path)
+    assert sync._imported_seq(state, "anna") >= 2
+    assert "1" in sync._recorded_conflicts(state, "anna")
+    summary = sync._conflict_summary(state, "anna")
+    assert summary and summary[0]["entity"] == "r_script" and summary[0]["reason"]
+
+
+async def test_export_appends_and_survives_truncated_tail(rater_a):
+    """Append-only export never rewrites prior lines; a partial trailing line
+    (crash mid-append) is dropped on parse and later exports are intact."""
+    sync.set_current_user("anna")
+    sidecar = Path(rater_a.project_path) / sync.SYNC_DIR_NAME / "anna" / "changes.jsonl"
+
+    async with rater_a.session_factory() as session:
+        await CodeRepository(session).add_code(name="first", owner="anna")
+    await _export(rater_a, "anna")
+    first_len = sidecar.read_text(encoding="utf-8").count("\n")
+
+    async with rater_a.session_factory() as session:
+        await CodeRepository(session).add_code(name="second", owner="anna")
+    await _export(rater_a, "anna")
+    # Append: the first export's lines are untouched.
+    assert sidecar.read_text(encoding="utf-8").count("\n") == first_len + 1
+
+    # Simulate a torn tail (crash mid-append), then export again.
+    with open(sidecar, "a", encoding="utf-8") as f:
+        f.write('{"partial')
+    async with rater_a.session_factory() as session:
+        await CodeRepository(session).add_code(name="third", owner="anna")
+    await _export(rater_a, "anna")
+
+    entries = sync._parse_sidecar(sidecar)
+    names = [e["row"].get("name") for e in entries if e["entity"] == "code_name"]
+    assert "first" in names and "second" in names and "third" in names
+
+
 async def test_delete_propagates(rater_a, rater_b):
     """Deleting a source on one side removes its codings on the other."""
     sync.set_current_user("anna")
@@ -295,6 +435,17 @@ async def test_pk_collision_remaps_and_updates_follow(rater_a, rater_b):
         assert [c.owner for c in codings] == ["berta"]
 
 
+async def test_sync_presence_endpoint(project_client):
+    """GET /sync/presence reports live other-instance presence (empty here —
+    no other instances on this single client)."""
+    client, _ = project_client
+    res = await client.get("/api/v1/sync/presence")
+    assert res.status_code == 200
+    body = res.json()
+    assert body["ok"] is True
+    assert body["presence"] == []
+
+
 async def test_sync_endpoints(project_client):
     client, _ = project_client
     res = await client.get("/api/v1/sync/status")
@@ -369,6 +520,33 @@ def test_detect_shared_plain_folder(tmp_path):
         "shared": False,
         "reason": "not a shared folder",
     }
+
+
+@pytest.mark.parametrize("folder", ["OneDrive", "Dropbox", "Google Drive", "iCloud", "Nextcloud"])
+def test_detect_shared_cloud_sync_folder(tmp_path, folder):
+    project = tmp_path / folder / "P.qda"
+    project.mkdir(parents=True)
+    res = sync.detect_shared(str(project))
+    assert res["shared"] is True
+    assert "cloud-sync folder" in res["reason"]
+
+
+def test_detect_shared_st_folder_marker(tmp_path):
+    syncroot = tmp_path / "mysync"
+    syncroot.mkdir()
+    (syncroot / ".stfolder").write_text("", encoding="utf-8")
+    project = syncroot / "sub" / "deeper" / "P.qda"
+    project.mkdir(parents=True)
+    assert sync.detect_shared(str(project)) == {
+        "shared": True,
+        "reason": "Syncthing folder marker",
+    }
+
+
+def test_detect_shared_st_marker_ignores_unrelated(tmp_path):
+    project = tmp_path / "plain" / "P.qda"
+    project.mkdir(parents=True)
+    assert sync.detect_shared(str(project))["shared"] is False
 
 
 async def test_auto_enable_decision_honors_override(rater_a, tmp_path, monkeypatch):

@@ -345,3 +345,41 @@ async def test_migrated_v5_database_converges(v2_db):
     cur = await v2_db.cursor()
     await cur.execute("SELECT databaseversion FROM project")
     assert (await cur.fetchone())[0] == "v14"
+
+
+async def test_v32_adds_unique_sync_log_seq_index(tmp_path):
+    """A database whose sync_log lacks the unique (user, seq) index gets it
+    via migrate_v32, deduplicates colliding rows, and is stamped v32. A fresh
+    schema (index already present) is a no-op."""
+    from qualcoder_api.persistence.schema import create_new_project_schema
+
+    db = tmp_path / "v31.qda"
+    conn = await aiosqlite.connect(db)
+    await create_new_project_schema(conn, app_version="4.0-test", codername="tester")
+    cur = await conn.cursor()
+    # Drop the index to simulate a pre-v32 database, then seed a duplicate
+    # (user, seq) pair.
+    await cur.execute("DROP INDEX IF EXISTS idx_sync_log_user_seq")
+    await cur.execute(
+        "INSERT INTO sync_log (ts, user, seq, entity, action, pk_name, pk_value, row_json) "
+        "VALUES ('t','anna',1,'code_name','insert','cid','1','{}')"
+    )
+    await cur.execute(
+        "INSERT INTO sync_log (ts, user, seq, entity, action, pk_name, pk_value, row_json) "
+        "VALUES ('t','anna',1,'code_name','insert','cid','2','{}')"
+    )
+    await conn.commit()
+
+    applied = await MigrationChain(conn).run_all("4.0-test", "tester")
+    assert "v32" in applied
+    await cur.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='index' AND name='idx_sync_log_user_seq'"
+    )
+    assert await cur.fetchone() is not None
+    # Duplicate (user, seq) was deduplicated.
+    await cur.execute("SELECT COUNT(*) FROM sync_log WHERE user='anna'")
+    assert (await cur.fetchone())[0] == 1
+    # Re-running is a no-op (idempotent).
+    second = await MigrationChain(conn).run_all("4.0-test", "tester")
+    assert "v32" not in second
+    await conn.close()

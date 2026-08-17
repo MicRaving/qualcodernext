@@ -31,7 +31,7 @@ All releases are available on: [https://github.com/MicRaving/QCnext/releases](ht
 You can find the documentation here:
 
 * [**Documentation Hub**](docs/README.md) — Start screen, workflow diagrams, and glossary.
-* [**Workspace Shell \& Collaboration Guide**](docs/workspace-and-shell.md) — Layout, projects, real-time sync, audit history \& bug reporter.
+* [**Workspace Shell \& Collaboration Guide**](docs/workspace-and-shell.md) — Layout, projects, asynchronous sync, audit history \& bug reporter.
 * [**Files \& Material Import Guide**](docs/files-and-import.md) — Document management, web scraping, and QDA interchange (REFI-QDA, NVivo, SPSS, Zotero).
 * [**Qualitative Coders Guide**](docs/coders.md) — Text, PDF, Image, CSV/Table, Webpage, and Audio/Video coders with Whisper auto-transcription.
 * [**Cases \& Attributes Guide**](docs/cases-and-attributes.md) — Study units, participant metadata, and mixed-methods attributes.

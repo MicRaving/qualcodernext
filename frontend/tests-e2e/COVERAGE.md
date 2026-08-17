@@ -49,7 +49,7 @@ Top gaps worth filling next (quick to script, high value):
 | Coder switcher | Rename coder | — | **Gap** |
 | Coder switcher | Per-coder stats | — | **Gap** |
 | Coder switcher | Per-coder visibility toggle for sync | — | **Gap** |
-| Coder switcher | Collaboration sync switch, status, "Sync now" | — | **Gap** |
+| Coder switcher | Collaboration sync switch, status, "Sync now" | S (sync.spec.ts) | — |
 | Inspector | File details (type/date/owner/memo), "Open in coder" | IA (annotation), F | — |
 | Inspector | Add annotation inline | IA | — |
 | Inspector | Code details: highlight-in-open-file, memo edit, recent segments jump, links in/out | — | **Gap** |
@@ -316,7 +316,8 @@ Top gaps worth filling next (quick to script, high value):
 | Queue | Drag-to-reorder jobs | — | **Gap** |
 | Completion | Toast + project refresh when a job finishes | T (implicit) | — |
 | Import | Ribbon chip fill while importing | — | **Gap** |
-| Sync | Enable/disable cycle; last-sync/pending/error; Sync now | — | **Gap** |
+| Sync | Enable/disable cycle; last-sync/pending/error; Sync now | S (sync.spec.ts) | — |
+| Sync | Shared-folder auto-detect notice | S (sync.spec.ts) | — |
 | Sync | Sync dot state on the coder switcher | — | **Gap** |
 | Visibility | Hide a coder's codings from other users | — | **Gap** |
 | Lock | Open an in-use project reports the locking user | — | **Gap** |

@@ -136,7 +136,7 @@ async def compact_project(db_path: str) -> dict:
         for name, sql in dropped_sql.items():
             if name in recreated_names:
                 continue
-            if sql and sql.strip().upper().startswith("CREATE INDEX"):
+            if sql and sql.strip().upper().startswith(("CREATE INDEX", "CREATE UNIQUE INDEX")):
                 await cur.execute(sql)
                 restored += 1
 
