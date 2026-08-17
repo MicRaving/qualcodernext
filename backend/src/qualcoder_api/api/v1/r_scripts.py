@@ -13,17 +13,17 @@ from __future__ import annotations
 import csv
 import io
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from sqlalchemy import delete, insert, select
 from sqlalchemy import update as sa_update
-from sqlalchemy.engine import CursorResult, Result
 
 from qualcoder_api.api.v1.deps import DbDep, ServiceDep
 from qualcoder_api.core.timeutil import now as _now
 from qualcoder_api.persistence import tables
+from qualcoder_api.persistence.repo.base import _inserted_pk
 from qualcoder_api.services import audit, report_service, sync
 from qualcoder_api.services.user_settings import get_codername, resolve_owner
 
@@ -35,14 +35,6 @@ REPORTS = (
     "coder-comparison",
     "summary-table",
 )
-
-
-def _inserted_pk(result: Result) -> int:
-    """First inserted primary key from an INSERT statement result."""
-    pk = cast(CursorResult[Any], result).inserted_primary_key
-    if pk is None:  # pragma: no cover - inserts always return a pk here
-        raise RuntimeError("insert returned no primary key")
-    return int(pk[0])
 
 
 class RScriptCreate(BaseModel):

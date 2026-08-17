@@ -6,6 +6,7 @@ import { errorMessage } from "@/lib/utils";
 import { useEffect, useMemo, useState } from "react";
 import { LoaderCircle, Plus, Search, X } from "lucide-react";
 import { api, type CodeTreeItem } from "@/lib/api";
+import { FALLBACK_CODE_COLOR } from "@/features/coding/tint";
 import { Button, IconButton, Input, MenuItem, Modal } from "@/components/ui/orchestrator";
 import { useI18n } from "@/lib/i18n";
 
@@ -109,7 +110,7 @@ export function CodePicker({ open, codes, onClose, onPick }: CodePickerProps) {
               >
                 <span
                   className="h-3 w-3 shrink-0 rounded-sm border border-border"
-                  style={{ backgroundColor: c.color ?? "var(--qc-accent)" }}
+                  style={{ backgroundColor: c.color ?? FALLBACK_CODE_COLOR }}
                   aria-hidden
                 />
                 <span className="truncate">{c.name}</span>

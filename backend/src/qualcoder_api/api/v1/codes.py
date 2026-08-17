@@ -180,7 +180,6 @@ async def create_code(req: CodeCreate, db: DbDep) -> Code:
 async def update_code(cid: int, req: CodeUpdate, db: DbDep) -> Code:
     repo = CodeRepository(db)
     old_code = await repo.get_code(cid)
-    from qualcoder_api.persistence import tables
 
     old_row = (
         await db.execute(select(tables.code_name).where(tables.code_name.c.cid == cid))
@@ -200,8 +199,6 @@ async def update_code(cid: int, req: CodeUpdate, db: DbDep) -> Code:
         values = req.model_dump(exclude_none=True, exclude={"name", "supercid"})
         if values:
             from sqlalchemy import update as sa_update
-
-            from qualcoder_api.persistence import tables
 
             await db.execute(
                 sa_update(tables.code_name)
@@ -229,8 +226,6 @@ async def update_code(cid: int, req: CodeUpdate, db: DbDep) -> Code:
 @router.delete("/{cid}", status_code=204)
 async def delete_code(cid: int, db: DbDep) -> None:
     from sqlalchemy import select
-
-    from qualcoder_api.persistence import tables
 
     row = (
         await db.execute(select(tables.code_name).where(tables.code_name.c.cid == cid))
@@ -319,8 +314,6 @@ async def merge_code(cid: int, req: MergeRequest, db: DbDep) -> Code:
     # Capture everything the undo needs: the merged-away code row, every
     # coding it owns, and its sub-codes.
     from sqlalchemy import select
-
-    from qualcoder_api.persistence import tables
 
     old_row = (
         await db.execute(select(tables.code_name).where(tables.code_name.c.cid == cid))
@@ -518,7 +511,6 @@ async def create_category(req: CategoryCreate, db: DbDep) -> Category:
 
 @router.delete("/categories/{catid}", status_code=204)
 async def delete_category(catid: int, db: DbDep) -> None:
-    from qualcoder_api.persistence import tables
 
     row = (
         await db.execute(select(tables.code_cat).where(tables.code_cat.c.catid == catid))
@@ -539,8 +531,6 @@ class CategoryRename(BaseModel):
 async def rename_category(catid: int, req: CategoryRename, db: DbDep) -> Category:
     """Rename a category (the code PATCH endpoint only covers codes)."""
     from sqlalchemy import update as sa_update
-
-    from qualcoder_api.persistence import tables
 
     name = req.name.strip()
     if not name:
@@ -577,8 +567,6 @@ async def merge_category(catid: int, req: MergeCategoryRequest, db: DbDep) -> No
     if catid == req.target_catid:
         raise HTTPException(status_code=422, detail="cannot merge a category into itself")
     from sqlalchemy import select
-
-    from qualcoder_api.persistence import tables
 
     old_row = (
         await db.execute(select(tables.code_cat).where(tables.code_cat.c.catid == catid))

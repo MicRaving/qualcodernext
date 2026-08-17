@@ -26,14 +26,13 @@ import {
   X,
 } from "lucide-react";
 import { api, ApiError } from "@/lib/api";
+import { SYNC_POLL_MS } from "@/lib/config";
 import { useI18n } from "@/lib/i18n";
 import { useCoderStore } from "@/stores/coder";
 import { usePrefsStore } from "@/stores/prefs";
 import { useProjectStore } from "@/stores/project";
 import { useToast } from "@/lib/toast";
 import { Button, HelpFlyout, IconButton, Menu, MenuItem, Modal } from "@/components/ui/orchestrator";
-
-const SYNC_POLL_MS = 30_000;
 
 const FLYOUT_WIDTH = 260;
 const FLYOUT_MIN_HEIGHT = 240;

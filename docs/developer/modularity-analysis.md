@@ -2,7 +2,7 @@
 
 > Planning document. **Implementation complete** — see the status table in
 > section H. Verification: backend 883 tests + ruff + mypy clean; frontend
-> tsc + eslint clean, vitest 319/319.
+> tsc + eslint clean, vitest 319/319, Playwright e2e 50/50.
 
 ## Method
 
@@ -494,21 +494,21 @@ split in D1 preserves this boundary.
 |---|---|---|---|---|
 | **1** | B1 — `_now()` → `core/timeutil.py` | 13 copies + 5 inline sites | S | ✅ |
 | **2** | C1 — color palette → `core/palette.py` | domain data out of persistence | S | ✅ |
-| **3** | B5 — `FALLBACK_CODE_COLOR` → `tint.ts` | 4 files | S | ✅ |
-| **4** | B3 — `errorMessage()` → `lib/utils.ts` | 183 sites | M | ✅ |
-| **5** | B2 — `useAsyncEffect` hook | 23 effects converted, 7 left (polls/cleanup) | M | ✅ |
-| **6** | B6 — `useCodeMaps()` hook | AvCoder/ImageCoder/PdfCoder; TextCoder+HtmlCoder/CsvCoder need bespoke maps | S | ✅ |
+| **3** | B5 — `FALLBACK_CODE_COLOR` → `tint.ts` | 4 files | S | ✅ + Wave 4 (7 call sites joined) |
+| **4** | B3 — `errorMessage()` → `lib/utils.ts` | 183 sites | M | ✅ + Wave 4 (`errorTextOf` consolidated) |
+| **5** | B2 — `useAsyncEffect` hook | 23 effects converted, 7 left (polls/cleanup) | M | ✅ + Wave 4 (`contextPickerData` + `ImageCoder` converted) |
+| **6** | B6 — `useCodeMaps()` hook | AvCoder/ImageCoder/PdfCoder; TextCoder+HtmlCoder/CsvCoder need bespoke maps | S | ✅ + Wave 4 (all 6 source from `codingApi`; 4 via `useCodeIndex`, 2 via `useCodeMaps`, 0 build local maps) |
 | **7** | D1 — split `lib/api.ts` into package | transport 269 / types 825 / endpoints 839 / index 3 | M | ✅ |
 | **8** | D3 — split `repositories.py` → `repo/` package | 2065 → 9 files + 51-line shim | M | ✅ |
-| **9** | E — fix circular deps (audit_capture) | 28 lazy imports eliminated | M | ✅ |
+| **9** | E — fix circular deps (audit_capture) | capture cluster moved to `persistence/audit_capture.py`; persistence repos (`code_repo`/`source_repo`) import it, not `services.sync`; `sync` re-exports for back-compat | M | ✅ |
 | **10** | D2 — `audit_undo` → registry + handlers | 2000 → 10 files, 101 actions registered | L | ✅ |
 | **11** | D5 — `useCoder()` hook | ImageCoder + AvCoder converted; 4 coders kept bespoke loads (entangled) | L | ⚠️ |
 | **12** | D4 — `interchange/importers` → package | 1530 → 10 files | M | ✅ |
 | **13** | D6 — split `project.ts` store into slices | 1183 → 6 stores (project 543 / prefs 187 / graph 185 / inspector 149 / workspace 125 / coder 86) | M | ✅ |
 | **14** | B4 — `confirmAction()` helper | kept `window.confirm` (DESIGN.md spec; modal migration later) | S | ⏳ |
 | **15** | C2 — single VERSION constant | backend `APP_VERSION` in `core/__init__.py`; frontend `app.version` stays i18n data | S | ⚠️ |
-| **16** | C3 — `lib/config.ts` for magic numbers | all api.ts magic numbers replaced | S | ✅ |
-| **17** | C4 — move `GRAPH_MODELS` to graphs feature | `features/graphs/models.ts` + re-export | S | ✅ |
+| **16** | C3 — `lib/config.ts` for magic numbers | all api.ts magic numbers replaced | S | ✅ + Wave 4 (`AI_REFRESH_MS`, `SYNC_POLL_MS`, `SOURCE_TIMEOUT_MS` adopted) |
+| **17** | C4 — move `GRAPH_MODELS` to graphs feature | dead `features/graphs/models.ts` deleted (Wave 4); live copy stays in `lib/api/types.ts` | S | ✅ |
 | **18** | D7 — split locale dicts by domain | 14 files × domains | L | ⏳ (low priority) |
 
 **S** = <1 hour, **M** = half day, **L** = 1-2 days.
@@ -550,13 +550,13 @@ worthwhile splits. Single-concern / borderline files are left alone.
 
 | Priority | Item | Before | After | Status |
 |---|---|---|---|---|
-| **J1** | Split `audit_undo/handlers/entity.py` (D2 regression — 30 handlers / 10 domains in one file) | 938 | 6 sub-domain files | ⏳ |
-| **J2** | Split `report_service.py` → `reports/` package by report family | 1471 | ~7 files | ⏳ |
-| **J3** | Split `scrape_service.py` → `scrape/` package by source type | 1377 | ~6 files | ⏳ |
-| **J4** | Extract pdf-text-locate engine from `api/v1/sources.py` → `services/pdf_locate.py` | 1080 | ~600 + ~480 | ⏳ |
-| **J5** | Split `coding_service.py` → core + `autocode_service.py` | 838 | ~430 + ~410 | ⏳ |
-| **J6** | Split `graph_service.py` → core + items + lines | 888 | ~3 files | ⏳ |
-| **J7** | Split `api/v1/importers.py` → router + preview module | 903 | ~400 + ~500 | ⏳ |
+| **J1** | Split `audit_undo/handlers/entity.py` (D2 regression — 30 handlers / 10 domains in one file) | 938 | 123-line entity.py + 11 sub-domain files (case_attribute, annotation_extras, creative, reference, coder_sync, dictionary_codeset, qtt_filter_sql) | ✅ |
+| **J2** | Split `report_service.py` → `reports/` package by report family | 1471 | 9-file package (1611 lines) + 78-line shim | ✅ |
+| **J3** | Split `scrape_service.py` → `scrape/` package by source type | 1377 | deferred — ~40 test `patch()` calls target the module namespace; would require rewriting the test patch targets | ➖ |
+| **J4** | Extract pdf-text-locate engine from `api/v1/sources.py` → `services/pdf_locate.py` | 1080 | 666 + 432 | ✅ |
+| **J5** | Split `coding_service.py` → core + `autocode_service.py` | 838 | 424 + 441 | ✅ |
+| **J6** | Split `graph_service.py` → core + items + lines | 888 | 412 + base 58 + items 307 + lines 171 | ✅ |
+| **J7** | Split `api/v1/importers.py` → router + preview module | 903 | 485 + 433 | ✅ |
 | ➖ | `persistence/repo/code_repo.py` (872) | single class — mixin split is risky | — | ➖ |
 | ➖ | `api/v1/codes.py` (725) | one domain (codes+categories) | — | ➖ |
 | ➖ | `services/merge_projects.py` (718) | single concern (table copy) | — | ➖ |
@@ -565,3 +565,6 @@ worthwhile splits. Single-concern / borderline files are left alone.
 | ➖ | `services/sync.py` (620) | single domain (sync) | — | ➖ |
 | ➖ | `persistence/tables.py` (607) | schema definitions belong together | — | ➖ |
 | ➖ | `api/v1/qtt.py` (604) | just over threshold, one domain | — | ➖ |
+
+**Final verification** (after all tasks): 883 pytest pass · ruff clean · mypy clean
+(134 files).

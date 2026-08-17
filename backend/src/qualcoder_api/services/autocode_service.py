@@ -354,7 +354,7 @@ async def _suggest_and_create_codes(
     assistant is disabled/unconfigured or nothing important is found)."""
     from qualcoder_api.persistence.repositories import CodeRepository
     from qualcoder_api.services import user_settings
-    from qualcoder_api.services.ai_service import AiService, AiUnavailable
+    from qualcoder_api.services.ai_service import AiService
 
     ai = user_settings.get_ai_settings()
     if not ai.get("enabled"):
@@ -401,7 +401,7 @@ async def _suggest_and_create_codes(
     try:
         service = AiService(session)
         reply = await service.chat(ai, prompt, context="", mode="general")
-    except (AiUnavailable, Exception):
+    except Exception:  # any AI failure degrades to no suggestions
         return []
 
     import json

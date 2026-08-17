@@ -15,6 +15,7 @@ import time
 import uuid
 from pathlib import Path
 
+from qualcoder_api.persistence import tables
 from qualcoder_api.services import audit
 
 logger = logging.getLogger(__name__)
@@ -318,8 +319,6 @@ async def finalize_transcript(
             # instead of silently discarding the new result.
             from sqlalchemy import select, update
 
-            from qualcoder_api.persistence import tables
-
             transcript_name = job_data.get("transcript_name", "transcript.txt")
             async with session_factory() as session:
                 existing = (
@@ -368,8 +367,6 @@ async def finalize_transcript(
         if source is not None:
             source_id = source.id
             from sqlalchemy import delete, select, update
-
-            from qualcoder_api.persistence import tables
 
             async with session_factory() as session:
                 media_row = (

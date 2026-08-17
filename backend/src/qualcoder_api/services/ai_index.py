@@ -19,6 +19,7 @@ from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from qualcoder_api.core.models import Source
+from qualcoder_api.persistence import tables
 from qualcoder_api.services.ai_service import (
     SIMILARITY_THRESHOLD,
     _chunk_text,
@@ -104,7 +105,6 @@ async def rebuild_index(
     """
     from sqlalchemy import select
 
-    from qualcoder_api.persistence import tables
     from qualcoder_api.services.ai_service import AiUnavailable
 
     async with session_factory() as session:

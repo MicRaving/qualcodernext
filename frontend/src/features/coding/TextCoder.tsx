@@ -35,7 +35,7 @@ import {
   ViewHeader,
 } from "@/components/ui/orchestrator";
 import { AutocodeDialog } from "@/features/coding/AutocodeDialog";
-import { patchCodingWeight } from "@/features/coding/codingApi";
+import { patchCodingWeight, useCodeIndex } from "@/features/coding/codingApi";
 import {
   api,
   type Annotation,
@@ -454,11 +454,7 @@ export function TextCoder({
 
   /* ------------------------------------------------------------- derived */
 
-  const codeById = useMemo(() => {
-    const m = new Map<number, CodeTreeItem>();
-    for (const c of codes) if (c.kind === "code") m.set(c.id, c);
-    return m;
-  }, [codes]);
+  const { byId: codeById } = useCodeIndex(codes);
 
   const colorByCid = useMemo(() => {
     const m: Record<number, string> = {};

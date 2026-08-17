@@ -4,10 +4,12 @@ from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
+from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
 from qualcoder_api.api.v1.deps import DbDep, ServiceDep
-from qualcoder_api.core.models import AVCoding, Coding, ImageCoding
+from qualcoder_api.core.models import AVCoding, Coding, ImageCoding, MediaType
+from qualcoder_api.persistence import tables
 from qualcoder_api.persistence.repositories import CodingRepository
 from qualcoder_api.services import audit
 from qualcoder_api.services.coding_service import (
@@ -103,10 +105,6 @@ async def list_text_codings(fid: int, db: DbDep) -> list[Coding]:
 async def update_text_coding(ctid: int, req: TextCodingUpdate, db: DbDep) -> Coding:
     if req.pos0 is not None and req.pos1 is not None and req.pos1 <= req.pos0:
         raise HTTPException(status_code=422, detail="pos1 must be greater than pos0")
-    from sqlalchemy import select
-
-    from qualcoder_api.persistence import tables
-
     old_row = (
         await db.execute(select(tables.code_text).where(tables.code_text.c.ctid == ctid))
     ).first()
@@ -126,10 +124,6 @@ async def update_text_coding(ctid: int, req: TextCodingUpdate, db: DbDep) -> Cod
 
 @router.delete("/text/{ctid}", status_code=204)
 async def delete_text_coding(ctid: int, db: DbDep) -> None:
-    from sqlalchemy import select
-
-    from qualcoder_api.persistence import tables
-
     row = (
         await db.execute(select(tables.code_text).where(tables.code_text.c.ctid == ctid))
     ).first()
@@ -173,10 +167,6 @@ class ImageCodingUpdate(BaseModel):
 @router.patch("/image/{imid}", response_model=ImageCoding)
 async def update_image_coding(imid: int, req: ImageCodingUpdate, db: DbDep) -> ImageCoding:
     """Update a coded image/PDF rectangle (port of move/resize rectangle)."""
-    from sqlalchemy import select
-
-    from qualcoder_api.persistence import tables
-
     old_row = (
         await db.execute(select(tables.code_image).where(tables.code_image.c.imid == imid))
     ).first()
@@ -196,10 +186,6 @@ async def update_image_coding(imid: int, req: ImageCodingUpdate, db: DbDep) -> I
 
 @router.delete("/image/{imid}", status_code=204)
 async def delete_image_coding(imid: int, db: DbDep) -> None:
-    from sqlalchemy import select
-
-    from qualcoder_api.persistence import tables
-
     row = (
         await db.execute(select(tables.code_image).where(tables.code_image.c.imid == imid))
     ).first()
@@ -240,10 +226,6 @@ class AVCodingUpdate(BaseModel):
 @router.patch("/av/{avid}", response_model=AVCoding)
 async def update_av_coding(avid: int, req: AVCodingUpdate, db: DbDep) -> AVCoding:
     """Update an AV time-range coding (memo/weight)."""
-    from sqlalchemy import select
-
-    from qualcoder_api.persistence import tables
-
     old_row = (
         await db.execute(select(tables.code_av).where(tables.code_av.c.avid == avid))
     ).first()
@@ -263,10 +245,6 @@ async def update_av_coding(avid: int, req: AVCodingUpdate, db: DbDep) -> AVCodin
 
 @router.delete("/av/{avid}", status_code=204)
 async def delete_av_coding(avid: int, db: DbDep) -> None:
-    from sqlalchemy import select
-
-    from qualcoder_api.persistence import tables
-
     row = (
         await db.execute(select(tables.code_av).where(tables.code_av.c.avid == avid))
     ).first()
@@ -430,11 +408,6 @@ async def autocode_batch_endpoint(req: AutocodeBatchRequest, svc: ServiceDep, db
     if not (req.prompt or "").strip():
         raise HTTPException(status_code=422, detail="a coding prompt is required")
 
-    from sqlalchemy import select
-
-    from qualcoder_api.core.models import MediaType
-    from qualcoder_api.persistence import tables
-
     rows = (
         await db.execute(
             select(tables.source.c.id, tables.source.c.name, tables.source.c.mediapath).where(
@@ -520,10 +493,6 @@ async def shift_positions_endpoint(req: ShiftPositionsRequest) -> dict:
 async def commit_edit_endpoint(req: CommitEditRequest, db: DbDep) -> dict:
     old_text = ""
     try:
-        from sqlalchemy import select
-
-        from qualcoder_api.persistence import tables
-
         old_row = (
             await db.execute(select(tables.source.c.fulltext).where(tables.source.c.id == req.fid))
         ).first()

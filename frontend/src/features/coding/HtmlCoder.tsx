@@ -86,7 +86,7 @@ import {
   type Coding,
   type Source,
 } from "@/lib/api";
-import { patchCodingWeight } from "@/features/coding/codingApi";
+import { patchCodingWeight, useCodeIndex } from "@/features/coding/codingApi";
 import {
   MAX_HIGHLIGHTS,
   buildHighlightedHtml,
@@ -790,13 +790,7 @@ export function HtmlCoder({ source }: { source: Source }) {
   );
 
   // cid -> { name, color } for the toolbar/menu labels.
-  const codeById = useMemo(() => {
-    const m = new Map<number, CodeTreeItem>();
-    for (const c of codes) {
-      if (c.kind === "code") m.set(c.id, c);
-    }
-    return m;
-  }, [codes]);
+  const { byId } = useCodeIndex(codes);
 
   const postCodingsToFrame = useCallback(() => {
     const frame = iframeRef.current;
@@ -1003,7 +997,7 @@ export function HtmlCoder({ source }: { source: Source }) {
   /** Delete the selected coding (with confirm), then refresh. */
   function deleteSelected() {
     if (!selectedCoding) return;
-    const code = codeById.get(selectedCoding.cid);
+    const code = byId.get(selectedCoding.cid);
     if (
       !window.confirm(
         t("pdfCoder.removeConfirm", {
@@ -1521,13 +1515,13 @@ export function HtmlCoder({ source }: { source: Source }) {
               }}
               title={
                 activeCodeId != null
-                  ? t("coder.codeWithActive", { name: codeById.get(activeCodeId)?.name ?? "" })
+                  ? t("coder.codeWithActive", { name: byId.get(activeCodeId)?.name ?? "" })
                   : t("coder.codeAction")
               }
             >
               <span className="truncate">
                 {activeCodeId != null
-                  ? codeById.get(activeCodeId)?.name ?? t("coder.codeAction")
+                  ? byId.get(activeCodeId)?.name ?? t("coder.codeAction")
                   : t("coder.codeAction")}
               </span>
             </Button>
@@ -1553,7 +1547,7 @@ export function HtmlCoder({ source }: { source: Source }) {
         >
           <Menu role="menu" className="min-w-44" aria-label={t("htmlCoder.contextMenu")}>
             {ctxMenu.codings.map((row) => {
-              const code = codeById.get(row.cid);
+              const code = byId.get(row.cid);
               return (
                 <Fragment key={row.ctid}>
                   <MenuItem
@@ -1601,7 +1595,7 @@ export function HtmlCoder({ source }: { source: Source }) {
                   <Code size={12} aria-hidden />
                   <span className="min-w-0 flex-1 truncate">
                     {activeCodeId != null
-                      ? t("coder.codeWithActive", { name: codeById.get(activeCodeId)?.name ?? "" })
+                      ? t("coder.codeWithActive", { name: byId.get(activeCodeId)?.name ?? "" })
                       : t("coder.codeAction")}
                   </span>
                 </MenuItem>
@@ -1645,12 +1639,12 @@ export function HtmlCoder({ source }: { source: Source }) {
               <span
                 className="h-3 w-3 shrink-0 rounded-sm border border-border"
                 style={{
-                  backgroundColor: codeById.get(selectedCoding.cid)?.color ?? FALLBACK_CODE_COLOR,
+                  backgroundColor: byId.get(selectedCoding.cid)?.color ?? FALLBACK_CODE_COLOR,
                 }}
                 aria-hidden
               />
               <span className="font-medium">
-                {codeById.get(selectedCoding.cid)?.name ??
+                {byId.get(selectedCoding.cid)?.name ??
                   t("coder.fallbackCode", { id: selectedCoding.cid })}
               </span>
               {selectedCoding.seltext && (

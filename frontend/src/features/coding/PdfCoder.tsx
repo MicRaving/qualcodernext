@@ -44,7 +44,7 @@ import {
   type ImageCoding,
   type Source,
 } from "@/lib/api";
-import { patchCodingWeight, useCodeMaps } from "@/features/coding/codingApi";
+import { patchCodingWeight, useCodeIndex } from "@/features/coding/codingApi";
 import { CodePicker, type PickedCode } from "@/features/coding/CodePicker";
 import { AutocodeDialog } from "@/features/coding/AutocodeDialog";
 import { TextCoder } from "@/features/coding/TextCoder";
@@ -519,13 +519,7 @@ export function PdfCoder({ source }: { source: Source }) {
 
   /* ------------------------------------------------------------ derived */
 
-  const codeById = useMemo(() => {
-    const m = new Map<number, CodeTreeItem>();
-    for (const c of codes) if (c.kind === "code") m.set(c.id, c);
-    return m;
-  }, [codes]);
-
-  const { colorByCid } = useCodeMaps(codes);
+  const { byId, colorByCid } = useCodeIndex(codes);
 
   const pageNumbers = useMemo(() => {
     const out: number[] = [];
@@ -955,7 +949,7 @@ export function PdfCoder({ source }: { source: Source }) {
   }
 
   function deleteRow(row: FooterRow) {
-    const code = codeById.get(row.coding.cid);
+    const code = byId.get(row.coding.cid);
     if (!window.confirm(t("pdfCoder.removeConfirm", { name: code?.name ?? t("coder.fallbackCodeLower", { id: row.coding.cid }) }))) return;
     void (async () => {
       try {
@@ -1075,7 +1069,7 @@ export function PdfCoder({ source }: { source: Source }) {
   }
 
   function overlayTitle(o: PageOverlay): string {
-    const code = codeById.get(o.coding.cid);
+    const code = byId.get(o.coding.cid);
     const name = code?.name ?? t("coder.fallbackCode", { id: o.coding.cid });
     return o.coding.memo ? `${name} — ${o.coding.memo}` : name;
   }
@@ -1419,12 +1413,12 @@ export function PdfCoder({ source }: { source: Source }) {
               <span
                 className="h-3 w-3 shrink-0 rounded-sm border border-border"
                 style={{
-                  backgroundColor: codeById.get(footerRow.coding.cid)?.color ?? DEFAULT_CODING_COLOR,
+                  backgroundColor: byId.get(footerRow.coding.cid)?.color ?? DEFAULT_CODING_COLOR,
                 }}
                 aria-hidden
               />
               <span className="font-medium">
-                {codeById.get(footerRow.coding.cid)?.name ?? t("coder.fallbackCode", { id: footerRow.coding.cid })}
+                {byId.get(footerRow.coding.cid)?.name ?? t("coder.fallbackCode", { id: footerRow.coding.cid })}
               </span>
               {footerRow.kind === "text" && footerRow.coding.seltext && (
                 <span className="max-w-48 truncate text-xs text-text-secondary" title={footerRow.coding.seltext}>

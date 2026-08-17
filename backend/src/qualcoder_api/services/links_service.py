@@ -9,28 +9,13 @@ sees them.
 
 from __future__ import annotations
 
-from typing import Any, cast
-
 from sqlalchemy import delete, insert, select
-from sqlalchemy.engine import CursorResult, Result, RowMapping
+from sqlalchemy.engine import RowMapping
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from qualcoder_api.core.timeutil import now as _now
 from qualcoder_api.persistence import tables
-
-
-def _rowdict(mapping) -> dict:
-    from qualcoder_api.services import sync
-
-    return sync.table_row(mapping)
-
-
-def _inserted_pk(result: Result) -> int:
-    """First inserted primary key from an INSERT statement result."""
-    pk = cast(CursorResult[Any], result).inserted_primary_key
-    if pk is None:  # pragma: no cover - inserts always return a pk here
-        raise RuntimeError("insert returned no primary key")
-    return int(pk[0])
+from qualcoder_api.persistence.repo.base import _inserted_pk, _rowdict
 
 
 class LinkError(ValueError):
@@ -130,7 +115,7 @@ class LinkService:
             )
         ).first()
         assert row is not None
-        data = _rowdict(row._mapping)
+        data = _rowdict(row)
         await self._sync("insert", link_id, data)
         await self.session.commit()
         return await self._resolve(data)
@@ -147,7 +132,7 @@ class LinkService:
         if row is None:
             await self.session.commit()
             return None
-        data = _rowdict(row._mapping)
+        data = _rowdict(row)
         await self._sync("delete", link_id, data)
         await self.session.commit()
         return data

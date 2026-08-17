@@ -11,6 +11,7 @@ import { useState, type FormEvent } from "react";
 import { Share2 } from "lucide-react";
 import { Button, Field, Input, Modal, Select } from "@/components/ui/orchestrator";
 import { ApiError, fetchWithTimeout, initApiBase } from "@/lib/api";
+import { SOURCE_TIMEOUT_MS } from "@/lib/config";
 import { useI18n } from "@/lib/i18n";
 import type { ReportId } from "@/stores/workspace";
 import { useWorkspaceStore } from "@/stores/workspace";
@@ -54,7 +55,7 @@ async function publishBlob(report: string, format: PublishFormat): Promise<Blob>
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ report, format }),
       },
-      60_000,
+      SOURCE_TIMEOUT_MS,
     );
     if (!res.ok) {
       let detail: unknown;

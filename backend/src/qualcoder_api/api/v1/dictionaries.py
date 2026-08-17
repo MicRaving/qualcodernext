@@ -17,6 +17,7 @@ from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel
 
 from qualcoder_api.api.v1.deps import DbDep, ServiceDep
+from qualcoder_api.persistence import tables
 from qualcoder_api.services import audit, dictionary_service
 from qualcoder_api.services.user_settings import get_codername, resolve_owner
 
@@ -71,8 +72,6 @@ async def create_dictionary(req: DictionaryCreate, db: DbDep) -> dict:
 async def rename_dictionary(dict_id: int, req: DictionaryRename, db: DbDep) -> dict:
     from sqlalchemy import select
 
-    from qualcoder_api.persistence import tables
-
     old_row = (
         await db.execute(select(tables.dictionary).where(tables.dictionary.c.id == dict_id))
     ).first()
@@ -96,8 +95,6 @@ async def rename_dictionary(dict_id: int, req: DictionaryRename, db: DbDep) -> d
 @router.delete("/{dict_id}", status_code=204)
 async def delete_dictionary(dict_id: int, db: DbDep) -> None:
     from sqlalchemy import select
-
-    from qualcoder_api.persistence import tables
 
     row = (
         await db.execute(select(tables.dictionary).where(tables.dictionary.c.id == dict_id))
@@ -141,8 +138,6 @@ async def add_entry(dict_id: int, req: DictionaryEntryCreate, db: DbDep) -> dict
 @router.delete("/entries/{entry_id}", status_code=204)
 async def remove_entry(entry_id: int, db: DbDep) -> None:
     from sqlalchemy import select
-
-    from qualcoder_api.persistence import tables
 
     row = (
         await db.execute(

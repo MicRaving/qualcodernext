@@ -11,6 +11,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from qualcoder_api.api.v1.deps import DbDep
+from qualcoder_api.persistence import tables
 from qualcoder_api.services import audit
 from qualcoder_api.services.links_service import LinkError, LinkService
 from qualcoder_api.services.user_settings import get_codername, resolve_owner
@@ -60,8 +61,6 @@ async def create_link(req: LinkCreate, db: DbDep) -> dict:
     except LinkError as err:
         raise HTTPException(status_code=422, detail=str(err)) from err
     from sqlalchemy import select
-
-    from qualcoder_api.persistence import tables
 
     row = (
         await db.execute(select(tables.link).where(tables.link.c.id == link["id"]))

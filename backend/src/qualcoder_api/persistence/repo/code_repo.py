@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from qualcoder_api.core.models import Category, Code
 from qualcoder_api.core.palette import random_code_color
 from qualcoder_api.persistence import tables
-from qualcoder_api.persistence.repo.base import _inserted_pk, _now
+from qualcoder_api.persistence.repo.base import _inserted_pk, _now, _rowdict
 
 
 class CodeRepository:
@@ -202,12 +202,12 @@ class CodeRepository:
             )
         ).first()
         code = Code.model_validate(row._mapping) if row else None
-        from qualcoder_api.services import sync
+        from qualcoder_api.persistence import audit_capture
 
         if row is not None:
-            await sync.capture_insert(
+            await audit_capture.capture_insert(
                 self.session, entity="code_name", pk_name="cid", pk_value=row.cid,
-                row=sync.table_row(row._mapping),
+                row=audit_capture.table_row(row._mapping),
             )
         await self.session.commit()
         return code
@@ -236,12 +236,12 @@ class CodeRepository:
             )
         ).first()
         category = Category.model_validate(row._mapping) if row else None
-        from qualcoder_api.services import sync
+        from qualcoder_api.persistence import audit_capture
 
         if row is not None:
-            await sync.capture_insert(
+            await audit_capture.capture_insert(
                 self.session, entity="code_cat", pk_name="catid", pk_value=row.catid,
-                row=sync.table_row(row._mapping),
+                row=audit_capture.table_row(row._mapping),
             )
         await self.session.commit()
         return category
@@ -252,7 +252,7 @@ class CodeRepository:
         )
         await self.session.commit()
         code = await self.get_code(cid)
-        from qualcoder_api.services import sync
+        from qualcoder_api.persistence import audit_capture
 
         if code is not None:
             row = (
@@ -260,9 +260,9 @@ class CodeRepository:
                     select(tables.code_name).where(tables.code_name.c.cid == cid)
                 )
             ).first()
-            await sync.capture_update(
+            await audit_capture.capture_update(
                 self.session, entity="code_name", pk_name="cid", pk_value=cid,
-                row=sync.table_row(row._mapping) if row else None,
+                row=audit_capture.table_row(row._mapping) if row else None,
             )
             await self.session.commit()
         return code
@@ -296,7 +296,7 @@ class CodeRepository:
         )
         await self.session.commit()
         code = await self.get_code(cid)
-        from qualcoder_api.services import sync
+        from qualcoder_api.persistence import audit_capture
 
         if code is not None:
             row = (
@@ -304,9 +304,9 @@ class CodeRepository:
                     select(tables.code_name).where(tables.code_name.c.cid == cid)
                 )
             ).first()
-            await sync.capture_update(
+            await audit_capture.capture_update(
                 self.session, entity="code_name", pk_name="cid", pk_value=cid,
-                row=sync.table_row(row._mapping) if row else None,
+                row=audit_capture.table_row(row._mapping) if row else None,
             )
             await self.session.commit()
         return code
@@ -334,7 +334,7 @@ class CodeRepository:
         )
         await self.session.commit()
         code = await self.get_code(cid)
-        from qualcoder_api.services import sync
+        from qualcoder_api.persistence import audit_capture
 
         if code is not None:
             row = (
@@ -342,9 +342,9 @@ class CodeRepository:
                     select(tables.code_name).where(tables.code_name.c.cid == cid)
                 )
             ).first()
-            await sync.capture_update(
+            await audit_capture.capture_update(
                 self.session, entity="code_name", pk_name="cid", pk_value=cid,
-                row=sync.table_row(row._mapping) if row else None,
+                row=audit_capture.table_row(row._mapping) if row else None,
             )
             await self.session.commit()
         return code
@@ -456,7 +456,7 @@ class CodeRepository:
             await self._set_code_positions([id_ for _, id_ in rest])
         await self.session.commit()
         moved = await self.get_code(cid)
-        from qualcoder_api.services import sync
+        from qualcoder_api.persistence import audit_capture
 
         if moved is not None:
             row = (
@@ -464,9 +464,9 @@ class CodeRepository:
                     select(tables.code_name).where(tables.code_name.c.cid == cid)
                 )
             ).first()
-            await sync.capture_update(
+            await audit_capture.capture_update(
                 self.session, entity="code_name", pk_name="cid", pk_value=cid,
-                row=sync.table_row(row._mapping) if row else None,
+                row=audit_capture.table_row(row._mapping) if row else None,
             )
             await self.session.commit()
         return moved
@@ -566,7 +566,7 @@ class CodeRepository:
             await self._set_category_positions([id_ for _, id_ in rest])
         await self.session.commit()
         moved = await self.get_category(catid)
-        from qualcoder_api.services import sync
+        from qualcoder_api.persistence import audit_capture
 
         if moved is not None:
             row = (
@@ -574,9 +574,9 @@ class CodeRepository:
                     select(tables.code_cat).where(tables.code_cat.c.catid == catid)
                 )
             ).first()
-            await sync.capture_update(
+            await audit_capture.capture_update(
                 self.session, entity="code_cat", pk_name="catid", pk_value=catid,
-                row=sync.table_row(row._mapping) if row else None,
+                row=audit_capture.table_row(row._mapping) if row else None,
             )
             await self.session.commit()
         return moved
@@ -618,10 +618,7 @@ class CodeRepository:
 
     async def delete_code(self, cid: int) -> None:
         """Delete a code and all its codings (legacy order)."""
-        from qualcoder_api.services import sync
-
-        def _rowdict(row) -> dict:
-            return sync.table_row(row._mapping)
+        from qualcoder_api.persistence import audit_capture
 
         for tbl, col, pk in (
             (tables.code_name, tables.code_name.c.cid, "cid"),
@@ -632,7 +629,7 @@ class CodeRepository:
             rows = (await self.session.execute(select(tbl).where(col == cid))).all()
             await self.session.execute(delete(tbl).where(col == cid))
             for row in rows:
-                await sync.capture_delete(
+                await audit_capture.capture_delete(
                     self.session, entity=tbl.name, pk_name=pk,
                     pk_value=_rowdict(row).get(pk), row=_rowdict(row),
                 )
@@ -650,7 +647,7 @@ class CodeRepository:
         for row in sub_rows:
             data = _rowdict(row)
             data["supercid"] = None
-            await sync.capture_update(
+            await audit_capture.capture_update(
                 self.session, entity="code_name", pk_name="cid",
                 pk_value=data.get("cid"), row=data,
             )
@@ -658,10 +655,7 @@ class CodeRepository:
 
     async def delete_category(self, catid: int) -> None:
         """Delete a category; reassign orphaned codes and children to null."""
-        from qualcoder_api.services import sync
-
-        def _rowdict(row) -> dict:
-            return sync.table_row(row._mapping)
+        from qualcoder_api.persistence import audit_capture
 
         code_rows = (
             await self.session.execute(
@@ -674,7 +668,7 @@ class CodeRepository:
         for row in code_rows:
             data = _rowdict(row)
             data["catid"] = None
-            await sync.capture_update(
+            await audit_capture.capture_update(
                 self.session, entity="code_name", pk_name="cid",
                 pk_value=data.get("cid"), row=data,
             )
@@ -689,7 +683,7 @@ class CodeRepository:
         for row in cat_rows:
             data = _rowdict(row)
             data["supercatid"] = None
-            await sync.capture_update(
+            await audit_capture.capture_update(
                 self.session, entity="code_cat", pk_name="catid",
                 pk_value=data.get("catid"), row=data,
             )
@@ -702,7 +696,7 @@ class CodeRepository:
             delete(tables.code_cat).where(tables.code_cat.c.catid == catid)
         )
         if cat_row is not None:
-            await sync.capture_delete(
+            await audit_capture.capture_delete(
                 self.session, entity="code_cat", pk_name="catid", pk_value=catid,
                 row=_rowdict(cat_row),
             )
@@ -728,7 +722,7 @@ class CodeRepository:
                 select(tables.code_text).where(tables.code_text.c.cid == old_cid)
             )
         ).all()
-        from qualcoder_api.services import sync
+        from qualcoder_api.persistence import audit_capture
 
         for row in rows:
             dup = (
@@ -743,8 +737,8 @@ class CodeRepository:
                 )
             ).first()
             if dup is not None:
-                data = sync.table_row(row._mapping)
-                await sync.capture_delete(
+                data = audit_capture.table_row(row._mapping)
+                await audit_capture.capture_delete(
                     self.session, entity="code_text", pk_name="ctid",
                     pk_value=data.get("ctid"), row=data,
                 )
@@ -757,9 +751,9 @@ class CodeRepository:
                     .where(tables.code_text.c.ctid == row.ctid)
                     .values(cid=new_cid)
                 )
-                data = sync.table_row(row._mapping)
+                data = audit_capture.table_row(row._mapping)
                 data["cid"] = new_cid
-                await sync.capture_update(
+                await audit_capture.capture_update(
                     self.session, entity="code_text", pk_name="ctid",
                     pk_value=data.get("ctid"), row=data,
                 )
@@ -772,10 +766,10 @@ class CodeRepository:
                 update(tbl).where(col == old_cid).values(**{col.name: new_cid})
             )
             for row in rows:
-                data = sync.table_row(row._mapping)
+                data = audit_capture.table_row(row._mapping)
                 data[col.name] = new_cid
                 pk = "avid" if tbl is tables.code_av else "imid"
-                await sync.capture_update(
+                await audit_capture.capture_update(
                     self.session, entity=tbl.name, pk_name=pk,
                     pk_value=int(data[pk]), row=data,
                 )
@@ -791,9 +785,9 @@ class CodeRepository:
             .values(supercid=new_cid)
         )
         for row in sub_rows:
-            data = sync.table_row(row._mapping)
+            data = audit_capture.table_row(row._mapping)
             data["supercid"] = new_cid
-            await sync.capture_update(
+            await audit_capture.capture_update(
                 self.session, entity="code_name", pk_name="cid",
                 pk_value=data.get("cid"), row=data,
             )
@@ -806,15 +800,15 @@ class CodeRepository:
             delete(tables.code_name).where(tables.code_name.c.cid == old_cid)
         )
         if old_row is not None:
-            await sync.capture_delete(
+            await audit_capture.capture_delete(
                 self.session, entity="code_name", pk_name="cid", pk_value=old_cid,
-                row=sync.table_row(old_row._mapping),
+                row=audit_capture.table_row(old_row._mapping),
             )
         await self.session.commit()
 
     async def merge_category(self, catid: int, target_catid: int) -> None:
         """Merge category ``catid`` into ``target_catid``."""
-        from qualcoder_api.services import sync
+        from qualcoder_api.persistence import audit_capture
 
         code_rows = (
             await self.session.execute(
@@ -827,9 +821,9 @@ class CodeRepository:
             .values(catid=target_catid)
         )
         for row in code_rows:
-            data = sync.table_row(row._mapping)
+            data = audit_capture.table_row(row._mapping)
             data["catid"] = target_catid
-            await sync.capture_update(
+            await audit_capture.capture_update(
                 self.session, entity="code_name", pk_name="cid",
                 pk_value=data.get("cid"), row=data,
             )
@@ -842,9 +836,9 @@ class CodeRepository:
             delete(tables.code_cat).where(tables.code_cat.c.catid == catid)
         )
         if cat_row is not None:
-            await sync.capture_delete(
+            await audit_capture.capture_delete(
                 self.session, entity="code_cat", pk_name="catid", pk_value=catid,
-                row=sync.table_row(cat_row._mapping),
+                row=audit_capture.table_row(cat_row._mapping),
             )
         sub_rows = (
             await self.session.execute(
@@ -857,9 +851,9 @@ class CodeRepository:
             .values(supercatid=target_catid)
         )
         for row in sub_rows:
-            data = sync.table_row(row._mapping)
+            data = audit_capture.table_row(row._mapping)
             data["supercatid"] = target_catid
-            await sync.capture_update(
+            await audit_capture.capture_update(
                 self.session, entity="code_cat", pk_name="catid",
                 pk_value=data.get("catid"), row=data,
             )

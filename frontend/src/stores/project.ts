@@ -7,7 +7,7 @@
  * inspector, graph and preference state live in their own slices — this
  * store re-exports their hooks so `@/stores/project` imports keep working.
  */
-import { errorMessage } from "@/lib/utils";
+import { errorMessage, errorTextOf } from "@/lib/utils";
 import { create } from "zustand";
 import {
   api,
@@ -174,20 +174,6 @@ function viewLabelOf(view: WorkspaceView): string {
       return "View: dashboard";
     default:
       return `View: ${view.kind}`;
-  }
-}
-
-/** Normalize an uncaught error (event reason, Error, string…) to text. */
-function errorTextOf(e: unknown): string {
-  if (e instanceof Error) return e.message || e.name;
-  if (typeof e === "string") return e;
-  if (e && typeof e === "object" && "message" in e && typeof e.message === "string") {
-    return e.message;
-  }
-  try {
-    return JSON.stringify(e);
-  } catch {
-    return String(e);
   }
 }
 

@@ -11,6 +11,7 @@ import httpx
 from httpx import AsyncClient
 
 from qualcoder_api.core.models import Source
+from qualcoder_api.persistence import tables
 
 CHAT_PATH = "/chat/completions"
 EMBEDDINGS_PATH = "/embeddings"
@@ -267,8 +268,6 @@ class AiService:
             return ""
         from sqlalchemy import select
 
-        from qualcoder_api.persistence import tables
-
         blocks: list[str] = []
         async with self.session_factory() as session:
             file_query = select(
@@ -310,8 +309,6 @@ class AiService:
         from sqlalchemy import func, select
 
         from qualcoder_api.core.enums import MediaType
-        from qualcoder_api.persistence import tables
-
         try:
             async with self.session_factory() as session:
                 code_rows = (
@@ -380,8 +377,6 @@ class AiService:
         if ai.get("mcp_permissions", "read") not in ("read", "full"):
             return ""
         from sqlalchemy import func, select
-
-        from qualcoder_api.persistence import tables
 
         try:
             async with self.session_factory() as session:
@@ -500,8 +495,6 @@ class AiService:
             return ""
         from sqlalchemy import select
 
-        from qualcoder_api.persistence import tables
-
         try:
             async with self.session_factory() as session:
                 row = (
@@ -605,8 +598,6 @@ class AiService:
         # Text sources WITH their fulltext (the list endpoint deliberately
         # omits fulltext; the search index needs it).
         from sqlalchemy import select
-
-        from qualcoder_api.persistence import tables
 
         async with self.session_factory() as session:
             rows = await session.execute(

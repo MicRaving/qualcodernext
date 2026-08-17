@@ -47,7 +47,7 @@ import { AutocodeDialog } from "@/features/coding/AutocodeDialog";
 import { TranscribeDialog } from "@/features/coding/TranscribeDialog";
 import { formatTime, insertTimestampAtCaret, parseTranscript, segmentLeft, secondsToMs, segmentWidth, buildCrAt, rawToRendered, renderedToRaw, stripCr, normalizeCodingPositions } from "@/features/coding/media";
 import { getSelectionOffsets } from "@/features/coding/selection";
-import { codeTint } from "@/features/coding/tint";
+import { FALLBACK_CODE_COLOR, codeTint } from "@/features/coding/tint";
 import {
   copyLinkPayload,
   createLink,
@@ -575,7 +575,7 @@ export function AvCoder({ source }: { source: Source }) {
         <span
           key={c.ctid}
           className="cursor-pointer rounded-sm qc-seg"
-          style={{ backgroundColor: codeTint(color ?? "var(--qc-accent)") }}
+          style={{ backgroundColor: codeTint(color ?? FALLBACK_CODE_COLOR) }}
           onClick={() => {
             // A click on a coded transcript segment opens its details in
             // the bottom footer (pure client state — no fetch).
@@ -1968,7 +1968,7 @@ export function AvCoder({ source }: { source: Source }) {
             <>
               <span
                 className="h-3 w-3 shrink-0 rounded-sm border border-border"
-                style={{ backgroundColor: colorByCid.get(selectedText.cid) ?? "var(--qc-accent)" }}
+                style={{ backgroundColor: colorByCid.get(selectedText.cid) ?? FALLBACK_CODE_COLOR }}
                 aria-hidden
               />
               <span className="truncate text-sm font-medium text-text-primary" title={selectedText.date}>

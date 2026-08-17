@@ -22,6 +22,8 @@ import json
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from qualcoder_api.persistence import tables
+
 
 class UnsupportedAction(Exception):
     pass
@@ -58,7 +60,6 @@ def _ensure(detail: dict, key: str):
 
 async def _sync_capture(session: AsyncSession, entity: str, action: str, pk: str, pk_value) -> None:
     """Capture the current state of one row after an undo/redo write."""
-    from qualcoder_api.persistence import tables
     from qualcoder_api.persistence.repositories import _capture, _rowdict
 
     table = getattr(tables, entity, None)

@@ -33,6 +33,7 @@ import { useCoderStore } from "@/stores/coder";
 import { useProjectStore } from "@/stores/project";
 import { useI18n } from "@/lib/i18n";
 import { downloadChartPng } from "@/features/analyze/chartPng";
+import { FALLBACK_CODE_COLOR } from "@/features/coding/tint";
 import { barWidth, formatCount, matrixCell } from "@/features/analyze/reportHelpers";
 import {
   AttributesReport,
@@ -328,7 +329,7 @@ export function CodeFrequenciesView() {
                     className="h-full rounded-sm"
                     style={{
                       width: barWidth(row.count, max),
-                      backgroundColor: row.color ?? "var(--qc-accent)",
+                      backgroundColor: row.color ?? FALLBACK_CODE_COLOR,
                     }}
                   />
                 </div>

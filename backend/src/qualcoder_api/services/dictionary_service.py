@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import re
 from collections import Counter, defaultdict
-from typing import Any
 
 from sqlalchemy import delete, func, insert, select
 from sqlalchemy.exc import IntegrityError
@@ -21,15 +20,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from qualcoder_api.core.timeutil import now as _now
 from qualcoder_api.persistence import tables
-from qualcoder_api.persistence.repositories import _inserted_pk
+from qualcoder_api.persistence.repo.base import _inserted_pk, _rowdict
 
 # Same tokenization as the word-frequency report (report_service.py): words
 # may carry one embedded apostrophe or hyphen (e.g. "don't", "e-mail").
 _TOKEN_RE = re.compile(r"[^\W\d_]+(?:[''-][^\W\d_]+)*")
-
-
-def _rowdict(row: Any) -> dict:
-    return dict(row._mapping)
 
 
 # ---------------------------------------------------------------------------

@@ -11,6 +11,7 @@
 import { useEffect, useRef, useState } from "react";
 import { BookOpenText, CheckCircle2, LoaderCircle, Sparkles } from "lucide-react";
 import { api, type AutocodeResponse, type CodeTreeItem } from "@/lib/api";
+import { FALLBACK_CODE_COLOR } from "@/features/coding/tint";
 import { useI18n } from "@/lib/i18n";
 import {
   Button,
@@ -247,7 +248,7 @@ export function AutocodeDialog({
                   />
                   <span
                     className="h-2.5 w-2.5 shrink-0 rounded-sm border border-border"
-                    style={{ backgroundColor: c.color ?? "var(--qc-accent)" }}
+                    style={{ backgroundColor: c.color ?? FALLBACK_CODE_COLOR }}
                     aria-hidden
                   />
                   <span className="truncate">{c.name}</span>

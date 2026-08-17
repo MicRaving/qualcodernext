@@ -6,6 +6,7 @@ import { createContext, useContext, useEffect, type ReactNode } from "react";
 import { CircleAlert, Download } from "lucide-react";
 import { Button, EmptyState, LoadingState } from "@/components/ui/orchestrator";
 import { downloadCsv } from "@/lib/csv";
+import { FALLBACK_CODE_COLOR } from "@/features/coding/tint";
 import { tdCls } from "@/features/analyze/reportData";
 
 /** Center-view menu bar: reports register their action buttons here and they
@@ -131,7 +132,7 @@ export function ColorSwatch({ color }: { color: string | null }) {
   return (
     <span
       className="inline-block h-3 w-3 shrink-0 rounded-sm"
-      style={{ backgroundColor: color ?? "var(--qc-accent)" }}
+      style={{ backgroundColor: color ?? FALLBACK_CODE_COLOR }}
       aria-hidden
     />
   );

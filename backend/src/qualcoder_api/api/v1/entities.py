@@ -4,9 +4,11 @@ from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
+from sqlalchemy import select
 
 from qualcoder_api.api.v1.deps import DbDep
 from qualcoder_api.core.models import Annotation, Attribute, AttributeType, Case, CaseText, Journal
+from qualcoder_api.persistence import tables
 from qualcoder_api.persistence.repositories import (
     AnnotationRepository,
     AttributeRepository,
@@ -69,10 +71,6 @@ async def create_case(req: CaseCreate, db: DbDep) -> Case:
 
 @case_router.patch("/{caseid}", response_model=Case)
 async def update_case(caseid: int, req: CaseUpdate, db: DbDep) -> Case:
-    from sqlalchemy import select
-
-    from qualcoder_api.persistence import tables
-
     old = (
         await db.execute(select(tables.cases).where(tables.cases.c.caseid == caseid))
     ).first()
@@ -95,9 +93,7 @@ async def update_case(caseid: int, req: CaseUpdate, db: DbDep) -> Case:
 
 @case_router.delete("/{caseid}", status_code=204)
 async def delete_case(caseid: int, db: DbDep) -> None:
-    from sqlalchemy import select
 
-    from qualcoder_api.persistence import tables
 
     row = (
         await db.execute(select(tables.cases).where(tables.cases.c.caseid == caseid))
@@ -145,9 +141,7 @@ async def link_span(caseid: int, req: LinkSpanRequest, db: DbDep) -> CaseText:
 
 @case_router.delete("/{caseid}/files/{fid}", status_code=204)
 async def unlink_file(caseid: int, fid: int, db: DbDep) -> None:
-    from sqlalchemy import select
 
-    from qualcoder_api.persistence import tables
 
     rows = (
         await db.execute(
@@ -193,9 +187,7 @@ async def list_attribute_types(db: DbDep) -> list[AttributeType]:
 
 @attr_router.post("/types", response_model=AttributeType, status_code=201)
 async def create_attribute_type(req: AttrTypeCreate, db: DbDep) -> AttributeType:
-    from sqlalchemy import select
 
-    from qualcoder_api.persistence import tables
 
     attr = await AttributeRepository(db).add_type(
         name=req.name, owner=resolve_owner(req.owner), case_or_file=req.case_or_file,
@@ -214,9 +206,7 @@ async def create_attribute_type(req: AttrTypeCreate, db: DbDep) -> AttributeType
 
 @attr_router.delete("/types/{name}", status_code=204)
 async def delete_attribute_type(name: str, db: DbDep) -> None:
-    from sqlalchemy import select
 
-    from qualcoder_api.persistence import tables
 
     row = (
         await db.execute(select(tables.attribute_type).where(tables.attribute_type.c.name == name))
@@ -239,9 +229,7 @@ async def list_attribute_values(
 async def set_attribute_value(
     name: str, attr_type: str, entity_id: int, req: AttrValueSet, db: DbDep
 ) -> Attribute:
-    from sqlalchemy import select
 
-    from qualcoder_api.persistence import tables
 
     old_row = (
         await db.execute(
@@ -303,9 +291,7 @@ async def create_journal(req: JournalCreate, db: DbDep) -> Journal:
 
 @journal_router.patch("/{jid}", response_model=Journal)
 async def update_journal(jid: int, req: JournalUpdate, db: DbDep) -> Journal:
-    from sqlalchemy import select
 
-    from qualcoder_api.persistence import tables
 
     old = (
         await db.execute(select(tables.journal).where(tables.journal.c.jid == jid))
@@ -329,9 +315,7 @@ async def update_journal(jid: int, req: JournalUpdate, db: DbDep) -> Journal:
 
 @journal_router.delete("/{jid}", status_code=204)
 async def delete_journal(jid: int, db: DbDep) -> None:
-    from sqlalchemy import select
 
-    from qualcoder_api.persistence import tables
 
     row = (
         await db.execute(select(tables.journal).where(tables.journal.c.jid == jid))
@@ -373,9 +357,7 @@ async def list_annotations(fid: int, db: DbDep) -> list[Annotation]:
 @annotation_router.get("", response_model=list[dict])
 async def list_all_annotations(db: DbDep) -> list[dict]:
     """Every annotation in the project with its file name (Notes workspace)."""
-    from sqlalchemy import select
 
-    from qualcoder_api.persistence import tables
 
     rows = await db.execute(
         select(tables.annotation, tables.source.c.name)
@@ -406,9 +388,7 @@ async def create_annotation(req: AnnotationCreate, db: DbDep) -> Annotation:
 
 @annotation_router.patch("/{anid}", response_model=Annotation)
 async def update_annotation(anid: int, req: AnnotationUpdate, db: DbDep) -> Annotation:
-    from sqlalchemy import select
 
-    from qualcoder_api.persistence import tables
 
     if req.pos0 is not None and req.pos1 is not None and req.pos1 <= req.pos0:
         raise HTTPException(status_code=422, detail="pos1 must be greater than pos0")
@@ -445,9 +425,7 @@ async def update_annotation(anid: int, req: AnnotationUpdate, db: DbDep) -> Anno
 
 @annotation_router.delete("/{anid}", status_code=204)
 async def delete_annotation(anid: int, db: DbDep) -> None:
-    from sqlalchemy import select
 
-    from qualcoder_api.persistence import tables
 
     row = (
         await db.execute(select(tables.annotation).where(tables.annotation.c.anid == anid))

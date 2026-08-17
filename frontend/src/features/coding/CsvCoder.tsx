@@ -39,7 +39,7 @@ import {
   AnnotationDetailsBar,
   CodingDetailsBar,
 } from "@/features/coding/DetailsBars";
-import { patchCodingWeight } from "@/features/coding/codingApi";
+import { patchCodingWeight, useCodeIndex } from "@/features/coding/codingApi";
 import { parseCsv } from "@/lib/csv";
 import { tdCls, thCls } from "@/features/analyze/reportData";
 import { getSelectionOffsets } from "@/features/coding/selection";
@@ -258,11 +258,7 @@ export function CsvCoder({ source }: { source: Source }) {
   /** The parsed table — columns detected from the header row. */
   const parsed = useMemo(() => (fulltext != null ? parseCsv(fulltext) : null), [fulltext]);
 
-  const codeById = useMemo(() => {
-    const m = new Map<number, CodeTreeItem>();
-    for (const c of codes) if (c.kind === "code") m.set(c.id, c);
-    return m;
-  }, [codes]);
+  const { byId: codeById } = useCodeIndex(codes);
 
   /** All non-empty cells in text order (row-major) — enables binary-search
    *  overlap lookup, so big tables stay cheap when codings change. Empty

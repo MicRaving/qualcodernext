@@ -11,6 +11,7 @@ import { api } from "@/lib/api";
 import { useProjectStore } from "@/stores/project";
 import { useI18n } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
+import { FALLBACK_CODE_COLOR } from "@/features/coding/tint";
 import { Button, EmptyState, SectionLabel, Select } from "@/components/ui/orchestrator";
 import { cardCls, tdCls, thCls, useReport } from "@/features/analyze/reportData";
 import {
@@ -437,7 +438,7 @@ function CodeByVariableSection({
                       title={`${code.name}: ${count}`}
                       style={{
                         width: barWidth(count, maxTotal),
-                        backgroundColor: code.color ?? "var(--qc-accent)",
+                        backgroundColor: code.color ?? FALLBACK_CODE_COLOR,
                       }}
                     />
                   );

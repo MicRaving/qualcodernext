@@ -7,7 +7,8 @@
  * ``file:<id>``/``code:<id>`` shape; codes use ``c:<cid>`` and files
  * ``f:<sid>`` so the three pickers never collide.
  */
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
+import { useAsyncEffect } from "@/lib/useAsync";
 import { ApiError, api, fetchWithTimeout, initApiBase, type CodeTreeItem, type Source } from "@/lib/api";
 import { CONTEXT_PICKERS, type AiMode, type ContextPickerKind } from "@/features/ai/aiModes";
 
@@ -92,8 +93,7 @@ export function useContextPickers(mode: AiMode): ContextPickerState {
   });
   const [selectedKeys, setSelectedKeys] = useState<Set<string>>(new Set());
 
-  useEffect(() => {
-    let cancelled = false;
+  useAsyncEffect(async (signal) => {
     setSelectedKeys(new Set());
     setQueryState({ memos: "", codes: "", files: "" });
     setData((prev) => ({
@@ -102,36 +102,42 @@ export function useContextPickers(mode: AiMode): ContextPickerState {
       codeCounts: required.codes ? new Map() : prev.codeCounts,
       sources: required.files ? null : prev.sources,
     }));
-    if (required.memos) {
-      fetchMemos()
-        .then((items) => {
-          if (!cancelled) setData((p) => ({ ...p, memos: items }));
-        })
-        .catch(() => {
-          if (!cancelled) setData((p) => ({ ...p, memos: [] }));
-        });
-    }
-    if (required.codes) {
-      fetchCodes()
-        .then(({ tree, counts }) => {
-          if (!cancelled) setData((p) => ({ ...p, codes: tree, codeCounts: counts }));
-        })
-        .catch(() => {
-          if (!cancelled) setData((p) => ({ ...p, codes: [], codeCounts: new Map() }));
-        });
-    }
-    if (required.files) {
-      fetchSources()
-        .then((items) => {
-          if (!cancelled) setData((p) => ({ ...p, sources: items }));
-        })
-        .catch(() => {
-          if (!cancelled) setData((p) => ({ ...p, sources: [] }));
-        });
-    }
-    return () => {
-      cancelled = true;
-    };
+
+    await Promise.allSettled([
+      required.memos
+        ? fetchMemos()
+            .then((items) => {
+              signal.throwIfAborted();
+              setData((p) => ({ ...p, memos: items }));
+            })
+            .catch(() => {
+              signal.throwIfAborted();
+              setData((p) => ({ ...p, memos: [] }));
+            })
+        : null,
+      required.codes
+        ? fetchCodes()
+            .then(({ tree, counts }) => {
+              signal.throwIfAborted();
+              setData((p) => ({ ...p, codes: tree, codeCounts: counts }));
+            })
+            .catch(() => {
+              signal.throwIfAborted();
+              setData((p) => ({ ...p, codes: [], codeCounts: new Map() }));
+            })
+        : null,
+      required.files
+        ? fetchSources()
+            .then((items) => {
+              signal.throwIfAborted();
+              setData((p) => ({ ...p, sources: items }));
+            })
+            .catch(() => {
+              signal.throwIfAborted();
+              setData((p) => ({ ...p, sources: [] }));
+            })
+        : null,
+    ]);
   }, [mode, required.memos, required.codes, required.files]);
 
   const memoById = useMemo(

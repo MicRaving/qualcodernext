@@ -14,3 +14,9 @@ export const REQUEST_TIMEOUT_MS = 15_000;
 
 /** Timeout for raw source-file fetches (large PDFs, images). */
 export const SOURCE_TIMEOUT_MS = 60_000;
+
+/** AI model list refresh interval (ms). */
+export const AI_REFRESH_MS = 60_000;
+
+/** Coder sync-status polling interval (ms). */
+export const SYNC_POLL_MS = 30_000;

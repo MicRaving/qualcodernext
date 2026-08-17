@@ -28,6 +28,17 @@ export function useCodeMaps(codes: CodeTreeItem[]) {
   return { colorByCid, nameByCid };
 }
 
+/** Build a full code index: by-id map + color/name lookup maps. */
+export function useCodeIndex(codes: CodeTreeItem[]) {
+  const byId = useMemo(() => {
+    const m = new Map<number, CodeTreeItem>();
+    for (const c of codes) if (c.kind === "code") m.set(c.id, c);
+    return m;
+  }, [codes]);
+  const { colorByCid, nameByCid } = useCodeMaps(codes);
+  return { byId, colorByCid, nameByCid };
+}
+
 export type CodingKind = "text" | "image" | "av";
 
 const PATCH_PATHS: Record<CodingKind, (id: number) => string> = {

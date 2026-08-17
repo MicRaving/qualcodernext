@@ -2,15 +2,10 @@
 
 This is a rework of [QualCoder](https://github.com/ccbogel/QualCoder), the open-source qualitative data analysis (QDA) tool. The central focus of the software is to load text and multimedia files for qualitative coding. It can transcribe audio/video files, organize codes and files, generate reports like coding graphs and coder comparisons, and integrates LLMs to explore the data, support coding, and analyze the results.
 
-## Documentation
-
-Full user documentation for every screen, dialog and feature lives in
-[`docs/`](docs/README.md) (includes screenshots). The authoritative UI design
-spec for developers is [`frontend/src/DESIGN.md`](frontend/src/DESIGN.md).
-
 ### Scope of the Rework
 
-I really love QualCoder but always felt like it had some shortcomings. Based on the upstream QualCoder as per 10.08.2026, I tried to rework the codebase with the following major goals 
+I really love QualCoder but always felt like it had some shortcomings. Based on the upstream QualCoder as per 10.08.2026, I tried to rework the codebase with the following major goals
+
 
 
 * **Simplified UI**: This was the main point behind the rework. I used QualCoder a lot but was never able to convince my students and fellow researchers because the UI was always unintuitive with many functions hidden behind menus and requiring just one too many clicks. The rework tries to simplify and reorganize the UI as much as possible while retaining full functionality.
@@ -22,28 +17,6 @@ I really love QualCoder but always felt like it had some shortcomings. Based on 
 * **Minor features**: Undo/redo with a full project history. More reports and additional interrater agreements like Fleiss Kappa. Implemented a dashboard for quick access. Easier file management with multiselect etc
 * **(Future) Web apps**: With more and more people relying on tablets and smartphones, using offline apps becomes less practical. The rework did not fully implement a client-server structure and future iterations will always retain offline functionality, but it lays the groundwork for running QualCoder in a browser.
 
-## Collaboration
-
-Raters work as **different coders on separate copies of the same `.qda` project
-folder**, shared through any folder-sync tool (Nextcloud, ownCloud, Sync\&Share,
-Syncthing, Dropbox, ...). The SQLite database is **never merged by the sync tool**
-— that corrupts projects. Instead:
-
-1. Every mutation is captured into the project's `sync\\\_log` (v19 schema) with full
-row snapshots.
-2. Every 60 seconds (or via *Sync now*) the app appends your local changes to
-`changes/<your-coder-name>/changes.jsonl` inside the project folder — the sync
-tool carries those files.
-3. Every 60 seconds the app imports your collaborators' sidecar files and replays
-them: INSERT/UPDATE/DELETE by primary key, last-write-wins per row, natural-key
-fallback for codings, and automatic PK remapping when autoincrement counters
-collide between raters. Replay never re-exports (no ping-pong).
-4. The toolbar sync chip shows pending changes and collaborators' last-sync times.
-
-Rules of thumb: give every rater a **unique coder name**; do not sync per-machine
-artifacts (`project\\\_in\\\_use.lock`, `ai\\\_index.sqlite3`, `backups/` — sync state lives
-in `\\\~/.qualcoder/sync/`).
-
 ## Installation
 
 All releases are available on: [https://github.com/MicRaving/QCnext/releases](https://github.com/MicRaving/QCnext/releases)
@@ -52,6 +25,21 @@ All releases are available on: [https://github.com/MicRaving/QCnext/releases](ht
 * Linux: Install the flatpack (untested)
 * MacOS: Install the .dmg (untested)
 * Compilation: Clone the repo and run compile.ps1 (Windows) to build the portable folder and installer. Scripts for Linux and MacOS will follow soon.
+
+## Documentation
+
+There's an LLM-generated user documentation in [`docs/`](docs/README.md) that I'm currently reworking and refining:
+
+* [**Documentation Hub**](docs/README.md) — Start screen, workflow diagrams, and glossary.
+* [**Workspace Shell \& Collaboration Guide**](docs/workspace-and-shell.md) — Layout, projects, real-time sync, audit history \& bug reporter.
+* [**Files \& Material Import Guide**](docs/files-and-import.md) — Document management, web scraping, and QDA interchange (REFI-QDA, NVivo, SPSS, Zotero).
+* [**Qualitative Coders Guide**](docs/coders.md) — Text, PDF, Image, CSV/Table, Webpage, and Audio/Video coders with Whisper auto-transcription.
+* [**Cases \& Attributes Guide**](docs/cases-and-attributes.md) — Study units, participant metadata, and mixed-methods attributes.
+* [**Notes, Worksheets \& Synthesis Guide**](docs/notes-and-synthesis.md) — Journal, annotations, code memos, Crafter (QTT), and Creative Coding.
+* [**Analysis, Reports \& Graphs Guide**](docs/analysis-and-reports.md) — 11 analytical reports, interrater agreement, publishing (Word/Excel/PPT), SQL/R console \& visual code maps.
+* [**AI Assistant \& Settings Guide**](docs/ai-and-settings.md) — Local/Cloud LLM config, semantic vector search, MCP endpoints, and app preferences.
+
+For developers: The authoritative UI design spec is [`frontend/src/DESIGN.md`](frontend/src/DESIGN.md), and backend developer refactoring plans live in [`docs/developer/`](docs/developer/).
 
 ## License
 
@@ -69,7 +57,6 @@ Here is a non-exhaustive list of planned features
 * Bug-fixing - You tell me!
 
 ## What will (likely) not be implemented
+
 * ATLAS.ti: Closed format, other migration paths exist, not worth the effort.
-
-
 

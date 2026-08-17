@@ -4,6 +4,8 @@ from __future__ import annotations
 from sqlalchemy import text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from qualcoder_api.persistence import tables
+
 from ..base import (
     UnsupportedAction,
     _coding_table_for,
@@ -26,8 +28,6 @@ _TREE_FIELDS = ("catid", "supercid", "position")
 async def _revert_rename(session: AsyncSession, row: dict, *, undo: bool, **kwargs) -> str:
     """code.rename: restore the full pre-update row when recorded, else the
     old/new name only (legacy rows)."""
-    from qualcoder_api.persistence import tables
-
     detail = _detail(row)
     cid = _ensure(detail, "cid")
     before = detail.get("before")

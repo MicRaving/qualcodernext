@@ -9,30 +9,20 @@ exactly like the segment-link endpoints.
 
 from __future__ import annotations
 
-from typing import Any, cast
-
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from sqlalchemy import delete, insert, select
 from sqlalchemy import update as sa_update
-from sqlalchemy.engine import CursorResult, Result
 
 from qualcoder_api.api.v1.deps import DbDep
 from qualcoder_api.core.timeutil import now as _now
 from qualcoder_api.persistence import tables
+from qualcoder_api.persistence.repo.base import _inserted_pk
 from qualcoder_api.persistence.repositories import CodeRepository, CodingRepository
 from qualcoder_api.services import audit, sync
 from qualcoder_api.services.user_settings import get_codername, resolve_owner
 
 router = APIRouter(prefix="/creative", tags=["creative"])
-
-
-def _inserted_pk(result: Result) -> int:
-    """First inserted primary key from an INSERT statement result."""
-    pk = cast(CursorResult[Any], result).inserted_primary_key
-    if pk is None:  # pragma: no cover - inserts always return a pk here
-        raise RuntimeError("insert returned no primary key")
-    return int(pk[0])
 
 
 class CreativeCreate(BaseModel):

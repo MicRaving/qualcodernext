@@ -6,6 +6,7 @@
  * to screen pixels: screen = image * zoom.
  */
 import { errorMessage } from "@/lib/utils";
+import { useAsyncEffect } from "@/lib/useAsync";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { LoaderCircle, Minus, Pencil, Plus, Trash2, ZoomIn, ZoomOut } from "lucide-react";
 import { api, fetchSourceFile, type ImageCoding, type Source } from "@/lib/api";
@@ -92,28 +93,29 @@ export function ImageCoder({ source }: { source: Source }) {
   // helper (the raw URL builders are the sync dev fallback until the App
   // boot gate settles) and hand it to <img> as a blob URL. A transport
   // failure re-resolves the base and retries once inside the helper.
-  useEffect(() => {
-    let cancelled = false;
-    let objectUrl: string | null = null;
+  useAsyncEffect(async (signal) => {
     setImgSrc(null);
     setImageLoaded(false);
-    void (async () => {
-      try {
-        const res = await fetchSourceFile(source.id);
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const blob = await res.blob();
-        if (cancelled) return;
-        objectUrl = URL.createObjectURL(blob);
-        setImgSrc(objectUrl);
-      } catch (e) {
-        if (!cancelled) setError(errorMessage(e, t("imageCoder.loadFileError")));
-      }
-    })();
-    return () => {
-      cancelled = true;
-      if (objectUrl) URL.revokeObjectURL(objectUrl);
-    };
+    try {
+      const res = await fetchSourceFile(source.id);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const blob = await res.blob();
+      signal.throwIfAborted();
+      setImgSrc(URL.createObjectURL(blob));
+    } catch (e) {
+      signal.throwIfAborted();
+      setError(errorMessage(e, t("imageCoder.loadFileError")));
+    }
   }, [source.id, t, setError]);
+
+  // Revoke the previous blob URL when it is replaced or on unmount.
+  // useAsyncEffect discards returned cleanups, so this companion effect
+  // owns the object-URL lifecycle.
+  useEffect(() => {
+    return () => {
+      if (imgSrc) URL.revokeObjectURL(imgSrc);
+    };
+  }, [imgSrc]);
 
   const codeColor = (coding: ImageCoding) => colorByCid.get(coding.cid) ?? "rgba(0,0,0,0.15)";
 

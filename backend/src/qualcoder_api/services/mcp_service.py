@@ -279,8 +279,6 @@ class McpService:
             raise McpError(-32602, "name is required")
         from sqlalchemy import select
 
-        from qualcoder_api.persistence import tables
-
         old_row = (
             await session.execute(select(tables.code_name.c.name).where(tables.code_name.c.cid == cid))
         ).first()

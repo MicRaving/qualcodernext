@@ -87,11 +87,11 @@ class SourceRepository:
                 select(tables.source).where(tables.source.c.id == new_id)
             )
         ).first()
-        from qualcoder_api.services import sync
+        from qualcoder_api.persistence import audit_capture
 
-        await sync.capture_insert(
+        await audit_capture.capture_insert(
             self.session, entity="source", pk_name="id", pk_value=new_id,
-            row=sync.table_row(row._mapping) if row else None,
+            row=audit_capture.table_row(row._mapping) if row else None,
         )
         await self.session.commit()
         return source
@@ -114,7 +114,7 @@ class SourceRepository:
             )
             await self.session.commit()
         source = await self.get_source(source_id)
-        from qualcoder_api.services import sync
+        from qualcoder_api.persistence import audit_capture
 
         if source is not None:
             row = (
@@ -122,9 +122,9 @@ class SourceRepository:
                     select(tables.source).where(tables.source.c.id == source_id)
                 )
             ).first()
-            await sync.capture_update(
+            await audit_capture.capture_update(
                 self.session, entity="source", pk_name="id", pk_value=source_id,
-                row=sync.table_row(row._mapping) if row else None,
+                row=audit_capture.table_row(row._mapping) if row else None,
             )
             await self.session.commit()
         return source
@@ -166,13 +166,13 @@ class SourceRepository:
         deletes are captured for both. Committed by the caller so the whole
         cascade is atomic.
         """
-        from qualcoder_api.services import sync
+        from qualcoder_api.persistence import audit_capture
 
         async def _grab(table, col) -> list[dict]:
             rows = (
                 await self.session.execute(select(table).where(col == source_id))
             ).all()
-            return [sync.table_row(r._mapping) for r in rows]
+            return [audit_capture.table_row(r._mapping) for r in rows]
 
         for table, fk, pk in (
             (tables.code_text, tables.code_text.c.fid, "ctid"),
@@ -185,7 +185,7 @@ class SourceRepository:
             rows = await _grab(table, fk)
             await self.session.execute(delete(table).where(fk == source_id))
             for row in rows:
-                await sync.capture_delete(
+                await audit_capture.capture_delete(
                     self.session, entity=table.name, pk_name=pk, pk_value=row.get(pk), row=row
                 )
         src_rows = await _grab(tables.source, tables.source.c.id)
@@ -201,6 +201,6 @@ class SourceRepository:
             .values(av_text_id=None)
         )
         for row in src_rows:
-            await sync.capture_delete(
+            await audit_capture.capture_delete(
                 self.session, entity="source", pk_name="id", pk_value=source_id, row=row
             )

@@ -6,6 +6,7 @@
  * dictionary feature can be added without touching the shared client.
  */
 import { localRequest } from "@/lib/api";
+import { SOURCE_TIMEOUT_MS } from "@/lib/config";
 
 export interface DictionaryEntry {
   id: number;
@@ -88,7 +89,7 @@ export const dictionaryApi = {
         dictionary_id: dictionaryId,
         sources: sources && sources.length > 0 ? sources : null,
       }),
-    }, 60_000),
+    }, SOURCE_TIMEOUT_MS),
 
   frequencies: (dictionaryId: number, normalize = false, stopwords = true) =>
     request<DictionaryFrequencies>(

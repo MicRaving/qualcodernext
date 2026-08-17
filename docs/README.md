@@ -1,144 +1,105 @@
-# QCnext — Documentation
+# QCnext — User Documentation
 
-This documentation describes **every screen, dialog and feature** of QCnext. It
-is written for a researcher who wants to understand *what the software does, why
-it works the way it does, and how to get work done* — not for someone reading the
-source code. (For the technical build, see
-[`frontend/src/DESIGN.md`](../frontend/src/DESIGN.md) and the repository
-[`README.md`](../README.md).)
+Disclaimer: As of 17.08.2026, most of this text is LLM-generated based on my notes. I will rework this in the coming weeks.
 
-**For developers:** the authoritative UI spec is
-[`frontend/src/DESIGN.md`](../frontend/src/DESIGN.md) — every screen must follow
-it. UI-consistency / motion tracking lives in
-[`ui-polish-plan.md`](ui-polish-plan.md).
 
-## What is "coding"?
 
-A **project** in QCnext is a folder containing your source material (text files,
-PDFs, images, audio, video, web captures, spreadsheets) plus a database that
-records your analytical work.
+Welcome to the official documentation for **QCnext**, the open-source Qualitative Data Analysis (QDA) application. This documentation is written for qualitative researchers, students, analysts, and teams who want to understand how to use the software effectively for coding text, multimedia, survey data, web content, and mixed-methods research.
 
-The core analytical act is **coding**: marking a passage of a document, a region
-of an image, or a time range of an audio/video file, and attaching a **code** to
-it. A code is a label — a theme, category, or concept. The marked passage plus
-its code is a **coding** (also called a *segment* or *quote*). A researcher
-typically:
+\---
 
-1. **Imports** material (files, web pages, transcripts, survey data).
-2. **Creates codes**, usually organised into **categories** (a hierarchical codebook).
-3. **Reads** each document and codes meaningful passages.
-4. **Writes memos** (analytical notes) on codes, files and passages.
-5. **Explores** the coded data with reports, graphs and statistics.
-6. **Exports** results (Word/Excel/PowerPoint, REFI-QDA, codebooks, CSV).
+## Quick Navigation
 
-Around this core, QCnext adds research-adjacent tools: a journal for your
-research log, annotations on passages, cases with attributes (for mixed-methods
-work), a Questions-Themes-Theories workspace for building an argument, an AI
-assistant, an R integration, and much more.
-
-## Key concepts (glossary)
-
-|Term|Meaning|
+|Documentation Guide|Description|
 |-|-|
-|**Project**|A folder (`.qda`) containing source files + a SQLite database with your codes, codings, notes and settings.|
-|**Source / File**|One piece of material: text, PDF, image, audio, video, HTML capture, or CSV table.|
-|**Code**|A label you attach to passages. Codes can be nested (sub-codes) and grouped in categories.|
-|**Category**|A grouping node in the codebook tree that holds codes (or sub-categories).|
-|**Coding / Segment**|One marked passage + its code. Position is stored precisely (character offsets in text, pixel rectangles in images/PDFs, milliseconds in AV).|
-|**Coder**|A named person working in the project. Every coding records who made it.|
-|**Memo**|A free-text analytical note attached to a code or a file.|
-|**Annotation**|A note attached to a specific passage of a document (distinct from a code).|
-|**Journal**|A dated research log (entries with free text).|
-|**Case**|A study entity (person, school, organisation) that files can be linked to; cases carry **attributes** (structured variables) for mixed-methods analysis.|
-|**Bookmark**|A saved position in a file or media, for quick return.|
-|**Link**|A directed connection between two passages (MAXQDA-style "linked quotes").|
+|[**Workspace \& Shell Guide**](workspace-and-shell.md)|Start screen, workspace layout, project management, audit history, task queue \& real-time collaboration sync.|
+|[**Files \& Material Import Guide**](files-and-import.md)|Importing documents, batch imports, web scraping, and QDA interchange (REFI-QDA, NVivo, RQDA, SPSS, RIS/Zotero).|
+|[**The Qualitative Coders Guide**](coders.md)|Full guide to coding Plain Text, PDFs, Images, CSV/Spreadsheet cells, Webpages, and Audio/Video timelines with transcription.|
+|[**Cases \& Attributes Guide**](cases-and-attributes.md)|Organizing study entities (participants, sites, schools), member files, and mixed-methods attribute variables.|
+|[**Notes, Worksheets \& Synthesis Guide**](notes-and-synthesis.md)|Methodological journal, document annotations, code memos, Crafter (QTT worksheets), and Creative Coding scratchpad.|
+|[**Analysis, Reports \& Graphs Guide**](analysis-and-reports.md)|11 analytical reports, interrater agreement (Krippendorff α, Cohen κ, Gwet AC1), publishing to Word/Excel/PPT, SQL/R console, and SVG visual code maps.|
+|[**AI Assistant \& Settings Guide**](ai-and-settings.md)|Setting up Local/Cloud LLMs, semantic vector search, MCP tools, theme customization, anonymization pseudonyms, and updates.|
 
-## How the application is organised
+\---
 
-QCnext is a single window with a fixed structure (the "workspace layout"):
+## What is Qualitative Coding?
+
+In qualitative research, a **project** in QCnext is a self-contained `.qda` directory holding your raw source material (interview transcripts, PDFs, images, field notes, survey spreadsheets, audio/video recordings, and web captures) along with an integrated database that records your analysis.
+
+The core activity is **coding**: highlighting a segment of text, drawing a region on an image or PDF, or marking a timestamp interval on audio/video, and attaching a **code** (a category, concept, or theme label) to it.
 
 ```
-┌───────────────────────────────────────────────────────────────┐
-│ Ribbon (navigation + coder switcher + task queue + toolbars)   │
-├──────────────┬──────────────────────────────┬─────────────────┤
-│ LEFT BAR     │  CENTER VIEW                 │  RIGHT BAR      │
-│ (lists,      │  (the active screen: file    │  (Inspector,    │
-│  code tree)  │   manager, coder, reports…)  │   AI, Settings, │
-│              │                              │   History…)     │
-├──────────────┴──────────────────────────────┴─────────────────┤
-│ Status bar (project name · counts · version)                   │
-└───────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                            TYPICAL WORKFLOW                                 │
+│                                                                             │
+│ 1. Import Material   ──>  2. Build Codebook   ──>  3. Code \& Annotate       │
+│ (Text, PDF, Media)        (Codes \& Categories)      (Select text \& mark)    │
+│                                                                             │
+│ 6. Export \& Publish  <──  5. Explore Reports   <──  4. Synthesize Notes       │
+│ (Word, Excel, REFI)       (Graphs, Interrater)      (Memos, Journal, QTT)   │
+└─────────────────────────────────────────────────────────────────────────────┘
 ```
 
-* The **ribbon** at the top switches between the main areas: Dashboard,
-Coding (file manager), Cases, Journal (notes), Crafter (QTT), Reports
-(analysis), plus right-side tool buttons (History, AI, Creative, Settings,
-report-a-bug).
-* The **left bar** shows context-appropriate lists: your files, your code
-tree, cases, notes, worksheets, or reports.
-* The **center view** is where the work happens.
-* The **right bar** shows the **Inspector** (details of whatever you clicked),
-or one of the toggleable panes: AI chat/search, Settings, History, Creative.
-* The **status bar** shows the project name, file/code/case counts and the app
-version.
+\---
 
-The bars are resizable (drag the inner border; drag past the minimum to hide a
-bar — a small edge tab recalls it).
+## Key Concepts Glossary
 
-## Screen map
-
-Every screen and dialog is documented in its own page:
-
-|Screen / feature|Page|
+|Term|Description|
 |-|-|
-|The workspace shell: ribbon, bars, coder switcher, task queue, Inspector|[shell.md](shell.md)|
-|Dashboard — start screen, projects, recent projects|[dashboard.md](dashboard.md)|
-|File manager — import, organise, URL import, batch jobs|[files.md](files.md)|
-|**Text coder** — code, annotate, edit plain text|[coding-text.md](coding-text.md)|
-|**PDF coder** — code PDF pages and extracted text|[coding-pdf.md](coding-pdf.md)|
-|**Image coder** — code rectangular regions of images|[coding-image.md](coding-image.md)|
-|**CSV/table coder** — code inside spreadsheet cells|[coding-csv.md](coding-csv.md)|
-|**Webpage coder** — code captured HTML pages|[coding-html.md](coding-html.md)|
-|**Audio/video coder** — timeline coding, transcripts, transcription|[coding-av.md](coding-av.md)|
-|Cases + attributes|[cases.md](cases.md)|
-|Notes — journal, annotations, memos|[notes.md](notes.md)|
-|Crafter — Questions-Themes-Theories worksheets|[qtt.md](qtt.md)|
-|Analysis — all reports and statistics|[analyze.md](analyze.md)|
-|Graphs — the code-map editor and model generators|[graphs.md](graphs.md)|
-|Creative coding scratchpad|[creative.md](creative.md)|
-|AI assistant — chat, semantic search, configuration|[ai.md](ai.md)|
-|Settings — appearance, language, AI, pseudonyms, updates|[settings.md](settings.md)|
-|Import / Export (interchange with other QDA tools)|[interchange.md](interchange.md)|
-|History — the audit log and undo/redo|[history.md](history.md)|
-|Background tasks, the task queue, and collaboration sync|[status-and-tasks.md](status-and-tasks.md)|
-|Reporting bugs|[bug-report.md](bug-report.md)|
+|**Project (`.qda`)**|A dedicated directory containing source files and a SQLite database storing codes, codings, cases, notes, and settings.|
+|**Source / File**|Any primary material imported into the project (Text, PDF, Image, Audio, Video, HTML, CSV).|
+|**Code**|An analytical label attached to data segments. Codes can be hierarchical (sub-codes) and grouped into **Categories**.|
+|**Category**|A container node in the codebook tree used to group related codes logically.|
+|**Coding (Segment)**|A marked passage or region bound to a specific code, recording exact position (character offsets, coordinates, or timestamps) and owner.|
+|**Coder**|A registered researcher name. Every coding, note, and modification records the coder who created it.|
+|**Memo**|Analytical commentary attached to a code, file, or project entity.|
+|**Annotation**|A targeted note attached to a specific passage of a document (distinct from a code).|
+|**Case**|A unit of analysis (e.g., participant, organisation, school) linked to files/spans and carrying structured **Attributes**.|
+|**QTT Worksheet**|A Crafter workspace for synthesizing Questions, Themes, and Theories into structured analytical arguments.|
 
-## Coverage checklist
+\---
 
-* **WorkspaceView kinds**: dashboard, files, coding, cases, notes, qtt,
-analyze, graphs, history, settings, ai — all covered (coding splits into the
-five coder pages: text, PDF, image, CSV, HTML, AV).
-* **RightPane values**: inspector (shell.md), ai (ai.md), settings
-(settings.md), history (history.md), creative (creative.md) — all covered.
-* **ReportIds**: code-frequencies, code-segments, file-code, code-relations,
-interrater, text-corpus, dictionary, stats, summary-table, sentiment,
-doc-compare, codebook, references, sql, r-console, graphs — all covered in
-analyze.md and graphs.md.
-* **Other surfaces**: task queue + sync (status-and-tasks.md), bug report
-(bug-report.md), interchange/import-export (interchange.md).
+## Application Layout Overview
 
-## A typical first session
+QCnext uses a single-window **Workspace Layout** organized into five primary slots:
 
-1. **Start** the app → the Dashboard appears.
-2. **Create or open a project** (see [dashboard.md](dashboard.md)).
-3. **Import files** (see [files.md](files.md)) — text, PDF, image, audio/video,
-CSV, HTML, or from a URL.
-4. **Create codes** in the left bar's code tree (the `Code` button).
-5. **Open a file** and select text (or drag a rectangle / timeline range) →
-the floating toolbar lets you code it with the active code, pick another
-code, create a new code from the text ("in-vivo"), annotate, or link it.
-See the [coding-\*.md](coding-text.md) pages.
-6. **Write memos** and explore with **Reports** as your coding grows.
-7. **Collaborate**: enable sync in the coder switcher flyout to share the
-project with other coders via a synced folder.
+```
+┌──────────────────────────────────────────────────────────────────────────────────┐
+│ Ribbon (Navigation · Active Coder Switcher · Background Task Queue · Pane Toggles)│
+├─────────────────┬──────────────────────────────────────────────┬─────────────────┤
+│ LEFT BAR        │ CENTER VIEW                                  │ RIGHT BAR       │
+│ (Code Tree,     │ (Active Screen: Coder, File Manager,          │ (Inspector, AI, │
+│  File List,     │  Reports, Crafter, Cases, Dashboard)         │  Settings,      │
+│  Report List)   │                                              │  History)       │
+├─────────────────┴──────────────────────────────────────────────┴─────────────────┤
+│ Status Bar (Project Name · Entity Counts · Sync Status · App Version)            │
+└──────────────────────────────────────────────────────────────────────────────────┘
+```
+
+* **Ribbon**: Top bar for navigating main views (*Dashboard*, *Coding*, *Cases*, *Journal*, *Crafter*, *Reports*) and toggling utility panes (*History*, *AI*, *Creative*, *Settings*, *Bug Reporter*).
+* **Left Bar**: Displays contextual sidebars such as the codebook tree, file explorer, case list, or report navigation list.
+* **Center View**: The primary workspace where documents are read and coded, reports are generated, or worksheets are edited.
+* **Right Bar**: Displays the **Inspector** (showing details of the currently selected element) or a active side-pane (AI Chat, Settings, Audit History, Creative Scratchpad).
+* **Status Bar**: Bottom bar displaying current project stats, active coder name, sync indicator, and app version.
+
+\---
+
+## Typical First Session
+
+1. **Start QCnext**: Launch the application to view the [Dashboard](workspace-and-shell.md#dashboard--start-screen).
+2. **Create a Project**: Click **New project** and specify a `.qda` location.
+3. **Import Material**: Open the [File Manager](files-and-import.md) and import your interview transcripts, PDFs, images, or media files.
+4. **Define Codes**: Create codes and categories in the left-bar Code Tree.
+5. **Code Your Data**: Open a source file in one of the specialized [Coders](coders.md), select passages or regions, and assign codes.
+6. **Synthesize \& Memos**: Write analytical memos and synthesize findings in [Crafter (QTT)](notes-and-synthesis.md#crafter-qtt-worksheets).
+7. **Analyze \& Export**: Generate [Reports \& Visual Code Maps](analysis-and-reports.md), test interrater reliability, and publish reports to Word, Excel, or REFI-QDA.
+8. **Collaborate**: Enable [Collaboration Sync](workspace-and-shell.md#collaboration-sync) in the ribbon to work simultaneously with team members via shared cloud folders.
+
+\---
+
+## Technical \& Developer Documentation
+
+* **UI Design System**: [`frontend/src/DESIGN.md`](../frontend/src/DESIGN.md) — Authoritative layout, typography, and component specifications.
+* **Codebase Architecture**: [`AGENTS.md`](../AGENTS.md) — Repository structure, backend FastAPI architecture, Tauri packaging, and build scripts.
+* **Developer Refactoring Audits**: [`docs/developer/`](developer/) — Internal wave plans and modularity analysis.
 

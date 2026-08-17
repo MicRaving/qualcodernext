@@ -30,15 +30,19 @@ later task while an earlier one is unfinished.
 
 ## Current state (verified after server restart)
 
+> **IMPLEMENTATION COMPLETE.** All tasks below are done except Task 6 (J3,
+> deliberately deferred). Final verification: 883 pytest pass, ruff clean,
+> mypy clean (134 files).
+
 | Task | Status | Detail |
 |---|---|---|
 | J5 autocode split | ✅ done | `coding_service.py` 424 lines + `autocode_service.py` 441 lines, barrel re-exports `autocode`/`ai_autocode` |
 | J7 importers split | ✅ done | `importers.py` 486 lines + `importers_preview.py` 433 lines, but 2 ruff errors (unused `import asyncio` at top + redefined at line 76) |
 | J4 pdf_locate | ⚠️ half-done | `pdf_locate.py` (432 lines) created with all pure functions, BUT `sources.py` (1080 lines) still has every function AND does not import from `pdf_locate.py`. The new file is dead duplicate code. |
-| J1 entity.py split | ⏳ not started | `handlers/entity.py` is 938 lines |
-| J2 report_service split | ⏳ not started | `report_service.py` is 1471 lines |
-| J3 scrape_service split | ⏳ deferred | 1377 lines — tests use ~40 `patch.object(scrape_service, "_YT_*")` and `patch("...scrape_service.subprocess.run")` calls that BREAK if functions move to a submodule. Only safe to split if you also update every test patch target. See Task 6 below. |
-| J6 graph_service split | ⏳ not started | `graph_service.py` is 888 lines |
+| J1 entity.py split | ✅ done | `entity.py` 123 lines (3 generic handlers) + 11 sub-domain files (case_attribute, annotation_extras, creative, reference, coder_sync, dictionary_codeset, qtt_filter_sql), 101 handlers registered |
+| J2 report_service split | ✅ done | `reports/` package (9 files, 1611 lines) + 78-line shim `report_service.py` |
+| J3 scrape_service split | ⏳ deferred | 1377 lines — tests use ~40 `patch.object(scrape_service, "_YT_*")` and `patch("...scrape_service.subprocess.run")` calls that BREAK if functions move to a submodule. Deferred deliberately. |
+| J6 graph_service split | ✅ done | `graph_service.py` 412 + `graph_base.py` 58 + `graph_items.py` 307 + `graph_lines.py` 171 |
 
 Baseline: 883 pytest pass, mypy clean (115 files), 2 ruff errors.
 

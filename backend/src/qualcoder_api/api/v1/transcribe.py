@@ -13,6 +13,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from qualcoder_api.api.v1.deps import DbDep, ServiceDep
+from qualcoder_api.persistence import tables
 from qualcoder_api.services.transcription import (
     TRANSCRIPTION_DEFAULTS,
     get_job,
@@ -75,7 +76,6 @@ async def transcribe(req: TranscribeRequest, svc: ServiceDep, db: DbDep) -> dict
     """Start a transcription job; returns its id for polling."""
     from sqlalchemy import select
 
-    from qualcoder_api.persistence import tables
     from qualcoder_api.services import audit
     from qualcoder_api.services.user_settings import get_codername, get_transcription_settings
 

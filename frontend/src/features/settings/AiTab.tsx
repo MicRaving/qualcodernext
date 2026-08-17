@@ -12,6 +12,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { LoaderCircle, RotateCw } from "lucide-react";
 import { api } from "@/lib/api";
+import { AI_REFRESH_MS } from "@/lib/config";
 import { errorDetail } from "@/features/ai/format";
 import { useI18n } from "@/lib/i18n";
 import { ErrorBanner, Field, IconButton, Input, Select } from "@/components/ui/orchestrator";
@@ -148,7 +149,7 @@ export function AiTab() {
     }
     setModels([]);
     void loadModels();
-    const timer = window.setInterval(() => void loadModels(), 60_000);
+    const timer = window.setInterval(() => void loadModels(), AI_REFRESH_MS);
     return () => window.clearInterval(timer);
   }, [provider, apiBase, loadModels, enabled]);
 
