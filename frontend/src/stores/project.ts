@@ -24,17 +24,6 @@ import { useInspectorStore } from "./inspector";
 import { usePrefsStore } from "./prefs";
 import { useWorkspaceStore, type WorkspaceView } from "./workspace";
 
-// --- Re-exports so existing `@/stores/project` imports keep working ------
-
-export { useWorkspaceStore } from "./workspace";
-export type { WorkspaceView, RightPane, ReportId } from "./workspace";
-export { useCoderStore } from "./coder";
-export { useInspectorStore } from "./inspector";
-export type { InspectorSelection } from "./inspector";
-export { useGraphStore } from "./graph";
-export { usePrefsStore } from "./prefs";
-export type { ThemeMode, A11yMode } from "./prefs";
-
 // --- Shared task / bug-report types ---------------------------------------
 
 /** A background job as tracked by the UI (transcription, autocode, R or

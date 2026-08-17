@@ -434,7 +434,8 @@ async function snapshotContext(): Promise<SnapshotContext> {
   let lastAction: string | null = null;
   let lastError: string | null = null;
   try {
-    const { useWorkspaceStore, useProjectStore } = await import("@/stores/project");
+    const { useWorkspaceStore } = await import("@/stores/workspace");
+    const { useProjectStore } = await import("@/stores/project");
     view = useWorkspaceStore.getState().view.kind;
     lastAction = useProjectStore.getState().bugReport.lastAction;
     lastError = useProjectStore.getState().bugReport.lastError;
