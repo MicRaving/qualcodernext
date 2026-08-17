@@ -18,18 +18,6 @@ This guide covers analytical writing, reflective journaling, structured workshee
 
 Qualitative research extends far beyond attaching labels to text. QCnext provides three complementary layers for analytical writing and synthesis:
 
-```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                      ANALYTICAL SYNTHESIS PIPELINE                          │
-│                                                                             │
-│  ┌──────────────────────┐   ┌──────────────────────┐   ┌──────────────────┐ │
-│  │ 1. REFLECTIVE NOTES  │──>│ 2. CREATIVE SCRATCH  │──>│ 3. CRAFTER (QTT) │ │
-│  │ Journal, Annotations,│   │ Capture early ideas  │   │ Synthesize final │ │
-│  │ Memos                │   │ & promote to codes   │   │ argument sheets  │ │
-│  └──────────────────────┘   └──────────────────────┘   └──────────────────┘ │
-└─────────────────────────────────────────────────────────────────────────────┘
-```
-
 1. **Reflective Notes**: Methodological journaling, passage annotations, and code/file memos.
 2. **Creative Coding**: An incubator for capturing early ideas and converting fragments directly into codes.
 3. **Crafter (QTT Worksheets)**: Structured workspaces for gathering quotes, charts, notes, and links under research questions to build final analytical arguments.

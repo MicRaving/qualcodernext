@@ -68,28 +68,11 @@ Entering a URL into the **Import URL** dialog provides two import modes:
 
 ---
 
-## QDA Interchange & Format Compatibility
+### Supported Interchange Formats
 
 QCnext offers broad interoperability with other QDA software, allowing you to migrate projects seamlessly to and from external platforms.
 
 Access the Interchange tool via **Settings → Import / Export**.
-
-```
-  ┌─────────────────────────────────────────────────────────────┐
-  │                 IMPORT / EXPORT INTERCHANGE                 │
-  ├──────────────────────────────┬──────────────────────────────┤
-  │ EXPORT                       │ IMPORT                       │
-  │ • REFI-QDA (.qdp)            │ • REFI-QDA (.qdp / .qdc)     │
-  │ • Plain Text Codebook        │ • RQDA (.rqda)               │
-  │ • Reports (Word / Excel)     │ • Taguette (.tag / .json)    │
-  │                              │ • Transana (.tprd)           │
-  │                              │ • NVivo (.nvpx)              │
-  │                              │ • RIS / Zotero (.ris)        │
-  │                              │ • Survey CSV / Excel / SPSS  │
-  └──────────────────────────────┴──────────────────────────────┘
-```
-
-### Supported Interchange Formats
 
 | Format / Source | Extension | Details & Capability |
 | :--- | :--- | :--- |

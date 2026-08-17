@@ -19,31 +19,6 @@ This guide covers the Analysis workspace in QCnext: eleven analytical reports, s
 
 Access Analysis by clicking **Reports** in the ribbon. The left bar organizes available tools into three sections: **Analytical Reports**, **Tools**, and **Graphs**.
 
-```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                           ANALYSIS ARCHITECTURE                             │
-│                                                                             │
-│ ┌──────────────────────┐  ┌──────────────────────┐  ┌────────────────────┐ │
-│ │ ANALYTICAL REPORTS   │  │ SPECIALIZED TOOLS    │  │ VISUAL CODE MAPS   │ │
-│ │ • Frequencies        │  │ • Codebook Exporter  │  │ • SVG Canvas       │ │
-│ │ • Segments           │  │ • RIS References     │  │ • 6 Model Gen.     │ │
-│ │ • File × Code Heatmap│  │ • Read-Only SQL      │  │ • Node Drag & Drop │ │
-│ │ • Code Relations     │  │ • R Script Console   │  │ • Arrow Connectors │ │
-│ │ • Interrater Agreement│  └──────────────────────┘  └────────────────────┘ │
-│ │ • Text & Corpus      │                                                    │
-│ │ • Word Dictionary    │  ┌───────────────────────────────────────────────┐ │
-│ │ • Mixed-Methods Stats│  │ PUBLISHING ENGINE                             │ │
-│ │ • Summary Grid       │  │ Export formatted .docx / .xlsx / .pptx reports│ │
-│ │ • Sentiment Analysis │  └───────────────────────────────────────────────┘ │
-│ │ • Document Compare   │                                                    │
-│ └──────────────────────┘                                                    │
-└─────────────────────────────────────────────────────────────────────────────┘
-```
-
----
-
-## The 11 Analytical Reports
-
 ### 1. Code Frequencies
 ![Code Frequencies](screenshots/12-reports-code-frequencies.png)
 Ranked bar chart and breakdown table displaying usage counts per code and category. Includes cumulative frequency charts (downloadable as PNG) and CSV exports.

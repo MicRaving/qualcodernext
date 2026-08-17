@@ -22,18 +22,6 @@ QCnext integrates both privacy-focused **Local LLMs** (Ollama, LM Studio) and **
 
 Access AI Configuration in **Settings → AI Assistant** or via the AI right-bar pane.
 
-```
-  ┌─────────────────────────────────────────────────────────────┐
-  │                   AI PROVIDER SELECTION                     │
-  ├──────────────────────────────┬──────────────────────────────┤
-  │ LOCAL PROVIDERS (Private)    │ CLOUD PROVIDERS              │
-  │ • Ollama (localhost:11434)   │ • Google Gemini              │
-  │ • LM Studio (localhost:1234) │ • OpenAI GPT     	        │
-  │                              │ • Anthropic Claude           │
-  │                              │ • Custom OpenAI-compatible   │
-  └──────────────────────────────┴──────────────────────────────┘
-```
-
 ### Setup Steps
 
 1. **Enable AI**: Toggle the **Enable AI Assistant** switch.
