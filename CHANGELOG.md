@@ -1,10 +1,81 @@
-# QCnext — Changelog vs. upstream QualCoder
+﻿## v0.2.1 (2026-08-17)
 
-Baseline: [ccbogel/QualCoder](https://github.com/ccbogel/QualCoder) (`master`, snapshot of 10.08.2026, QualCoder 4.0 lineage — PyQt6 desktop app).
-QCnext is a complete rework of that codebase, keeping full compatibility with existing `.qda` projects.
+## What's Changed in v0.2.1
+
+### Features
+- [feature-scope] complete modularity audit implementation + micropass (55265b1)
+
+### Other Changes
+- docs: refine documentation hub READMEs and workspace/shell guide (fe4df78)
+- Refactor persistence layer into per-entity repos, modularize importers/audit-undo, add api lib + new stores, update frontend & docs (7e47bb3)
+- UI consistency sweep (Phase B): collapse ad-hoc toolbar clusters to the toolbarBtn size, add shadow elevation tokens, standardize status pills (55c6138)
+- Graphs function bar contained to the center view (no longer spans the sidebars); DESIGN.md function-bar rule updated; image-coding e2e hardened with integer drag coordinates (e8b4c9f)
+- Add full changelog vs upstream QualCoder (high-level summary + detailed area-by-area list) (b7df1c4)
+- Settings: R + About pinned to the very bottom (About last); rebuild compiled artifacts; repo cleanup: drop unused design-tokens.json, planning docs and caches (48d0bde)
+- Rebuild compiled artifacts (sub-span marks, settings headlines, no-window R probe) (593a299)
+- CSV table: only the marked text is highlighted (sub-span marks via per-cell raw map) - no more whole-cell tint; settings back to headline sections (no tabs), maintenance keeps only the compact-on-close switch; R version probe + R jobs run without flashing a cmd window (CREATE_NO_WINDOW); e2e: integer drag coords + sub-span assertions (862e052)
+- Rebuild compiled artifacts (CSV table coding, settings tabs, review fixes) (a1ef585)
+- CSV table coding (cell selection -> shared toolbar, code badges, details bars, unmark/undo), settings tabs (General/AI/Updates/Maintenance with Auto-update label + interval beside toggle + compact project/index maintenance), review fixes: graph node PATCH 404 URLs, undo restore keeps weight/avid, api.undoCodings body shape, graph menu bar into orchestrator slot, shared localRequest client + Toggle/LoadError primitives, dead api methods removed, updates default True (backend) (a3075d7)
+- Rebuild compiled artifacts (CSV table view, settings consistency) (ef7163f)
+- CSV columns detected: CsvCoder table view (RFC-4180 parser, TSV auto-detect, Table/Plain-text toggles, sticky header, coded plain-text side) + routing; Settings consistency: compact inline LLM/index status indicators (no layout shift), GitHub settings removed, auto-update ON by default, AI settings hidden + model polling gated when AI disabled, duplicate export hint removed; urlImportMode test updated for the Reddit purge (848e62a)
+- Rebuild compiled artifacts (youtube csv revert, reddit purge, bug report fixes) (74a78be)
+- YouTube comments back to a single 4-column CSV file (structured per-comment import reverted), Reddit purged (backend mode, OAuth code, settings, UI option, tests; reddit URLs route to article), bug report: robust never-blank capture + Tauri opener plugin (system browser) + token-less primary flow + download-screenshot + copy, stray probe specs removed (b454f00)
+- Rebuild compiled artifacts (reddit oauth, bug report feature) (d95634e)
+- Reddit scraping rework (anonymous hardening with old.reddit fallback + Retry-After, optional OAuth app-only path via Settings credentials, actionable 403/429 messages), GitHub bug report feature (ribbon button, html2canvas screenshot, paint-over canvas with highlight/redact/undo, prefilled last action + last error + env block, labels/assignee/milestone, API submission with attachment upload + data-URI fallback, browser fallback URL ΓÇö probe-verified), AiSettingsRequest accepts reddit credentials (709b6de)
+- Rebuild compiled artifacts (YouTube CSV, URL mode detect, PDF bottom-bar rework) (237c9a4)
+- YouTube comments as real CSV columns (RFC-4180, note rows, .csv sources), URL mode auto-select (youtube/reddit hosts), PDF bottom-bar rework (click=view never creates; min-size guard, idempotent appends, read-only footer with inline errors) + backend 409 for duplicate text codings (b874838)
+- Rebuild compiled artifacts (webpage coding, youtube notes, pdf locate, CORS/click fixes) (b7faccd)
+- Remove stray debug spec (821560c)
+- Webpage coding: select text on the rendered page to code it (view-model mapping, floating toolbar, active-code + picker), right-click forwarding into the app context menu (on codings/selections), highlights kept; YouTube 240s comments timeout + no silent caption fallback (explicit note rows); pdf-text-locate run-anchor fallback + actionable 422s; PDF segment-click fixed via CORS-on-500 + error-body parsing + resilient load/refresh (50 e2e passing) (a0fcf3c)
+- Rebuild compiled artifacts (base-gate, pdf locate fallback, undo robustness, baked html marks, youtube fixes, session sort/shift-select) (a9b15c8)
+- Stale API-base class fixed (App render gate + fetchSourceFile/fetchThumbnail helpers, all coders migrated), pdf-text-locate 4-level fallback with confidence, History undo robustness (no 500s on legacy rows, clear messages, 117-test matrix), HtmlCoder pre-computed marks baked into srcDoc + live re-mark, YouTube packaged-backend fixes (frozen-safe, per-call executor, comments never replaced by captions), session sort/filter memory + shift-click range selection in files (a87e569)
+- Rebuild compiled artifacts (details polish, Crafter rename, PDF fetch fix, HtmlCoder) (fff58d0)
+- HtmlCoder: remove Save-as-PDF button + dead state/imports/keys (live codings verified in real browser via probe: 2 marks rendered), e2e fixes for Crafter rename / new undo label / PDF overlay locator (49 passing) (56d356f)
+- Remove stray vite log (cfd6ffe)
+- Coder details polish (auto-show after assigning, weight buttons, date tooltip), PDF failed-to-fetch fix (await initApiBase + bounded retry), rename QTT to Crafter (UI labels + docs), AttributeEditor real button styling (8e52b50)
+- Remove leftover probe script (d14bc01)
+- Transcript cascade on media delete, YouTube comments-only output with corrected --write-comments flag, History undo gating inverted (backend-authoritative, 4 explicit exclusions), import destination preview, undo for every action family, HtmlCoder codings fix (8852065)
+- Rebuild compiled artifacts (destination preview, undo-all, DnD fixes) (1ffa687)
+- Import destination preview (per-format 'will create' summary), History undo for every action family (source import/delete/link/replace, autocode, transcribe/r cancel, bookmarks, speakers, pseudonyms, references, filters, SQL, coders, sync, dictionaries, code sets, R scripts, QTT, graphs), AvCoder auto-transcribe after transcript delete (job-aware mode + stale-commit guard), HtmlCoder live codings (whitespace/entity-safe matching, re-mark crash fix, robust script stripping + injection), YouTube comments 4-column contract, files drag&drop (Tauri dragDropEnabled=false restores WebView2 native drops + items fallback + document net), Sidebar pointer-drag arming fix (330d712)
+- Rebuild compiled artifacts (maintenance + animations + pointer-drag) (c0b51c2)
+- Project maintenance: checkpoint-on-close + Compact project (WAL flush, drop rebuildable indexes, VACUUM, recreate; maintenance settings + endpoint), non-intrusive animations (motion tokens consumed, button/input transitions, hover lift, modal/menu/toast animations, prefers-reduced-motion), Sidebar tree drag rewritten as pointer-based (replaces unreliable HTML5 DnD), e2e sync-button label update (49 passing) (d5c813f)
+- Fix batch 4: AI Option A (additive per-mode context pickers, shared chat thread, mode labels + pipeline help, search layout aligned bottom, empty-prompt spacer, quick-action chips removed), sync button shows only last-sync time, History undo/redo for all action families (codes/categories/codings/sources/transcripts/cases/attributes/notes/links/comments/creative), survey import timeout + abort reconciliation, FileManager center DnD (WebView2 empty-types dragover fix + depth counter), AvCoder auto-transcribe after transcript delete (live-store derivation), HtmlCoder live coding highlights (script-stripped srcDoc + postMessage), YouTube comments as tab-separated columns (8832a77)
+- AI chat mode separation assessment (docs/ai-chat-mode-assessment.md): keep memo/text/code separation with additive pickers + shared thread (Option A) (c56b405)
+- Rebuild compiled artifacts (fix batch 3) (9cb2d24)
+- Fix batch 3: AI search in mode dropdown + per-mode context pickers (codes/files/memos), sync time inside flyout button, code-tree DnD hardened (wrapper draggable, no setDragImage crash, container drop safety net, real e2e verification), import manager as overlay, mass-delete live refresh, default empty-transcript manual transcription (first-char auto timestamp, no toggle), offline HTML snapshots (inline CSS/images/fonts), URL Auto removed, YouTube subprocess isolation + 240s dialog timeout, e2e suite updated (49 passing) (9d4d18f)
+- Rebuild compiled artifacts (fix batch 2) (c3e5463)
+- Remove scratch reproduction script (repro-dnd.cjs) (c066aa3)
+- Fix batch 2: AI chat overflow + per-mode context, local-provider model filtering + Gemini key-required message, flyout cleanup (tasks section removed, yellow sync-now, queue trashcans flush right + clamping), Sidebar DnD drop fix + human errors + promote/demote in context menu + files-leftbar drop, import manager overhaul (preview + force-format, ribbon to Settings), import-once bug fix, scrape PDF mode + YouTube abort guards + Reddit hardening, media format recognition (opus etc.), AV transcription auto-save, HtmlCoder charset-aware layout (e6ca3f1)
+- Task queue flyout: window-height clamp + aligned fixed-width icon column (20d4606)
+- Bugfix/UX batch: AI chat pinned composer + project context per mcp_permissions + models error detail, code tree drag&drop (hierarchy indicator, merge-on-drop, position conservation, promote/demote toolbar, context-menu cleanup, merge dropdown), import overlay for all formats + import-in-tasks + ribbon entry, sync auto-enable (shared-folder detection, 3s notice, per-project override), auto-load-project setting, task queue alignment, coder flyout refresh/collaboration rows, bars height pass, file drag&drop import, AV transcription (preset transcript, live timestamp, Tab segment, delete transcript), webpage PDF export + HTML split view, YouTube comments, Reddit 422 fixes, inline region coordinates (1255cb5)
+- R integration phases 1+2: Rscript bridge (detection, background job engine with QC_PORT/QC_PROJECT/QC_EXCHANGE env contract, artifact serving), r_script storage (v30) + CRUD, /r/prepare-report (report data to CSV + R stub), R console analyze view (editor, templates, queue-integrated run, stdout/stderr, PNG/CSV outputs, saved scripts), Settings R status (dc916b1)
+- R integration feasibility assessment (docs/r-integration-assessment.md): Rscript bridge recommended, CSV/SQLite-readonly/HTTP exchange methods, rpy2 excluded from packaged build, phase 1+2 scope; roadmap updated (7ced2d4)
+- ATLAS.ti import assessment: REFI-QDA path documented as primary (already works), Mac XML export feasible as best-effort, .atlproj/.atlasti bundles not feasible (no public spec, no OSS parsers); Interchange help + docs + README + roadmap updated; verified open-source projects listed (b98ce21)
+- Roadmap wave 4: comments (sync-propagated threads in Inspector), code weights 0-100 + in-vivo coding, memo types in Notes, NVivo .nvpx best-effort importer, code sets (sidebar manager + tree filter), e2e gap filling (49 passing), sync replay + OWNER_TABLES extended, History undo/redo refreshes open coders (512fd3f)
+- Fix AI provider models (Gemini native /v1beta/models with x-goog-api-key, Claude x-api-key + anthropic-version), remove provider grey-out, interrater coefficient show/hide toggles, batch coding skips files with real transcripts (has_transcript), coder flyout exact-width clamp + open-above fallback, stylized promote/demote errors (63c09a0)
+- CI/release fixes per owner notes: upload NSIS setup.exe only (no MSI), Linux builds flatpak-only, release workflow degrades to unsigned builds when TAURI_SIGNING_PRIVATE_KEY is absent, fix unused pid warning (lib.rs), macOS updater bundles renamed QCnext_darwin_* (ad3aca8)
+- Compiled artifacts (development branch): backend onedir (PyInstaller, faster-whisper + roadmap deps), release qcnext.exe, QCnext 0.2.0 MSI/NSIS installers via git-lfs (76634c3)
+- v0.2.0 build fixes: health/about version strings 0.2.0, PyInstaller spec hidden imports + data files for openpyxl/pyreadstat/pandas/vaderSentiment/yt-dlp/trafilatura/python-docx/python-pptx, e2e config (vite prewarm, reduced motion) (1ef4097)
+- E2E suite updated to current UI (37/37 passing, new roadmap.spec coverage), README 0.2.0 changelog, full screen documentation in docs/ (18 files) (4ccd199)
+- Roadmap wave 3: Smart Publisher (Word/Excel/PowerPoint report export), QTT workspace (qual + Creswell 14-step mixed-methods worksheets, send-to-QTT from coders), Transana .tprd import (defensive schema probe, media+transcript+keyword mapping) (274dc67)
+- Roadmap wave 2: manual transcription mode (media keys, F9/Space, timestamp insert), sentiment report (VADER + AI), document comparison chart (LCS alignment), URL import (Reddit/YouTube/article/HTML capture), creative coding scratchpad with promote-to-code (4450ab5)
+- Roadmap wave 1: XLSX/SPSS import (openpyxl+pyreadstat), AI memo chat/paraphrase/sentiment prompts, dictionary engine (CRUD, autocode, per-doc frequencies), attribute value labels, segment hyperlinks, stats suite (chi-square/Fisher-free MWU/Spearman, crosstabs, group compare, code-by-variable) + summary tables (32714f1)
+- v0.2.0 alpha: code promote/demote (Word-list style), multi-coder interrater (N-rater Alpha + pairwise Kappa/AC1), coder flyout bounds + per-row delete + global task start/pause/clear, batch transcribe/autocode icons + eligible counts, batch-transcribe eligibility fix (av_text_id no longer gates), noScribe purge, PDF plain-text/PDF toggles with live-synced codings, Gemini models/probe fix, API key persistence, per-provider model filtering, greyed-out local providers, a11y large-text zoom + full black/white high contrast, bar height fixes, README roadmap (NVivo/ATLAS Maybe + open-source format research) (c6fdc53)
+- Background task queue (batch transcribe/autocode, pause/clear/reorder/delete), a11y modes, PDF split view, sidebar drag-hide, Coding ribbon rename, per-provider AI models (35d072b)
+- Identifier org.qcnext.desktop (avoid .app bundle conflict) (05d3a7e)
+- Autocode prompt prefill verified; AI providers: LM Studio 127.0.0.1, per-provider models URLs (v1 fallbacks), Gemini Bearer auth per docs; about text + status version 0.1.0 (b398ac4)
+- AI model polling (provider filters, dedupe, clear-on-switch, periodic), provider-aware status probe (Gemini x-goog-api-key), graph delete stale-grid fix, autocode prompt rework (AI-coded spans + prefilled prompt + fallback), rename to QCnext / version 0.1 (38c92d3)
+- Graphs: fix double dialog (create/delete), dropdown cleanup; PDF text marking (shared plain-text codings, y-flip, re-render fix); autocode rework: multi-code + AI code suggestions, shared dialog for text/PDF/transcripts; settings: model polling per provider, service status button, HelpFlyout (698e948)
+- PDF text marking (shared codings with plain-text mode), graph delete icon, Cases/Codes-used right-click jumps (ab92db3)
+- Remove scratch playwright config (0129423)
+- Add smoke e2e for reports menu bar, graphs-under-reports, journal ribbon (594b136)
+- Reports menu-bar buttons, graphs under reports (center dropdown + models, import fix), segment goto highlight, Journal ribbon, inspector right-click to annotations/memos (c9ff59d)
+- Add manual workflow_dispatch trigger to the release workflow (afeee80)
 
 ---
+**Full changelog**: https://github.com/MicRaving/qualcodernext/compare/v0.1.1...v0.2.1
 
+---
 
 ### Major changes
 
@@ -286,3 +357,4 @@ QCnext is a complete rework of that codebase, keeping full compatibility with ex
 - Release workflow degrades to unsigned builds when `TAURI_SIGNING_PRIVATE_KEY` is
   absent; manual `workflow_dispatch` trigger.
 - Updater artifacts (`.sig`, `qualcoder-latest.json`) generated per build.
+
