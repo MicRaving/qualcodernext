@@ -53,6 +53,7 @@ Here is a non-exhaustive list of planned features
 * Further refine the UI
 * Organize History in hierarchical structure: Right now, every action can be undone regardless of whether it destroys other actions, too.
 * Bug-fixing - You tell me!
+* Rework the search: Include a search bar in the ribbon that lets users search for exact words in the projects (filter by categories) and via semantic search (move the build index button and the semantic search here)
 
 ## What will (likely) not be implemented
 
