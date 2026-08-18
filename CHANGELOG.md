@@ -1,3 +1,11 @@
+## v0.2.4 (2026-08-18)
+
+## What's Changed in v0.2.4
+
+### Features
+- collaboration presence + sync improvements (3e1b5b6)
+
+
 ## v0.2.3 (2026-08-18)
 
 ## What's Changed in v0.2.3
@@ -383,6 +391,7 @@
 - Release workflow degrades to unsigned builds when `TAURI_SIGNING_PRIVATE_KEY` is
   absent; manual `workflow_dispatch` trigger.
 - Updater artifacts (`.sig`, `qualcoder-latest.json`) generated per build.
+
 
 
 
