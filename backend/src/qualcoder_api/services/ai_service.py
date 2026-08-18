@@ -52,6 +52,40 @@ TOPIC_SELECTION_MAX_CHARS = 12000
 CHAT_CONTEXT_MAX_CHARS = 12000
 
 
+def derive_mode(
+    mode: str,
+    memo_ids: list[int] | None,
+    code_ids: list[int] | None,
+    source_ids: list[int] | None,
+    source_id: int | None = None,
+) -> str:
+    """Resolve the effective chat mode.
+
+    An explicit mode is honored as-is. ``"auto"`` (the default) derives the
+    mode from the context picker selections: only codes → ``code_analysis``,
+    only memos → ``memo_analysis``, only sources → ``text_analysis``, more
+    than one kind → ``topic_exploration``, nothing selected → ``general``.
+    """
+    if mode != "auto":
+        return mode
+    kinds = sum(
+        (
+            bool(memo_ids),
+            bool(code_ids),
+            bool(source_ids) or source_id is not None,
+        )
+    )
+    if kinds >= 2:
+        return "topic_exploration"
+    if code_ids:
+        return "code_analysis"
+    if memo_ids:
+        return "memo_analysis"
+    if source_ids or source_id is not None:
+        return "text_analysis"
+    return "general"
+
+
 class AiUnavailable(Exception):
     """Raised when the AI backend is unreachable or misconfigured."""
 
@@ -150,7 +184,7 @@ class AiService:
         ai: dict,
         message: str,
         context: str = "",
-        mode: str = "general",
+        mode: str = "auto",
         prompt_id: str | None = None,
         memo_ids: list[int] | None = None,
         source_id: int | None = None,
@@ -160,6 +194,15 @@ class AiService:
         ok, _ = self.is_configured(ai)
         if not ok:
             raise AiUnavailable("AI is not configured")
+        from qualcoder_api.services.ai_prompts import (
+            is_custom_prompt_id,
+            persona_for,
+            prompt_for,
+        )
+
+        # ``auto`` derives the mode from the picker selections; an explicit
+        # mode (e.g. sentiment's ``general`` + ``sentiment`` prompt) is kept.
+        mode = derive_mode(mode, memo_ids, code_ids, source_ids, source_id)
         # Per-mode context, assembled from the mode's picker selections.
         # Each analysis mode builds its PRIMARY context plus the other
         # selected kinds (additive pickers):
@@ -222,10 +265,15 @@ class AiService:
         if blocks:
             joined = _cap_text("\n\n".join(blocks), CHAT_CONTEXT_MAX_CHARS)
             context = f"{joined}\n\n{context}" if context else joined
-        from qualcoder_api.services.ai_prompts import prompt_for, system_prompt_for
-
-        system_prompt = system_prompt_for(mode)
-        extra_prompt = prompt_for(prompt_id, mode)
+        # The persona is the instruction's own mode when a built-in prompt_id
+        # is given, else the (derived) chat mode's system prompt.
+        system_prompt = persona_for(prompt_id, mode)
+        extra_prompt = None
+        if prompt_id and is_custom_prompt_id(prompt_id):
+            # User-defined template: resolve its body from the ai_prompt table.
+            extra_prompt = await self._custom_prompt_text(prompt_id)
+        else:
+            extra_prompt = prompt_for(prompt_id, mode)
         api_base = ai["api_base"].rstrip("/")
         url = f"{api_base}{CHAT_PATH}"
         content = message
@@ -256,6 +304,26 @@ class AiService:
         if choices:
             content = (choices[0].get("message") or {}).get("content") or ""
         return {"reply": content, "model": ai["model"]}
+
+    async def _custom_prompt_text(self, prompt_id: str) -> str | None:
+        """Body of a user-defined template (``custom:<row-id>``), or None."""
+        from qualcoder_api.services.ai_prompts import CUSTOM_PROMPT_PREFIX
+
+        try:
+            row_id = int(prompt_id[len(CUSTOM_PROMPT_PREFIX):])
+        except (ValueError, IndexError):
+            return None
+        if self.session_factory is None:
+            return None
+        try:
+            async with self.session_factory() as session:
+                result = await session.execute(
+                    tables.ai_prompt.select().where(tables.ai_prompt.c.id == row_id)
+                )
+                row = result.first()
+        except Exception:
+            return None
+        return row.text if row is not None else None
 
     async def _memo_context(self, memo_ids: list[int] | None = None) -> str:
         """Assemble labelled memo excerpts (file + code memos) for chat.

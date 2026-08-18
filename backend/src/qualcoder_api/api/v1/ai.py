@@ -27,7 +27,10 @@ class AiSettingsRequest(BaseModel):
 class ChatRequest(BaseModel):
     message: str
     context: str = ""
-    mode: str = "general"  # general | help | topic_exploration | code_analysis | text_analysis | memo_analysis | search
+    # auto derives the mode from the picker selections (codes → code_analysis,
+    # memos → memo_analysis, sources → text_analysis, several kinds →
+    # topic_exploration, none → general); an explicit mode is honored as-is.
+    mode: str = "auto"
     prompt_id: str | None = None
     memo_ids: list[int] | None = None
     # text_analysis: the source currently open in the coder, so the chat
@@ -39,6 +42,23 @@ class ChatRequest(BaseModel):
     # text_analysis / topic_exploration: share the fulltext of these
     # sources (the files context picker).
     source_ids: list[int] | None = None
+    # Session id: when given, the exchange is appended to that chat; when
+    # None, a new chat session is created for the turn.
+    chat_id: int | None = None
+
+
+class ChatCreateRequest(BaseModel):
+    title: str = ""
+
+
+class ChatRenameRequest(BaseModel):
+    title: str
+
+
+class TemplateRequest(BaseModel):
+    name: str
+    description: str = ""
+    text: str = ""
 
 
 class SearchRequest(BaseModel):
@@ -365,35 +385,142 @@ async def save_ai_settings(req: AiSettingsRequest) -> dict:
 
 @router.post("/chat")
 async def ai_chat(req: ChatRequest, svc: ServiceDep, session: DbDep) -> dict:
+    import json
+
+    from qualcoder_api.services import ai_history
+    from qualcoder_api.services.ai_service import derive_mode
+
     ai = user_settings.get_ai_settings()
+    chat_id = req.chat_id
     try:
-        return await AiService(svc.session_factory).chat(
+        if chat_id is None:
+            chat = await ai_history.create_chat(session)
+            chat_id = chat["id"]
+        else:
+            existing = await ai_history.get_chat(session, chat_id)
+            if existing is None:
+                raise HTTPException(status_code=404, detail="chat session not found")
+        envelope = json.dumps(
+            {
+                "mode": req.mode,
+                "mode_derived": derive_mode(
+                    req.mode, req.memo_ids, req.code_ids, req.source_ids, req.source_id
+                ),
+                "prompt_id": req.prompt_id,
+                "memo_ids": req.memo_ids,
+                "code_ids": req.code_ids,
+                "source_ids": req.source_ids,
+            },
+            ensure_ascii=False,
+        )
+        await ai_history.append_message(
+            session, chat_id, "user", req.message, request_json=envelope
+        )
+        result = await AiService(svc.session_factory).chat(
             ai, req.message, req.context, mode=req.mode, prompt_id=req.prompt_id,
             memo_ids=req.memo_ids, source_id=req.source_id,
             code_ids=req.code_ids, source_ids=req.source_ids,
         )
     except AiUnavailable as err:
         raise HTTPException(status_code=503, detail=str(err)) from err
+    await ai_history.append_message(session, chat_id, "assistant", result["reply"])
+    await ai_history.ensure_title(session, chat_id, req.message)
+    return {
+        "chat_id": chat_id,
+        "reply": result["reply"],
+        "model": result["model"],
+    }
+
+
+@router.get("/chats")
+async def ai_chats(session: DbDep) -> dict:
+    """Saved AI chat sessions (most recently updated first)."""
+    from qualcoder_api.services import ai_history
+
+    return {"chats": await ai_history.list_chats(session)}
+
+
+@router.post("/chats", status_code=201)
+async def ai_chat_create(req: ChatCreateRequest, session: DbDep) -> dict:
+    from qualcoder_api.services import ai_history
+
+    return await ai_history.create_chat(session, req.title)
+
+
+@router.get("/chats/{chat_id}")
+async def ai_chat_get(chat_id: int, session: DbDep) -> dict:
+    from qualcoder_api.services import ai_history
+
+    chat = await ai_history.get_chat(session, chat_id)
+    if chat is None:
+        raise HTTPException(status_code=404, detail="chat session not found")
+    return chat
+
+
+@router.patch("/chats/{chat_id}")
+async def ai_chat_rename(chat_id: int, req: ChatRenameRequest, session: DbDep) -> dict:
+    from qualcoder_api.services import ai_history
+
+    if not req.title.strip():
+        raise HTTPException(status_code=422, detail="title is empty")
+    if not await ai_history.rename_chat(session, chat_id, req.title):
+        raise HTTPException(status_code=404, detail="chat session not found")
+    return {"id": chat_id, "title": req.title.strip()}
+
+
+@router.delete("/chats/{chat_id}", status_code=204)
+async def ai_chat_delete(chat_id: int, session: DbDep) -> None:
+    from qualcoder_api.services import ai_history
+
+    if not await ai_history.delete_chat(session, chat_id):
+        raise HTTPException(status_code=404, detail="chat session not found")
 
 
 @router.get("/prompts")
-async def ai_prompts() -> dict:
-    """The prompt library (upstream ai_prompt_library catalog)."""
-    from qualcoder_api.services.ai_prompts import CATALOG
+async def ai_prompts(svc: ServiceDep, session: DbDep) -> dict:
+    """The merged prompt catalog: built-in library + user templates."""
+    from qualcoder_api.services import ai_templates
 
-    return {
-        "prompts": [
-            {
-                "id": prompt.id,
-                "mode": prompt.mode,
-                "name": prompt.name,
-                "label": prompt.label,
-                "description": prompt.description,
-                "hidden": prompt.hidden,
-            }
-            for prompt in CATALOG.prompts
-        ]
-    }
+    return {"prompts": await ai_templates.list_catalog(session)}
+
+
+@router.get("/templates")
+async def ai_templates_list(session: DbDep) -> dict:
+    """User-defined instruction templates (with full bodies for editing)."""
+    from qualcoder_api.services import ai_templates
+
+    return {"templates": await ai_templates.list_templates(session)}
+
+
+@router.post("/templates", status_code=201)
+async def ai_templates_create(req: TemplateRequest, session: DbDep) -> dict:
+    from qualcoder_api.services import ai_templates
+
+    if not req.name.strip() or not req.text.strip():
+        raise HTTPException(status_code=422, detail="name and text are required")
+    return await ai_templates.create_template(session, req.name, req.description, req.text)
+
+
+@router.put("/templates/{template_id}")
+async def ai_templates_update(template_id: int, req: TemplateRequest, session: DbDep) -> dict:
+    from qualcoder_api.services import ai_templates
+
+    if not req.name.strip() or not req.text.strip():
+        raise HTTPException(status_code=422, detail="name and text are required")
+    updated = await ai_templates.update_template(
+        session, template_id, name=req.name, description=req.description, text=req.text
+    )
+    if updated is None:
+        raise HTTPException(status_code=404, detail="template not found")
+    return updated
+
+
+@router.delete("/templates/{template_id}", status_code=204)
+async def ai_templates_delete(template_id: int, session: DbDep) -> None:
+    from qualcoder_api.services import ai_templates
+
+    if not await ai_templates.delete_template(session, template_id):
+        raise HTTPException(status_code=404, detail="template not found")
 
 
 @router.post("/search")

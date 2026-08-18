@@ -47,18 +47,24 @@ MODE_SYSTEM_PROMPTS: dict[str, str] = {
         "memos. Ground every statement in the provided memos; identify recurring "
         "patterns and themes without adding outside context."
     ),
+    "sentiment": (
+        "You are a careful reader of qualitative text, assessing the emotional "
+        "tone and sentiment of the given material. Stay grounded in the text and "
+        "justify every judgement with one sentence."
+    ),
 }
 
 
 @dataclass(frozen=True)
 class Prompt:
     id: str
-    mode: str  # "help" | "topic_exploration" | "code_analysis" | "text_analysis" | "memo_analysis" | "search"
+    mode: str  # "help" | "topic_exploration" | "code_analysis" | "text_analysis" | "memo_analysis" | "sentiment" | "search" | "general"
     name: str
     description: str
     text: str
     label: str = ""  # friendly display label (falls back to ``name``)
     hidden: bool = False  # True for underscore-root/internal prompts (_init, …)
+    group: str = ""  # frontend dropdown section: "analysis" | "specialized" | "custom" | ""
 
 
 @dataclass(frozen=True)
@@ -96,17 +102,10 @@ def _load_catalog() -> Catalog:
 
 def _parse(path: str, text: str) -> Prompt:
     mode = "general"
+    group = ""
     if path.startswith("search/"):
         mode = "search"
-    elif path.startswith("code-analysis"):
-        mode = "code_analysis"
-    elif path.startswith("text-analysis"):
-        mode = "text_analysis"
-    elif path.startswith("memo-analysis"):
-        mode = "memo_analysis"
-    elif path.startswith("topic-exploration"):
-        mode = "topic_exploration"
-    elif path.startswith("_") or path.endswith("_agent.md"):
+    elif path.startswith("_"):
         mode = "help"
     name = path.rsplit("/", 1)[-1].replace(".md", "")
     description = ""
@@ -123,6 +122,10 @@ def _parse(path: str, text: str) -> Prompt:
                 description = value.strip("\"'")
             elif key == "label":
                 label = value.strip("\"'")
+            elif key == "mode":
+                mode = value.strip("\"'")
+            elif key == "group":
+                group = value.strip("\"'")
     return Prompt(
         id=path.replace(".md", "").replace("\\", "/"),
         mode=mode,
@@ -131,14 +134,44 @@ def _parse(path: str, text: str) -> Prompt:
         hidden=path.rsplit("/", 1)[-1].startswith("_"),
         description=description,
         text=body.strip(),
+        group=group,
     )
 
 
 CATALOG = _load_catalog()
 
+# User-defined templates are stored in the ``ai_prompt`` table and exposed
+# with ids of the form ``custom:<row-id>`` so they are distinguishable from
+# built-in catalog ids.
+CUSTOM_PROMPT_PREFIX = "custom:"
+
+
+def is_custom_prompt_id(prompt_id: str) -> bool:
+    return prompt_id.startswith(CUSTOM_PROMPT_PREFIX)
+
 
 def system_prompt_for(mode: str) -> str:
     return MODE_SYSTEM_PROMPTS.get(mode, MODE_SYSTEM_PROMPTS["general"])
+
+
+def prompt_mode(prompt_id: str | None) -> str | None:
+    """The persona mode of a built-in catalog prompt (``None`` when the id
+    does not name a built-in — e.g. a user-defined template)."""
+    if not prompt_id:
+        return None
+    prompt = CATALOG.by_id(prompt_id)
+    return prompt.mode if prompt is not None else None
+
+
+def persona_for(prompt_id: str | None, mode: str) -> str:
+    """The system prompt for a chat request.
+
+    When an instruction (prompt_id) names a built-in catalog prompt, its own
+    mode's system prompt wins — the instruction is the persona. Otherwise the
+    (derived or explicit) chat mode's system prompt applies.
+    """
+    prompt_persona = prompt_mode(prompt_id)
+    return system_prompt_for(prompt_persona if prompt_persona else mode)
 
 
 def prompt_for(prompt_id: str | None, mode: str = "general") -> str | None:

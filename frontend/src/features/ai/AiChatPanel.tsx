@@ -1,21 +1,21 @@
 /**
- * AiChatPanel — chat with the project AI assistant. The chat mode and
- * prompt-library selection live in the pane's top bar (AiView).
+ * AiChatPanel — chat with the project AI assistant. The instruction picker
+ * and the chat-history control live in the pane's top bar (AiView).
  *
- * The message thread lives in a module-level cache so it survives mode
- * switches and pane toggles (context is a request property, not a thread
- * property). Every analysis mode shows all three context pickers
- * (additive); the mode-relevant one is expanded by default and the
- * selection is sent with the chat request.
+ * The conversation is persisted in the project database: the panel loads
+ * the messages of the selected chat session from the backend and appends
+ * every new exchange to it. The mode is auto-derived by the backend from
+ * the context picker selections ("auto"), so all three pickers are always
+ * shown; the read-only mode badge mirrors the derivation client-side.
  */
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { useAsyncEffect } from "@/lib/useAsync";
-import { Eraser, LoaderCircle, Send } from "lucide-react";
-import { ApiError, api, fetchWithTimeout, initApiBase, type AiStatus } from "@/lib/api";
+import { LoaderCircle, Send } from "lucide-react";
+import { api, type AiStatus } from "@/lib/api";
 import { errorDetail, welcomeMessage } from "@/features/ai/format";
 import { useI18n } from "@/lib/i18n";
 import { ErrorBanner, IconButton, Textarea } from "@/components/ui/orchestrator";
-import { CONTEXT_PICKER_KINDS, primaryContextKind, type AiMode } from "@/features/ai/aiModes";
+import { AI_MODE_LABELS, CONTEXT_PICKER_KINDS, deriveModeLabel } from "@/features/ai/aiModes";
 import { ContextPickerArea } from "@/features/ai/ContextPickers";
 import { useContextPickers } from "@/features/ai/contextPickerData";
 
@@ -26,127 +26,97 @@ interface ChatMessage {
   text: string;
 }
 
-/**
- * Module-level thread cache (same pattern as the SettingsView draft): the
- * AiChatPanel unmounts when the pane closes or the search mode is picked,
- * and remounting would otherwise wipe the conversation.
- */
-let threadCache: ChatMessage[] | null = null;
-
-/** Drops the shared thread (used by the clear-chat button). */
-function resetThread(): void {
-  threadCache = null;
-}
-
-async function chatWithContext(opts: {
-  message: string;
-  mode: AiMode;
-  promptId?: string;
-  memoIds?: number[];
-  codeIds?: number[];
-  sourceIds?: number[];
-}): Promise<{ reply: string }> {
-  const base = await initApiBase();
-  const res = await fetchWithTimeout(`${base}/ai/chat`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      message: opts.message,
-      context: "",
-      mode: opts.mode,
-      prompt_id: opts.promptId,
-      memo_ids: opts.memoIds,
-      code_ids: opts.codeIds,
-      source_ids: opts.sourceIds,
-    }),
-  });
-  if (!res.ok) {
-    let detail: unknown;
-    try {
-      detail = (await res.json()).detail;
-    } catch {
-      /* non-JSON error body */
-    }
-    throw new ApiError(res.status, `API error ${res.status} on /ai/chat`, detail);
-  }
-  return (await res.json()) as { reply: string };
-}
-
 export function AiChatPanel({
-  mode,
+  chatId,
   promptId,
+  onChatId,
 }: {
-  mode: AiMode;
+  /** The open chat session (null = a fresh, unsaved conversation). */
+  chatId: number | null;
+  /** Selected instruction template id ("" = backend default). */
   promptId: string;
+  /** Called when the backend creates/opens a chat session for a turn. */
+  onChatId?: (chatId: number) => void;
 }) {
   const { t } = useI18n();
-  const pickers = useContextPickers(mode);
-  const [messages, setMessages] = useState<ChatMessage[]>(() => threadCache ?? []);
+  const pickers = useContextPickers();
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
   const [waiting, setWaiting] = useState(false);
   const [status, setStatus] = useState<AiStatus | null>(null);
+  const [loadedChatId, setLoadedChatId] = useState<number | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
-
-  /** Commit to React state and the module cache so the thread survives remounts. */
-  function commitMessages(update: ChatMessage[] | ((prev: ChatMessage[]) => ChatMessage[])) {
-    setMessages((prev) => {
-      const next =
-        typeof update === "function" ? (update as (p: ChatMessage[]) => ChatMessage[])(prev) : update;
-      threadCache = next;
-      return next;
-    });
-  }
 
   useAsyncEffect(async (signal) => {
     try {
       const s = await api.aiStatus();
       signal.throwIfAborted();
       setStatus(s);
-      // Only seed the welcome message on a fresh thread — a restored
-      // conversation (mode switch / pane reopen) keeps its history.
-      if (s.enabled) {
-        commitMessages((m) =>
-          m.length > 0 ? m : [{ role: "assistant", text: welcomeMessage(true) }],
-        );
-      }
     } catch {
       signal.throwIfAborted();
       setStatus(null);
     }
   }, []);
 
+  // Load the messages of the selected chat session from the backend.
+  useAsyncEffect(
+    async (signal) => {
+      if (chatId === null) {
+        setMessages([]);
+        setLoadedChatId(null);
+        return;
+      }
+      if (chatId === loadedChatId) return;
+      try {
+        const detail = await api.aiChatGet(chatId);
+        signal.throwIfAborted();
+        setMessages(
+          detail.messages.map((m) => ({
+            role: m.role === "user" ? "user" : "assistant",
+            text: m.text,
+          })),
+        );
+        setLoadedChatId(chatId);
+      } catch {
+        signal.throwIfAborted();
+        setMessages([]);
+      }
+    },
+    [chatId],
+  );
+
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
   }, [messages, waiting]);
 
   const disabled = !status?.enabled;
-
-  const kinds = useMemo(
-    () => CONTEXT_PICKER_KINDS.filter((k) => pickers.required[k]),
-    [pickers.required],
-  );
+  const kinds = useMemo(() => CONTEXT_PICKER_KINDS, []);
+  const modeLabelKey = deriveModeLabel({
+    memoIds: pickers.selectedMemoIds,
+    codeIds: pickers.selectedCodeIds,
+    sourceIds: pickers.selectedSourceIds,
+  });
 
   async function sendWith() {
     const text = input.trim();
     if (!text || waiting || disabled) return;
     setInput("");
-    commitMessages((m) => [...m, { role: "user", text }]);
+    setMessages((m) => [...m, { role: "user", text }]);
     setWaiting(true);
     try {
-      const res =
-        kinds.length > 0
-          ? await chatWithContext({
-              message: text,
-              mode,
-              promptId: promptId || undefined,
-              memoIds: kinds.includes("memos") ? pickers.selectedMemoIds : undefined,
-              codeIds: kinds.includes("codes") ? pickers.selectedCodeIds : undefined,
-              sourceIds: kinds.includes("files") ? pickers.selectedSourceIds : undefined,
-            })
-          : await api.aiChat(text, "", mode, promptId || undefined);
-      commitMessages((m) => [...m, { role: "assistant", text: res.reply }]);
+      const res = await api.aiChat(text, "", "auto", promptId || undefined, {
+        memoIds: kinds.includes("memos") ? pickers.selectedMemoIds : undefined,
+        codeIds: kinds.includes("codes") ? pickers.selectedCodeIds : undefined,
+        sourceIds: kinds.includes("files") ? pickers.selectedSourceIds : undefined,
+        chatId: chatId ?? undefined,
+      });
+      if (res.chat_id != null && res.chat_id !== chatId) {
+        setLoadedChatId(res.chat_id);
+        onChatId?.(res.chat_id);
+      }
+      setMessages((m) => [...m, { role: "assistant", text: res.reply }]);
     } catch (e) {
-      commitMessages((m) => [...m, { role: "error", text: errorDetail(e) }]);
+      setMessages((m) => [...m, { role: "error", text: errorDetail(e) }]);
     } finally {
       setWaiting(false);
     }
@@ -159,11 +129,11 @@ export function AiChatPanel({
     }
   }
 
+  const showWelcome = messages.length === 0 && !waiting;
+
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-bg">
-      {disabled && (
-        <ErrorBanner tone="warning">{welcomeMessage(false)}</ErrorBanner>
-      )}
+      {disabled && <ErrorBanner tone="warning">{welcomeMessage(false)}</ErrorBanner>}
 
       {/* Messages */}
       <div ref={scrollRef} className="min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto p-3">
@@ -200,15 +170,23 @@ export function AiChatPanel({
               </div>
             </div>
           )}
-          {messages.length === 0 && !waiting && (
-            <p className="py-4 text-center text-xs text-text-secondary">{t("ai.noMessages")}</p>
+          {showWelcome && (
+            <p className="py-4 text-center text-xs text-text-secondary">
+              {t("ai.welcomeReady")}
+            </p>
           )}
         </div>
       </div>
 
-      {/* Context pickers (additive: memos / codes / files per mode) */}
+      {/* Context pickers (additive: memos / codes / files) */}
       {kinds.length > 0 && (
-        <ContextPickerArea pickers={pickers} initialKind={primaryContextKind(mode) ?? undefined} />
+        <div className="min-w-0 shrink-0">
+          <p className="px-3 pb-1 pt-2 text-[10px] font-semibold uppercase tracking-wide text-text-secondary">
+            {t("ai.modeLabel")}{" "}
+            <span className="normal-case font-normal">{t(AI_MODE_LABELS[modeLabelKey])}</span>
+          </p>
+          <ContextPickerArea pickers={pickers} />
+        </div>
       )}
 
       {/* Input row */}
@@ -235,19 +213,16 @@ export function AiChatPanel({
             >
               <Send size={14} aria-hidden />
             </button>
-            <IconButton
-              label={t("ai.clearAria")}
-              title={t("ai.clearTitle")}
-              className="h-8 w-8 border border-border bg-bg"
-              onClick={() => {
-                resetThread();
-                commitMessages(
-                  status?.enabled ? [{ role: "assistant", text: welcomeMessage(true) }] : [],
-                );
-              }}
-            >
-              <Eraser size={14} aria-hidden />
-            </IconButton>
+            {chatId === null && (
+              <IconButton
+                label={t("ai.clearAria")}
+                title={t("ai.clearTitle")}
+                className="h-8 w-8 border border-border bg-bg"
+                onClick={() => setMessages([])}
+              >
+                <span aria-hidden>×</span>
+              </IconButton>
+            )}
           </div>
         </div>
       </div>

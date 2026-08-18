@@ -34,7 +34,7 @@ LEGACY_TABLES = [
     "CREATE TABLE journal (jid integer primary key, name text, jentry text, date text, owner text)",
 ]
 
-ALL_VERSIONS = [f"v{v}" for v in range(2, 32)]
+ALL_VERSIONS = [f"v{v}" for v in range(2, 32)] + ["v34"]
 
 
 @pytest.fixture
@@ -98,7 +98,7 @@ async def test_full_chain_sets_final_version(v2_db):
     cur = await v2_db.cursor()
     await cur.execute("SELECT databaseversion, about FROM project")
     row = await cur.fetchone()
-    assert row[0] == "v31"
+    assert row[0] == "v34"
     assert row[1] == "4.0-test"
 
 
@@ -382,4 +382,39 @@ async def test_v32_adds_unique_sync_log_seq_index(tmp_path):
     # Re-running is a no-op (idempotent).
     second = await MigrationChain(conn).run_all("4.0-test", "tester")
     assert "v32" not in second
+    await conn.close()
+
+
+async def test_v34_adds_ai_chat_tables(tmp_path):
+    """v34 creates the persistent AI chat/template tables on legacy projects
+    and is a no-op on a fresh schema (which already contains them)."""
+    from qualcoder_api.persistence.schema import create_new_project_schema
+
+    db = tmp_path / "legacy.qda"
+    conn = await aiosqlite.connect(db)
+    cur = await conn.cursor()
+    for sql in LEGACY_TABLES:
+        await cur.execute(sql)
+    await cur.execute("INSERT INTO project VALUES ('v2', '2020-01-01', '', 'QualCoder 1.0')")
+    await conn.commit()
+
+    applied = await MigrationChain(conn).run_all("4.0-test", "tester")
+    assert "v34" in applied
+    objects = await _objects(conn)
+    assert {"ai_chat", "ai_chat_message", "ai_prompt"} <= objects
+    await cur.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='index' AND name='idx_ai_chat_message_chat_id'"
+    )
+    assert await cur.fetchone() is not None
+    await cur.execute("SELECT databaseversion FROM project")
+    assert (await cur.fetchone())[0] == "v34"
+    await conn.close()
+
+    # Fresh schema: tables already exist → v34 is a no-op.
+    fresh = tmp_path / "fresh.qda"
+    conn = await aiosqlite.connect(fresh)
+    await create_new_project_schema(conn, app_version="4.0-test", codername="tester")
+    applied = await MigrationChain(conn).run_all("4.0-test", "tester")
+    assert "v34" not in applied
+    assert applied == []
     await conn.close()

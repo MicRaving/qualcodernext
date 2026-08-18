@@ -1,27 +1,11 @@
-/** AI assistant modes — chat modes plus the semantic-search view. */
-export const AI_MODES = [
-  "general",
-  "help",
-  "topic_exploration",
-  "code_analysis",
-  "text_analysis",
-  "memo_analysis",
-  "search",
-] as const;
+/**
+ * AI assistant modes — the backend derives the analysis mode automatically
+ * from the context picker selections ("auto" mode), so the old mode dropdown
+ * is gone. This module only mirrors the derivation for the read-only mode
+ * badge in the chat panel and defines the context-picker kinds.
+ */
 
-export type AiMode = (typeof AI_MODES)[number];
-
-export const AI_MODE_LABELS: Record<AiMode, string> = {
-  general: "ai.modeGeneral",
-  help: "ai.modeHelp",
-  topic_exploration: "ai.modeTopic",
-  code_analysis: "ai.modeCode",
-  text_analysis: "ai.modeText",
-  memo_analysis: "ai.modeMemos",
-  search: "ai.modeSearch",
-};
-
-/** Kinds of context pickers a mode can share with the request. */
+/** Kinds of context pickers a chat request can share. */
 export type ContextPickerKind = "memos" | "codes" | "files";
 
 export const CONTEXT_PICKER_KINDS: readonly ContextPickerKind[] = [
@@ -30,37 +14,34 @@ export const CONTEXT_PICKER_KINDS: readonly ContextPickerKind[] = [
   "files",
 ];
 
-/**
- * Which context pickers each mode shows (Option A — additive pickers):
- * every analysis mode exposes ALL three kinds so the user can attach memos
- * to a code review, codes to a text analysis, etc.; the mode-relevant kind
- * (see ``primaryContextKind``) is expanded by default. General/help show
- * none; the semantic-search view shows all three (files act as the filter).
- */
-export const CONTEXT_PICKERS: Record<AiMode, Record<ContextPickerKind, boolean>> = {
-  general: { memos: false, codes: false, files: false },
-  help: { memos: false, codes: false, files: false },
-  topic_exploration: { memos: true, codes: true, files: true },
-  code_analysis: { memos: true, codes: true, files: true },
-  text_analysis: { memos: true, codes: true, files: true },
-  memo_analysis: { memos: true, codes: true, files: true },
-  search: { memos: true, codes: true, files: true },
+/** Mode labels (used by the auto-mode badge). */
+export const AI_MODE_LABELS: Record<string, string> = {
+  general: "ai.modeGeneral",
+  topic_exploration: "ai.modeTopic",
+  code_analysis: "ai.modeCode",
+  text_analysis: "ai.modeText",
+  memo_analysis: "ai.modeMemos",
+  sentiment: "ai.modeSentiment",
 };
 
 /**
- * The picker kind a mode treats as its primary context — expanded by
- * default in the picker tab row. ``topic_exploration`` and ``search`` have
- * no single primary; they fall back to the first tab.
+ * Mirrors the backend's ``derive_mode``: only codes → code_analysis, only
+ * memos → memo_analysis, only sources → text_analysis, several kinds →
+ * topic_exploration, nothing selected → general. Returns the i18n key for
+ * the mode label.
  */
-export function primaryContextKind(mode: AiMode): ContextPickerKind | null {
-  switch (mode) {
-    case "memo_analysis":
-      return "memos";
-    case "code_analysis":
-      return "codes";
-    case "text_analysis":
-      return "files";
-    default:
-      return null;
-  }
+export function deriveModeLabel(ids: {
+  memoIds?: number[];
+  codeIds?: number[];
+  sourceIds?: number[];
+}): string {
+  const memos = (ids.memoIds?.length ?? 0) > 0;
+  const codes = (ids.codeIds?.length ?? 0) > 0;
+  const sources = (ids.sourceIds?.length ?? 0) > 0;
+  const kinds = Number(memos) + Number(codes) + Number(sources);
+  if (kinds >= 2) return "topic_exploration";
+  if (codes) return "code_analysis";
+  if (memos) return "memo_analysis";
+  if (sources) return "text_analysis";
+  return "general";
 }

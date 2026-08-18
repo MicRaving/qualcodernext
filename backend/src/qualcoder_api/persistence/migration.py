@@ -292,7 +292,56 @@ class MigrationChain:
         applied += await self.migrate_v31(app_version)
         applied += await self.migrate_v32(app_version)
         applied += await self.migrate_v33(app_version)
+        applied += await self.migrate_v34(app_version)
         return applied
+
+    async def migrate_v34(self, app_version: str) -> list[str]:
+        """v34: persistent AI assistant data — saved chat sessions, chat
+        messages and user-defined instruction templates (``ai_chat``,
+        ``ai_chat_message``, ``ai_prompt``). No-op when the tables are
+        already present (fresh projects create them in their schema)."""
+        if self.conn is None:
+            return []
+        cur = await self.conn.cursor()
+        changed = False
+        if not await self._has_table(cur, "ai_chat"):
+            await cur.execute(
+                "CREATE TABLE ai_chat (id integer primary key autoincrement, title text, "
+                "created text, updated text)"
+            )
+            await self.conn.commit()
+            changed = True
+        if not await self._has_table(cur, "ai_chat_message"):
+            await cur.execute(
+                "CREATE TABLE ai_chat_message (id integer primary key autoincrement, chat_id integer, "
+                "role text, text text, request_json text, created text)"
+            )
+            await self.conn.commit()
+            changed = True
+        if not await self._has_table(cur, "ai_prompt"):
+            await cur.execute(
+                "CREATE TABLE ai_prompt (id integer primary key autoincrement, name text, "
+                "description text, text text, created text, updated text)"
+            )
+            await self.conn.commit()
+            changed = True
+        if not await self._has_table(cur, "ai_chat_message"):
+            return (changed and ["v34"]) or []
+        await cur.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = 'idx_ai_chat_message_chat_id'"
+        )
+        if await cur.fetchone() is None:
+            await cur.execute(
+                "CREATE INDEX IF NOT EXISTS idx_ai_chat_message_chat_id "
+                "ON ai_chat_message(chat_id)"
+            )
+            await self.conn.commit()
+            changed = True
+        if changed:
+            await cur.execute('update project set databaseversion="v34", about=?', [app_version])
+            await self.conn.commit()
+            return ["v34"]
+        return []
 
     async def migrate_v33(self, app_version: str) -> list[str]:
         """v33: composite index on audit_log(entity, entity_id, id) so the

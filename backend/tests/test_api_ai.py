@@ -887,12 +887,13 @@ async def test_chat_prompt_id_resolves_from_catalog(project_client, monkeypatch)
         {"/chat/completions": {"choices": [{"message": {"content": "rewritten"}}]}},
     )
     res = await client.post(
-        "/api/v1/ai/chat", json={"message": "The cat sat.", "prompt_id": "paraphrase"}
+        "/api/v1/ai/chat",
+        json={"message": "The cat sat.", "prompt_id": "instructions/paraphrase"},
     )
     assert res.status_code == 200, res.text
     content = fake.calls[0]["json"]["messages"][1]["content"]
     assert content.startswith("Instructions:\n")
-    assert "Rewrite the given passage" in content
+    assert "paraphrase the empirical data" in content
     assert content.endswith("\n\nThe cat sat.")
 
     res = await client.post(
@@ -901,9 +902,15 @@ async def test_chat_prompt_id_resolves_from_catalog(project_client, monkeypatch)
     assert res.status_code == 200, res.text
     content = fake.calls[1]["json"]["messages"][1]["content"]
     assert "Classify the sentiment" in content
+    # The sentiment instruction carries its own persona mode.
+    system = fake.calls[1]["json"]["messages"][0]["content"]
+    assert "sentiment" in system.lower()
 
 
-async def test_chat_memo_analysis_mode_resolves_root_prompt(project_client, monkeypatch):
+async def test_chat_memo_analysis_mode_uses_memo_persona(project_client, monkeypatch):
+    """memo_analysis without an instruction no longer injects a root prompt
+    (the per-mode root libraries were consolidated into the instruction
+    catalog); the memo persona still applies as the system prompt."""
     client, _ = project_client
     fake = patch_client(
         monkeypatch,
@@ -914,10 +921,202 @@ async def test_chat_memo_analysis_mode_resolves_root_prompt(project_client, monk
     )
     assert res.status_code == 200, res.text
     content = fake.calls[0]["json"]["messages"][1]["content"]
-    assert "Instructions:\n" in content
-    assert "Summarize the given research memos" in content
+    assert "Instructions:" not in content
+    assert content == "analyze"
     system = fake.calls[0]["json"]["messages"][0]["content"]
     assert "memos" in system.lower()
+
+
+async def test_chat_custom_template_prompt_is_resolved_from_db(project_client, monkeypatch):
+    """A user-defined template (custom:<id>) is injected as the instruction."""
+    client, _ = project_client
+    res = await client.post(
+        "/api/v1/ai/templates",
+        json={"name": "My Focus", "description": "d", "text": "Focus only on the gaps."},
+    )
+    assert res.status_code == 201, res.text
+    template_id = res.json()["id"]
+    fake = patch_client(
+        monkeypatch,
+        {"/chat/completions": {"choices": [{"message": {"content": "ok"}}]}},
+    )
+    res = await client.post(
+        "/api/v1/ai/chat",
+        json={"message": "go", "prompt_id": f"custom:{template_id}"},
+    )
+    assert res.status_code == 200, res.text
+    content = fake.calls[0]["json"]["messages"][1]["content"]
+    assert content.startswith("Instructions:\n")
+    assert "Focus only on the gaps." in content
+    # Custom templates carry the general persona (no catalog mode).
+    system = fake.calls[0]["json"]["messages"][0]["content"]
+    assert "qualitative data analysis" in system.lower()
+
+
+# ----------------------------------------------------------------------
+# Auto mode + persistent chat history
+# ----------------------------------------------------------------------
+
+def test_derive_mode_auto_rules():
+    from qualcoder_api.services.ai_service import derive_mode
+
+    assert derive_mode("auto", None, None, None) == "general"
+    assert derive_mode("auto", [1], None, None) == "memo_analysis"
+    assert derive_mode("auto", None, [2], None) == "code_analysis"
+    assert derive_mode("auto", None, None, None, source_id=3) == "text_analysis"
+    assert derive_mode("auto", [1], [2], None) == "topic_exploration"
+    assert derive_mode("auto", None, [2], [4]) == "topic_exploration"
+    # Explicit modes are honored as-is.
+    assert derive_mode("general", [1], None, None) == "general"
+    assert derive_mode("code_analysis", None, None, None) == "code_analysis"
+
+
+async def test_chat_auto_mode_persists_new_history(project_client, monkeypatch):
+    client, _ = project_client
+    fake = patch_client(
+        monkeypatch,
+        {"/chat/completions": {"choices": [{"message": {"content": "hi back"}}]}},
+    )
+    res = await client.post("/api/v1/ai/chat", json={"message": "How do I start?"})
+    assert res.status_code == 200, res.text
+    chat_id = res.json()["chat_id"]
+    assert chat_id > 0
+    assert res.json()["reply"] == "hi back"
+
+    listing = await client.get("/api/v1/ai/chats")
+    chats = listing.json()["chats"]
+    assert len(chats) == 1
+    assert chats[0]["id"] == chat_id
+    assert chats[0]["title"] == "How do I start?"
+
+    detail = await client.get(f"/api/v1/ai/chats/{chat_id}")
+    messages = detail.json()["messages"]
+    assert [m["role"] for m in messages] == ["user", "assistant"]
+    assert messages[0]["text"] == "How do I start?"
+    assert messages[1]["text"] == "hi back"
+    envelope = json.loads(messages[0]["request_json"])
+    assert envelope["mode"] == "auto"
+    assert envelope["mode_derived"] == "general"
+    assert envelope["prompt_id"] is None
+
+
+async def test_chat_continues_existing_chat(project_client, monkeypatch):
+    client, _ = project_client
+    created = await client.post("/api/v1/ai/chats", json={"title": "Empty session"})
+    chat_id = created.json()["id"]
+    fake = patch_client(
+        monkeypatch,
+        {"/chat/completions": {"choices": [{"message": {"content": "again"}}]}},
+    )
+    res = await client.post(
+        "/api/v1/ai/chat", json={"message": "more", "chat_id": chat_id}
+    )
+    assert res.status_code == 200, res.text
+    assert res.json()["chat_id"] == chat_id
+
+    detail = await client.get(f"/api/v1/ai/chats/{chat_id}")
+    messages = detail.json()["messages"]
+    assert len(messages) == 2
+
+    missing = await client.post("/api/v1/ai/chat", json={"message": "x", "chat_id": 99999})
+    assert missing.status_code == 404
+
+
+async def test_chat_rename_and_delete(project_client, monkeypatch):
+    client, _ = project_client
+    created = await client.post("/api/v1/ai/chats", json={"title": "Session A"})
+    chat_id = created.json()["id"]
+
+    renamed = await client.patch(
+        f"/api/v1/ai/chats/{chat_id}", json={"title": "Session B"}
+    )
+    assert renamed.status_code == 200, renamed.text
+    assert renamed.json()["title"] == "Session B"
+
+    detail = await client.get(f"/api/v1/ai/chats/{chat_id}")
+    assert detail.json()["title"] == "Session B"
+
+    deleted = await client.delete(f"/api/v1/ai/chats/{chat_id}")
+    assert deleted.status_code == 204
+    gone = await client.get(f"/api/v1/ai/chats/{chat_id}")
+    assert gone.status_code == 404
+
+
+async def test_chat_rename_rejects_empty_title(project_client):
+    client, _ = project_client
+    created = await client.post("/api/v1/ai/chats", json={"title": "Session"})
+    res = await client.patch(
+        f"/api/v1/ai/chats/{created.json()['id']}", json={"title": "   "}
+    )
+    assert res.status_code == 422
+
+
+# ----------------------------------------------------------------------
+# Instruction templates + merged catalog
+# ----------------------------------------------------------------------
+
+async def test_template_crud(project_client):
+    client, _ = project_client
+
+    created = await client.post(
+        "/api/v1/ai/templates",
+        json={"name": "Gap Finder", "description": "Finds gaps", "text": "Find the gaps."},
+    )
+    assert created.status_code == 201, created.text
+    template_id = created.json()["id"]
+
+    listing = await client.get("/api/v1/ai/templates")
+    assert listing.status_code == 200
+    assert [t["id"] for t in listing.json()["templates"]] == [template_id]
+
+    updated = await client.put(
+        f"/api/v1/ai/templates/{template_id}",
+        json={"name": "Gap Finder 2", "description": "d", "text": "Find ALL the gaps."},
+    )
+    assert updated.status_code == 200, updated.text
+    assert updated.json()["name"] == "Gap Finder 2"
+    assert updated.json()["text"] == "Find ALL the gaps."
+
+    deleted = await client.delete(f"/api/v1/ai/templates/{template_id}")
+    assert deleted.status_code == 204
+    assert (await client.get("/api/v1/ai/templates")).json()["templates"] == []
+
+
+async def test_template_validation(project_client):
+    client, _ = project_client
+    no_name = await client.post(
+        "/api/v1/ai/templates", json={"name": "  ", "description": "", "text": "x"}
+    )
+    assert no_name.status_code == 422
+    no_text = await client.post(
+        "/api/v1/ai/templates", json={"name": "X", "description": "", "text": "  "}
+    )
+    assert no_text.status_code == 422
+
+
+async def test_prompts_merge_custom_templates_with_groups(project_client):
+    client, _ = project_client
+    await client.post(
+        "/api/v1/ai/templates",
+        json={"name": "My Template", "description": "d", "text": "Body."},
+    )
+    res = await client.get("/api/v1/ai/prompts")
+    assert res.status_code == 200, res.text
+    prompts = res.json()["prompts"]
+    ids = {p["id"] for p in prompts}
+    assert "instructions/summarize" in ids
+    assert "instructions/compare" in ids
+    assert "instructions/criticize" in ids
+    assert "sentiment" in ids
+    assert "specialized/reconstructive-srp-lieder-schaffer-2024" in ids
+    custom = [p for p in prompts if p["custom"]]
+    assert len(custom) == 1
+    assert custom[0]["group"] == "custom"
+    assert custom[0]["id"].startswith("custom:")
+    by_id = {p["id"]: p for p in prompts}
+    assert by_id["instructions/summarize"]["group"] == "analysis"
+    assert by_id["sentiment"]["group"] == "analysis"
+    assert by_id["specialized/reconstructive-srp-lieder-schaffer-2024"]["group"] == "specialized"
 
 
 # ----------------------------------------------------------------------

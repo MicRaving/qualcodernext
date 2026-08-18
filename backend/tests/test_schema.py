@@ -49,6 +49,9 @@ EXPECTED_TABLES = {
     "code_set",
     "code_set_member",
     "r_script",
+    "ai_chat",
+    "ai_chat_message",
+    "ai_prompt",
 }
 
 EXPECTED_VIEWS = {

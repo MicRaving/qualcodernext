@@ -21,6 +21,9 @@ import type {
   AiIndexStatus,
   AiPromptInfo,
   AiStatus,
+  AiChatInfo,
+  AiChatDetail,
+  AiTemplateInfo,
   AVCoding,
   BadLink,
   Bookmarks,
@@ -568,12 +571,51 @@ export const api = {
     mcp_permissions?: string;
   }) =>
     request<unknown>("/ai/settings", { method: "PUT", body: JSON.stringify(body) }),
-  aiChat: (message: string, context = "", mode = "general", promptId?: string) =>
+  aiChat: (
+    message: string,
+    context = "",
+    mode = "auto",
+    promptId?: string,
+    ids?: { memoIds?: number[]; codeIds?: number[]; sourceIds?: number[]; sourceId?: number; chatId?: number },
+  ) =>
     request<AiChatReply>("/ai/chat", {
       method: "POST",
-      body: JSON.stringify({ message, context, mode, prompt_id: promptId }),
+      body: JSON.stringify({
+        message,
+        context,
+        mode,
+        prompt_id: promptId,
+        memo_ids: ids?.memoIds,
+        code_ids: ids?.codeIds,
+        source_ids: ids?.sourceIds,
+        source_id: ids?.sourceId,
+        chat_id: ids?.chatId,
+      }),
     }),
   aiPrompts: () => request<{ prompts: AiPromptInfo[] }>("/ai/prompts"),
+  aiChats: () => request<{ chats: AiChatInfo[] }>("/ai/chats"),
+  aiChatCreate: (title = "") =>
+    request<AiChatInfo>("/ai/chats", { method: "POST", body: JSON.stringify({ title }) }),
+  aiChatGet: (chatId: number) => request<AiChatDetail>(`/ai/chats/${chatId}`),
+  aiChatRename: (chatId: number, title: string) =>
+    request<{ id: number; title: string }>(`/ai/chats/${chatId}`, {
+      method: "PATCH",
+      body: JSON.stringify({ title }),
+    }),
+  aiChatDelete: (chatId: number) => request<void>(`/ai/chats/${chatId}`, { method: "DELETE" }),
+  aiTemplates: () => request<{ templates: AiTemplateInfo[] }>("/ai/templates"),
+  aiTemplateCreate: (body: { name: string; description?: string; text: string }) =>
+    request<AiTemplateInfo>("/ai/templates", { method: "POST", body: JSON.stringify(body) }),
+  aiTemplateUpdate: (
+    templateId: number,
+    body: { name: string; description?: string; text: string },
+  ) =>
+    request<AiTemplateInfo>(`/ai/templates/${templateId}`, {
+      method: "PUT",
+      body: JSON.stringify(body),
+    }),
+  aiTemplateDelete: (templateId: number) =>
+    request<void>(`/ai/templates/${templateId}`, { method: "DELETE" }),
   aiIndexStatus: () => request<AiIndexStatus>("/ai/index"),
   aiIndexBuild: () => request<AiIndexStatus>("/ai/index", { method: "POST", body: "{}" }),
   aiIndexDelete: () => request<void>("/ai/index", { method: "DELETE" }),

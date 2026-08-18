@@ -606,3 +606,37 @@ comment = Table(
     Column("owner", String),
     Column("created", String),
 )
+
+ai_chat = Table(
+    "ai_chat",
+    metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("title", String),
+    Column("created", String),
+    Column("updated", String),
+)
+
+ai_chat_message = Table(
+    "ai_chat_message",
+    metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("chat_id", Integer),
+    # "user" | "assistant"
+    Column("role", String),
+    Column("text", Text),
+    # JSON request envelope {mode, prompt_id, memo_ids, code_ids, source_ids}
+    # so a persisted exchange stays reproducible.
+    Column("request_json", Text),
+    Column("created", String),
+)
+
+ai_prompt = Table(
+    "ai_prompt",
+    metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("name", String),
+    Column("description", Text),
+    Column("text", Text),
+    Column("created", String),
+    Column("updated", String),
+)

@@ -348,6 +348,8 @@ export interface AiStatus {
 export interface AiChatReply {
   reply: string;
   model: string;
+  /** Chat session the exchange was appended to (auto-created when new). */
+  chat_id?: number;
 }
 
 export interface AiSearchResult {
@@ -362,6 +364,43 @@ export interface AiPromptInfo {
   mode: string;
   name: string;
   description: string;
+  /** Friendly display label (falls back to ``name``). */
+  label?: string;
+  /** Backend flag for internal entries (e.g. ``_init``); never shown. */
+  hidden?: boolean;
+  /** Dropdown section: "analysis" | "specialized" | "custom" | "". */
+  group?: string;
+  /** True for user-defined templates stored in the project. */
+  custom?: boolean;
+}
+
+export interface AiChatInfo {
+  id: number;
+  title: string;
+  created: string;
+  updated: string;
+}
+
+export interface AiChatMessage {
+  id: number;
+  chat_id: number;
+  role: string;
+  text: string;
+  request_json: string;
+  created: string;
+}
+
+export interface AiChatDetail extends AiChatInfo {
+  messages: AiChatMessage[];
+}
+
+export interface AiTemplateInfo {
+  id: number;
+  name: string;
+  description: string;
+  text: string;
+  created: string;
+  updated: string;
 }
 
 export interface AiIndexStatus {

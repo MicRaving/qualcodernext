@@ -96,6 +96,11 @@ _SCHEMA_SQL: list[str] = [
     "body text, owner TEXT, created text)",
     "CREATE TABLE r_script (id integer primary key autoincrement, name text, script text, "
     "owner text, created text, updated text, unique(name))",
+    "CREATE TABLE ai_chat (id integer primary key autoincrement, title text, created text, updated text)",
+    "CREATE TABLE ai_chat_message (id integer primary key autoincrement, chat_id integer, "
+    "role text, text text, request_json text, created text)",
+    "CREATE TABLE ai_prompt (id integer primary key autoincrement, name text, description text, "
+    "text text, created text, updated text)",
 ]
 
 # Hot-path indexes (created for new projects; the migration chain adds the
@@ -125,6 +130,7 @@ _INDEX_SQL: list[str] = [
     "CREATE INDEX IF NOT EXISTS idx_code_name_super ON code_name(supercid)",
     "CREATE INDEX IF NOT EXISTS idx_attribute_name ON attribute(name)",
     "CREATE INDEX IF NOT EXISTS idx_comment_target ON comment(target_kind, target_id)",
+    "CREATE INDEX IF NOT EXISTS idx_ai_chat_message_chat_id ON ai_chat_message(chat_id)",
 ]
 
 # Extra tables/views beyond the v14 core (added at project-open time).

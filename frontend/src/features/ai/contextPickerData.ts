@@ -1,16 +1,16 @@
 /**
  * ContextPickers data layer — loading + multi-select state for the
- * per-mode context pickers (shared by the chat and search panels).
+ * context pickers shared with every AI chat request.
  *
- * Every analysis mode loads all three kinds (additive pickers); the
- * selection may mix them freely. Memo keys keep the legacy
- * ``file:<id>``/``code:<id>`` shape; codes use ``c:<cid>`` and files
+ * All three kinds (memos / codes / files) are always loaded and shown
+ * (additive pickers); the selection may mix them freely. Memo keys keep the
+ * legacy ``file:<id>``/``code:<id>`` shape; codes use ``c:<cid>`` and files
  * ``f:<sid>`` so the three pickers never collide.
  */
 import { useMemo, useState } from "react";
 import { useAsyncEffect } from "@/lib/useAsync";
 import { ApiError, api, fetchWithTimeout, initApiBase, type CodeTreeItem, type Source } from "@/lib/api";
-import { CONTEXT_PICKERS, type AiMode, type ContextPickerKind } from "@/features/ai/aiModes";
+import { type ContextPickerKind } from "@/features/ai/aiModes";
 
 export interface MemoEntry {
   kind: "file" | "code";
@@ -77,9 +77,8 @@ export interface ContextPickerState {
   selectedSourceIds: number[];
 }
 
-/** Loads the context picker data for a mode and tracks the multi-select. */
-export function useContextPickers(mode: AiMode): ContextPickerState {
-  const required = CONTEXT_PICKERS[mode];
+/** Loads the context picker data (all three kinds) and tracks the multi-select. */
+export function useContextPickers(): ContextPickerState {
   const [data, setData] = useState<ContextPickerState["data"]>({
     memos: null,
     codes: null,
@@ -96,49 +95,38 @@ export function useContextPickers(mode: AiMode): ContextPickerState {
   useAsyncEffect(async (signal) => {
     setSelectedKeys(new Set());
     setQueryState({ memos: "", codes: "", files: "" });
-    setData((prev) => ({
-      memos: required.memos ? null : prev.memos,
-      codes: required.codes ? null : prev.codes,
-      codeCounts: required.codes ? new Map() : prev.codeCounts,
-      sources: required.files ? null : prev.sources,
-    }));
+    setData((prev) => ({ ...prev, memos: null, codes: null, codeCounts: new Map(), sources: null }));
 
     await Promise.allSettled([
-      required.memos
-        ? fetchMemos()
-            .then((items) => {
-              signal.throwIfAborted();
-              setData((p) => ({ ...p, memos: items }));
-            })
-            .catch(() => {
-              signal.throwIfAborted();
-              setData((p) => ({ ...p, memos: [] }));
-            })
-        : null,
-      required.codes
-        ? fetchCodes()
-            .then(({ tree, counts }) => {
-              signal.throwIfAborted();
-              setData((p) => ({ ...p, codes: tree, codeCounts: counts }));
-            })
-            .catch(() => {
-              signal.throwIfAborted();
-              setData((p) => ({ ...p, codes: [], codeCounts: new Map() }));
-            })
-        : null,
-      required.files
-        ? fetchSources()
-            .then((items) => {
-              signal.throwIfAborted();
-              setData((p) => ({ ...p, sources: items }));
-            })
-            .catch(() => {
-              signal.throwIfAborted();
-              setData((p) => ({ ...p, sources: [] }));
-            })
-        : null,
+      fetchMemos()
+        .then((items) => {
+          signal.throwIfAborted();
+          setData((p) => ({ ...p, memos: items }));
+        })
+        .catch(() => {
+          signal.throwIfAborted();
+          setData((p) => ({ ...p, memos: [] }));
+        }),
+      fetchCodes()
+        .then(({ tree, counts }) => {
+          signal.throwIfAborted();
+          setData((p) => ({ ...p, codes: tree, codeCounts: counts }));
+        })
+        .catch(() => {
+          signal.throwIfAborted();
+          setData((p) => ({ ...p, codes: [], codeCounts: new Map() }));
+        }),
+      fetchSources()
+        .then((items) => {
+          signal.throwIfAborted();
+          setData((p) => ({ ...p, sources: items }));
+        })
+        .catch(() => {
+          signal.throwIfAborted();
+          setData((p) => ({ ...p, sources: [] }));
+        }),
     ]);
-  }, [mode, required.memos, required.codes, required.files]);
+  }, []);
 
   const memoById = useMemo(
     () => new Map<string, MemoEntry>((data.memos ?? []).map((m) => [`${m.kind}:${m.id}`, m])),
@@ -203,7 +191,7 @@ export function useContextPickers(mode: AiMode): ContextPickerState {
   }
 
   return {
-    required,
+    required: { memos: true, codes: true, files: true },
     data,
     query,
     setQuery: (kind, value) => setQueryState((prev) => ({ ...prev, [kind]: value })),
