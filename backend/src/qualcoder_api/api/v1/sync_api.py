@@ -86,7 +86,11 @@ async def sync_presence(svc: ServiceDep) -> dict:
     try:
         from qualcoder_api.services import presence_service
 
-        presence = presence_service.read(svc.project_path)
+        # Return ALL entries (including this backend's own). The frontend
+        # excludes the current coder by name so each instance sees "other
+        # active coders" — this also provides file-indicator data for ALL
+        # active coders (including self, used for the Sidebar highlight).
+        presence = presence_service.read(svc.project_path, exclude_pid=None)
     except Exception as err:  # pragma: no cover - defensive
         return {"ok": False, "reason": str(err)}
     return {"ok": True, "presence": presence}

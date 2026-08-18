@@ -135,16 +135,39 @@ def _recorded_conflicts(state: dict, rater: str) -> dict[str, dict]:
     """Per-rater entries that conflicted and must be retried next cycle,
     keyed by str(seq). Stored outside the sidecar so a conflict no longer
     blocks later entries (the watermark advances past it). Each value holds
-    the original sidecar entry plus the last recorded reason."""
+    the original sidecar entry, the last recorded reason, and a retry count."""
     return state.setdefault("conflicts", {}).setdefault(rater, {})
 
 
+#: Permanent-conflict reasons that will never succeed on retry.
+_PERMANENT_CONFLICT_REASONS = frozenset({
+    "IntegrityError", "OperationalError", "ValueError",
+    "ConflictError", "DatabaseError",
+})
+
+#: Drop a conflict entry after this many retries (it is likely permanent).
+_MAX_CONFLICT_RETRIES = 10
+
+
 def _remember_conflict(state: dict, rater: str, seq: int, entry: dict, reason: str) -> None:
-    _recorded_conflicts(state, rater)[str(seq)] = {"entry": entry, "reason": reason}
+    recs = _recorded_conflicts(state, rater)
+    existing = recs.get(str(seq))
+    retries = (existing.get("retries", 0) if isinstance(existing, dict) else 0) + 1
+    recs[str(seq)] = {"entry": entry, "reason": reason, "retries": retries}
 
 
 def _forget_conflict(state: dict, rater: str, seq: int) -> None:
     _recorded_conflicts(state, rater).pop(str(seq), None)
+
+
+def _prune_stale_conflicts(state: dict, rater: str, watermark: int) -> None:
+    """Remove recorded conflicts whose seq is below the current watermark —
+    these are already past the point where they would be retried from the
+    sidecar, so they are dead weight that would never be cleaned up."""
+    recs = _recorded_conflicts(state, rater)
+    stale = [k for k in recs if int(k) <= watermark]
+    for k in stale:
+        del recs[k]
 
 
 def _conflict_summary(state: dict, rater: str) -> list[dict]:
@@ -454,11 +477,24 @@ async def import_pending(session: AsyncSession, project_path: str, user: str) ->
         rater = sidecar.parent.name
         if rater == user:
             continue
+
+        # Prune conflicts whose seq is below the current watermark (they will
+        # never be replayed again — the sidecar entries above them have
+        # already advanced the watermark).
+        _prune_stale_conflicts(state, rater, _imported_seq(state, rater))
+
         # Combine previously-recorded conflicts (which may sit below the
         # watermark) with brand-new sidecar entries, then replay in seq order.
         pending: dict[int, dict] = {}
         for key, rec in _recorded_conflicts(state, rater).items():
             if isinstance(rec, dict) and isinstance(rec.get("entry"), dict):
+                # Drop entries that have exceeded the retry limit or have a
+                # permanent-conflict reason (constraint violation, etc.).
+                retries = rec.get("retries", 0)
+                reason = rec.get("reason", "")
+                if retries >= _MAX_CONFLICT_RETRIES or reason in _PERMANENT_CONFLICT_REASONS:
+                    _forget_conflict(state, rater, int(key))
+                    continue
                 pending[int(key)] = rec["entry"]
             else:
                 # Stale/malformed record from an older format — drop it.

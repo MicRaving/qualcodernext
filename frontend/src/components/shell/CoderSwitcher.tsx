@@ -94,11 +94,15 @@ export function CoderSwitcher() {
   const refreshHelpAnchor = helpOpen === "refresh" ? refreshHelpAnchorEl : null;
 
   // Coders with live activity in OTHER instances (fresh presence heartbeat).
+  // Excludes the current coder to avoid self-redundancy (the coder list
+  // already highlights the active coder; only other instances are "live").
   const liveCoders = useMemo(() => {
     const set = new Set<string>();
-    for (const e of presence) if (isLive(e.ts)) set.add(e.coder);
+    for (const e of presence) {
+      if (isLive(e.ts) && e.coder !== coderName) set.add(e.coder);
+    }
     return set;
-  }, [presence]);
+  }, [presence, coderName]);
 
   /* Recompute the flyout position whenever the window is resized. */
   useEffect(() => {
