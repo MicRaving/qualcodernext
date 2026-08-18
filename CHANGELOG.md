@@ -1,3 +1,18 @@
+## v0.2.3 (2026-08-18)
+
+## What's Changed in v0.2.3
+
+### Features
+- collaboration presence + sync improvements (413e2fb)
+
+### Bug Fixes
+- [scope] remove dead store re-exports that crashed the production bundle (blank screen) (5edad1c)
+
+### Other
+- docs: remove decorative ASCII diagrams from guides (8c71bd7)
+- Rebuild compiled artifacts (v0.2.2 history/audit hardening) (2cb117d)
+
+
 ## v0.2.2 (2026-08-17)
 
 ## What's Changed in v0.2.2
@@ -368,5 +383,6 @@
 - Release workflow degrades to unsigned builds when `TAURI_SIGNING_PRIVATE_KEY` is
   absent; manual `workflow_dispatch` trigger.
 - Updater artifacts (`.sig`, `qualcoder-latest.json`) generated per build.
+
 
 
