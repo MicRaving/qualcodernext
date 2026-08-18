@@ -6,7 +6,7 @@
  * UI components call these actions; the store never renders.
  */
 import { create } from "zustand";
-import { api, type SyncStatus } from "@/lib/api";
+import { api, type PresenceEntry, type SyncStatus } from "@/lib/api";
 import { useProjectStore } from "./project";
 
 export type ThemeMode = "light" | "dark";
@@ -129,6 +129,14 @@ interface PrefsState {
    *  the shell shows a transient notice and clears it. */
   syncAutoNotice: boolean;
   setSyncAutoNotice: (v: boolean) => void;
+
+  /** Live coder presence (who is actively working, and on which file).
+   *  Polled while a project is open; shown in the coder flyout and file list. */
+  presence: PresenceEntry[];
+  setPresence: (v: PresenceEntry[]) => void;
+  refreshPresence: () => Promise<void>;
+  /** Report the file this instance is currently working on. */
+  reportFileActivity: (fileId: number | null, fileName: string) => void;
 }
 
 export const usePrefsStore = create<PrefsState>((set) => ({
@@ -183,5 +191,20 @@ export const usePrefsStore = create<PrefsState>((set) => ({
     } catch {
       return false;
     }
+  },
+  presence: [],
+  setPresence: (v) => set({ presence: v }),
+  refreshPresence: async () => {
+    try {
+      const res = await api.syncPresence();
+      set({ presence: res.ok ? res.presence : [] });
+    } catch {
+      /* project closed etc. — keep the last known state */
+    }
+  },
+  reportFileActivity: (fileId, fileName) => {
+    // Fire-and-forget: the backend heartbeat keeps the presence fresh even if
+    // this call races with a project close.
+    void api.setPresenceActivity(fileId, fileName).catch(() => {});
   },
 }));

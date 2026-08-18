@@ -53,6 +53,7 @@ import {
 import { useInspectorStore } from "@/stores/inspector";
 import { useWorkspaceStore } from "@/stores/workspace";
 import { useProjectStore } from "@/stores/project";
+import { usePrefsStore } from "@/stores/prefs";
 import { TranscribeDialog } from "@/features/coding/TranscribeDialog";
 import { AutocodeDialog } from "@/features/coding/AutocodeDialog";
 import {
@@ -158,6 +159,7 @@ export function FileManager() {
   const selectFile = useInspectorStore((s) => s.selectFile);
   const sources = useProjectStore((s) => s.sources);
   const codeTree = useProjectStore((s) => s.codeTree);
+  const presence = usePrefsStore((s) => s.presence);
 
   const fileQuery = useProjectStore((s) => s.fileQuery);
   const setFileQuery = useProjectStore((s) => s.setFileQuery);
@@ -332,6 +334,15 @@ export function FileManager() {
     () => sortSources(filtered, sortKey, sortDir),
     [filtered, sortKey, sortDir],
   );
+  // Files being worked on by a live coder (fresh presence with a file).
+  const liveFileIds = useMemo(() => {
+    const set = new Set<number>();
+    const now = Date.now() / 1000;
+    for (const e of presence) {
+      if (e.file_id != null && now - e.ts < 60) set.add(e.file_id);
+    }
+    return set;
+  }, [presence]);
   const menuRow = menu ? rows.find((r) => r.id === menu.id) : undefined;
   // Row menu position, re-clamped on every render trigger while open (open
   // event + viewportTick for window resizes): translateX(-100%) anchors the
@@ -966,6 +977,13 @@ export function FileManager() {
                       <span className="flex items-center gap-2">
                         {fileIcon(row.media_type)}
                         <span className="truncate font-medium">{row.name}</span>
+                        {liveFileIds.has(row.id) && (
+                          <span
+                            aria-hidden
+                            className="h-1.5 w-1.5 shrink-0 rounded-full bg-[var(--qc-success)]"
+                            title={t("sync.liveOnFile")}
+                          />
+                        )}
                       </span>
                     </td>
                     <td className="whitespace-nowrap border-b border-border px-3 py-2 text-text-secondary">

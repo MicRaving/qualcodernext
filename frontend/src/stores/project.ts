@@ -425,7 +425,7 @@ export const useProjectStore = create<ProjectLifecycleState>((set, get) => ({
       inspectorError: null,
     });
     useCoderStore.setState({ activeCodeId: null });
-    usePrefsStore.setState({ syncAutoNotice: false });
+    usePrefsStore.setState({ syncAutoNotice: false, presence: [] });
   },
 
   refreshProject: async () => {

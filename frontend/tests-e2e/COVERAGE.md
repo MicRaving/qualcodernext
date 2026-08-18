@@ -318,6 +318,7 @@ Top gaps worth filling next (quick to script, high value):
 | Import | Ribbon chip fill while importing | — | **Gap** |
 | Sync | Enable/disable cycle; last-sync/pending/error; Sync now | S (sync.spec.ts) | — |
 | Sync | Shared-folder auto-detect notice | S (sync.spec.ts) | — |
+| Sync | Live coder presence: active-coder indicator + current file | S (sync.spec.ts) | — |
 | Sync | Sync dot state on the coder switcher | — | **Gap** |
 | Visibility | Hide a coder's codings from other users | — | **Gap** |
 | Lock | Open an in-use project reports the locking user | — | **Gap** |

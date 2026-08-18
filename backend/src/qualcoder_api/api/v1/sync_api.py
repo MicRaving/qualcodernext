@@ -27,6 +27,12 @@ class SyncOverrideRequest(BaseModel):
     mode: str = "auto"
 
 
+class PresenceActivityRequest(BaseModel):
+    """The source this instance is currently working on (null = none)."""
+    file_id: int | None = None
+    file_name: str = ""
+
+
 @router.get("/settings")
 async def get_sync_settings() -> dict:
     """The per-machine sync switch state."""
@@ -73,15 +79,39 @@ async def sync_status(svc: ServiceDep) -> dict:
 
 @router.get("/presence")
 async def sync_presence(svc: ServiceDep) -> dict:
-    """Live presence entries (other instances on the open project) read from
-    the presence-registry lock file — who is working as which coder."""
+    """Live presence entries of OTHER instances on the open project — who is
+    actively working and on which file (per-instance presence files)."""
     if svc.project_path == "":
         return {"ok": False, "reason": "no project open"}
     try:
-        openers = svc.openers()
+        from qualcoder_api.services import presence_service
+
+        presence = presence_service.read(svc.project_path)
     except Exception as err:  # pragma: no cover - defensive
         return {"ok": False, "reason": str(err)}
-    return {"ok": True, "presence": openers}
+    return {"ok": True, "presence": presence}
+
+
+@router.post("/presence/activity")
+async def sync_presence_activity(req: PresenceActivityRequest, svc: ServiceDep) -> dict:
+    """Report the source this instance is currently working on (or that it
+    left the coder view, ``file_id=null``). Broadcast to other instances via
+    the presence files."""
+    if svc.project_path == "":
+        return {"ok": False, "reason": "no project open"}
+    svc.set_current_source(req.file_id, req.file_name)
+    try:
+        from qualcoder_api.services import presence_service
+
+        presence_service.touch(
+            svc.project_path,
+            user_settings.get_codername(),
+            file_id=req.file_id,
+            file_name=req.file_name,
+        )
+    except Exception as err:  # pragma: no cover - defensive
+        return {"ok": False, "reason": str(err)}
+    return {"ok": True}
 
 
 @router.get("/auto-detect")

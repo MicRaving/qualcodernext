@@ -203,6 +203,37 @@ export function ProjectShell() {
     return () => window.clearTimeout(timer);
   }, [syncAutoNotice]);
 
+  // Live coder presence: refresh the list of active instances while a
+  // project is open, and report this instance's current file to the others.
+  const PRESENCE_POLL_MS = 10_000;
+  useEffect(() => {
+    if (!projectOpen) return;
+    let cancelled = false;
+    const refresh = async () => {
+      if (cancelled) return;
+      await usePrefsStore.getState().refreshPresence();
+    };
+    void refresh();
+    const timer = window.setInterval(() => void refresh(), PRESENCE_POLL_MS);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [projectOpen]);
+
+  // Report which file this instance is working on whenever the view changes,
+  // so other raters see the live "on which file" indicator.
+  useEffect(() => {
+    if (!projectOpen) return;
+    const store = usePrefsStore.getState();
+    if (view.kind === "coding" && "sourceId" in view) {
+      const source = useProjectStore.getState().sources.find((s) => s.id === view.sourceId);
+      store.reportFileActivity(view.sourceId, source?.name ?? String(view.sourceId));
+    } else {
+      store.reportFileActivity(null, "");
+    }
+  }, [projectOpen, view]);
+
   // Announce task completion for screen readers (aria-live region — only
   // mounted in screen-reader mode so the default DOM stays quiet).
   const announce = (text: string) => {

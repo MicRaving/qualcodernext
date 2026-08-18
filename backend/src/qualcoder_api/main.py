@@ -80,15 +80,40 @@ async def _sync_loop() -> None:
                 logger.exception("background sync cycle failed: %s", err)
 
 
+async def _presence_loop() -> None:
+    """Live coder presence: while a project is open, refresh this instance's
+    presence file so other instances see it as active (independent of the sync
+    switch). The frontend reports the current file via the activity endpoint."""
+    from qualcoder_api.services import presence_service
+
+    while True:
+        await asyncio.sleep(presence_service.PRESENCE_HEARTBEAT_SECS)
+        if not service.project_path:
+            continue
+        try:
+            presence_service.touch(
+                service.project_path,
+                user_settings.get_codername(),
+                file_id=service.current_source_id,
+                file_name=service.current_source_name,
+            )
+        except Exception as err:  # pragma: no cover - defensive
+            logger.exception("presence heartbeat failed: %s", err)
+
+
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
-    task = asyncio.create_task(_sync_loop())
+    tasks = [
+        asyncio.create_task(_sync_loop()),
+        asyncio.create_task(_presence_loop()),
+    ]
     try:
         yield
     finally:
-        task.cancel()
-        with _contextlib.suppress(asyncio.CancelledError):
-            await task
+        for task in tasks:
+            task.cancel()
+            with _contextlib.suppress(asyncio.CancelledError):
+                await task
         await service.close_project()
 
 

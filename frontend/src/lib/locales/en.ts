@@ -1685,6 +1685,11 @@ export const en: Record<string, string> = {
   "sync.retryAll": "Retry all",
   "sync.conflictItem": "{entity} #{pk} — {reason}",
   "sync.presence": "Open as coder",
+  "sync.liveNow": "Live now",
+  "sync.liveNone": "No other raters online",
+  "sync.liveNoFile": "not in a file",
+  "sync.presenceLive": "Actively working",
+  "sync.liveOnFile": "Being worked on",
 
   // Duplicate-coder warning (working as the same coder on two instances
   // corrupts the sync).

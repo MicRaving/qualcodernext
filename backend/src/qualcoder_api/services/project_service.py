@@ -56,6 +56,16 @@ class ProjectService:
         self.project_path: str = ""
         self.project_name: str = ""
         self.lock_file_path: str = ""
+        #: Live presence: the source currently being worked on in THIS
+        #: instance (reported by the frontend, broadcast via the presence
+        #: heartbeat to other instances).
+        self.current_source_id: int | None = None
+        self.current_source_name: str = ""
+
+    def set_current_source(self, source_id: int | None, source_name: str = "") -> None:
+        """Record the source this instance is currently working on."""
+        self.current_source_id = source_id
+        self.current_source_name = source_name
 
     # ------------------------------------------------------------------
     # Connection
@@ -259,8 +269,14 @@ class ProjectService:
             except Exception as err:
                 logger.warning("Compact project on close failed: %s", err)
         self.delete_lock_file()
+        if self.project_path:
+            from qualcoder_api.services import presence_service
+
+            presence_service.clear(self.project_path)
         self.project_path = ""
         self.project_name = ""
+        self.current_source_id = None
+        self.current_source_name = ""
 
     # ------------------------------------------------------------------
     # Backup

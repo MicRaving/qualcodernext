@@ -794,6 +794,24 @@ export interface SyncConflict {
   reason: string;
 }
 
+/** Live coder presence — an instance actively working on the open project
+ *  (broadcast via per-instance presence files inside the project folder). */
+export interface PresenceEntry {
+  coder: string;
+  os_user: string;
+  pid: number;
+  /** Last heartbeat (epoch seconds); "live" when recent. */
+  ts: number;
+  /** The source currently being worked on (null = not in a file). */
+  file_id: number | null;
+  file_name: string;
+}
+
+export interface PresenceResponse {
+  ok: boolean;
+  presence: PresenceEntry[];
+}
+
 export interface SyncCollaborator {
   user: string;
   last_sync: number; // sidecar mtime (epoch seconds)

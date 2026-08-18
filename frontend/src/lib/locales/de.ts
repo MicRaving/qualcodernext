@@ -1571,6 +1571,11 @@ export const de: Record<string, string> = {
   "sync.retryAll": "Alle erneut",
   "sync.conflictItem": "{entity} #{pk} — {reason}",
   "sync.presence": "Offen als Coder",
+  "sync.liveNow": "Gerade aktiv",
+  "sync.liveNone": "Keine anderen Coder online",
+  "sync.liveNoFile": "keine Datei",
+  "sync.presenceLive": "Arbeitet gerade",
+  "sync.liveOnFile": "Wird gerade bearbeitet",
 
   // Warnung: gleicher Coder auf zwei Instanzen (korrumpiert den Sync).
   "coder.duplicateWarningTitle": "Gleicher Coder auf zwei Instanzen",

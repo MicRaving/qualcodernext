@@ -62,6 +62,7 @@ import { useCoderStore } from "@/stores/coder";
 import { useInspectorStore } from "@/stores/inspector";
 import { useWorkspaceStore } from "@/stores/workspace";
 import { useProjectStore } from "@/stores/project";
+import { usePrefsStore } from "@/stores/prefs";
 import { clampToViewport } from "@/features/sidebar/codeActions";
 
 type ContextMenu =
@@ -165,6 +166,18 @@ export function Sidebar() {
   const hiddenCodes = useCoderStore((s) => s.hiddenCodes);
   const toggleHiddenCode = useCoderStore((s) => s.toggleHiddenCode);
   const view = useWorkspaceStore((s) => s.view);
+  const presence = usePrefsStore((s) => s.presence);
+
+  // Files currently being worked on by a live coder (fresh presence with a
+  // non-null file) — shown as a small indicator in the file list.
+  const liveFileIds = useMemo(() => {
+    const set = new Set<number>();
+    const now = Date.now() / 1000;
+    for (const e of presence) {
+      if (e.file_id != null && now - e.ts < 60) set.add(e.file_id);
+    }
+    return set;
+  }, [presence]);
 
   // Refresh the set list whenever a project opens/closes. The applied
   // filter is a client-side snapshot and is dropped on close.
@@ -1414,6 +1427,13 @@ export function Sidebar() {
                       >
                         {fileIcon(s.media_type)}
                         <span className="truncate">{s.name}</span>
+                        {liveFileIds.has(s.id) && (
+                          <span
+                            aria-hidden
+                            className="ml-auto h-1.5 w-1.5 shrink-0 rounded-full bg-[var(--qc-success)]"
+                            title={t("sync.liveOnFile")}
+                          />
+                        )}
                       </button>
                       <span className="flex shrink-0 items-center gap-0.5 pr-1 opacity-0 transition-opacity group-hover:opacity-100 hover:opacity-100">
                         <IconButton

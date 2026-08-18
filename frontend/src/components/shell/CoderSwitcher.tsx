@@ -48,6 +48,13 @@ function formatSince(ts: number): string {
   return `${Math.round(delta / 86400)}d`;
 }
 
+/** How fresh a presence heartbeat counts as "live" (seconds). */
+const LIVE_ACTIVITY_SECS = 60;
+
+function isLive(ts: number): boolean {
+  return ts > 0 && Date.now() / 1000 - ts < LIVE_ACTIVITY_SECS;
+}
+
 interface CoderStats {
   coder: string;
   tables: { entity: string; count: number }[];
@@ -65,6 +72,7 @@ export function CoderSwitcher() {
   const setSyncStatus = usePrefsStore((s) => s.setSyncStatus);
   const setSyncEnabled = usePrefsStore((s) => s.setSyncEnabled);
   const runSyncNow = usePrefsStore((s) => s.runSyncNow);
+  const presence = usePrefsStore((s) => s.presence);
   const [open, setOpen] = useState(false);
   const [adding, setAdding] = useState(false);
   const [newName, setNewName] = useState("");
@@ -84,6 +92,13 @@ export function CoderSwitcher() {
   const syncEnabled = syncStatus?.ok === true && syncStatus.enabled === true;
   const syncError = Boolean(syncStatus?.last_error);
   const refreshHelpAnchor = helpOpen === "refresh" ? refreshHelpAnchorEl : null;
+
+  // Coders with live activity in OTHER instances (fresh presence heartbeat).
+  const liveCoders = useMemo(() => {
+    const set = new Set<string>();
+    for (const e of presence) if (isLive(e.ts)) set.add(e.coder);
+    return set;
+  }, [presence]);
 
   /* Recompute the flyout position whenever the window is resized. */
   useEffect(() => {
@@ -375,6 +390,13 @@ export function CoderSwitcher() {
               >
                 <User size={13} aria-hidden />
                 <span className="truncate">{c.name}</span>
+                {liveCoders.has(c.name) && (
+                  <span
+                    aria-hidden
+                    className="ml-0.5 inline-block h-2 w-2 shrink-0 rounded-full bg-[var(--qc-success)]"
+                    title={t("sync.presenceLive")}
+                  />
+                )}
                 {c.coding_count > 0 && (
                   <span className="ml-auto text-xs text-text-secondary">{c.coding_count}</span>
                 )}
@@ -508,6 +530,42 @@ export function CoderSwitcher() {
               <RefreshCw size={13} aria-hidden />
             </button>
           </div>
+
+          {/* Live presence: who is actively working and on which file */}
+          <div className="px-2 py-1.5">
+            <span className="text-[10px] font-medium uppercase tracking-wide text-text-secondary">
+              {t("sync.liveNow")}
+            </span>
+            {presence.length === 0 ? (
+              <p className="mt-1 text-[11px] text-text-secondary">{t("sync.liveNone")}</p>
+            ) : (
+              <ul className="mt-1 space-y-0.5">
+                {presence.slice(0, 6).map((e) => (
+                  <li key={e.pid} className="flex items-center gap-1.5 text-[11px] leading-snug">
+                    <span
+                      aria-hidden
+                      className={`h-2 w-2 shrink-0 rounded-full ${
+                        isLive(e.ts) ? "bg-[var(--qc-success)]" : "bg-border"
+                      }`}
+                    />
+                    <span className={`truncate ${isLive(e.ts) ? "text-text-primary" : "text-text-secondary"}`}>
+                      {e.coder}
+                    </span>
+                    {e.file_name ? (
+                      <span className="ml-auto min-w-0 truncate text-text-secondary" title={e.file_name}>
+                        {e.file_name}
+                      </span>
+                    ) : (
+                      <span className="ml-auto shrink-0 text-text-secondary">
+                        {t("sync.liveNoFile")}
+                      </span>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+          <div className="my-1 h-px bg-border" aria-hidden />
 
           {/* Enable collaboration */}
           <div className="px-2 py-1.5">

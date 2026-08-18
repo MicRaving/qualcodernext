@@ -77,6 +77,7 @@ import type {
   SqlResult,
   SyncResult,
   SyncStatus,
+  PresenceResponse,
   TranscribeJob,
   TranscribeStatus,
   UndoCodingsResponse,
@@ -801,10 +802,14 @@ export const api = {
 
   colorScheme: () => request<ColorScheme>("/color-scheme"),
   syncStatus: () => request<SyncStatus>("/sync/status"),
-  syncPresence: () =>
-    request<{ ok: boolean; presence: Array<{ user: string; coder: string; pid: number; ts: number }> }>(
-      "/sync/presence",
-    ),
+  syncPresence: () => request<PresenceResponse>("/sync/presence"),
+  /** Report the source this instance is currently working on (null leaves the
+   *  coder view). Broadcast to other instances as live presence. */
+  setPresenceActivity: (fileId: number | null, fileName: string) =>
+    request<{ ok: boolean }>("/sync/presence/activity", {
+      method: "POST",
+      body: JSON.stringify({ file_id: fileId, file_name: fileName }),
+    }),
   syncNow: () => request<SyncResult>("/sync/now", { method: "POST" }),
   setSyncEnabled: (enabled: boolean) =>
     request<{ enabled: boolean }>("/sync/settings", {

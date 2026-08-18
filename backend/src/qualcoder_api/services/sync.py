@@ -83,9 +83,13 @@ _last_result: dict | None = None
 
 
 def _note_success(result: dict | None) -> None:
-    global _last_sync_ts, _last_result
+    global _last_sync_ts, _last_result, _last_error, _last_error_ts
     _last_sync_ts = time.time()
     _last_result = result
+    # A successful cycle clears any previous error so the UI indicator does
+    # not keep showing a stale failure.
+    _last_error = ""
+    _last_error_ts = 0.0
 
 
 def _note_error(err: Exception) -> None:
@@ -148,7 +152,13 @@ def _conflict_summary(state: dict, rater: str) -> list[dict]:
     out: list[dict] = []
     for seq in sorted(_recorded_conflicts(state, rater), key=lambda s: int(s)):
         rec = _recorded_conflicts(state, rater)[seq]
-        entry = rec.get("entry", {})
+        if not isinstance(rec, dict):
+            # Stale/malformed entry from an older format — drop it.
+            _recorded_conflicts(state, rater).pop(seq, None)
+            continue
+        entry = rec.get("entry")
+        if not isinstance(entry, dict):
+            entry = {}
         out.append({
             "seq": int(seq),
             "entity": entry.get("entity", ""),
@@ -245,7 +255,8 @@ NATURAL_KEYS: dict[str, list[str]] = {
 
 def _parse_sidecar(path: Path) -> list[dict]:
     """Read JSONL lines defensively; corrupt tails (mid-copy writes by the
-    sync tool) are dropped."""
+    sync tool) are dropped. Non-object lines (e.g. a bare number from a torn
+    write) are skipped so callers never crash on ``.get`` of a non-dict."""
     entries: list[dict] = []
     try:
         raw = path.read_text(encoding="utf-8")
@@ -256,9 +267,11 @@ def _parse_sidecar(path: Path) -> list[dict]:
         if not line:
             continue
         try:
-            entries.append(json.loads(line))
+            parsed = json.loads(line)
         except json.JSONDecodeError:
             continue
+        if isinstance(parsed, dict):
+            entries.append(parsed)
     return entries
 
 
@@ -443,10 +456,13 @@ async def import_pending(session: AsyncSession, project_path: str, user: str) ->
             continue
         # Combine previously-recorded conflicts (which may sit below the
         # watermark) with brand-new sidecar entries, then replay in seq order.
-        pending: dict[int, dict] = {
-            int(seq): rec.get("entry", {})
-            for seq, rec in _recorded_conflicts(state, rater).items()
-        }
+        pending: dict[int, dict] = {}
+        for key, rec in _recorded_conflicts(state, rater).items():
+            if isinstance(rec, dict) and isinstance(rec.get("entry"), dict):
+                pending[int(key)] = rec["entry"]
+            else:
+                # Stale/malformed record from an older format — drop it.
+                _forget_conflict(state, rater, int(key))
         for e in _parse_sidecar(sidecar):
             if e.get("seq", 0) > _imported_seq(state, rater):
                 pending[int(e["seq"])] = e
