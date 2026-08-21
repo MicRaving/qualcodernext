@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from sqlalchemy import delete, insert, select, update
+from sqlalchemy import delete, insert, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from qualcoder_api.core.models import Annotation
@@ -18,9 +18,8 @@ class AnnotationRepository:
 
     async def list_for_file(self, fid: int) -> list[Annotation]:
         rows = await self.session.execute(
-            select(tables.annotation)
-            .where(tables.annotation.c.fid == fid)
-            .order_by(tables.annotation.c.pos0)
+            text("SELECT * FROM annotation_visible WHERE fid = :fid ORDER BY pos0"),
+            {"fid": fid},
         )
         return [Annotation.model_validate(r._mapping) for r in rows]
 

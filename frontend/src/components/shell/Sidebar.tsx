@@ -1,8 +1,8 @@
 /**
  * Left sidebar — Files / Codes / Cases trees built from the API.
  */
-import { errorMessage } from "@/lib/utils";
-import { useEffect, useMemo, useRef, useState, type DragEvent as ReactDragEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
+import { cn, errorMessage } from "@/lib/utils";
+import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent as ReactDragEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import {
   Check,
   ChevronDown,
@@ -29,6 +29,7 @@ import {
   Unlink,
   Upload,
   UserRound,
+  Globe,
   X,
 } from "lucide-react";
 import { api, ApiError, type CodeTreeItem, type Source } from "@/lib/api";
@@ -55,6 +56,7 @@ import {
   Select,
 } from "@/components/ui/orchestrator";
 import { InlineNameEdit } from "@/components/ui/InlineNameEdit";
+import { UrlImportDialog } from "@/features/manage/UrlImportDialog";
 import { isPdf } from "@/lib/media";
 import { useToast } from "@/lib/toast";
 import { useI18n } from "@/lib/i18n";
@@ -117,6 +119,7 @@ export function Sidebar() {
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
   const [menu, setMenu] = useState<ContextMenu | null>(null);
   const [toolbarError, setToolbarError] = useState<string | null>(null);
+  const [urlImportOpen, setUrlImportOpen] = useState(false);
   /** Pointer-drag state (refs — the drag must survive re-renders). */
   const pointerDownRef = useRef<{ item: CodeTreeItem; x: number; y: number } | null>(null);
   const dragStartedRef = useRef(false);
@@ -153,6 +156,14 @@ export function Sidebar() {
   const [appliedSet, setAppliedSet] = useState<{ id: number; name: string; cids: Set<number> } | null>(null);
   const [manageMenu, setManageMenu] = useState<{ x: number; y: number } | null>(null);
   const [membersEditor, setMembersEditor] = useState<{ set: CodeSetSummary; members: Set<number> } | null>(null);
+  /** Shift-click marked rows for mass deletion. Files by source id; codes
+   *  and categories as "kind:id" keys (ids are per-table, so a code and a
+   *  category can share the same numeric id). */
+  const [markedFiles, setMarkedFiles] = useState<Set<number>>(new Set());
+  const [markedCodes, setMarkedCodes] = useState<Set<string>>(new Set());
+  /** Range anchors for shift-click marking (last clicked row per list). */
+  const fileAnchorRef = useRef<number | null>(null);
+  const codeAnchorRef = useRef<string | null>(null);
 
   const sources = useProjectStore((s) => s.sources);
   const codeTree = useProjectStore((s) => s.codeTree);
@@ -593,6 +604,131 @@ export function Sidebar() {
       toast.error(detail);
     }
   }
+
+  /* ------------------------------------------------------------------ */
+  /* Shift-click marking + mass delete                                   */
+  /* ------------------------------------------------------------------ */
+
+  const clearMarks = useCallback(() => {
+    setMarkedFiles(new Set());
+    setMarkedCodes(new Set());
+    fileAnchorRef.current = null;
+    codeAnchorRef.current = null;
+  }, []);
+
+  // Escape clears the marking; a closed project drops it too.
+  useEffect(() => {
+    if (!projectOpen) {
+      clearMarks();
+      return;
+    }
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && (markedFiles.size > 0 || markedCodes.size > 0)) {
+        clearMarks();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [projectOpen, markedFiles, markedCodes, clearMarks]);
+
+  /** Toggle one file's mark (ctrl/cmd-click). */
+  function toggleFileMark(id: number) {
+    fileAnchorRef.current = id;
+    setMarkedFiles((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  /** Mark the range anchor..id within the CURRENT sources order
+   *  (shift-click). */
+  function markFileRange(id: number) {
+    const ids = sources.map((s) => s.id);
+    const from = fileAnchorRef.current ?? id;
+    const i = ids.indexOf(from);
+    const j = ids.indexOf(id);
+    if (i < 0 || j < 0) return;
+    const [lo, hi] = i <= j ? [i, j] : [j, i];
+    setMarkedFiles((prev) => {
+      const next = new Set(prev);
+      for (let k = lo; k <= hi; k++) next.add(ids[k]);
+      return next;
+    });
+    fileAnchorRef.current = id;
+  }
+
+  /** Toggle one code/category mark (ctrl/cmd-click). */
+  function toggleCodeMark(item: CodeTreeItem) {
+    const key = `${item.kind}:${item.id}`;
+    codeAnchorRef.current = key;
+    setMarkedCodes((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  }
+
+  /** Mark the range anchor..item within the flat codeTree order
+   *  (shift-click). */
+  function markCodeRange(item: CodeTreeItem) {
+    const keys = codeTree.map((it) => `${it.kind}:${it.id}`);
+    const target = `${item.kind}:${item.id}`;
+    const from = codeAnchorRef.current ?? target;
+    const i = keys.indexOf(from);
+    const j = keys.indexOf(target);
+    if (i < 0 || j < 0) return;
+    const [lo, hi] = i <= j ? [i, j] : [j, i];
+    setMarkedCodes((prev) => {
+      const next = new Set(prev);
+      for (let k = lo; k <= hi; k++) next.add(keys[k]);
+      return next;
+    });
+    codeAnchorRef.current = target;
+  }
+
+  /** Delete every marked file/code/category via the existing per-item
+   *  endpoints, then refresh once. Failures are counted, not fatal — the
+   *  remaining items are still removed. */
+  async function massDelete() {
+    const total = markedFiles.size + markedCodes.size;
+    if (total === 0) return;
+    if (!window.confirm(t("sidebar.massDeleteConfirm", { count: total }))) return;
+    setToolbarError(null);
+    let failed = 0;
+    for (const id of markedFiles) {
+      try {
+        await api.deleteSource(id);
+      } catch {
+        failed++;
+      }
+    }
+    const byKey = new Map(codeTree.map((it) => [`${it.kind}:${it.id}`, it]));
+    for (const key of markedCodes) {
+      const item = byKey.get(key);
+      if (!item) continue;
+      try {
+        if (item.kind === "category") await api.deleteCategory(item.id);
+        else await api.deleteCode(item.id);
+        clearInspectorIfSelected(item);
+      } catch {
+        failed++;
+      }
+    }
+    clearMarks();
+    await useProjectStore.getState().refreshProject();
+    if (failed > 0) {
+      const detail = t("sidebar.massDeleteError", { count: failed });
+      setToolbarError(detail);
+      toast.error(detail);
+    } else {
+      toast.success(t("sidebar.massDeleteDone", { count: total }));
+    }
+  }
+
+  const markedCount = markedFiles.size + markedCodes.size;
 
   async function removeSubcode(item: CodeTreeItem) {
     setToolbarError(null);
@@ -1254,8 +1390,24 @@ export function Sidebar() {
           >
             <button
             type="button"
-            onClick={() => {
+            aria-pressed={
+              item.kind === "category"
+                ? markedCodes.has(`category:${item.id}`)
+                : markedCodes.has(`code:${item.id}`)
+            }
+            onClick={(e) => {
               if (consumeDragClick()) return;
+              if (e.shiftKey) {
+                e.preventDefault();
+                markCodeRange(item);
+                return;
+              }
+              if (e.ctrlKey || e.metaKey) {
+                e.preventDefault();
+                toggleCodeMark(item);
+                return;
+              }
+              clearMarks();
               if (item.kind === "category") {
                 if (hasChildren) setCollapsed((c) => ({ ...c, [key]: !isCollapsed }));
               } else {
@@ -1283,6 +1435,8 @@ export function Sidebar() {
               item.kind === "code" && hiddenCodes.includes(item.id)
                 ? "opacity-40"
                 : ""
+            } ${
+              markedCodes.has(`${item.kind}:${item.id}`) ? "bg-danger/10 ring-1 ring-danger" : ""
             } ${
               dropZone?.key === key && dropZone.mode === "merge"
                 ? "ring-2 ring-accent"
@@ -1417,12 +1571,29 @@ export function Sidebar() {
                     <div className="group flex items-center">
                       <button
                         type="button"
-                        onClick={() => setView({ kind: "coding", sourceId: s.id })}
+                        aria-pressed={markedFiles.has(s.id)}
+                        onClick={(e) => {
+                          if (e.shiftKey) {
+                            e.preventDefault();
+                            markFileRange(s.id);
+                            return;
+                          }
+                          if (e.ctrlKey || e.metaKey) {
+                            e.preventDefault();
+                            toggleFileMark(s.id);
+                            return;
+                          }
+                          clearMarks();
+                          setView({ kind: "coding", sourceId: s.id });
+                        }}
                         onContextMenu={(e) => {
                           e.preventDefault();
                           setMenu({ kind: "file", x: e.clientX, y: e.clientY, source: s });
                         }}
-                        className="flex min-w-0 flex-1 items-center gap-1.5 rounded-sm px-2 py-1 text-left text-sm hover:bg-surface-higher"
+                        className={cn(
+                          "flex min-w-0 flex-1 items-center gap-1.5 rounded-sm px-2 py-1 text-left text-sm hover:bg-surface-higher",
+                          markedFiles.has(s.id) && "bg-danger/10 ring-1 ring-danger",
+                        )}
                         title={s.memo || s.name}
                       >
                         {fileIcon(s.media_type)}
@@ -1474,17 +1645,28 @@ export function Sidebar() {
           <BarHeader
             title={t("nav.files")}
             actions={
-              <Button
-                variant="primary"
-                icon={<Upload size={12} aria-hidden />}
-                disabled={!projectOpen}
-                onClick={() => {
-                  setView({ kind: "files" });
-                  useProjectStore.getState().requestImport();
-                }}
-              >
-                {t("files.import")}
-              </Button>
+              <>
+                <Button
+                  variant="primary"
+                  icon={<Globe size={12} aria-hidden />}
+                  disabled={!projectOpen}
+                  title={t("files.urlImport")}
+                  onClick={() => setUrlImportOpen(true)}
+                >
+                  {t("files.urlImportShort")}
+                </Button>
+                <Button
+                  variant="primary"
+                  icon={<Upload size={12} aria-hidden />}
+                  disabled={!projectOpen}
+                  onClick={() => {
+                    setView({ kind: "files" });
+                    useProjectStore.getState().requestImport();
+                  }}
+                >
+                  {t("files.import")}
+                </Button>
+              </>
             }
           />
         ) : (
@@ -1695,6 +1877,33 @@ export function Sidebar() {
             </div>
           )}
           {renderFileGroups()}
+        </div>
+      )}
+
+      {/* Mass-delete action bar (visible while rows are shift-click marked) */}
+      {markedCount > 0 && (
+        <div
+          role="toolbar"
+          aria-label={t("sidebar.massDeleteAria")}
+          className="flex shrink-0 items-center gap-2 border-t border-border bg-surface px-2 py-1.5"
+        >
+          <span className="min-w-0 flex-1 truncate text-xs text-text-secondary">
+            {t("sidebar.massMarked", { count: markedCount })}
+          </span>
+          <Button
+            variant="secondary"
+            className="shrink-0 px-2 py-0.5 text-xs"
+            onClick={clearMarks}
+          >
+            {t("common.cancel")}
+          </Button>
+          <Button
+            variant="primaryCompact"
+            className="shrink-0 bg-danger px-2 py-0.5 text-xs hover:bg-danger/90"
+            onClick={() => void massDelete()}
+          >
+            {t("sidebar.massDelete")}
+          </Button>
         </div>
       )}
 
@@ -1921,6 +2130,7 @@ export function Sidebar() {
         onSave={(cids) => saveMembers(cids)}
         t={t}
       />
+      {urlImportOpen && <UrlImportDialog onClose={() => setUrlImportOpen(false)} />}
     </LeftBar>
   );
 }

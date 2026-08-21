@@ -15,7 +15,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from qualcoder_api.core.timeutil import now
 from qualcoder_api.persistence import tables
-from qualcoder_api.services.ai_prompts import CATALOG, CUSTOM_PROMPT_PREFIX, is_custom_prompt_id
+from qualcoder_api.services.ai_prompts import (
+    CATALOG,
+    CUSTOM_PROMPT_PREFIX,
+    GLOBAL_PROMPT_PREFIX,
+    is_custom_prompt_id,
+)
 
 
 def _template_row(row) -> dict:
@@ -102,7 +107,9 @@ async def delete_template(session: AsyncSession, template_id: int) -> bool:
 
 
 async def list_catalog(session: AsyncSession) -> list[dict]:
-    """Built-in prompts + user templates, picker-ready (no ``text`` body)."""
+    """Built-in prompts + app-wide templates + project templates, picker-ready."""
+    from qualcoder_api.services import user_settings
+
     built_in = [
         {
             "id": prompt.id,
@@ -115,6 +122,20 @@ async def list_catalog(session: AsyncSession) -> list[dict]:
             "custom": False,
         }
         for prompt in CATALOG.prompts
+    ]
+    global_prompts = [
+        {
+            "id": f"{GLOBAL_PROMPT_PREFIX}{row['id']}",
+            "mode": "general",
+            "name": row["name"],
+            "label": row["name"],
+            "description": row.get("description", ""),
+            "hidden": False,
+            "group": "custom",
+            "custom": True,
+            "global": True,
+        }
+        for row in user_settings.get_ai_global_prompts()
     ]
     custom = [
         {
@@ -129,7 +150,63 @@ async def list_catalog(session: AsyncSession) -> list[dict]:
         }
         for row in await list_templates(session)
     ]
-    return built_in + custom
+    return built_in + global_prompts + custom
+
+
+async def list_editor_templates(session: AsyncSession) -> list[dict]:
+    """Everything the template editor can edit, with defaults + scope.
+
+    ``scope`` is ``builtin`` (shipped, editable via an app-wide override),
+    ``app`` (a globally saved template) or ``project`` (this project's row).
+    ``default`` carries the shipped text for built-ins (None otherwise) so the
+    editor can offer "Reset to default".
+    """
+    from qualcoder_api.services import user_settings
+
+    overrides = user_settings.get_ai_prompt_overrides()
+    templates: list[dict] = []
+    for prompt in CATALOG.prompts:
+        if prompt.hidden or not prompt.group:
+            continue  # only the pickable groups (analysis / specialized)
+        templates.append(
+            {
+                "id": prompt.id,
+                "name": prompt.name,
+                "label": prompt.label,
+                "description": prompt.description,
+                "text": overrides.get(prompt.id, prompt.text),
+                "default": prompt.text,
+                "group": prompt.group,
+                "scope": "builtin",
+            }
+        )
+    templates.extend(
+        {
+            "id": f"{GLOBAL_PROMPT_PREFIX}{row['id']}",
+            "name": row["name"],
+            "label": row["name"],
+            "description": row.get("description", ""),
+            "text": row.get("text", ""),
+            "default": None,
+            "group": "custom",
+            "scope": "app",
+        }
+        for row in user_settings.get_ai_global_prompts()
+    )
+    templates.extend(
+        {
+            "id": f"{CUSTOM_PROMPT_PREFIX}{row['id']}",
+            "name": row["name"],
+            "label": row["name"],
+            "description": row["description"],
+            "text": row["text"],
+            "default": None,
+            "group": "custom",
+            "scope": "project",
+        }
+        for row in await list_templates(session)
+    )
+    return templates
 
 
 def resolve_custom_row_id(prompt_id: str) -> int | None:

@@ -80,8 +80,15 @@ _SCHEMA_SQL: list[str] = [
     "CREATE TABLE audit_log (id integer primary key autoincrement, ts text, user text, action text, "
     "entity text, entity_id integer, source_id integer, detail text);",
     "CREATE TABLE sync_log (id integer primary key autoincrement, ts text, user text, seq integer, "
-    "entity text, action text, pk_name text, pk_value text, row_json text);",
+    "entity text, action text, pk_name text, pk_value text, rev integer default 0, row_json text);",
     "CREATE UNIQUE INDEX IF NOT EXISTS idx_sync_log_user_seq ON sync_log(user, seq);",
+    "CREATE TABLE sync_rev (entity text not null, pk text not null, rev integer not null default 0, "
+    "mtime text not null default '', origin text not null default '', deleted integer not null default 0, "
+    "primary key (entity, pk))",
+    "CREATE TABLE sync_conflict (id integer primary key autoincrement, entity text not null, "
+    "pk text not null, pk_name text not null, local_rev integer not null, remote_rev integer not null, "
+    "local_row text, remote_row text, remote_instance text not null, remote_coder text not null default '', "
+    "detected_at text not null, resolved_at text, resolution text, merged_row text)",
     "CREATE TABLE dictionary (id integer primary key autoincrement, name text, owner text, created text, "
     "unique(name));",
     "CREATE TABLE dictionary_entry (id integer primary key autoincrement, dict_id integer, code_name text, "
@@ -131,6 +138,7 @@ _INDEX_SQL: list[str] = [
     "CREATE INDEX IF NOT EXISTS idx_attribute_name ON attribute(name)",
     "CREATE INDEX IF NOT EXISTS idx_comment_target ON comment(target_kind, target_id)",
     "CREATE INDEX IF NOT EXISTS idx_ai_chat_message_chat_id ON ai_chat_message(chat_id)",
+    "CREATE INDEX IF NOT EXISTS idx_sync_conflict_unresolved ON sync_conflict(entity, pk) WHERE resolved_at IS NULL",
 ]
 
 # Extra tables/views beyond the v14 core (added at project-open time).

@@ -27,6 +27,7 @@ from qualcoder_api.persistence.repositories import (
     SourceRepository,
 )
 from qualcoder_api.services import sync
+from qualcoder_api.services import sync_engine
 from qualcoder_api.services.project_service import ProjectService
 
 
@@ -304,6 +305,92 @@ async def test_conflict_does_not_block_later_entries(rater_b, tmp_path):
     assert summary and summary[0]["entity"] == "r_script" and summary[0]["reason"]
 
 
+async def test_non_pk_unique_constraint_conflict(rater_b, tmp_path):
+    """A same-name source with a different PK and different content is matched
+    by natural key and surfaced as a concurrent-edit conflict.  It must:
+    - record a conflict in the sync_conflict TABLE (not just JSON state)
+    - carry the LOCAL row snapshot (so the resolver shows "mine" correctly)
+    - NOT poison the session for later entries
+    - advance the watermark past the conflict
+    - survive a second import cycle (no re-replay)
+    """
+    from sqlalchemy import insert as sa_insert
+    from sqlalchemy import text as sa_text
+
+    sync.set_current_user("berta")
+    async with rater_b.session_factory() as session:
+        # berta has a source named "Kodiertutorial.txt" (id=29)
+        await session.execute(
+            sa_insert(tables.source).values(
+                id=29, name="Kodiertutorial.txt", fulltext="berta's text",
+                owner="berta", date="t",
+            )
+        )
+        await session.commit()
+
+    # Craft anna's sidecar: seq1 has a DIFFERENT PK (id=99) but the SAME
+    # name and different content → natural-key match → concurrent edit.  seq2
+    # is clean.
+    sidecar = Path(rater_b.project_path) / sync.SYNC_DIR_NAME / "anna" / "changes.jsonl"
+    sidecar.parent.mkdir(parents=True, exist_ok=True)
+    lines = [
+        json.dumps({
+            "id": 1, "ts": "t", "user": "anna", "seq": 1, "entity": "source",
+            "action": "insert", "pk_name": "id", "pk_value": 99,
+            "row": {"id": 99, "name": "Kodiertutorial.txt", "fulltext": "anna's text",
+                    "mediapath": None, "memo": None, "owner": "anna", "date": "t",
+                    "av_text_id": None, "risid": None},
+        }),
+        json.dumps({
+            "id": 2, "ts": "t", "user": "anna", "seq": 2, "entity": "code_name",
+            "action": "insert", "pk_name": "cid", "pk_value": 1,
+            "row": {"cid": 1, "name": "clean", "owner": "anna", "date": "t", "color": "1"},
+        }),
+    ]
+    sidecar.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    sync.set_current_user("berta")
+    async with rater_b.session_factory() as session:
+        report = await sync.import_pending(session, rater_b.project_path, "berta")
+        assert "anna" in report
+        # seq2 applied despite seq1's conflict.
+        assert report["anna"]["applied"] == 1
+        assert len(report["anna"]["conflicts"]) == 1
+        conflict = report["anna"]["conflicts"][0]
+        assert conflict["entity"] == "source"
+        assert conflict["reason"] == "concurrent edit"
+
+        # The conflict was persisted to the sync_conflict TABLE with the LOCAL
+        # row snapshot (so the resolver shows "mine", not an empty row).
+        rows = await session.execute(
+            sa_text("SELECT entity, pk, local_row FROM sync_conflict WHERE resolved_at IS NULL")
+        )
+        conflicts_in_db = rows.all()
+        assert any(r.entity == "source" for r in conflicts_in_db)
+        source_conflict = next(r for r in conflicts_in_db if r.entity == "source")
+        assert source_conflict.local_row is not None
+        assert json.loads(source_conflict.local_row)["name"] == "Kodiertutorial.txt"
+
+        # berta's source is untouched.
+        sources = (await session.execute(tables.source.select())).all()
+        assert len(sources) == 1
+        assert sources[0].name == "Kodiertutorial.txt"
+        assert sources[0].fulltext == "berta's text"
+
+        # The clean code applied.
+        codes = (await session.execute(tables.code_name.select())).all()
+        assert any(c.name == "clean" for c in codes)
+
+    # Watermark advanced past both entries.
+    state = sync.load_state(rater_b.project_path)
+    assert sync._imported_seq(state, "anna") >= 2
+
+    # Second import: no re-replay (0 applied, 0 conflicts).
+    async with rater_b.session_factory() as session:
+        report2 = await sync.import_pending(session, rater_b.project_path, "berta")
+    assert "anna" not in report2 or report2["anna"]["applied"] == 0
+
+
 async def test_export_appends_and_survives_truncated_tail(rater_a):
     """Append-only export never rewrites prior lines; a partial trailing line
     (crash mid-append) is dropped on parse and later exports are intact."""
@@ -435,6 +522,84 @@ async def test_pk_collision_remaps_and_updates_follow(rater_a, rater_b):
         assert [c.owner for c in codings] == ["berta"]
 
 
+async def test_natural_key_match_across_diverged_pks(rater_b):
+    """A source with the SAME name but a DIFFERENT autoincrement PK converges
+    by natural key — no duplicate row, no conflict."""
+    from sqlalchemy import insert as sa_insert
+
+    sync.set_current_user("berta")
+    async with rater_b.session_factory() as session:
+        # berta has "Kodiertutorial.txt" at id=29.
+        await session.execute(
+            sa_insert(tables.source).values(
+                id=29, name="Kodiertutorial.txt", fulltext="same text",
+                owner="default", date="t",
+            )
+        )
+        await session.commit()
+
+    # anna's sidecar has the same source at id=99 (diverged PK) with identical
+    # content — it must converge, not duplicate.
+    sidecar = Path(rater_b.project_path) / sync.SYNC_DIR_NAME / "anna" / "changes.jsonl"
+    sidecar.parent.mkdir(parents=True, exist_ok=True)
+    sidecar.write_text(
+        json.dumps({
+            "id": 1, "ts": "t", "user": "anna", "seq": 1, "entity": "source",
+            "action": "insert", "pk_name": "id", "pk_value": 99,
+            "row": {"id": 99, "name": "Kodiertutorial.txt", "fulltext": "same text",
+                    "mediapath": None, "memo": None, "owner": "default", "date": "t",
+                    "av_text_id": None, "risid": None},
+        }) + "\n",
+        encoding="utf-8",
+    )
+
+    sync.set_current_user("berta")
+    async with rater_b.session_factory() as session:
+        report = await sync.import_pending(session, rater_b.project_path, "berta")
+        assert report["anna"]["conflicts"] == []
+        sources = (await session.execute(tables.source.select())).all()
+        assert len(sources) == 1
+        assert sources[0].id == 29
+        assert sources[0].name == "Kodiertutorial.txt"
+
+
+async def test_legacy_rev0_delete_does_not_destroy_local_row(rater_b):
+    """A rev-0 (unversioned/legacy) delete for a row that still exists locally
+    is ambiguous and must be skipped — never destroy local data on it."""
+    from sqlalchemy import insert as sa_insert
+
+    sync.set_current_user("berta")
+    async with rater_b.session_factory() as session:
+        await session.execute(
+            sa_insert(tables.source).values(
+                id=29, name="Kodiertutorial.txt", fulltext="text",
+                owner="berta", date="t",
+            )
+        )
+        await session.commit()
+
+    sidecar = Path(rater_b.project_path) / sync.SYNC_DIR_NAME / "anna" / "changes.jsonl"
+    sidecar.parent.mkdir(parents=True, exist_ok=True)
+    sidecar.write_text(
+        json.dumps({
+            "id": 1, "ts": "t", "user": "anna", "seq": 1, "entity": "source",
+            "action": "delete", "pk_name": "id", "pk_value": 29,
+            "row": {"id": 29, "name": "Kodiertutorial.txt", "fulltext": "text",
+                    "mediapath": None, "memo": None, "owner": "berta", "date": "t",
+                    "av_text_id": None, "risid": None},
+        }) + "\n",
+        encoding="utf-8",
+    )
+
+    sync.set_current_user("berta")
+    async with rater_b.session_factory() as session:
+        report = await sync.import_pending(session, rater_b.project_path, "berta")
+        assert report["anna"]["conflicts"] == []
+        sources = (await session.execute(tables.source.select())).all()
+        assert len(sources) == 1
+        assert sources[0].name == "Kodiertutorial.txt"
+
+
 async def test_sync_presence_endpoint(project_client):
     """GET /sync/presence reports live other-instance presence (empty here —
     no other instances on this single client)."""
@@ -481,7 +646,7 @@ async def test_detect_shared_changes_dir_with_foreign_sidecars(rater_a):
     (changes / "berta").mkdir(parents=True)
     (changes / "berta" / "changes.jsonl").write_text("", encoding="utf-8")
     result = sync.detect_shared(rater_a.project_path, user="anna")
-    assert result == {"shared": True, "reason": "change sidecars from other raters"}
+    assert result == {"shared": True, "reason": "change sidecars from other instances"}
     # The rater's own sidecar alone is not evidence of sharing.
     (changes / "anna").mkdir(parents=True)
     (changes / "anna" / "changes.jsonl").write_text("", encoding="utf-8")
@@ -617,3 +782,307 @@ async def test_open_result_reports_sync_auto_enable(project_client):
     )
     res = await client.post("/api/v1/projects/open", json={"project_path": str(target)})
     assert res.json()["sync_auto_enabled"] is False
+
+
+# ----------------------------------------------------------------------
+# Sync-health / robustness fixes
+# ----------------------------------------------------------------------
+
+def test_reset_health_for_project_clears_globals():
+    """Switching projects zeroes the process-wide health globals (used at the
+    start of run_sync_cycle / sync_status) so the indicator never shows the
+    previous project's state."""
+    sync._health_project = "proj-a"
+    sync._last_sync_ts = 55.0
+    sync._last_error = "boom"
+    sync._last_error_ts = 7.0
+    sync._last_result = {"ok": False}
+    sync._reset_health_for_project("proj-b")
+    assert sync._last_sync_ts == 0.0
+    assert sync._last_error == ""
+    assert sync._last_error_ts == 0.0
+    assert sync._last_result is None
+    assert sync._health_project == "proj-b"
+    # Same project: no reset, values set afterwards are preserved.
+    sync._last_error = "boom"
+    sync._reset_health_for_project("proj-b")
+    assert sync._last_error == "boom"
+
+
+async def test_health_resets_on_project_change(rater_a, rater_b):
+    """sync_status and run_sync_cycle start with a clean health state when
+    the active project differs from the last one."""
+    sync._health_project = ""
+    sync._note_error(RuntimeError("boom"))
+    sync._last_sync_ts = 55.0
+    sync._last_result = {"ok": False}
+
+    status = await sync.sync_status(rater_a.session_factory, rater_a.project_path, "anna")
+    assert status["ok"] is True
+    assert sync._health_project == rater_a.project_path
+    assert sync._last_sync_ts == 0.0
+    assert sync._last_error == ""
+    assert sync._last_error_ts == 0.0
+    assert sync._last_result is None
+
+    # Same project: error set afterwards is preserved.
+    sync._note_error(RuntimeError("boom"))
+    await sync.sync_status(rater_a.session_factory, rater_a.project_path, "anna")
+    assert sync._last_error == "boom"
+
+    # A different project resets again (run_sync_cycle path).
+    result = await sync.run_sync_cycle(rater_b.session_factory, rater_b.project_path, "berta")
+    assert result["ok"] is True
+    assert sync._health_project == rater_b.project_path
+
+
+async def test_export_defers_when_sidecar_locked(rater_a, monkeypatch):
+    """A PermissionError on the sidecar append defers export instead of
+    failing: no watermark advance, and the rows are retried next cycle."""
+    sync.set_current_user("anna")
+    async with rater_a.session_factory() as session:
+        await CodeRepository(session).add_code(name="first", owner="anna")
+
+    def _locked(sidecar, lines):
+        raise PermissionError(13, "Permission denied")
+
+    with monkeypatch.context() as m:
+        m.setattr(sync_engine, "_append_sidecar", _locked)
+        async with rater_a.session_factory() as session:
+            result = await sync.export_pending(session, rater_a.project_path, "anna")
+        assert result == {"exported": 0, "deferred": 1}
+        state = sync.load_state(rater_a.project_path)
+        assert sync._exported_id(state, "anna") == 0
+
+    # Unlocked retry exports the deferred rows and advances the watermark.
+    async with rater_a.session_factory() as session:
+        result = await sync.export_pending(session, rater_a.project_path, "anna")
+    assert result == {"exported": 1}
+    state = sync.load_state(rater_a.project_path)
+    assert sync._exported_id(state, "anna") >= 1
+
+
+async def test_cycle_defers_locked_sidecar_without_error(rater_a, monkeypatch):
+    """run_sync_cycle treats a deferred (locked) append as a success — no
+    scary error surfaces in the health globals."""
+    sync.set_current_user("anna")
+    async with rater_a.session_factory() as session:
+        await CodeRepository(session).add_code(name="first", owner="anna")
+
+    def _locked(sidecar, lines):
+        raise PermissionError(13, "Permission denied")
+
+    monkeypatch.setattr(sync_engine, "_append_sidecar", _locked)
+    result = await sync.run_sync_cycle(rater_a.session_factory, rater_a.project_path, "anna")
+    assert result["ok"] is True
+    assert result["exported"] == 0
+    assert result["deferred"] == 1
+    assert sync._last_error == ""
+    assert sync._last_error_ts == 0.0
+
+
+async def test_db_locked_replay_is_retried_not_conflict(rater_b, monkeypatch):
+    """A transient 'database is locked' OperationalError is retried by
+    _replay_one and NOT recorded as a conflict nor advanced past the
+    watermark by import_pending."""
+    from sqlalchemy.exc import OperationalError
+
+    sidecar = Path(rater_b.project_path) / sync.SYNC_DIR_NAME / "anna" / "changes.jsonl"
+    sidecar.parent.mkdir(parents=True, exist_ok=True)
+    entry = {
+        "id": 1, "ts": "t", "user": "anna", "seq": 1, "entity": "code_name",
+        "action": "insert", "pk_name": "cid", "pk_value": 1,
+        "row": {"cid": 1, "name": "locked", "owner": "anna", "date": "t", "color": "1"},
+    }
+    sidecar.write_text(json.dumps(entry) + "\n", encoding="utf-8")
+
+    async def _locked_insert(session, entity, row):
+        raise OperationalError("INSERT code_name", {}, Exception("database is locked"))
+
+    monkeypatch.setattr(sync_engine, "_insert_row", _locked_insert)
+    sync.set_current_user("berta")
+    async with rater_b.session_factory() as session:
+        outcome = await sync._replay_one(session, entry, {})
+        assert outcome == {"status": "retry", "entity": "code_name",
+                           "pk": "1", "action": "insert"}
+        report = await sync.import_pending(session, rater_b.project_path, "berta")
+
+    assert report["anna"]["applied"] == 0
+    assert report["anna"]["conflicts"] == []
+    state = sync.load_state(rater_b.project_path)
+    assert sync._imported_seq(state, "anna") == 0
+    assert sync._recorded_conflicts(state, "anna") == {}
+    # The insert was never applied.
+    async with rater_b.session_factory() as session:
+        codes = (await session.execute(tables.code_name.select())).all()
+        assert len(codes) == 0
+
+
+# ----------------------------------------------------------------------
+# Cleanup: sync_log trimming + sidecar compaction
+# ----------------------------------------------------------------------
+
+async def test_export_trims_exported_sync_log_rows(rater_a):
+    """After export, already-exported sync_log rows are dropped (keeping the
+    latest row per user so the seq counter never resets)."""
+    sync.set_current_user("anna")
+    async with rater_a.session_factory() as session:
+        await CodeRepository(session).add_code(name="one", owner="anna")
+        await CodeRepository(session).add_code(name="two", owner="anna")
+        await CodeRepository(session).add_code(name="three", owner="anna")
+    await _export(rater_a, "anna")
+    async with rater_a.session_factory() as session:
+        rows = (await session.execute(tables.sync_log.select())).all()
+        # Only the latest row per user survives.
+        assert len(rows) == 1
+        assert json.loads(rows[0].row_json)["name"] == "three"
+
+
+async def test_export_keeps_unexported_rows(rater_a):
+    """Rows above the export watermark are never trimmed."""
+    sync.set_current_user("anna")
+    async with rater_a.session_factory() as session:
+        await CodeRepository(session).add_code(name="one", owner="anna")
+    await _export(rater_a, "anna")
+    async with rater_a.session_factory() as session:
+        await CodeRepository(session).add_code(name="two", owner="anna")
+    # No export yet — both rows remain (one exported, one pending).
+    async with rater_a.session_factory() as session:
+        rows = (await session.execute(tables.sync_log.select())).all()
+        assert len(rows) == 2
+
+
+async def test_sidecar_compaction_keeps_latest_per_row(tmp_path):
+    """Compaction rewrites a sidecar to one entry per (entity, pk)."""
+    sidecar = tmp_path / "changes.jsonl"
+    lines = [
+        {"seq": 1, "entity": "code_name", "pk_value": "1", "rev": 1,
+         "row": {"name": "old"}},
+        {"seq": 2, "entity": "code_name", "pk_value": "1", "rev": 2,
+         "row": {"name": "new"}},
+        {"seq": 3, "entity": "code_name", "pk_value": "2", "rev": 1,
+         "row": {"name": "other"}},
+    ]
+    sidecar.write_text("\n".join(json.dumps(e) for e in lines) + "\n", encoding="utf-8")
+    # Force compaction by lowering the threshold.
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr(sync_engine, "SIDECAR_COMPACT_THRESHOLD_ENTRIES", 1)
+    kept = sync_engine._compact_sidecar(sidecar)
+    assert kept == 2
+    entries = sync_engine._parse_sidecar(sidecar)
+    by_pk = {str(e["pk_value"]): e for e in entries}
+    assert by_pk["1"]["row"]["name"] == "new"
+    assert by_pk["2"]["row"]["name"] == "other"
+    monkeypatch.undo()
+
+
+# ----------------------------------------------------------------------
+# Conflict resolution
+# ----------------------------------------------------------------------
+
+async def test_resolve_conflict_keep_mine(rater_b):
+    """Resolving with "local" keeps the local row and bumps its rev."""
+    from sqlalchemy import text as sa_text
+
+    sync.set_current_user("berta")
+    async with rater_b.session_factory() as session:
+        await CodeRepository(session).add_code(name="shared", owner="berta")
+        # Simulate a conflict: local row exists, remote has a different name.
+        await session.execute(
+            sa_text(
+                "INSERT INTO sync_conflict (entity, pk, pk_name, local_rev, remote_rev, "
+                "local_row, remote_row, remote_instance, remote_coder, detected_at) "
+                "VALUES ('code_name', '1', 'cid', 1, 1, :local, :remote, 'x', 'anna', 't')"
+            ),
+            {
+                "local": json.dumps({"cid": 1, "name": "shared", "owner": "berta"}),
+                "remote": json.dumps({"cid": 1, "name": "renamed", "owner": "anna"}),
+            },
+        )
+        await session.commit()
+
+    result = await sync.resolve_conflict(
+        rater_b.session_factory, rater_b.project_path, 1, "local", None
+    )
+    assert result["ok"] is True
+    async with rater_b.session_factory() as session:
+        code = (await session.execute(tables.code_name.select())).first()
+        assert code.name == "shared"
+        rev = (await session.execute(
+            sa_text("SELECT rev FROM sync_rev WHERE entity='code_name' AND pk='1'")
+        )).scalar()
+        assert rev == 2
+
+
+async def test_resolve_conflict_take_theirs(rater_b):
+    """Resolving with "remote" applies the remote row."""
+    from sqlalchemy import text as sa_text
+
+    sync.set_current_user("berta")
+    async with rater_b.session_factory() as session:
+        await CodeRepository(session).add_code(name="shared", owner="berta")
+        await session.execute(
+            sa_text(
+                "INSERT INTO sync_conflict (entity, pk, pk_name, local_rev, remote_rev, "
+                "local_row, remote_row, remote_instance, remote_coder, detected_at) "
+                "VALUES ('code_name', '1', 'cid', 1, 1, :local, :remote, 'x', 'anna', 't')"
+            ),
+            {
+                "local": json.dumps({"cid": 1, "name": "shared", "owner": "berta"}),
+                "remote": json.dumps({"cid": 1, "name": "renamed", "owner": "anna"}),
+            },
+        )
+        await session.commit()
+
+    result = await sync.resolve_conflict(
+        rater_b.session_factory, rater_b.project_path, 1, "remote", None
+    )
+    assert result["ok"] is True
+    async with rater_b.session_factory() as session:
+        code = (await session.execute(tables.code_name.select())).first()
+        assert code.name == "renamed"
+
+
+async def test_resolve_all_conflicts(rater_b):
+    """Bulk resolution clears every pending conflict with one strategy."""
+    from sqlalchemy import text as sa_text
+
+    sync.set_current_user("berta")
+    async with rater_b.session_factory() as session:
+        await CodeRepository(session).add_code(name="a", owner="berta")
+        await CodeRepository(session).add_code(name="b", owner="berta")
+        for pk, name in (("1", "a"), ("2", "b")):
+            await session.execute(
+                sa_text(
+                    "INSERT INTO sync_conflict (entity, pk, pk_name, local_rev, remote_rev, "
+                    "local_row, remote_row, remote_instance, remote_coder, detected_at) "
+                    "VALUES ('code_name', :pk, 'cid', 1, 1, :local, :remote, 'x', 'anna', 't')"
+                ),
+                {
+                    "pk": pk,
+                    "local": json.dumps({"cid": int(pk), "name": name, "owner": "berta"}),
+                    "remote": json.dumps({"cid": int(pk), "name": name + "-x", "owner": "anna"}),
+                },
+            )
+        await session.commit()
+
+    result = await sync.resolve_all_conflicts(
+        rater_b.session_factory, rater_b.project_path, "local"
+    )
+    assert result["ok"] is True
+    assert result["resolved"] == 2
+    async with rater_b.session_factory() as session:
+        pending = (await session.execute(
+            sa_text("SELECT COUNT(*) FROM sync_conflict WHERE resolved_at IS NULL")
+        )).scalar()
+        assert pending == 0
+
+
+async def test_resolve_all_conflicts_endpoint(project_client):
+    """POST /sync/conflicts/resolve-all resolves pending conflicts."""
+    client, _ = project_client
+    res = await client.post("/api/v1/sync/conflicts/resolve-all", json={"resolution": "local"})
+    assert res.status_code == 200
+    assert res.json()["ok"] is True
+    res = await client.post("/api/v1/sync/conflicts/resolve-all", json={"resolution": "merged"})
+    assert res.status_code == 422

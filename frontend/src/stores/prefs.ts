@@ -6,7 +6,7 @@
  * UI components call these actions; the store never renders.
  */
 import { create } from "zustand";
-import { api, type PresenceEntry, type SyncStatus } from "@/lib/api";
+import { api, type PresenceEntry, type SyncStatus, type SyncConflictV2 } from "@/lib/api";
 import { useProjectStore } from "./project";
 
 export type ThemeMode = "light" | "dark";
@@ -86,8 +86,8 @@ function initialA11yMode(): A11yMode {
 const INITIAL_A11Y_MODE = initialA11yMode();
 applyA11yMode(INITIAL_A11Y_MODE);
 
-/** UI pref: whether creating a coding auto-selects it in the coder's
- *  segment-details bar (DEFAULT ON). */
+/** Auto-show segment details is the default behavior now (shown as a bubble
+ *  when the memo gutter is off, and in the gutter when it is on) — always on. */
 function applyAutoShowSegmentDetails(v: boolean) {
   if (typeof window !== "undefined") {
     localStorage.setItem("qc-auto-show-segment-details", v ? "1" : "0");
@@ -95,11 +95,6 @@ function applyAutoShowSegmentDetails(v: boolean) {
 }
 
 function initialAutoShowSegmentDetails(): boolean {
-  if (typeof window !== "undefined") {
-    const saved = localStorage.getItem("qc-auto-show-segment-details");
-    if (saved === "1") return true;
-    if (saved === "0") return false;
-  }
   return true;
 }
 
@@ -117,7 +112,7 @@ interface PrefsState {
   autoShowSegmentDetails: boolean;
   setAutoShowSegmentDetails: (v: boolean) => void;
 
-  /** Collaboration sync (Option B: sidecar change files over folder sync). */
+  /** Collaboration sync (Option C: versioned sidecars + conflict resolution). */
   syncStatus: SyncStatus | null;
   setSyncStatus: (v: SyncStatus | null) => void;
   /** Enable/disable the sync cycle. A manual toggle (remember: true) also
@@ -129,6 +124,28 @@ interface PrefsState {
    *  the shell shows a transient notice and clears it. */
   syncAutoNotice: boolean;
   setSyncAutoNotice: (v: boolean) => void;
+
+  /** Collaboration (Golden Master + sandbox) mode of the open project. */
+  collabMode: "single" | "collaboration";
+  setCollabMode: (v: "single" | "collaboration") => void;
+  /** Fetch the mode from the backend (called after opening a project). */
+  loadProjectMode: () => Promise<void>;
+  /** Switch the open project to collaboration mode. */
+  activateCollaboration: () => Promise<boolean>;
+  /** Consolidate to data.qda and return to single-coder mode (destructive). */
+  revertCollaboration: () => Promise<boolean>;
+  /** Refresh the cold data.qda archive from the live sandbox. */
+  consolidate: () => Promise<boolean>;
+
+  /** Pending conflicts awaiting resolution via the ConflictResolver. */
+  conflicts: SyncConflictV2[];
+  loadConflicts: () => Promise<void>;
+  resolveConflict: (
+    conflictId: number,
+    resolution: "local" | "remote" | "merged",
+    mergedRow?: Record<string, unknown>,
+  ) => Promise<boolean>;
+  resolveAllConflicts: (resolution: "local" | "remote") => Promise<number>;
 
   /** Live coder presence (who is actively working, and on which file).
    *  Polled while a project is open; shown in the coder flyout and file list. */
@@ -181,6 +198,44 @@ export const usePrefsStore = create<PrefsState>((set) => ({
   },
   syncAutoNotice: false,
   setSyncAutoNotice: (v) => set({ syncAutoNotice: v }),
+  collabMode: "single",
+  setCollabMode: (v) => set({ collabMode: v }),
+  loadProjectMode: async () => {
+    try {
+      const res = await api.projectMode();
+      set({ collabMode: res.mode });
+    } catch {
+      /* project closed etc. — keep the last known mode */
+    }
+  },
+  activateCollaboration: async () => {
+    try {
+      const res = await api.activateCollaboration();
+      if (!res.ok) return false;
+      set({ collabMode: "collaboration" });
+      return true;
+    } catch {
+      return false;
+    }
+  },
+  revertCollaboration: async () => {
+    try {
+      const res = await api.revertCollaboration();
+      if (!res.ok) return false;
+      set({ collabMode: "single" });
+      return true;
+    } catch {
+      return false;
+    }
+  },
+  consolidate: async () => {
+    try {
+      const res = await api.consolidateProject();
+      return res.ok;
+    } catch {
+      return false;
+    }
+  },
   runSyncNow: async () => {
     try {
       const res = await api.syncNow();
@@ -190,6 +245,50 @@ export const usePrefsStore = create<PrefsState>((set) => ({
       return true;
     } catch {
       return false;
+    }
+  },
+  conflicts: [],
+  loadConflicts: async () => {
+    try {
+      const res = await api.syncConflicts();
+      if (res.ok) set({ conflicts: res.conflicts });
+    } catch {
+      /* project closed etc. */
+    }
+  },
+  resolveConflict: async (conflictId, resolution, mergedRow) => {
+    try {
+      const res = await api.resolveConflict({
+        conflict_id: conflictId,
+        resolution,
+        merged_row: mergedRow,
+      });
+      if (!res.ok) return false;
+      // Refresh conflicts and status after resolution.
+      const [conflictsRes, statusRes] = await Promise.all([
+        api.syncConflicts().catch(() => null),
+        api.syncStatus().catch(() => null),
+      ]);
+      if (conflictsRes?.ok) set({ conflicts: conflictsRes.conflicts });
+      if (statusRes) set({ syncStatus: statusRes });
+      return true;
+    } catch {
+      return false;
+    }
+  },
+  resolveAllConflicts: async (resolution) => {
+    try {
+      const res = await api.resolveAllConflicts(resolution);
+      if (!res.ok) return 0;
+      const [conflictsRes, statusRes] = await Promise.all([
+        api.syncConflicts().catch(() => null),
+        api.syncStatus().catch(() => null),
+      ]);
+      if (conflictsRes?.ok) set({ conflicts: conflictsRes.conflicts });
+      if (statusRes) set({ syncStatus: statusRes });
+      return res.resolved;
+    } catch {
+      return 0;
     }
   },
   presence: [],

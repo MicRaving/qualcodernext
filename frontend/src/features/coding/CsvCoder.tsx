@@ -39,7 +39,9 @@ import {
   AnnotationDetailsBar,
   CodingDetailsBar,
 } from "@/features/coding/DetailsBars";
-import { patchCodingWeight, useCodeIndex } from "@/features/coding/codingApi";
+import { useCodeIndex } from "@/features/coding/codingApi";
+import { useSegmentActions } from "@/features/coding/shared/useSegmentActions";
+import { clampToolbarAnchor } from "@/features/coding/shared/toolbarAnchor";
 import { parseCsv } from "@/lib/csv";
 import { tdCls, thCls } from "@/features/analyze/reportData";
 import { getSelectionOffsets } from "@/features/coding/selection";
@@ -47,6 +49,7 @@ import { FALLBACK_CODE_COLOR, codeTint } from "@/features/coding/tint";
 import { cn, errorMessage } from "@/lib/utils";
 import { useI18n } from "@/lib/i18n";
 import { useProjectStore } from "@/stores/project";
+import { useCoderStore } from "@/stores/coder";
 
 /** Which view is active — a single state so the two toggles can never be
  *  both off (mirrors the HtmlCoder/PdfCoder never-both-off rule). */
@@ -181,7 +184,17 @@ export function CsvCoder({ source }: { source: Source }) {
   /** The code list is the project store's tree (the backend serves it flat;
    *  the sidebar refreshes it on every code change, so names stay fresh when
    *  a code is created while this coder is open). */
-  const codes = useProjectStore((s) => s.codeTree);
+  /** The code list is the project store's tree (the backend serves it flat;
+   *  the sidebar refreshes it on every code change, so names stay fresh when
+   *  a code is created while this coder is open). Codes created inside the
+   *  embedded TextCoder arrive via onCodesChange and take precedence until
+   *  the next full reload folds them into the store tree. */
+  const storeCodes = useProjectStore((s) => s.codeTree);
+  const [embeddedCodes, setEmbeddedCodes] = useState<CodeTreeItem[] | null>(null);
+  const codes = embeddedCodes ?? storeCodes;
+  /** Codes hidden in the coder: their badges/highlights are dimmed out of
+   *  the table (matching Text/PDF/AV/Image surfaces). */
+  const hiddenCodes = useCoderStore((s) => s.hiddenCodes);
 
   /** The current text selection (in source coordinates) + popup position. */
   const [selection, setSelection] = useState<{ pos0: number; pos1: number; text: string } | null>(
@@ -192,9 +205,6 @@ export function CsvCoder({ source }: { source: Source }) {
   /** Codings/annotations of the cell the user clicked (details bars). */
   const [selectedCodings, setSelectedCodings] = useState<Coding[] | null>(null);
   const [selectedAnnotations, setSelectedAnnotations] = useState<Annotation[] | null>(null);
-
-  /** Unmark/undo stack of the codings removed from this session. */
-  const [undoStack, setUndoStack] = useState<Coding[]>([]);
 
   const scrollRef = useRef<HTMLDivElement | null>(null);
 
@@ -224,6 +234,7 @@ export function CsvCoder({ source }: { source: Source }) {
     setFulltext(null);
     setSelection(null);
     setToolbarAnchor(null);
+    setEmbeddedCodes(null);
     try {
       const [cod, anns, src] = await Promise.all([
         api.sourceCoding(source.id),
@@ -315,11 +326,14 @@ export function CsvCoder({ source }: { source: Source }) {
     for (const span of cellIndex) {
       const info = map.get(`${span.ri}:${span.ci}`);
       if (!info) continue;
-      // Distinct code badges per cell, in first-appearance order.
+      // Distinct code badges per cell, in first-appearance order. Hidden
+      // codes are dimmed out of the badges/highlights but stay on the cell
+      // (clicking still opens their details).
       const seen = new Set<number>();
       for (const c of info.codings) {
         if (seen.has(c.cid)) continue;
         seen.add(c.cid);
+        if (hiddenCodes.includes(c.cid)) continue;
         const code = codeById.get(c.cid);
         info.badges.push(
           code ?? { kind: "code", id: c.cid, name: "", color: null, parent_id: null, memo: "" },
@@ -329,6 +343,7 @@ export function CsvCoder({ source }: { source: Source }) {
       // coding must never tint the whole cell.
       info.highlights = mergeRanges(
         info.codings
+          .filter((c) => !hiddenCodes.includes(c.cid))
           .map((c): MarkSeg | null => {
             const r = fieldRangeInRaw(span.toRaw, c.pos0, c.pos1);
             if (!r) return null;
@@ -352,7 +367,7 @@ export function CsvCoder({ source }: { source: Source }) {
       );
     }
     return map;
-  }, [cellIndex, codings, annotations, codeById]);
+  }, [cellIndex, codings, annotations, codeById, hiddenCodes]);
 
   const cellInfo = useCallback(
     (ri: number, ci: number): CellInfo => cellInfoMap.get(`${ri}:${ci}`) ?? EMPTY_CELL_INFO,
@@ -422,12 +437,8 @@ export function CsvCoder({ source }: { source: Source }) {
     if (pos1 <= pos0) return;
     const rect = sel.getRangeAt(0).getBoundingClientRect();
     const scrollRect = scrollRef.current?.getBoundingClientRect();
-    const left = scrollRect
-      ? Math.min(Math.max(rect.left, scrollRect.left + 4), scrollRect.right - 300)
-      : rect.left;
-    const top = scrollRect ? Math.min(rect.bottom + 6, scrollRect.bottom - 40) : rect.bottom + 6;
+    setToolbarAnchor(clampToolbarAnchor(rect, scrollRect));
     setSelection({ pos0, pos1, text: cell.text.slice(offsets.start, offsets.end) });
-    setToolbarAnchor({ left, top });
   }
 
   useEffect(() => {
@@ -479,43 +490,26 @@ export function CsvCoder({ source }: { source: Source }) {
     void refreshCodes().catch(() => undefined);
   }, [refreshAnnotations, refreshCodes]);
 
+  // Shared mutation actions — the undo stack replaces this coder's
+  // hand-rolled copy; deletes confirm AND push (recoverable).
+  const actions = useSegmentActions({
+    kind: "text",
+    rows: codings,
+    idOf: (r) => r.ctid,
+    deleteRow: (ctid) => api.deleteTextCoding(ctid),
+    refresh: refreshCodings,
+    onError: setErrMsg,
+    onDeleted: () => setSelectedCodings(null),
+  });
+  const { undo } = actions;
+
   function deleteCoding(row: Coding) {
-    void (async () => {
-      try {
-        await api.deleteTextCoding(row.ctid);
-        setUndoStack((s) => [...s.slice(-19), row]);
-        setSelectedCodings(null);
-        await refreshCodings();
-      } catch (e) {
-        setErrMsg(errorMessage(e, t("coder.removeError")));
-      }
-    })();
+    actions.remove(row.ctid);
   }
 
   /** Stepper update of a segment's weight (0-100; 0 = no weight). */
   function updateCodingWeight(row: Coding, weight: number) {
-    void (async () => {
-      try {
-        await patchCodingWeight("text", row.ctid, weight);
-        await refreshCodings();
-      } catch (e) {
-        setErrMsg(errorMessage(e, t("coder.weightError")));
-      }
-    })();
-  }
-
-  function unmarkLast() {
-    const row = undoStack[undoStack.length - 1];
-    if (!row) return;
-    setUndoStack((s) => s.slice(0, -1));
-    void (async () => {
-      try {
-        await api.undoCodings([row]);
-        await refreshCodings();
-      } catch (e) {
-        setErrMsg(errorMessage(e, t("coder.restoreError")));
-      }
-    })();
+    void actions.updateWeight(row.ctid, weight);
   }
 
   function updateAnnotationMemo(anid: number, memo: string) {
@@ -603,8 +597,8 @@ export function CsvCoder({ source }: { source: Source }) {
               <Button
                 variant="toolbar"
                 icon={<Undo2 size={12} aria-hidden />}
-                onClick={unmarkLast}
-                disabled={undoStack.length === 0}
+                onClick={undo.undoLast}
+                disabled={!undo.canUndo}
                 title={t("coder.unmarkTitle")}
               >
                 {t("coder.unmarkLast")}
@@ -626,6 +620,7 @@ export function CsvCoder({ source }: { source: Source }) {
           codes={codes}
           onCodingsChange={setCodings}
           onAnnotationsChange={setAnnotations}
+          onCodesChange={setEmbeddedCodes}
         />
       ) : parsed && parsed.headers.length > 0 ? (
         <div

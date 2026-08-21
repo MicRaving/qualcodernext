@@ -9,7 +9,15 @@
  */
 import { errorMessage } from "@/lib/utils";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Download, History, RotateCw, Search, Undo2 } from "lucide-react";
+import {
+  ChevronDown,
+  ChevronRight,
+  Download,
+  History,
+  RotateCw,
+  Search,
+  Undo2,
+} from "lucide-react";
 import { api, type AuditRow, type AuditStatsRow } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 import { useProjectStore } from "@/stores/project";
@@ -42,6 +50,57 @@ const DESTRUCTIVE_ACTIONS = new Set([
 
 /** Entity tables that back the coder views — only these need a coding refetch. */
 const CODING_ENTITIES = new Set(["code_text", "code_image", "code_av", "annotation"]);
+
+const ACTION_FAMILY_PREFIXES: Array<[string, string]> = [
+  ["code_set.", "codeSets"],
+  ["r_script.", "rScripts"],
+  ["code.", "codes"],
+  ["category.", "categories"],
+  ["source.", "sources"],
+  ["coding.", "coding"],
+  ["case.", "cases"],
+  ["attribute.", "attributes"],
+  ["memo.", "memos"],
+  ["journal.", "journal"],
+  ["annotation.", "annotations"],
+  ["comment.", "comments"],
+  ["qtt.", "qtt"],
+  ["graph.", "graphs"],
+  ["creative.", "creative"],
+  ["project.", "project"],
+  ["dictionary.", "dictionary"],
+  ["link.", "links"],
+  ["coder.", "coders"],
+  ["reference.", "references"],
+  ["transcript.", "transcripts"],
+  ["transcribe.", "jobs"],
+  ["r.run", "jobs"],
+  ["filter.", "filters"],
+  ["sql.", "filters"],
+  ["pseudonym.", "pseudonyms"],
+  ["bookmark.", "bookmarks"],
+  ["speakers.", "coding"],
+  ["interchange.", "project"],
+  ["scrape.", "project"],
+  ["sync.", "sync"],
+];
+
+/** Audit actions are ``entity.action`` — map the entity prefix to a family. */
+function actionFamily(action: string): string {
+  const found = ACTION_FAMILY_PREFIXES.find(([prefix]) => action.startsWith(prefix));
+  return found ? found[1] : "other";
+}
+
+function dayLabel(day: string): string {
+  return new Date(`${day}T00:00:00`).toLocaleDateString(undefined, {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+  });
+}
+
+type FamilyGroup = { family: string; rows: AuditRow[] };
+type DayGroup = { day: string; label: string; families: FamilyGroup[] };
 
 function actionLabel(action: string, t: (key: string) => string): string {
   const key = `history.action.${action}`;
@@ -76,8 +135,36 @@ export function HistoryView() {
     next_id: null,
   });
   const [actionMsg, setActionMsg] = useState<string | null>(null);
+  const [collapsedDays, setCollapsedDays] = useState<Record<string, boolean>>({});
   const loadSeqRef = useRef(0);
   const searchTimer = useRef<number | undefined>(undefined);
+
+  // Group rows newest-first into day sections, each sub-divided by action
+  // family (rows keep their backend order inside a family).
+  const grouped = useMemo(() => {
+    const byDay = new Map<string, Map<string, AuditRow[]>>();
+    for (const row of rows) {
+      const day = row.ts.slice(0, 10);
+      let families = byDay.get(day);
+      if (!families) {
+        families = new Map();
+        byDay.set(day, families);
+      }
+      const family = actionFamily(row.action);
+      const list = families.get(family);
+      if (list) list.push(row);
+      else families.set(family, [row]);
+    }
+    const days: DayGroup[] = [];
+    for (const [day, families] of byDay) {
+      days.push({
+        day,
+        label: dayLabel(day),
+        families: [...families.entries()].map(([family, rws]) => ({ family, rows: rws })),
+      });
+    }
+    return days;
+  }, [rows]);
 
   // Debounce the search input into the server query param (300ms).
   useEffect(() => {
@@ -103,23 +190,17 @@ export function HistoryView() {
     setError(null);
     const seq = ++loadSeqRef.current;
     try {
-      const [res, st, us] = await Promise.all([
-        api.audit({
-          limit: PAGE_SIZE,
-          offset,
-          action: filterAction || undefined,
-          user: filterUser || undefined,
-          q: q || undefined,
-          summary: true,
-        }),
-        api.auditStats(),
-        api.auditUsers(),
-      ]);
+      const res = await api.audit({
+        limit: PAGE_SIZE,
+        offset,
+        action: filterAction || undefined,
+        user: filterUser || undefined,
+        q: q || undefined,
+        summary: true,
+      });
       if (seq !== loadSeqRef.current) return;
       setRows(res.rows);
       setTotal(res.total);
-      setStats(st);
-      setUsers(us);
     } catch (e) {
       if (seq !== loadSeqRef.current) return;
       setError(errorMessage(e, t("history.loadError")));
@@ -128,9 +209,25 @@ export function HistoryView() {
     }
   }, [offset, filterAction, filterUser, q, t]);
 
+  const loadMeta = useCallback(async () => {
+    // The action stats + coder list are project-wide — fetch once on mount
+    // and after undo/redo, not on every page/filter change.
+    try {
+      const [st, us] = await Promise.all([api.auditStats(), api.auditUsers()]);
+      setStats(st);
+      setUsers(us);
+    } catch {
+      // best-effort — the filter dropdowns just stay empty
+    }
+  }, []);
+
   useEffect(() => {
     void load();
   }, [load]);
+
+  useEffect(() => {
+    void loadMeta();
+  }, [loadMeta]);
 
   useEffect(() => {
     void refreshRedoPending();
@@ -159,7 +256,7 @@ export function HistoryView() {
       setActionMsg(res.message);
       await useProjectStore.getState().refreshProject();
       notifyViewsChanged(row.entity, row.source_id);
-      await Promise.all([load(), refreshRedoPending()]);
+      await Promise.all([load(), refreshRedoPending(), loadMeta()]);
     } catch (e) {
       setError(errorMessage(e, t("history.undoError")));
     }
@@ -186,7 +283,7 @@ export function HistoryView() {
         window.dispatchEvent(
           new CustomEvent("qc:codings-changed", { detail: { entities: ["*"], sourceIds: [] } }),
         );
-        await Promise.all([load(), refreshRedoPending()]);
+        await Promise.all([load(), refreshRedoPending(), loadMeta()]);
       } catch (e) {
         setError(errorMessage(e, t("history.redoError")));
       }
@@ -206,6 +303,7 @@ export function HistoryView() {
   return (
     <LeftBar
       borderSide="l"
+      width="lg"
       className="h-full min-h-0"
       header={
         <>
@@ -298,50 +396,98 @@ export function HistoryView() {
       {loading && rows.length === 0 ? (
         <LoadingState>{t("history.loading")}</LoadingState>
       ) : rows.length === 0 ? (
-        <EmptyState>{t("history.empty")}</EmptyState>
+        <EmptyState>
+          {filterAction || filterUser || q
+            ? t("history.noMatch")
+            : t("history.empty")}
+        </EmptyState>
       ) : (
         <>
-          <ul className="divide-y divide-border">
-            {rows.map((r) => {
-              const canUndo = r.undoable ?? true;
+          <div className="divide-y divide-border">
+            {grouped.map((day) => {
+              const isCollapsed = collapsedDays[day.day] ?? false;
+              const dayCount = day.families.reduce((n, f) => n + f.rows.length, 0);
               return (
-                <li key={r.id} className="flex items-start gap-2 px-3 py-2">
+                <section key={day.day}>
                   <button
                     type="button"
-                    onClick={() => void openDetail(r)}
-                    className="min-w-0 flex-1 text-left"
-                    title={t("history.detailTitle")}
+                    onClick={() =>
+                      setCollapsedDays((c) => ({ ...c, [day.day]: !isCollapsed }))
+                    }
+                    aria-expanded={!isCollapsed}
+                    className="flex w-full items-center gap-1.5 px-3 py-1.5 text-left text-xs font-medium uppercase tracking-wide text-text-secondary hover:bg-surface-higher"
                   >
-                    <div className="flex items-baseline justify-between gap-2">
-                      <span className="truncate text-sm font-medium text-text-primary hover:text-accent">
-                        {actionLabel(r.action, t)}
-                      </span>
-                      <span className="shrink-0 text-[10px] text-text-secondary">{r.ts}</span>
-                    </div>
-                    <div className="mt-0.5 flex items-center gap-2 text-xs text-text-secondary">
-                      <span className="truncate">
-                        {r.user}
-                        {r.entity
-                          ? ` · ${r.entity}${r.entity_id != null ? ` #${r.entity_id}` : ""}`
-                          : ""}
-                      </span>
-                      {r.summary && <span className="truncate text-text-secondary/80">{r.summary}</span>}
-                    </div>
+                    {isCollapsed ? (
+                      <ChevronRight size={14} className="shrink-0" aria-hidden />
+                    ) : (
+                      <ChevronDown size={14} className="shrink-0" aria-hidden />
+                    )}
+                    <span className="truncate">{day.label}</span>
+                    <span className="ml-auto shrink-0 text-[10px]">{dayCount}</span>
                   </button>
-                  <IconButton
-                    label={t("history.undoRowTitle")}
-                    title={canUndo ? t("history.undoRowTitle") : (r.undo_reason ?? t("history.undoRowTitle"))}
-                    size="row"
-                    className="mt-0.5"
-                    disabled={!canUndo}
-                    onClick={() => handleUndo(r)}
-                  >
-                    <Undo2 size={14} aria-hidden />
-                  </IconButton>
-                </li>
+                  {!isCollapsed && (
+                    <div className="divide-y divide-border">
+                      {day.families.map((fam) => (
+                        <div key={fam.family}>
+                          {day.families.length > 1 && (
+                            <div className="px-3 py-1 text-[11px] font-medium text-text-secondary/80">
+                              {t(`history.family.${fam.family}`)}
+                            </div>
+                          )}
+                          <ul className="divide-y divide-border">
+                            {fam.rows.map((r) => {
+                              const canUndo = r.undoable ?? true;
+                              return (
+                                <li key={r.id} className="flex items-start gap-2 px-3 py-2">
+                                  <button
+                                    type="button"
+                                    onClick={() => void openDetail(r)}
+                                    className="min-w-0 flex-1 text-left"
+                                    title={t("history.detailTitle")}
+                                  >
+                                    <div className="flex items-baseline justify-between gap-2">
+                                      <span className="truncate text-sm font-medium text-text-primary hover:text-accent">
+                                        {actionLabel(r.action, t)}
+                                      </span>
+                                      <span className="shrink-0 text-[10px] text-text-secondary">
+                                        {r.ts.slice(11)}
+                                      </span>
+                                    </div>
+                                    <div className="mt-0.5 flex items-center gap-2 text-xs text-text-secondary">
+                                      <span className="truncate">{r.user}</span>
+                                      {r.summary && (
+                                        <span className="truncate text-text-secondary/80">
+                                          {r.summary}
+                                        </span>
+                                      )}
+                                    </div>
+                                  </button>
+                                  <IconButton
+                                    label={t("history.undoRowTitle")}
+                                    title={
+                                      canUndo
+                                        ? t("history.undoRowTitle")
+                                        : (r.undo_reason ?? t("history.undoRowTitle"))
+                                    }
+                                    size="row"
+                                    className="mt-0.5"
+                                    disabled={!canUndo}
+                                    onClick={() => handleUndo(r)}
+                                  >
+                                    <Undo2 size={14} aria-hidden />
+                                  </IconButton>
+                                </li>
+                              );
+                            })}
+                          </ul>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </section>
               );
             })}
-          </ul>
+          </div>
           {total > PAGE_SIZE && (
             <div className="flex shrink-0 items-center justify-center gap-3 border-t border-border px-3 py-1.5 text-xs text-text-secondary">
               <Button
@@ -439,18 +585,45 @@ function DetailContent({ row, t }: { row: AuditRow; t: (key: string) => string }
     <div className="max-h-[60vh] overflow-y-auto p-3 text-sm">
       {row.action === "source.edit" ? (
         <div className="space-y-3">
-          <div>
-            <p className="text-xs font-medium text-danger">{t("history.before")}</p>
-            <pre className="mt-1 whitespace-pre-wrap rounded-sm border border-border bg-bg p-2 text-xs text-text-primary">
-              {String(row.detail.before ?? "")}
-            </pre>
-          </div>
-          <div>
-            <p className="text-xs font-medium text-success">{t("history.after")}</p>
-            <pre className="mt-1 whitespace-pre-wrap rounded-sm border border-border bg-bg p-2 text-xs text-text-primary">
-              {String(row.detail.after ?? "")}
-            </pre>
-          </div>
+          {(() => {
+            const before = String(row.detail.before ?? "");
+            const after = String(row.detail.after ?? "");
+            const LIMIT = 20000;
+            const beforeHuge = before.length > LIMIT;
+            const afterHuge = after.length > LIMIT;
+            return (
+              <>
+                <div>
+                  <p className="text-xs font-medium text-danger">{t("history.before")}</p>
+                  <pre className="mt-1 whitespace-pre-wrap rounded-sm border border-border bg-bg p-2 text-xs text-text-primary">
+                    {showAll || !beforeHuge
+                      ? before
+                      : `${before.slice(0, LIMIT)}\n… (truncated)`}
+                  </pre>
+                </div>
+                <div>
+                  <p className="text-xs font-medium text-success">{t("history.after")}</p>
+                  <pre className="mt-1 whitespace-pre-wrap rounded-sm border border-border bg-bg p-2 text-xs text-text-primary">
+                    {showAll || !afterHuge
+                      ? after
+                      : `${after.slice(0, LIMIT)}\n… (truncated)`}
+                  </pre>
+                </div>
+                {(beforeHuge || afterHuge) && (
+                  <div className="flex items-center justify-end gap-2">
+                    {!showAll && (
+                      <Button variant="secondary" onClick={() => setShowAll(true)}>
+                        {t("history.showAll")}
+                      </Button>
+                    )}
+                    <Button variant="secondary" onClick={download}>
+                      <Download size={14} aria-hidden /> {t("history.downloadDetail")}
+                    </Button>
+                  </div>
+                )}
+              </>
+            );
+          })()}
         </div>
       ) : (
         <>

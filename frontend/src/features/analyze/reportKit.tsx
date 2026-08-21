@@ -6,6 +6,7 @@ import { createContext, useContext, useEffect, type ReactNode } from "react";
 import { CircleAlert, Download } from "lucide-react";
 import { Button, EmptyState, LoadingState } from "@/components/ui/orchestrator";
 import { downloadCsv } from "@/lib/csv";
+import { useI18n } from "@/lib/i18n";
 import { FALLBACK_CODE_COLOR } from "@/features/coding/tint";
 import { tdCls } from "@/features/analyze/reportData";
 
@@ -53,6 +54,7 @@ export function ReportCsvButton({
   headers: string[];
   rows: unknown[][];
 }) {
+  const { t } = useI18n();
   return (
     <Button
       variant="secondary"
@@ -60,7 +62,7 @@ export function ReportCsvButton({
       onClick={() => downloadCsv(filename, headers, rows)}
       icon={<Download size={12} aria-hidden />}
     >
-      CSV
+      {t("analyze.csvButton")}
     </Button>
   );
 }
@@ -74,10 +76,11 @@ export function ReportStatus({
   error: string | null;
   onRetry: () => void;
 }) {
+  const { t } = useI18n();
   if (loading) {
     return (
       <div className="h-48">
-        <LoadingState>Loading report…</LoadingState>
+        <LoadingState>{t("analyze.loading")}</LoadingState>
       </div>
     );
   }
@@ -89,7 +92,7 @@ export function ReportStatus({
           {error}
         </p>
         <Button variant="secondary" onClick={onRetry}>
-          Retry
+          {t("common.retry")}
         </Button>
       </div>
     );
@@ -115,14 +118,7 @@ export function ReportHeader({
       <h2 className="text-sm font-medium text-text-primary">{title}</h2>
       <div className="flex items-center gap-2">
         {actions}
-        <Button
-          variant="secondary"
-          className="text-text-secondary hover:text-text-primary"
-          onClick={() => downloadCsv(filename, headers, rows)}
-          icon={<Download size={12} aria-hidden />}
-        >
-          CSV
-        </Button>
+        <ReportCsvButton filename={filename} headers={headers} rows={rows} />
       </div>
     </div>
   );
@@ -147,9 +143,10 @@ export function CategoryCell({ category }: { category: string }) {
 }
 
 export function EmptyData() {
+  const { t } = useI18n();
   return (
     <div className="h-48">
-      <EmptyState>No data</EmptyState>
+      <EmptyState>{t("analyze.noData")}</EmptyState>
     </div>
   );
 }

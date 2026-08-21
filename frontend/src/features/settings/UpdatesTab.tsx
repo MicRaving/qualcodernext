@@ -5,7 +5,7 @@
  */
 import { useEffect, useState } from "react";
 import { Check, Download, LoaderCircle, RotateCw } from "lucide-react";
-import { Button, Field, Select, Toggle } from "@/components/ui/orchestrator";
+import { Button, Select } from "@/components/ui/orchestrator";
 import { useI18n } from "@/lib/i18n";
 import { useUpdatesStore } from "@/stores/updates";
 import type { UpdatesSettings } from "@/lib/api";
@@ -19,9 +19,6 @@ export function UpdatesTab() {
   const updatesError = useUpdatesStore((s) => s.error);
   const updatesSettings = useUpdatesStore((s) => s.settings);
   const [checkInterval, setCheckInterval] = useState<UpdatesSettings["check_interval"]>("daily");
-  const [autoUpdate, setAutoUpdate] = useState(
-    () => useUpdatesStore.getState().settings?.auto_update ?? true,
-  );
 
   useEffect(() => {
     const store = useUpdatesStore.getState();
@@ -31,88 +28,66 @@ export function UpdatesTab() {
   useEffect(() => {
     if (updatesSettings) {
       setCheckInterval(updatesSettings.check_interval);
-      setAutoUpdate(updatesSettings.auto_update);
     }
   }, [updatesSettings]);
-
-  async function toggleAutoUpdate() {
-    const next = !autoUpdate;
-    setAutoUpdate(next);
-    const settings = { check_interval: checkInterval, auto_update: next };
-    try {
-      await useUpdatesStore.getState().saveSettings(settings);
-      if (next) {
-        // Enabling auto-update checks immediately (matches the scheduler).
-        void useUpdatesStore.getState().checkNow();
-      }
-    } catch {
-      /* keep the local toggle; the backend error surfaces on the next load */
-    }
-  }
 
   async function setIntervalAndSave(interval: UpdatesSettings["check_interval"]) {
     setCheckInterval(interval);
     try {
       await useUpdatesStore
         .getState()
-        .saveSettings({ check_interval: interval, auto_update: autoUpdate });
+        .saveSettings({ check_interval: interval, auto_update: updatesSettings?.auto_update ?? true });
     } catch {
-      /* same as above */
+      /* the backend error surfaces on the next load */
     }
   }
 
   return (
     <div className="p-3">
-      <h2 className="text-sm font-semibold text-text-primary">{t("settings.updatesSection")}</h2>
+      {/* Header */}
+      <div className="flex items-center justify-between gap-2">
+        <h2 className="text-sm font-semibold text-text-primary">{t("settings.updatesSection")}</h2>
+      </div>
 
-      {/* Auto-update toggle + check interval, side by side */}
-      <div className="mt-3 grid grid-cols-2 items-end gap-3">
-        <Field label={t("settings.updatesAuto")}>
-          <div className="mt-1">
-            <Toggle
-              checked={autoUpdate}
-              onChange={() => void toggleAutoUpdate()}
-              label={t("settings.updatesAuto")}
-            />
-          </div>
-        </Field>
-        <Field label={t("settings.updatesInterval")}>
+      {/* Interval (left) | Check now (right) */}
+      <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
+        <label className="flex items-center gap-1.5 text-[11px] text-text-secondary">
+          <span>{t("settings.updatesInterval")}</span>
           <Select
             value={checkInterval}
             onChange={(e) => void setIntervalAndSave(e.target.value as UpdatesSettings["check_interval"])}
-            className="mt-1 w-full"
+            className="w-28"
           >
             <option value="daily">{t("settings.updatesIntervalDaily")}</option>
             <option value="weekly">{t("settings.updatesIntervalWeekly")}</option>
             <option value="never">{t("settings.updatesIntervalNever")}</option>
           </Select>
-        </Field>
-      </div>
-
-      <div className="mt-3 flex flex-wrap items-end gap-3">
-        <Button
-          variant="secondary"
-          icon={
-            updatesStatus === "checking" ? (
-              <LoaderCircle size={12} className="animate-spin" aria-hidden />
-            ) : (
-              <RotateCw size={12} aria-hidden />
-            )
-          }
-          disabled={updatesStatus === "checking" || updatesStatus === "downloading"}
-          onClick={() => void useUpdatesStore.getState().checkNow()}
-        >
-          {t("settings.updatesCheckNow")}
-        </Button>
-        {updatesStatus === "available" && updatesInfo && (
+        </label>
+        <div className="flex flex-wrap items-center gap-2">
           <Button
-            variant="primary"
-            icon={<Download size={12} aria-hidden />}
-            onClick={() => void useUpdatesStore.getState().install()}
+            variant="secondary"
+            icon={
+              updatesStatus === "checking" ? (
+                <LoaderCircle size={12} className="animate-spin" aria-hidden />
+              ) : (
+                <RotateCw size={12} aria-hidden />
+              )
+            }
+            disabled={updatesStatus === "checking" || updatesStatus === "downloading"}
+            onClick={() => void useUpdatesStore.getState().checkNow()}
           >
-            {t("settings.updatesInstall")}
+            {t("settings.updatesCheckNow")}
           </Button>
-        )}
+          {updatesStatus === "available" && updatesInfo && (
+            <Button
+              variant="primary"
+              icon={<Download size={12} aria-hidden />}
+              onClick={() => void useUpdatesStore.getState().install()}
+            >
+              {t("settings.updatesInstall")}
+            </Button>
+          )}
+        </div>
       </div>
 
       {updatesStatus === "checking" && (
@@ -149,4 +124,3 @@ export function UpdatesTab() {
     </div>
   );
 }
-

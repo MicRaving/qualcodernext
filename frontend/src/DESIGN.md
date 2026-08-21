@@ -198,7 +198,7 @@ Status dots (e.g. coder/sync indicator): `h-1.5 w-1.5 rounded-full`,
 With a project open:
 
 ```
-[Dashboard] [Files] [Cases] [Notes] [Reports] [Graphs] │ [spacer]
+[Dashboard] [Files] [Cases] [Notes] [Reports] [Graphs] │ [search box]
 [Coder switcher: User + name + sync-dot + ▾] [queue chip?] [History]
 [AI] [Settings]
 ```
@@ -206,6 +206,17 @@ With a project open:
 - Nav buttons: `icon 20 + label text-xs font-medium`, active =
   `bg-surface-higher text-accent`, idle = `text-text-secondary`.
 - Divider after nav: `h-5 w-px bg-border`.
+- Search: a NATIVE text box in the ribbon (`h-7 w-48`, search icon at the
+  left inside the input). The query is treated as a regular expression (an
+  unescaped `*` is a wildcard — `LM*` = "LM" + anything; `\*` stays literal);
+  the rest of the search UI opens as a FLYOUT **centered in the window**
+  (`w-[44rem] max-w-[94vw]`, under the input vertically) on focus: mode toggle
+  Exact/Semantic, entity-scope chips (all on one line), semantic index
+  controls, live results with the matched span highlighted. No separate search
+  button. When the query is non-empty an **X** appears at the right edge of the
+  input to clear it (`aria-label` "Clear search", i18n `search.clear`); there
+  is NO header/title bar inside the flyout — the query stays in the ribbon
+  input.
 - Coder switcher: single button `flex max-w-44 items-center gap-1.5 rounded-sm
   border border-border bg-bg px-2 py-1 text-xs`; sync dot INSIDE it (never a
   separate button).
@@ -236,7 +247,7 @@ With a project open:
 | View | Left bar | Width | Header (BarHeader) |
 |---|---|---|---|
 | coding | Sidebar — code tree (namespace-aware, depth ≤ 64) | w-72 | "Codes" + count + annotation + yellow Code/Category |
-| files, dashboard, graphs | Sidebar — file groups | w-72 | "Files" + count + yellow Import |
+| files, dashboard, graphs | Sidebar — file groups | w-72 | "Files" + count + yellow **URL** button (opens the URL-import dialog) + yellow Import |
 | analyze | ReportsList — the six merged report screens + Tools group | w-72 | "Reports" + count + refresh |
 | history, ai, settings | — (right-bar panes) | — | — |
 | cases | CasesList | w-72 | "Cases" + count + refresh + yellow Add |
@@ -259,10 +270,14 @@ With a project open:
 - The top-bar buttons History / AI / Settings **toggle right-bar panes** (the
   center view keeps whatever it shows); clicking the active button closes the
   pane. Opening a file in the coder switches back to the Inspector.
-- Pane structure: `LeftBar borderSide="l"` + `BarHeader`; AI is `width="lg"`
-  with a Chat/Search tab toggle in the header; Settings is `width="lg"`
-  with stacked `Card` sections; History is `width="lg"` with a filter bar
-  (action/user selects) under the header and change cards with an undo icon.
+- Pane structure: `LeftBar borderSide="l"` + `BarHeader`; **AI** is
+  `width="lg"` (w-96) with `scroll={false}` and hosts the chat in its body;
+  **Settings** is `width="lg"` with stacked `Card` sections; **History** is
+  `width="lg"` with a filter bar (action/user selects) under the header and
+  change cards with an undo icon. The Help pane (`scroll={false}` — only its
+  content area scrolls, never over the mode/search bars) and Settings carry
+  the bug-report button in their `BarHeader` actions; the Help doc search is
+  regex-native (no toggle).
 - Inspector: compact header (`BarHeader`, h-10): item icon + name (or
   "Details") + close button.
 - Empty state: "Select a code or file for details." (centered, secondary).
@@ -273,6 +288,73 @@ With a project open:
 - Editing a file memo from ANYWHERE opens the Inspector's inline editor
   (never window.prompt + toast).
 
+### AI pane (AiView / AiChatPanel)
+
+`AiView` is a `LeftBar borderSide="l" width="lg" scroll={false}` — only the
+chat body scrolls, never the header:
+
+- **Header** (custom `cls.bar` row, h-10, outside the scroll area): the "AI"
+  title + the instruction-template `<select>` (`min-w-0 flex-1` — it fills the
+  bar, leaving minimal gap to the "AI" heading; groups Analysis / Specialized
+  / My templates) + three ghost `IconButton size="sm"`: **History**
+  (Hourglass → anchored popover with "New chat" and the saved sessions, each
+  with hover-revealed inline rename/delete like the file/code rows),
+  **Templates** (FileText → the template editor modal, which also edits the
+  wrapping prompt), **Help** (HelpCircle → `HelpFlyout`).
+- **Messages** (`.qc-scroll` body, max-w-2xl column): user bubbles right
+  (`bg-accent text-[var(--qc-bg)]`), assistant bubbles left (`bg-surface`
+  with an "AI assistant" label), errors left with `border-danger
+  bg-danger/10 text-danger`. A "Thinking…" spinner bubble shows while a
+  request runs. **Assistant replies render as Markdown** (headings, lists,
+  tables, fenced/inline code, bold/italic; links and images become plain
+  text — no raw HTML) via the shared `Markdown` component (`size="sm"`), the
+  same renderer the Help pane uses.
+- **Tool bubbles** (agentic chat): each executed MCP tool renders inside the
+  assistant bubble under a `Tools used` label as a bordered row
+  (`rounded-sm border border-border bg-bg px-2 py-1 text-xs`) with a Wrench
+  icon + human summary + an `Approved` (Check, `text-success`) or `Rejected`
+  (X, `text-danger`) tag — only for write tools that went through an explicit
+  approve/reject decision; read tools executed without a gate carry no tag.
+- **Pending approval** (agentic + Confirm writes): a panel above the
+  composer lists the proposed write tools (Wrench + summary each) with
+  `Approve` (primary, Check) and `Reject` (secondary, X) buttons.
+- **Data selector (collapsible)**: the context strip above the composer has a
+  header row — `MODE: <label>` with a `ChevronDown`/`ChevronRight` arrow
+  (`px-3 py-1.5`, `aria-expanded`) that collapses/expands the pickers below.
+  When expanded, the `ContextPickerArea` shows the `All | Memos | Codes |
+  Files` tab row plus the active picker. **All** is a toggle (`aria-pressed`)
+  that selects/clears every memos, code and file key at once; it is **on by
+  default**, so all project data is exposed unless the user narrows it.
+- **Composer**: a small option row above the textarea holds two checkboxes —
+  `Tools` (enable agentic chat) and `Confirm writes` — plus a right-aligned
+  MCP access `<select>` (`h-6 rounded-sm border border-border bg-bg px-1
+  text-[11px]`, options Read only / Read + write / Full access) that persists
+  via `PUT /ai/mcp-permissions` (the same setting as in Settings). Below it
+  the textarea + Send + (Clear, on a fresh chat only).
+- **Template editor** (Templates icon → modal): two tabs.
+  - **Personas** — every chat mode's system prompt as a textarea row with
+    `Save` + `Reset to default` (Restores the shipped text); saved app-wide
+    via `PUT /ai/personas`. The machine-wide **wrapping prompt** ("be short
+    and concise" by default) sits below, with its own Save + reset.
+  - **Templates** — the full editable catalog from `GET /ai/templates/all`,
+    grouped by Built-in / App / My templates: built-ins are edited via an
+    app-wide override (`PUT /ai/templates/all`, scope badge "Built-in",
+    `Reset to default` clears it), app templates are stored in the user
+    settings and usable in every project, project templates are the
+    project's `ai_prompt` rows with a `Save globally` (Globe) action that
+    copies them into the app store. New-template buttons create a project
+    (`Plus`) or app-wide (`Globe`) template.
+
+### Help pane
+
+The Help pane (`scroll={false}`, right bar) has two tabs: **Browse** — the
+in-app `help_docs/*.md` topics served by the backend (topic list + rendered
+markdown) with a regex-native search box whose **matched span is highlighted**
+in the result snippets (`bg-accent/30`, same as the search flyout) and an **X**
+to clear the search when non-empty (same as the ribbon search input) — and
+**Ask AI** — a single-turn "help"-mode chat (needs an open project with AI
+enabled). The bug-report button sits in the `BarHeader`.
+
 ## 10. Function bars per view
 
 - Function bars always render as the **first row of the center view** (`h-10
@@ -282,6 +364,58 @@ With a project open:
 - Graphs menu bar (first row of the center): title "Graphs" + graph `<select>`
   + "New graph" + (spacer) + "Models" + zoom controls + connect. The canvas is
   the rest of the center.
+
+## 10a. Memo gutter (Word-style sidebar)
+
+The memo gutter is a **separate reusable module** (`MemoGutter.tsx`) integrated
+into TextCoder, HtmlCoder, AvCoder, PdfCoder, and ImageCoder. It provides a
+Word-style sidebar for viewing and editing memo cards aligned to coded segments.
+
+### Layout & behavior
+
+- **Toggle**: Show/hide via a "Memos" button in each coder's header. Uses
+  `useGutterVisible()` from `viewOptions.ts` (persisted in localStorage).
+- **Gutter width**: `w-56` (14rem), positioned in the right margin of the
+  scroll container.
+- **Cards**: Each coded segment with a memo or weight > 0 renders a card in
+  the gutter. Cards are stacked vertically, aligned to their anchor spans.
+- **Stacking**: Up to `MAX_STACK=3` cards can share a vertical position.
+  Overflow collapses into a "+N more" chip that expands on click.
+- **Collapsed card**: `h-10` (40px) — shows a colored dot, code name, memo
+  preview, and weight chip (if weight > 0).
+- **Expanded card**: `h-32` (132px) — shows header + weight steppers + memo
+  textarea + delete button + extras slot.
+- **Selection**: Click a card to expand it. Click again or press Escape to
+  collapse. When the gutter is hidden, selecting a segment opens a floating
+  bubble instead.
+
+### Module structure
+
+```
+MemoGutter.tsx
+├── GutterRow (interface) — normalized coding data
+├── hasGutterData() — determines if a card should render
+├── toGutterRow() — builds GutterRow from coding objects
+├── MemoGutter — the sidebar component
+├── MemoGutterBubble — floating editor when gutter is hidden
+└── SegmentMemoEditor — shared card component
+```
+
+### Integration per coder
+
+| Coder | Anchor resolution | Notes |
+|---|---|---|
+| TextCoder | `[data-ctids~="ctid"]` on spans | Multi-coding support via space-separated IDs |
+| HtmlCoder | iframe/doc `[data-ctids~="ctid"]` | Queries both iframe and plain text pane |
+| AvCoder | transcript `[data-ctid="ctid"]` | Only transcript codings (timeline codings excluded) |
+| PdfCoder | `[data-ctid="imid"/"ctid"]` | Combined image + text codings |
+| ImageCoder | `[data-imid="imid"]` | PENDING: new gutter integration |
+
+### Layout solver
+
+`memoLayout.ts` provides pure functions:
+- `layoutGutterCards()` — positions cards vertically, pushing down for collisions
+- `stackRows()` — groups co-located rows (tolerance 2px)
 
 ## 11. Status bar
 
@@ -328,10 +462,8 @@ Rule: micro-interactions are **subtle and non-intrusive** — no springs, no
 staggered list reveals, no colored glow shadows. The `Card` component carries
 the hover lift automatically.
 
-Remaining UI-consistency sweep work is tracked in
-[`docs/ui-polish-plan.md`](../../docs/ui-polish-plan.md) (Phase B): the ad-hoc
-`h-6`/`h-7` toolbar clusters, a `cls.toolbarBtn` token, and the
-`--qc-shadow-sm/md/lg` elevation tokens are not yet done.
+Remaining UI-consistency sweep work is tracked in the CHANGELOG: the ad-hoc
+`h-6`/`h-7` toolbar clusters and a `cls.toolbarBtn` token are not yet done.
 
 ## 14. Cross-cutting rules
 
@@ -347,3 +479,6 @@ Remaining UI-consistency sweep work is tracked in
   own bars.
 - When a file opens in the coder, the Inspector shows its details
   automatically (`setView` handles this).
+- Choosing a **code occasion** (clicking a coded segment in any coder —
+  text/PDF/HTML/Image/AV) also selects the code in the right-bar Inspector
+  (`useInspectorStore.selectCode(cid)`), in addition to the bottom details bar.

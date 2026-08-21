@@ -152,7 +152,7 @@ export interface BarHeaderProps extends Omit<HTMLAttributes<HTMLElement>, "title
 export function BarHeader({ title, count, actions, children, ...rest }: BarHeaderProps) {
   return (
     <header className={cls.bar} {...rest}>
-      <h1 className="truncate text-sm font-semibold text-text-primary">{title}</h1>
+      <h1 className="shrink-0 truncate text-sm font-semibold text-text-primary">{title}</h1>
       {count !== undefined && <CountBadge value={count} />}
       <div className="flex-1" />
       {children ?? actions}
@@ -277,6 +277,8 @@ export interface ModalProps {
   closeDisabled?: boolean;
   /** Accessible name (falls back to `title` when it is a string). */
   ariaLabel?: string;
+  /** Actions rendered in the header between the spacer and the close X. */
+  headerActions?: ReactNode;
   children?: ReactNode;
 }
 
@@ -292,6 +294,7 @@ export function Modal({
   overlayClassName = "",
   closeDisabled = false,
   ariaLabel,
+  headerActions,
   children,
 }: ModalProps) {
   useEffect(() => {
@@ -320,6 +323,7 @@ export function Modal({
             {icon}
             <span className="truncate text-sm font-semibold text-text-primary">{title}</span>
             <div className="flex-1" />
+            {headerActions}
             <IconButton
               label="Close"
               size="sm"

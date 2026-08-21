@@ -43,6 +43,13 @@ OWNER_TABLES = (
 )
 
 
+# Coding-segment tables (text/image/AV codings). The coder flyout shows these
+# as "coded segments" — NOT the raw owner-row total across every OWNER_TABLES
+# (which would also count sources, codes, cases, attributes, ... and inflate
+# the number far beyond the real coding count).
+CODING_TABLES = ("code_text", "code_image", "code_av")
+
+
 class CoderInfo(BaseModel):
     name: str
     coding_count: int = 0
@@ -116,17 +123,39 @@ def _all_coders(svc, counts: dict[str, int]) -> list[str]:
     return names
 
 
-def _response(current: str, names: list[str], counts: dict[str, int]) -> CodersResponse:
+async def _segment_counts(svc) -> dict[str, int]:
+    """Coding-segment counts per owner (text + image + AV codings).
+
+    Used for the per-coder "coded segments" indicator in the coder flyout.
+    ``_coding_counts`` (all owner tables) is what feeds the coder-list union
+    and the delete/reassign guard — it is intentionally NOT the display count.
+    """
+    if svc.engine is None:
+        return {}
+    _, factory = svc._ensure_engine()
+    result: dict[str, int] = {}
+    async with factory() as session:
+        for table in CODING_TABLES:
+            rows = await session.execute(
+                text(f'SELECT owner, count(*) FROM "{table}" GROUP BY owner')
+            )
+            for owner, count in rows:
+                if owner:
+                    result[owner] = result.get(owner, 0) + int(count)
+    return result
+
+
+def _response(current: str, names: list[str], seg_counts: dict[str, int]) -> CodersResponse:
     return CodersResponse(
         current=current,
-        coders=[CoderInfo(name=n, coding_count=counts.get(n, 0)) for n in names],
+        coders=[CoderInfo(name=n, coding_count=seg_counts.get(n, 0)) for n in names],
     )
 
 
 @router.get("", response_model=CodersResponse)
 async def list_coders(svc: ServiceDep) -> CodersResponse:
     counts = await _coding_counts(svc)
-    return _response(get_codername(), _all_coders(svc, counts), counts)
+    return _response(get_codername(), _all_coders(svc, counts), await _segment_counts(svc))
 
 
 @router.post("", response_model=CodersResponse, status_code=201)
@@ -141,7 +170,6 @@ async def create_coder(req: CoderRequest, svc: ServiceDep) -> CodersResponse:
     await _record_audit(svc, action="coder.create", detail={"name": name})
     return _response(get_codername(), get_coders(), {})
 
-
 @router.put("/current", response_model=CodersResponse)
 async def switch_coder(req: CurrentCoderRequest, svc: ServiceDep) -> CodersResponse:
     name = req.name.strip()
@@ -151,7 +179,7 @@ async def switch_coder(req: CurrentCoderRequest, svc: ServiceDep) -> CodersRespo
     if name not in _all_coders(svc, counts):
         raise HTTPException(status_code=404, detail=f'coder "{name}" does not exist')
     set_codername(name)
-    return _response(name, _all_coders(svc, counts), counts)
+    return _response(name, _all_coders(svc, counts), await _segment_counts(svc))
 
 
 @router.patch("/{name}", response_model=CodersResponse)
@@ -208,8 +236,7 @@ async def rename_coder(name: str, req: RenameCoderRequest, svc: ServiceDep) -> C
     if get_codername() == name:
         set_codername(new_name)
     await _record_audit(svc, action="coder.rename", detail={"from": name, "to": new_name})
-    counts = await _coding_counts(svc)
-    return _response(get_codername(), renamed, counts)
+    return _response(get_codername(), renamed, await _segment_counts(svc))
 
 
 @router.get("/{name}/stats")
@@ -298,8 +325,7 @@ async def delete_coder(
     await _record_audit(
         svc, action="coder.delete", detail={"name": name, "reassign_to": reassign_to}
     )
-    counts = await _coding_counts(svc)
-    return _response(get_codername(), get_coders(), counts)
+    return _response(get_codername(), get_coders(), await _segment_counts(svc))
 
 
 @router.get("/visibility")

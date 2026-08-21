@@ -7,7 +7,6 @@ import { useRef, useState, useEffect } from "react";
 import { useAsyncEffect } from "@/lib/useAsync";
 import { Download, Paperclip, Trash2, X } from "lucide-react";
 import { api, type ReferenceEntry } from "@/lib/api";
-import { downloadCsv } from "@/lib/csv";
 import { cn, errorMessage } from "@/lib/utils";
 import { useI18n } from "@/lib/i18n";
 import { useWorkspaceStore } from "@/stores/workspace";
@@ -24,22 +23,11 @@ import {
   useReport,
 } from "@/features/analyze/reportData";
 import {
+  EmptyData,
+  ReportCsvButton,
   ReportStatus,
   ReportMenuBar,
 } from "@/features/analyze/reportKit";
-
-function CsvButton({ filename, headers, rows }: { filename: string; headers: string[]; rows: unknown[][] }) {
-  return (
-    <Button
-      variant="secondary"
-      className="text-text-secondary hover:text-text-primary"
-      onClick={() => downloadCsv(filename, headers, rows)}
-      icon={<Download size={12} aria-hidden />}
-    >
-      CSV
-    </Button>
-  );
-}
 
 // ---------------------------------------------------------------------------
 // Word cloud
@@ -140,11 +128,11 @@ export function WordCloudReport() {
       ) : error ? (
         <ReportStatus loading={false} error={error} onRetry={() => setAttempt((a) => a + 1)} />
       ) : !rows || rows.rows.length === 0 ? (
-        <div className="h-48"><EmptyState>No data</EmptyState></div>
+        <EmptyData />
       ) : (
         <>
           <ReportMenuBar>
-            <CsvButton
+            <ReportCsvButton
               filename="word-frequencies.csv"
               headers={[t("analyze.colWord"), t("analyze.colCount")]}
               rows={rows.rows.map((r) => [r.word, r.count])}
@@ -308,7 +296,7 @@ export function ReferencesReport() {
   return (
     <div className="space-y-2">
       <ReportMenuBar>
-        <CsvButton
+        <ReportCsvButton
           filename="references.csv"
           headers={[t("analyze.colTitle"), t("analyze.colAuthors"), t("analyze.colYear"), t("analyze.colType")]}
           rows={rows.map((r) => [r.title, r.authors.join("; "), r.year, r.type])}

@@ -89,3 +89,68 @@ describe("fetchSourceFile error-body parsing", () => {
     expect(await res.text()).toBe("pdf-bytes");
   });
 });
+
+describe("collaboration endpoints", () => {
+  it("reads the project mode", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ mode: "collaboration", uuid: "abc123" }), { status: 200 }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const res = await api.projectMode();
+    expect(res.mode).toBe("collaboration");
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(String(url)).toContain("/projects/mode");
+    expect(init?.method ?? "GET").toBe("GET");
+  });
+
+  it("activates collaboration via POST", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ ok: true, reason: "ok", uuid: "xyz" }), { status: 200 }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const res = await api.activateCollaboration();
+    expect(res.ok).toBe(true);
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(String(url)).toContain("/projects/activate-collaboration");
+    expect(init?.method).toBe("POST");
+  });
+
+  it("reverts and consolidates via POST", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ ok: true, reason: "ok" }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ ok: true, reason: "ok" }), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(api.revertCollaboration()).resolves.toMatchObject({ ok: true });
+    expect(String(fetchMock.mock.calls[0][0])).toContain("/projects/revert-collaboration");
+    await expect(api.consolidateProject()).resolves.toMatchObject({ ok: true });
+    expect(String(fetchMock.mock.calls[1][0])).toContain("/projects/consolidate");
+  });
+});
+
+describe("aiMcpTools endpoint", () => {
+  it("fetches the MCP tool catalog from /ai/mcp-tools", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          permissions: "write",
+          write_enabled: true,
+          read_tools: [{ name: "get_code_tree", description: "codebook" }],
+          write_tools: [{ name: "create_code", description: "create" }],
+        }),
+        { status: 200 },
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const res = await api.aiMcpTools();
+    expect(res.write_enabled).toBe(true);
+    expect(res.read_tools[0].name).toBe("get_code_tree");
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(String(url)).toContain("/ai/mcp-tools");
+    expect(init?.method ?? "GET").toBe("GET");
+  });
+});

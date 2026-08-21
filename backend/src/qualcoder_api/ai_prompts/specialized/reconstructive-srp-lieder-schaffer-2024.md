@@ -1,5 +1,6 @@
 ---
 name: reconstructive-srp-lieder-schaffer-2024
+label: Reconstructive SRP
 description: |-
   This prompt is based of the methodological framework of the documentary method. It will generate a 'formulating' and a 'reflecting interpretation' of the empirical data.
   Source: Lieder, F. R. & Schäffer, B. (2024). Reconstructive Social Research Prompting (RSRP). Distributed Interpretation between AI and Researchers in Qualitative Research. https://doi.org/10.31235/osf.io/d6e9m

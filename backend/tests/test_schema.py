@@ -52,6 +52,8 @@ EXPECTED_TABLES = {
     "ai_chat",
     "ai_chat_message",
     "ai_prompt",
+    "sync_rev",
+    "sync_conflict",
 }
 
 EXPECTED_VIEWS = {

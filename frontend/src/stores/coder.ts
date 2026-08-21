@@ -67,6 +67,9 @@ export const useCoderStore = create<CoderState>((set) => ({
     try {
       const res = await api.switchCoder(name);
       set({ coderName: res.current, coders: res.coders });
+      // Force all open coder views to re-fetch so the displayed segments
+      // reflect the new coder's visibility scope.
+      window.dispatchEvent(new CustomEvent("qc:codings-changed"));
       return true;
     } catch (e) {
       useProjectStore.setState({ error: errorMessage(e, "Could not switch coder")});

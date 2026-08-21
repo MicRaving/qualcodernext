@@ -10,7 +10,7 @@ import { errorMessage } from "@/lib/utils";
 import { useState, type FormEvent } from "react";
 import { Share2 } from "lucide-react";
 import { Button, Field, Input, Modal, Select } from "@/components/ui/orchestrator";
-import { ApiError, fetchWithTimeout, initApiBase } from "@/lib/api";
+import { localRequestBlob } from "@/lib/api";
 import { SOURCE_TIMEOUT_MS } from "@/lib/config";
 import { useI18n } from "@/lib/i18n";
 import type { ReportId } from "@/stores/workspace";
@@ -43,38 +43,16 @@ function withExtension(name: string, format: PublishFormat): string {
   return name.trim().replace(/\.(docx|pptx|xlsx)$/i, `.${EXTENSIONS[format]}`) || `${name}.${EXTENSIONS[format]}`;
 }
 
-/** Same local-fetch pattern as statsApi.ts: initApiBase + fetchWithTimeout,
- *  single retry on network-level failure (packaged backend restart). */
+/** Binary publish download through the shared local-fetch primitive. */
 async function publishBlob(report: string, format: PublishFormat): Promise<Blob> {
-  const doFetch = async (): Promise<Blob> => {
-    const base = await initApiBase();
-    const res = await fetchWithTimeout(
-      `${base}/publish/from-report`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ report, format }),
-      },
-      SOURCE_TIMEOUT_MS,
-    );
-    if (!res.ok) {
-      let detail: unknown;
-      try {
-        detail = (await res.json()).detail;
-      } catch {
-        /* non-JSON error body */
-      }
-      const suffix = typeof detail === "string" && detail ? `: ${detail}` : "";
-      throw new ApiError(res.status, `API error ${res.status} on /publish/from-report${suffix}`, detail);
-    }
-    return res.blob();
-  };
-  try {
-    return await doFetch();
-  } catch (err) {
-    if (err instanceof ApiError) throw err;
-    return doFetch();
-  }
+  return localRequestBlob(
+    "/publish/from-report",
+    {
+      method: "POST",
+      body: JSON.stringify({ report, format }),
+    },
+    SOURCE_TIMEOUT_MS,
+  );
 }
 
 function downloadBlob(blob: Blob, filename: string): void {

@@ -7,18 +7,20 @@
  */
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useAsyncEffect } from "@/lib/useAsync";
-import { Check, FileText, HelpCircle, History, Plus, Trash2 } from "lucide-react";
-import { api, type AiChatInfo, type AiPromptInfo } from "@/lib/api";
+import { Check, FileText, HelpCircle, Hourglass, Pencil, Plus, Trash2 } from "lucide-react";
+import { api, type AiChatInfo, type AiPromptInfo, type AiStatus } from "@/lib/api";
+import { AI_REFRESH_MS } from "@/lib/config";
 import {
-  BarHeader,
   HelpFlyout,
   IconButton,
   LeftBar,
   MenuItem,
   Select,
 } from "@/components/ui/orchestrator";
+import { cls } from "@/components/ui/tokens";
 import { InlineNameEdit } from "@/components/ui/InlineNameEdit";
 import { useI18n } from "@/lib/i18n";
+import { useToast } from "@/lib/toast";
 import { AiChatPanel } from "@/features/ai/AiChatPanel";
 import { AiTemplateEditor } from "@/features/ai/AiTemplateEditor";
 
@@ -126,15 +128,20 @@ function AnchorPopover({
 
 export function AiView() {
   const { t } = useI18n();
+  const toast = useToast();
   const [prompts, setPrompts] = useState<AiPromptInfo[]>([]);
   const [promptId, setPromptId] = useState("");
   const [chatId, setChatId] = useState<number | null>(null);
   const [chats, setChats] = useState<AiChatInfo[]>([]);
   const [historyAnchor, setHistoryAnchor] = useState<HTMLElement | null>(null);
-  const [renaming, setRenaming] = useState(false);
-  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [renamingId, setRenamingId] = useState<number | null>(null);
   const [helpAnchor, setHelpAnchor] = useState<HTMLElement | null>(null);
   const [templatesOpen, setTemplatesOpen] = useState(false);
+  // Service indicator next to the "AI" header: fetched once (no probe) on
+  // mount, then auto-probed while AI is enabled so the dot reflects the
+  // provider's reachability.
+  const [aiStatus, setAiStatus] = useState<AiStatus | null>(null);
+  const [checking, setChecking] = useState(false);
 
   useAsyncEffect(async (signal) => {
     const [promptsRes, chatsRes] = await Promise.allSettled([api.aiPrompts(), api.aiChats()]);
@@ -143,30 +150,98 @@ export function AiView() {
     signal.throwIfAborted();
   }, []);
 
+  useAsyncEffect(async (signal) => {
+    try {
+      const s = await api.aiStatus(false);
+      signal.throwIfAborted();
+      setAiStatus(s);
+    } catch {
+      signal.throwIfAborted();
+    }
+  }, []);
+
+  const aiEnabled = aiStatus?.enabled === true;
+
+  // Auto-probe the provider while AI is enabled so the header indicator
+  // reflects reachability without manual action.
+  useEffect(() => {
+    if (!aiEnabled) return;
+    let cancelled = false;
+    const probe = async () => {
+      setChecking(true);
+      try {
+        const s = await api.aiStatus(true);
+        if (!cancelled) setAiStatus(s);
+      } catch {
+        /* keep the last known state */
+      } finally {
+        if (!cancelled) setChecking(false);
+      }
+    };
+    void probe();
+    const timer = window.setInterval(() => void probe(), AI_REFRESH_MS);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [aiEnabled]);
+
   const usable = prompts.filter(isUsablePrompt);
   const groups = ["analysis", "specialized", "custom"].filter((g) =>
     usable.some((p) => promptGroup(p) === g),
   );
-  const activeChat = chats.find((c) => c.id === chatId) ?? null;
 
   function openChat(id: number) {
     setChatId(id);
     setPromptId((prev) => prev);
     setHistoryAnchor(null);
+    setRenamingId(null);
   }
 
   function startNewChat() {
     setChatId(null);
     setHistoryAnchor(null);
+    setRenamingId(null);
   }
 
-  async function deleteChat(id: number) {
+  async function renameChat(id: number, name: string) {
+    await api.aiChatRename(id, name);
+    setChats((prev) => prev.map((c) => (c.id === id ? { ...c, title: name } : c)));
+    setRenamingId(null);
+    toast.success(t("ai.historyRenamed", { name }));
+  }
+
+  async function deleteChat(id: number, name: string) {
+    if (!window.confirm(t("ai.historyDeleteConfirm", { name }))) return;
     await api.aiChatDelete(id);
     setChats((prev) => prev.filter((c) => c.id !== id));
     if (chatId === id) setChatId(null);
-    setHistoryAnchor(null);
-    setConfirmDelete(false);
+    setRenamingId(null);
+    toast.success(t("ai.historyDeleted", { name }));
   }
+
+  function refreshPrompts() {
+    void api.aiPrompts().then((res) => setPrompts(res.prompts));
+  }
+
+  const serviceDot = !aiEnabled
+    ? "bg-border"
+    : checking
+      ? "bg-warning"
+      : aiStatus?.reachable === true
+        ? "bg-success"
+        : aiStatus?.reachable === false
+          ? "bg-danger"
+          : "bg-warning";
+  const serviceTitle = !aiEnabled
+    ? t("ai.serviceOff")
+    : checking
+      ? t("settings.aiChecking")
+      : aiStatus?.reachable === true
+        ? t("settings.aiStatusConnected")
+        : aiStatus?.reachable === false
+          ? t("settings.aiStatusUnreachable")
+          : t("settings.aiCheckStatus");
 
   return (
     <LeftBar
@@ -174,17 +249,21 @@ export function AiView() {
       scroll={false}
       className="h-full min-h-0 max-w-full overflow-hidden"
       header={
-        <BarHeader
-          title="AI"
-          actions={
-            <>
-              <Select
-                value={promptId}
-                onChange={(e) => setPromptId(e.target.value)}
-                aria-label={t("ai.promptLabel")}
-                title={t("ai.promptLabel")}
-                className="min-w-0 max-w-full"
-              >
+        <div className={cls.bar}>
+          <span className="shrink-0 text-sm font-semibold text-text-primary">AI</span>
+          <span
+            role="status"
+            title={serviceTitle}
+            className={`h-1.5 w-1.5 shrink-0 rounded-full ${serviceDot}`}
+            aria-hidden
+          />
+          <Select
+            value={promptId}
+            onChange={(e) => setPromptId(e.target.value)}
+            aria-label={t("ai.promptLabel")}
+            title={t("ai.promptLabel")}
+            className="min-w-0 flex-1"
+          >
                 <option value="">{t("ai.promptNone")}</option>
                 {groups.map((group) => (
                   <optgroup key={group} label={t(GROUP_LABELS[group] ?? "ai.groupAnalysis")}>
@@ -205,92 +284,74 @@ export function AiView() {
                 aria-expanded={historyAnchor !== null}
                 onClick={(e) => setHistoryAnchor(historyAnchor ? null : e.currentTarget)}
               >
-                <History size={14} aria-hidden />
+                <Hourglass size={14} aria-hidden />
               </IconButton>
               {historyAnchor && (
                 <AnchorPopover
                   anchor={historyAnchor}
                   onClose={() => {
                     setHistoryAnchor(null);
-                    setRenaming(false);
-                    setConfirmDelete(false);
+                    setRenamingId(null);
                   }}
-                  className="w-60 rounded-md border border-border bg-surface py-1 shadow-qc-md"
+                  className="w-64 rounded-md border border-border bg-surface py-1 shadow-qc-md"
                 >
-                  {renaming && activeChat ? (
-                    <div className="px-2 py-1.5">
-                      <InlineNameEdit
-                        value={activeChat.title}
-                        placeholder={t("ai.historyRenamePlaceholder")}
-                        onSave={(name) => {
-                          void api.aiChatRename(activeChat.id, name).then(() => {
-                            setChats((prev) =>
-                              prev.map((c) => (c.id === activeChat.id ? { ...c, title: name } : c)),
-                            );
-                            setRenaming(false);
-                          });
-                        }}
-                        onCancel={() => setRenaming(false)}
-                      />
-                    </div>
-                  ) : (
-                    <>
-                      <MenuItem onClick={startNewChat} className="gap-2">
-                        <Plus size={14} aria-hidden />
-                        {t("ai.historyNew")}
-                      </MenuItem>
-                      <div className="qc-scroll max-h-56 overflow-y-auto">
-                        {chats.length === 0 ? (
-                          <p className="px-3 py-2 text-xs text-text-secondary">{t("ai.historyEmpty")}</p>
+                  <MenuItem onClick={startNewChat} className="gap-2">
+                    <Plus size={14} aria-hidden />
+                    {t("ai.historyNew")}
+                  </MenuItem>
+                  <div className="qc-scroll max-h-56 overflow-y-auto">
+                    {chats.length === 0 ? (
+                      <p className="px-3 py-2 text-xs text-text-secondary">{t("ai.historyEmpty")}</p>
+                    ) : (
+                      chats.map((chat) =>
+                        renamingId === chat.id ? (
+                          <div key={chat.id} className="px-2 py-1.5">
+                            <InlineNameEdit
+                              value={chat.title || "…"}
+                              placeholder={t("ai.historyRenamePlaceholder")}
+                              onSave={(name) => void renameChat(chat.id, name)}
+                              onCancel={() => setRenamingId(null)}
+                            />
+                          </div>
                         ) : (
-                          chats.map((chat) => (
+                          <div key={chat.id} className="group flex items-center">
                             <MenuItem
-                              key={chat.id}
                               onClick={() => openChat(chat.id)}
-                              className="gap-2"
+                              className="min-w-0 flex-1 gap-2"
                             >
-                              {chat.id === chatId && <Check size={12} className="shrink-0 text-accent" aria-hidden />}
-                              <span className="min-w-0 flex-1 truncate text-left">{chat.title || "…"}</span>
+                              {chat.id === chatId && (
+                                <Check size={12} className="shrink-0 text-accent" aria-hidden />
+                              )}
+                              <span className="min-w-0 flex-1 truncate text-left">
+                                {chat.title || "…"}
+                              </span>
                             </MenuItem>
-                          ))
-                        )}
-                      </div>
-                      <div className="flex items-center gap-1 border-t border-border px-1 py-1">
-                        <MenuItem
-                          disabled={!activeChat}
-                          onClick={() => {
-                            setConfirmDelete(false);
-                            setRenaming(true);
-                          }}
-                          className="flex-1 gap-1.5 text-xs"
-                        >
-                          <FileText size={12} aria-hidden />
-                          {t("ai.historyRename")}
-                        </MenuItem>
-                        {confirmDelete && activeChat ? (
-                          <button
-                            type="button"
-                            onClick={() => void deleteChat(activeChat.id)}
-                            className="flex-1 rounded-sm bg-danger px-2 py-1 text-xs text-white"
-                          >
-                            {t("ai.historyConfirmDelete")}
-                          </button>
-                        ) : (
-                          <MenuItem
-                            disabled={!activeChat}
-                            onClick={() => {
-                              setRenaming(false);
-                              setConfirmDelete(true);
-                            }}
-                            className="flex-1 gap-1.5 text-xs text-danger"
-                          >
-                            <Trash2 size={12} aria-hidden />
-                            {t("ai.historyDelete")}
-                          </MenuItem>
-                        )}
-                      </div>
-                    </>
-                  )}
+                            {/* Inline rename/delete, revealed on hover — same
+                                pattern as the file/code sidebar rows. */}
+                            <span className="flex shrink-0 items-center gap-0.5 pr-1 opacity-0 transition-opacity group-hover:opacity-100 hover:opacity-100">
+                              <IconButton
+                                label={t("ai.historyRename")}
+                                title={t("ai.historyRename")}
+                                size="row"
+                                onClick={() => setRenamingId(chat.id)}
+                              >
+                                <Pencil size={12} aria-hidden />
+                              </IconButton>
+                              <IconButton
+                                label={t("ai.historyDelete")}
+                                title={t("ai.historyDelete")}
+                                size="row"
+                                className="hover:text-danger"
+                                onClick={() => void deleteChat(chat.id, chat.title || "…")}
+                              >
+                                <Trash2 size={12} aria-hidden />
+                              </IconButton>
+                            </span>
+                          </div>
+                        ),
+                      )
+                    )}
+                  </div>
                 </AnchorPopover>
               )}
               <IconButton
@@ -315,10 +376,8 @@ export function AiView() {
                   <p className="text-xs leading-relaxed text-text-secondary">{t("ai.promptHelp")}</p>
                 </HelpFlyout>
               )}
-            </>
+            </div>
           }
-        />
-      }
     >
       <AiChatPanel
         chatId={chatId}
@@ -328,7 +387,7 @@ export function AiView() {
           void api.aiChats().then((res) => setChats(res.chats));
         }}
       />
-      <AiTemplateEditor open={templatesOpen} onClose={() => setTemplatesOpen(false)} />
+      <AiTemplateEditor open={templatesOpen} onClose={() => setTemplatesOpen(false)} onChanged={refreshPrompts} />
     </LeftBar>
   );
 }

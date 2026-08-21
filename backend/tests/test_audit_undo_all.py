@@ -52,6 +52,18 @@ async def _find_audit_id(client, action: str, index: int = 0) -> int:
     return rows[index]["id"]
 
 
+def _find_marker_id(target, action: str) -> int:
+    """Internal marker rows (sync.toggle / audit.undo / audit.redo) are hidden
+    from the API list — read the raw log to find one."""
+    with sqlite3.connect(str(target / "data.qda")) as conn:
+        row = conn.execute(
+            "SELECT id FROM audit_log WHERE action = ? ORDER BY id DESC LIMIT 1",
+            (action,),
+        ).fetchone()
+    assert row, f"no {action} marker row"
+    return row[0]
+
+
 async def _import_text(client, open_project, name: str, content: str) -> int:
     path = open_project / "documents" / name
     os.makedirs(path.parent, exist_ok=True)
@@ -460,7 +472,7 @@ async def test_undo_redo_sync_toggle(client, open_project, settings_file):
     assert res.status_code == 200, res.text
     assert (await client.get("/api/v1/sync/settings")).json()["enabled"] is True
 
-    aid = await _find_audit_id(client, "sync.toggle")
+    aid = _find_marker_id(open_project, "sync.toggle")
     await _undo(client, aid)
     assert (await client.get("/api/v1/sync/settings")).json()["enabled"] is False
     await _redo(client, aid)

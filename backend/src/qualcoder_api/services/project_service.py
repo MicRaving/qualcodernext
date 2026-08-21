@@ -61,11 +61,32 @@ class ProjectService:
         #: heartbeat to other instances).
         self.current_source_id: int | None = None
         self.current_source_name: str = ""
+        #: Collaboration mode state — True when a ``.qcnext-project`` marker is
+        #: present and the live working DB is a local sandbox (``data.qda`` is
+        #: then a cold archive refreshed on close).
+        self.collab: bool = False
+        self.uuid: str = ""
 
     def set_current_source(self, source_id: int | None, source_name: str = "") -> None:
         """Record the source this instance is currently working on."""
         self.current_source_id = source_id
         self.current_source_name = source_name
+
+    def collaboration_mode(self) -> bool:
+        """Whether the open project runs in collaboration (sandbox) mode."""
+        return bool(self.collab and self.uuid)
+
+    def _resolve_mode(self, project_path: str) -> None:
+        """Set ``self.collab``/``self.uuid`` from the project marker."""
+        from qualcoder_api.services import project_marker
+
+        marker = project_marker.read_marker(project_path)
+        if marker and marker.get("uuid"):
+            self.collab = True
+            self.uuid = str(marker["uuid"])
+        else:
+            self.collab = False
+            self.uuid = ""
 
     # ------------------------------------------------------------------
     # Connection
@@ -129,7 +150,7 @@ class ProjectService:
             await conn.close()
 
         await self._dispose_engine_if_any()
-        await self._open_engine(root)
+        await self._open_engine()
         from qualcoder_api.services import user_settings
 
         user_settings.append_recent_project(self.project_path)
@@ -163,9 +184,15 @@ class ProjectService:
         lock_user = self._read_lock_user(actual_path)
         duplicate_coder = self.detect_duplicate_coder(actual_path, codername)
 
+        self.project_path = actual_path
+        self.project_name = root.name
+        self._resolve_mode(actual_path)
+
         try:
             await self._dispose_engine_if_any()
-            await self._open_engine(root)
+            if self.collab:
+                await self._ensure_sandbox(actual_path, codername)
+            await self._open_engine()
             header = await self._get_header()
             if header is None or "QualCoder" not in (header.about or ""):
                 await self.close_project()
@@ -175,9 +202,7 @@ class ProjectService:
             logger.debug("Not a QualCoder database: %s", err)
             return OpenResult(ok=False, error=str(err))
 
-        self.project_name = root.name
-        self.project_path = actual_path
-        conn = await aiosqlite.connect(root / "data.qda")
+        conn = await aiosqlite.connect(self.db_path())
         applied: list[str] = []
         try:
             chain = MigrationChain(conn)
@@ -234,6 +259,10 @@ class ProjectService:
             await session.commit()
 
     def db_path(self) -> str:
+        if self.collab and self.uuid:
+            from qualcoder_api.services import sandbox
+
+            return str(sandbox.sandbox_path(self.uuid))
         return os.path.join(self.project_path, "data.qda")
 
     # ------------------------------------------------------------------
@@ -251,7 +280,10 @@ class ProjectService:
         failing cleanup must never break closing.
         """
         await self._dispose_engine_if_any()
-        if self.project_path:
+        if self.collab and self.project_path:
+            await self._consolidate_on_close()
+        await self._dispose_engine_if_any()
+        if self.project_path and not self.collab:
             from qualcoder_api.services.cleanup_service import checkpoint
 
             try:
@@ -278,6 +310,202 @@ class ProjectService:
         self.current_source_id = None
         self.current_source_name = ""
 
+    async def _consolidate_on_close(self) -> None:
+        """Collaboration-mode close: converge, then refresh the cold archive.
+
+        Final export + import bring the sandbox to the merged latest state;
+        the engine is disposed; the sandbox WAL is flushed and the sandbox is
+        copied over the shared ``data.qda`` archive (switched to a rollback
+        journal so it is a single self-consistent file); stray conflicted
+        copies are removed and the consolidation watermark is advanced.
+        """
+        from qualcoder_api.core.timeutil import now
+        from qualcoder_api.services import project_marker, sandbox, sync, sync_engine
+        from qualcoder_api.services.user_settings import get_instance_id
+
+        try:
+            instance_id = get_instance_id()
+            _, factory = self._ensure_engine()
+            async with factory() as session:
+                await sync.export_pending(session, self.project_path, instance_id)
+            async with factory() as session:
+                await sync.import_pending(session, self.project_path, instance_id)
+        except Exception as err:
+            logger.warning("final sync on close failed: %s", err)
+
+        await self._dispose_engine_if_any()
+
+        try:
+            from qualcoder_api.services.cleanup_service import checkpoint
+
+            sandbox_db = str(sandbox.sandbox_path(self.uuid))
+            await checkpoint(sandbox_db)
+            archive = Path(self.project_path) / "data.qda"
+            shutil.copy2(sandbox_db, archive)
+            conn = await aiosqlite.connect(str(archive))
+            try:
+                await conn.execute("PRAGMA journal_mode=DELETE")
+                await conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            finally:
+                await conn.close()
+            for suffix in ("-wal", "-shm"):
+                Path(str(archive) + suffix).unlink(missing_ok=True)
+            self._cleanup_conflicted_copies(self.project_path)
+            project_marker.update_consolidation_watermark(
+                self.project_path, now(), sync_engine._max_sidecar_seq(self.project_path)
+            )
+        except Exception as err:
+            logger.warning("consolidation on close failed: %s", err)
+
+    @staticmethod
+    def _cleanup_conflicted_copies(project_path: str) -> None:
+        """Remove stale ``data.qda (*conflicted copy*).qda`` files from the
+        shared folder left by cloud-sync conflict resolution."""
+        import contextlib
+
+        for f in Path(project_path).glob("data.qda (*conflicted copy*).qda"):
+            with contextlib.suppress(OSError):
+                f.unlink(missing_ok=True)
+
+    # ------------------------------------------------------------------
+    # Collaboration activation / revert / consolidate
+    # ------------------------------------------------------------------
+
+    async def activate_collaboration(self, codername: str = "") -> dict:
+        """Switch the open project to collaboration (sandbox) mode.
+
+        Gates on sync being enabled and ≥2 real coders; idempotent.  The
+        current ``data.qda`` is checkpointed and copied into a fresh local
+        sandbox, the marker is written, the engine is reopened on the sandbox,
+        and the full state is exported to this instance's sidecar so other
+        machines can rebuild.
+        """
+        import secrets
+
+        from qualcoder_api.services import project_marker, sandbox, sync
+        from qualcoder_api.services.cleanup_service import checkpoint
+        from qualcoder_api.services.user_settings import get_instance_id
+
+        if not self.project_path:
+            return {"ok": False, "reason": "no project is open"}
+        if self.collab:
+            return {"ok": False, "reason": "collaboration already active"}
+
+        _, factory = self._ensure_engine()
+        async with factory() as session:
+            ok, reason = await sync.should_activate_collaboration(session, self.project_path)
+        if not ok:
+            return {"ok": False, "reason": reason}
+
+        uuid = secrets.token_hex(6)  # 12 hex chars, unique per activation
+        await checkpoint(self.db_path())  # data.qda (WAL) -> self-consistent
+        sandbox.create_sandbox_from(self.db_path(), uuid)
+        # Marker LAST so a mid-failure never strands an unopened sandbox.
+        project_marker.write_marker(self.project_path, uuid, codername=codername)
+        self.uuid = uuid
+        self.collab = True
+
+        await self._dispose_engine_if_any()
+        await self._open_engine()
+        _, factory = self._ensure_engine()
+        async with factory() as session:
+            await sync.export_full_state(session, self.project_path, get_instance_id())
+        return {"ok": True, "uuid": uuid, "reason": "collaboration activated"}
+
+    async def revert_collaboration(self) -> dict:
+        """Consolidate to ``data.qda`` and return to single-coder mode.
+
+        Runs the same consolidation as close, removes the marker, the sandbox,
+        the sidecars and the presence files, disables sync, and reopens on
+        ``data.qda``.  A destructive, user-confirmed action.
+        """
+        import shutil
+
+        from qualcoder_api.services import (
+            presence_service,
+            project_marker,
+            sandbox,
+            sync,
+            user_settings,
+        )
+
+        if not self.collab or not self.uuid:
+            return {"ok": False, "reason": "not in collaboration mode"}
+
+        await self._consolidate_on_close()
+        project_marker.remove_marker(self.project_path)
+        changes_root = Path(self.project_path) / sync.SYNC_DIR_NAME
+        if changes_root.exists():
+            shutil.rmtree(changes_root, ignore_errors=True)
+        presence_dir = Path(self.project_path) / "presence"
+        if presence_dir.exists():
+            shutil.rmtree(presence_dir, ignore_errors=True)
+        sandbox.remove_sandbox(self.uuid)
+        try:
+            user_settings.save_sync_settings(False)
+        except Exception as err:  # pragma: no cover - defensive
+            logger.warning("could not disable sync on revert: %s", err)
+
+        self.collab = False
+        self.uuid = ""
+        await self._dispose_engine_if_any()
+        await self._open_engine()
+        presence_service.clear(self.project_path)
+        return {"ok": True, "reason": "reverted to single-coder mode"}
+
+    async def consolidate(self) -> dict:
+        """Refresh the cold ``data.qda`` archive from the live sandbox.
+
+        Converges (export + import), then snapshots the sandbox into
+        ``data.qda`` via SQLite's ``VACUUM INTO`` (safe while the engine stays
+        open), switches the archive to a rollback journal, and advances the
+        consolidation watermark.
+        """
+        from qualcoder_api.core.timeutil import now
+        from qualcoder_api.services import project_marker, sync, sync_engine
+        from qualcoder_api.services.user_settings import get_instance_id
+
+        if not self.collab or not self.uuid:
+            return {"ok": False, "reason": "not in collaboration mode"}
+
+        try:
+            instance_id = get_instance_id()
+            _, factory = self._ensure_engine()
+            async with factory() as session:
+                await sync.export_pending(session, self.project_path, instance_id)
+            async with factory() as session:
+                await sync.import_pending(session, self.project_path, instance_id)
+        except Exception as err:
+            logger.warning("consolidate converge failed: %s", err)
+
+        sandbox_db = self.db_path()
+        archive = Path(self.project_path) / "data.qda"
+        import aiosqlite as _aiosqlite
+
+        try:
+            tmp = archive.with_suffix(".tmp")
+            conn = await _aiosqlite.connect(sandbox_db)
+            try:
+                await conn.execute(f"VACUUM INTO '{tmp}'")
+            finally:
+                await conn.close()
+            tmp.replace(archive)
+            conn = await _aiosqlite.connect(str(archive))
+            try:
+                await conn.execute("PRAGMA journal_mode=DELETE")
+            finally:
+                await conn.close()
+            for suffix in ("-wal", "-shm"):
+                Path(str(archive) + suffix).unlink(missing_ok=True)
+            self._cleanup_conflicted_copies(self.project_path)
+            project_marker.update_consolidation_watermark(
+                self.project_path, now(), sync_engine._max_sidecar_seq(self.project_path)
+            )
+        except Exception as err:  # pragma: no cover - depends on sqlite version
+            logger.warning("consolidate archive refresh failed: %s", err)
+            return {"ok": False, "reason": f"consolidation failed: {err}"}
+        return {"ok": True, "reason": "archive refreshed"}
+
     # ------------------------------------------------------------------
     # Backup
     # ------------------------------------------------------------------
@@ -289,9 +517,10 @@ class ProjectService:
 
         The WAL is flushed BEFORE the copy: a plain ``data.qda`` file copy
         would miss committed frames still sitting in the ``-wal`` file, so
-        the backup would open as an inconsistent (older) database.
+        the backup would open as an inconsistent (older) database.  In
+        collaboration mode the live sandbox is what gets backed up.
         """
-        db_path = Path(self.project_path) / "data.qda"
+        db_path = Path(self.db_path())
         if not db_path.exists():
             return ("no database to back up", "")
         try:
@@ -463,6 +692,40 @@ class ProjectService:
     # Engine helpers
     # ------------------------------------------------------------------
 
-    async def _open_engine(self, root: Path) -> None:
-        self.engine = create_project_engine(root / "data.qda")
+    async def _open_engine(self) -> None:
+        self.engine = create_project_engine(self.db_path())
         self.session_factory = create_session_factory(self.engine)
+
+    async def _ensure_sandbox(self, project_path: str, codername: str) -> None:
+        """Make sure a local sandbox exists before opening in collaboration mode.
+
+        Prefers an existing sandbox (or its ``.bak`` crash-recovery copy).
+        When none exists, seeds from the cold ``data.qda`` archive if there are
+        no sidecars (first machine on a fresh collaboration), otherwise rebuilds
+        the full database from the sidecar change log.
+        """
+        from qualcoder_api.services import sandbox, sync
+        from qualcoder_api.services.user_settings import get_instance_id
+
+        if sandbox.sandbox_exists(self.uuid):
+            return
+        archive = Path(project_path) / "data.qda"
+        changes_root = Path(project_path) / sync.SYNC_DIR_NAME
+        has_sidecars = bool(changes_root.is_dir()) and any(
+            (d / "changes.jsonl").exists()
+            for d in changes_root.iterdir()
+            if d.is_dir()
+        )
+        if not has_sidecars and archive.exists():
+            from qualcoder_api.services.cleanup_service import checkpoint
+
+            await checkpoint(str(archive))
+            sandbox.create_sandbox_from(str(archive), self.uuid)
+            return
+        await sandbox.create_fresh_sandbox(self.uuid, codername=codername)
+        engine = create_project_engine(str(sandbox.sandbox_path(self.uuid)))
+        try:
+            factory = create_session_factory(engine)
+            await sync.rebuild_from_sidecars(factory, project_path, get_instance_id())
+        finally:
+            await dispose_engine(engine)

@@ -77,7 +77,11 @@ async def capture(
     user: str | None = None,
     ts: str | None = None,
 ) -> None:
-    """Record one mutation into sync_log (no-op while suspended)."""
+    """Record one mutation into sync_log (no-op while suspended).
+
+    Also bumps the per-row revision counter in ``sync_rev`` so the versioned
+    sync engine can detect concurrent edits (Lamport scalar clock per row).
+    """
     if _suspended.get():
         return
     if row is None or pk_value is None:
@@ -86,6 +90,9 @@ async def capture(
     if ts is None:
         ts = now()
     actor = user or current_user()
+    pk_str = str(pk_value)
+    is_delete = action == "delete"
+
     # Atomic per-user sequence. The (user, seq) unique constraint
     # (idx_sync_log_user_seq / u_sync_log_user_seq) makes a collision
     # impossible to slip through; on the rare race we re-run the counter
@@ -94,12 +101,38 @@ async def capture(
     for _attempt in range(3):
         try:
             async with session.begin_nested():
+                # Upsert sync_rev: bump the per-row Lamport clock.
+                # rev = max(current, 0) + 1 (monotonic per row).
                 await session.execute(
                     text(
-                        "INSERT INTO sync_log (ts, user, seq, entity, action, pk_name, pk_value, row_json) "
+                        "INSERT INTO sync_rev (entity, pk, rev, mtime, origin, deleted) "
+                        "VALUES (:e, :pk, 1, :ts, :origin, :del) "
+                        "ON CONFLICT(entity, pk) DO UPDATE SET "
+                        "rev = sync_rev.rev + 1, mtime = :ts, origin = :origin, deleted = :del"
+                    ),
+                    {
+                        "e": entity,
+                        "pk": pk_str,
+                        "ts": ts,
+                        "origin": "",
+                        "del": 1 if is_delete else 0,
+                    },
+                )
+
+                # Read back the new rev for inclusion in sync_log.
+                rev_row = await session.execute(
+                    text("SELECT rev FROM sync_rev WHERE entity = :e AND pk = :pk"),
+                    {"e": entity, "pk": pk_str},
+                )
+                rev = rev_row.scalar() or 0
+
+                # Insert into sync_log with the per-user seq and rev.
+                await session.execute(
+                    text(
+                        "INSERT INTO sync_log (ts, user, seq, entity, action, pk_name, pk_value, rev, row_json) "
                         "VALUES (:ts, :user, "
                         "(SELECT COALESCE(MAX(seq), 0) + 1 FROM sync_log WHERE user = :user2), "
-                        ":entity, :action, :pk_name, :pk_value, :row_json)"
+                        ":entity, :action, :pk_name, :pk_value, :rev, :row_json)"
                     ),
                     {
                         "ts": ts,
@@ -108,7 +141,8 @@ async def capture(
                         "entity": entity,
                         "action": action,
                         "pk_name": pk_name,
-                        "pk_value": str(pk_value),
+                        "pk_value": pk_str,
+                        "rev": rev,
                         "row_json": json.dumps(row, ensure_ascii=False, default=str),
                     },
                 )

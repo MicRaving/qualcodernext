@@ -8,11 +8,15 @@
 import { errorMessage } from "@/lib/utils";
 import { useAsyncEffect } from "@/lib/useAsync";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { LoaderCircle, Minus, Pencil, Plus, Trash2, ZoomIn, ZoomOut } from "lucide-react";
+import { LoaderCircle, Pencil, Trash2, Undo2, ZoomIn, ZoomOut } from "lucide-react";
 import { api, fetchSourceFile, type ImageCoding, type Source } from "@/lib/api";
 import { useCoder } from "@/features/coding/useCoder";
 import { CodePicker, type PickedCode } from "@/features/coding/CodePicker";
-import { patchCodingWeight, useCodeMaps } from "@/features/coding/codingApi";
+import { codingWeight, useCodeMaps } from "@/features/coding/codingApi";
+import { useAssignCode } from "@/features/coding/shared/events";
+import { useEscapeStack } from "@/features/coding/shared/useEscapeStack";
+import { useSegmentActions } from "@/features/coding/shared/useSegmentActions";
+import { WeightStepper } from "@/features/coding/shared/WeightStepper";
 import { codeTint } from "@/features/coding/tint";
 import { useI18n } from "@/lib/i18n";
 import {
@@ -25,6 +29,7 @@ import {
 } from "@/components/ui/orchestrator";
 import { cls } from "@/components/ui/tokens";
 import { useCoderStore } from "@/stores/coder";
+import { useInspectorStore } from "@/stores/inspector";
 import { usePrefsStore } from "@/stores/prefs";
 
 interface DragState {
@@ -154,21 +159,29 @@ export function ImageCoder({ source }: { source: Source }) {
   }
 
   /** Code the pending drag rectangle with the given code id. */
+  const createRect = useCallback(
+    async (cid: number, rect: { x1: number; y1: number; width: number; height: number }) => {
+      const created = await api.createImageCoding({
+        id: source.id,
+        x1: rect.x1,
+        y1: rect.y1,
+        width: rect.width,
+        height: rect.height,
+        cid,
+        owner: "default",
+      });
+      return created;
+    },
+    [source.id],
+  );
+
   const codeRect = useCallback(
     async (cid: number, rect: { x1: number; y1: number; width: number; height: number }) => {
       setPickerOpen(false);
       setSaving(true);
       setError(null);
       try {
-        const created = await api.createImageCoding({
-          id: source.id,
-          x1: rect.x1,
-          y1: rect.y1,
-          width: rect.width,
-          height: rect.height,
-          cid,
-          owner: "default",
-        });
+        const created = await createRect(cid, rect);
         setPendingRect(null);
         const fresh = await reload();
         setEditDraft(null);
@@ -186,26 +199,59 @@ export function ImageCoder({ source }: { source: Source }) {
         setSaving(false);
       }
     },
-    [source.id, reload, t, autoShowDetails, setError],
+    [createRect, reload, t, autoShowDetails, setError],
   );
 
   // Clicking a code in the left sidebar assigns it to the pending rectangle.
-  useEffect(() => {
-    const onAssign = (e: Event) => {
-      const cid = (e as CustomEvent<{ cid: number }>).detail?.cid;
-      if (typeof cid !== "number") return;
-      setPickerOpen(false);
-      const rect = pendingRectRef.current;
-      if (rect) void codeRect(cid, rect);
-    };
-    window.addEventListener("qc:assign-code", onAssign);
-    return () => window.removeEventListener("qc:assign-code", onAssign);
-  }, [codeRect]);
-
-  async function handlePick(code: PickedCode) {
+  useAssignCode((cid) => {
     setPickerOpen(false);
     const rect = pendingRectRef.current;
-    if (rect) await codeRect(code.cid, rect);
+    if (rect) void codeRect(cid, rect);
+  });
+
+  // Escape dismisses the picker first, then the details panel.
+  useEscapeStack([
+    () => {
+      if (!pickerOpen) return false;
+      setPickerOpen(false);
+      setPendingRect(null);
+      return true;
+    },
+    () => {
+      if (!selected && !editDraft) return false;
+      setSelected(null);
+      setEditDraft(null);
+      return true;
+    },
+  ]);
+
+  async function handlePick(codes: PickedCode[]) {
+    setPickerOpen(false);
+    const rect = pendingRectRef.current;
+    if (!rect || codes.length === 0) return;
+    // Create all codings first, then ONE reload — parallel create+reload
+    // loops used to race each other's refreshes.
+    setSaving(true);
+    setError(null);
+    let last: ImageCoding | undefined;
+    try {
+      for (const code of codes) {
+        last = await createRect(code.cid, rect);
+      }
+      setPendingRect(null);
+      setEditDraft(null);
+      const fresh = await reload();
+      const created = last;
+      if (autoShowDetails && created) {
+        setSelected(fresh.find((c) => c.imid === created.imid) ?? null);
+      } else {
+        setSelected(null);
+      }
+    } catch (e) {
+      setError(errorMessage(e, t("coder.createError")));
+    } finally {
+      setSaving(false);
+    }
   }
 
   // The drag must survive leaving the picture: track it on the window and
@@ -246,6 +292,22 @@ export function ImageCoder({ source }: { source: Source }) {
     };
   }, [drag, zoom, activeCodeId, codeRect, toImageCoords]);
 
+  // Shared mutation actions (memo/weight/important/delete) with a
+  // recoverable-delete undo stack — deletes confirm AND push here.
+  const actions = useSegmentActions({
+    kind: "image",
+    rows: codings,
+    idOf: (r) => r.imid,
+    deleteRow: (imid) => api.deleteImageCoding(imid),
+    refresh: () => reload(),
+    onError: setError,
+    onDeleted: () => {
+      setSelected(null);
+      setEditDraft(null);
+    },
+  });
+  const { undo } = actions;
+
   async function handleDelete(coding: ImageCoding) {
     if (
       !window.confirm(
@@ -255,31 +317,17 @@ export function ImageCoder({ source }: { source: Source }) {
       )
     )
       return;
-    try {
-      await api.deleteImageCoding(coding.imid);
-      setSelected(null);
-      setEditDraft(null);
-      await reload();
-    } catch (e) {
-      setError(errorMessage(e, t("coder.deleteError")));
-    }
+    actions.remove(coding.imid);
   }
 
-  /** Segment weight (backend rows carry it; 0 = no weight). */
-  const imgWeight = (coding: ImageCoding): number =>
-    (coding as ImageCoding & { weight?: number }).weight ?? 0;
-
-  /** Stepper update of a region's weight (0-100; 0 = no weight). */
+  /** Stepper update of a region's weight (0-100; 0 = no weight); the
+   *  details panel re-selects the fresh row so the value updates. */
   function updateCodingWeight(coding: ImageCoding, weight: number) {
-    void (async () => {
-      try {
-        await patchCodingWeight("image", coding.imid, weight);
-        const fresh = await reload();
-        setSelected(fresh.find((c) => c.imid === coding.imid) ?? null);
-      } catch (e) {
-        setError(errorMessage(e, t("coder.weightError")));
+    void actions.updateWeight(coding.imid, weight).then((fresh) => {
+      if (Array.isArray(fresh)) {
+        setSelected((fresh as ImageCoding[]).find((c) => c.imid === coding.imid) ?? null);
       }
-    })();
+    });
   }
 
   function startEditGeometry(coding: ImageCoding) {
@@ -357,6 +405,17 @@ export function ImageCoder({ source }: { source: Source }) {
             <Button variant="secondary" className="ml-1 py-0.5" onClick={fitZoom}>
               {t("imageCoder.fit")}
             </Button>
+            {undo.canUndo && (
+              <Button
+                variant="secondary"
+                className="ml-1 py-0.5"
+                icon={<Undo2 size={12} aria-hidden />}
+                onClick={undo.undoLast}
+                title={t("coder.unmarkTitle")}
+              >
+                {t("coder.unmarkLast")}
+              </Button>
+            )}
           </div>
         }
       />
@@ -370,6 +429,8 @@ export function ImageCoder({ source }: { source: Source }) {
           className="relative inline-block cursor-crosshair"
           style={{ transform: `scale(${zoom})`, transformOrigin: "top left" }}
           onMouseDown={handleMouseDown}
+          role="img"
+          aria-label={t("imageCoder.dragHint")}
         >
           <img
             src={imgSrc ?? undefined}
@@ -394,6 +455,9 @@ export function ImageCoder({ source }: { source: Source }) {
                 e.stopPropagation();
                 setEditDraft(null);
                 setSelected(coding);
+                // Choosing a code occasion also shows its details in the
+                // right-bar Inspector.
+                void useInspectorStore.getState().selectCode(coding.cid);
               }}
               title={`${nameByCid.get(coding.cid) ?? t("coder.plainCode")}${coding.memo ? ` — ${coding.memo}` : ""}`}
               className={`absolute cursor-pointer border qc-seg ${
@@ -456,24 +520,9 @@ export function ImageCoder({ source }: { source: Source }) {
               <>
                 <span className="flex items-center gap-1">
                   <span className="text-xs text-text-secondary">{t("coder.weight")}</span>
-                  <Button
-                    variant="toolbarIcon"
-                    icon={<Minus size={12} aria-hidden />}
-                    title={t("coder.weightDec")}
-                    aria-label={t("coder.weightDec")}
-                    disabled={imgWeight(selected) === 0}
-                    onClick={() => updateCodingWeight(selected, imgWeight(selected) - 1)}
-                  />
-                  <span className="min-w-5 text-center text-xs text-text-secondary" aria-label={t("coder.weight")}>
-                    {imgWeight(selected)}
-                  </span>
-                  <Button
-                    variant="toolbarIcon"
-                    icon={<Plus size={12} aria-hidden />}
-                    title={t("coder.weightInc")}
-                    aria-label={t("coder.weightInc")}
-                    disabled={imgWeight(selected) >= 100}
-                    onClick={() => updateCodingWeight(selected, imgWeight(selected) + 1)}
+                  <WeightStepper
+                    value={codingWeight(selected)}
+                    onChange={(next) => updateCodingWeight(selected, next)}
                   />
                 </span>
                 <Button

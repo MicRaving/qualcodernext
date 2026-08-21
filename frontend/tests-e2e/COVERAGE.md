@@ -1,40 +1,44 @@
 # E2E coverage matrix
 
-Every user operation documented in `docs/*.md` (and the view registry in
-`frontend/src/stores/project.ts` / `frontend/src/features/analyze/registry.ts`),
-mapped to the spec that exercises it. **Covered** = the operation is actually
-driven through the UI and asserted (not merely that its screen exists).
-**Gap** = documented but not exercised by any e2e test.
+Every user operation documented in the in-app help docs
+(`backend/src/qualcoder_api/help_docs/*.md`), the UI spec
+(`frontend/src/DESIGN.md`) and the view registry (`frontend/src/stores/project.ts`
+/ `frontend/src/features/analyze/registry.ts`), mapped to the spec that
+exercises it. **Covered** = the operation is actually driven through the UI and
+asserted (not merely that its screen exists). **Gap** = documented but not
+exercised by any e2e test.
 
 Legend: A=advanced.spec.ts · App=app.spec.ts · CF=coding-flows.spec.ts ·
 F=features.spec.ts · IA=inspector-annotation.spec.ts · M=media.spec.ts ·
-R=roadmap.spec.ts · S=smoke-features.spec.ts · T=tasks-a11y.spec.ts ·
-CG=coverage-gaps.spec.ts · W=coverage-wave.spec.ts
+R=roadmap.spec.ts · S=smoke-features.spec.ts · SY=sync.spec.ts ·
+T=tasks-a11y.spec.ts · CG=coverage-gaps.spec.ts · W=coverage-wave.spec.ts
 
 ## Summary
 
 | | Count |
 |---|---|
-| Covered operations | **55** |
-| Gaps | **74** |
-| Total documented operations | **129** |
+| Covered operations | **106** |
+| Gaps | **139** |
+| Total documented operations | **245** |
 
 Top gaps worth filling next (quick to script, high value):
-1. **History undo/redo** — W now drives per-row undo + redo (audit-log rows
+1. **AI agentic chat** — none of the chat flows are e2e-driven yet (no model
+   in CI): composer + context pickers, the Tools/Confirm-writes toggles, the
+   approval UI, tool bubbles and the permission badge. Needs a stubbed
+   OpenAI-compatible backend.
+2. **History undo/redo** — W now drives per-row undo + redo (audit-log rows
    carry undo icons); detail modal + pagination remain untested.
-2. **Notes workspace** — W covers journal create/edit/save and the code-memo
+3. **Notes workspace** — W covers journal create/edit/save and the code-memo
    tree (add/save); annotation tabs, memo delete and "open file" remain.
-3. **AV transcript coding** — the transcript pane is a full text-coder surface
+4. **AV transcript coding** — the transcript pane is a full text-coder surface
    but only manual-mode editing is covered.
-4. **Sentiment / Stats / Summary-table** — W runs the lexicon scoring, the
+5. **Sentiment / Stats / Summary-table** — W runs the lexicon scoring, the
    crosstab (chi-square) and the file×code grid; the other report modes
    (AI sentiment, group comparison, case scope) stay untested.
-5. **Files row context menu** — W drives rename + delete and asserts
-   Assign-to-case / Replace presence; the "heavy" entries still lack a run.
 
 ---
 
-## Shell (shell.md)
+## Shell (workspace.md)
 
 | Area | User operation | Covered? | Gap? |
 |---|---|---|---|
@@ -49,7 +53,7 @@ Top gaps worth filling next (quick to script, high value):
 | Coder switcher | Rename coder | — | **Gap** |
 | Coder switcher | Per-coder stats | — | **Gap** |
 | Coder switcher | Per-coder visibility toggle for sync | — | **Gap** |
-| Coder switcher | Collaboration sync switch, status, "Sync now" | S (sync.spec.ts) | — |
+| Coder switcher | Collaboration sync switch, status, "Sync now" | SY | — |
 | Inspector | File details (type/date/owner/memo), "Open in coder" | IA (annotation), F | — |
 | Inspector | Add annotation inline | IA | — |
 | Inspector | Code details: highlight-in-open-file, memo edit, recent segments jump, links in/out | — | **Gap** |
@@ -61,7 +65,7 @@ Top gaps worth filling next (quick to script, high value):
 | A11y | Screenreader aria-live region + skip link | — | **Gap** |
 | Keyboard | Escape closes floating UI; Ctrl+S in edit mode | — | **Gap** |
 
-## Dashboard (dashboard.md)
+## Dashboard (workspace.md)
 
 | Area | User operation | Covered? | Gap? |
 |---|---|---|---|
@@ -94,11 +98,12 @@ Top gaps worth filling next (quick to script, high value):
 | Context menu | Replace file (text sources) | W (presence) | — |
 | Filters | Saved filters: save/apply/delete | — | **Gap** |
 | URL import | UrlImportDialog (reddit/youtube/article/html) | — | **Gap** |
+| URL import | Leftbar "URL" button (files sidebar, next to Import) opens the dialog | — | **Gap** |
 | Repair | Broken-links list + per-row "Fix" | — | **Gap** |
 | Repair | Bulk rename path (prefix replace) | — | **Gap** |
 | Empty state | No-files / no-search-match hints | — | **Gap** |
 
-## Text coder (coding-text.md)
+## Text coder (files.md)
 
 | Area | User operation | Covered? | Gap? |
 |---|---|---|---|
@@ -110,6 +115,7 @@ Top gaps worth filling next (quick to script, high value):
 | Selection | Paste link here → link created | CG | — |
 | Selection | Send to QTT → pick worksheet → segment item stored | CG | — |
 | Segments | Coded-segment rendering, click → details panel (swatch/memo/date/delete) | F, A (delete) | — |
+| Segments | Clicking a coded segment also shows the code in the right-bar Inspector | — | **Gap** |
 | Segments | Unmark last (undo stack) | — | **Gap** |
 | Segments | Link marker jump → switches file + flashes span | CG | — |
 | Annotations | Annotation details panel edit memo / delete | — | **Gap** |
@@ -123,7 +129,7 @@ Top gaps worth filling next (quick to script, high value):
 | Jump | Inspector recent-segment → jump+flash | — | **Gap** |
 | Code colors | Segments tinted per code color | implicit (rendered) | — |
 
-## PDF coder (coding-pdf.md)
+## PDF coder (files.md)
 
 | Area | User operation | Covered? | Gap? |
 |---|---|---|---|
@@ -139,7 +145,7 @@ Top gaps worth filling next (quick to script, high value):
 | Autocode | Autocode dialog inside PdfCoder | — | **Gap** |
 | CodePicker | Search + create-new-code | A, F, M | — |
 
-## Image coder (coding-image.md)
+## Image coder (files.md)
 
 | Area | User operation | Covered? | Gap? |
 |---|---|---|---|
@@ -152,7 +158,22 @@ Top gaps worth filling next (quick to script, high value):
 | Hidden codes | Dimmed overlays | — | **Gap** |
 | Errors | Load error + Retry | — | **Gap** |
 
-## Audio/video coder (coding-av.md)
+## Memo gutter (DESIGN.md §10a)
+
+| Area | User operation | Covered? | Gap? |
+|---|---|---|---|
+| Toggle | "Memos" button shows/hides gutter | — | **Gap** |
+| Cards | Collapsed card (dot + name + memo preview + weight chip) | — | **Gap** |
+| Cards | Expanded card (header + weight steppers + memo textarea + delete) | — | **Gap** |
+| Stacking | "+N more" chip when > 3 cards at same anchor | — | **Gap** |
+| Selection | Click card to expand; click again or Escape to collapse | — | **Gap** |
+| Bubble | When gutter hidden, selecting segment opens floating bubble | — | **Gap** |
+| Memo | Edit memo in card/bubble, save on blur | — | **Gap** |
+| Weight | Stepper increment/decrement in card/bubble | — | **Gap** |
+| Delete | Delete coding from card/bubble | — | **Gap** |
+| Important | Toggle important flag from card/bubble | — | **Gap** |
+
+## Audio/video coder (files.md)
 
 | Area | User operation | Covered? | Gap? |
 |---|---|---|---|
@@ -198,7 +219,7 @@ Top gaps worth filling next (quick to script, high value):
 | Memos | Code-memo tree; files-with-memos; add/save/delete memo | W (code tree, add/save) | — |
 | Memos | "Open file" from a file memo | — | **Gap** |
 
-## Analysis — reports (analyze.md)
+## Analysis — reports (reports.md)
 
 | Report | Operation | Covered? | Gap? |
 |---|---|---|---|
@@ -223,7 +244,7 @@ Top gaps worth filling next (quick to script, high value):
 | Publish | Publish dialog: formats, filename, real .docx export | CG | — |
 | CSV | Report CSV exports (codebook copy only) | — | **Gap** |
 
-## Graphs (graphs.md)
+## Graphs (reports.md)
 
 | Area | User operation | Covered? | Gap? |
 |---|---|---|---|
@@ -235,7 +256,7 @@ Top gaps worth filling next (quick to script, high value):
 | Lines | Create via Connect; label edit; arrow mode; Delete | — | **Gap** |
 | Reports nav | Graphs entry under Reports | S, CF | — |
 
-## QTT (qtt.md)
+## QTT (reports.md)
 
 | Area | User operation | Covered? | Gap? |
 |---|---|---|---|
@@ -250,7 +271,7 @@ Top gaps worth filling next (quick to script, high value):
 | Items | Move item to another section; delete item | — | **Gap** |
 | Items | Click segment → jump into coder + flash | — | **Gap** |
 
-## Creative (creative.md)
+## Creative (reports.md)
 
 | Area | User operation | Covered? | Gap? |
 |---|---|---|---|
@@ -265,16 +286,31 @@ Top gaps worth filling next (quick to script, high value):
 
 | Area | User operation | Covered? | Gap? |
 |---|---|---|---|
-| Pane | AI toggle opens Chat/Search pane | — | **Gap** |
-| Chat | Modes; prompt library; send; thinking indicator; clear | — | **Gap** |
-| Chat | Paraphrase / Sentiment quick actions | — | **Gap** |
-| Chat | Memo analysis mode (memo picker) | — | **Gap** |
-| Search | Semantic search query + result → open in coder | — | **Gap** |
+| Pane | Ribbon AI toggle opens the chat pane (and closes it) | App (pane presence) | — |
+| Chat | Composer send; thinking indicator; clear | — | **Gap** |
+| Chat | Context pickers (memos/codes/files) feed the prompt | — | **Gap** |
+| Chat | "All" toggle selects/clears every memos+code+file; on by default | — | **Gap** |
+| Chat | Data selector collapses/expands via the arrow in its header | — | **Gap** |
+| Chat | Assistant replies render as markdown (headings/lists/code) | — | **Gap** |
+| Chat | Prompt-library dropdown (Analysis / Specialized / My templates) | — | **Gap** |
+| Chat | Wrapping prompt: edit + reset-to-default (template editor) | — | **Gap** |
+| Chat | Personas: edit each chat mode's system prompt + reset-to-default | — | **Gap** |
+| Chat | Built-in templates: edit via app-wide override; Reset to default | — | **Gap** |
+| Chat | "Save globally": copy a project template to the app store | — | **Gap** |
+| Chat | History: new chat, open session, inline rename/delete | — | **Gap** |
+| Agentic | "Tools" toggle hands the assistant the MCP tools | — | **Gap** |
+| Agentic | "Confirm writes" pauses before a write; Approve/Reject | — | **Gap** |
+| Agentic | Executed tools shown as "Tools used" lines under the answer | — | **Gap** |
+| Agentic | Read-only tool calls show no "Rejected" tag | — | **Gap** |
+| Agentic | Sidebar MCP access toggle (Read only / Read + write / Full access) | — | **Gap** |
+| Search | Semantic search via the ribbon flyout; result → open in coder | — | **Gap** |
+| Search | Flyout has no header bar; the query lives in the ribbon input | — | **Gap** |
+| Search | "X" in the ribbon input clears the query (search.clear) | — | **Gap** |
 | Settings | AI enable, provider, model list, base URL, key, MCP perms | App (pane presence) | — |
 | Settings | "Check" service status probe | — | **Gap** |
 | Settings | Semantic index status / build / rebuild / delete | — | **Gap** |
 
-## Settings (settings.md)
+## Settings (ai.md)
 
 | Area | User operation | Covered? | Gap? |
 |---|---|---|---|
@@ -288,7 +324,7 @@ Top gaps worth filling next (quick to script, high value):
 | Updates | Auto-update toggle; interval; Check now; Install | — | **Gap** |
 | About | App text | — | **Gap** |
 
-## Interchange (interchange.md)
+## Interchange
 
 | Area | User operation | Covered? | Gap? |
 |---|---|---|---|
@@ -296,7 +332,7 @@ Top gaps worth filling next (quick to script, high value):
 | Import | REFI-QDA (.qdp) with codes/sources/codings/cases | F | — |
 | Import | RQDA / Taguette / Transana / RIS / Survey CSV / XLSX / SAV / codebook / merge / Zotero | — | **Gap** |
 
-## History (history.md)
+## History
 
 | Area | User operation | Covered? | Gap? |
 |---|---|---|---|
@@ -308,7 +344,7 @@ Top gaps worth filling next (quick to script, high value):
 | Details | Card click → detail modal (diff for source edits) | — | **Gap** |
 | Pagination | 100 rows/page, prev/next, range readout | — | **Gap** |
 
-## Status & tasks (status-and-tasks.md)
+## Status & tasks (workspace.md)
 
 | Area | User operation | Covered? | Gap? |
 |---|---|---|---|
@@ -316,15 +352,15 @@ Top gaps worth filling next (quick to script, high value):
 | Queue | Drag-to-reorder jobs | — | **Gap** |
 | Completion | Toast + project refresh when a job finishes | T (implicit) | — |
 | Import | Ribbon chip fill while importing | — | **Gap** |
-| Sync | Enable/disable cycle; last-sync/pending/error; Sync now | S (sync.spec.ts) | — |
-| Sync | Shared-folder auto-detect notice | S (sync.spec.ts) | — |
-| Sync | Live coder presence: active-coder indicator + current file | S (sync.spec.ts) | — |
+| Sync | Enable/disable cycle; last-sync/pending/error; Sync now | SY | — |
+| Sync | Shared-folder auto-detect notice | SY | — |
+| Sync | Live coder presence: active-coder indicator + current file | SY | — |
 | Sync | Sync dot state on the coder switcher | — | **Gap** |
 | Visibility | Hide a coder's codings from other users | — | **Gap** |
 | Lock | Open an in-use project reports the locking user | — | **Gap** |
 
 ---
 
-*Generated against the v0.2.0 docs; update when screens change. Counts:
-covered rows are the "Covered?" cells with a spec reference; "—" in both
+*Generated against the current docs (v0.1.0); update when screens change.
+Counts: covered rows are the "Covered?" cells with a spec reference; "—" in both
 columns marks implicit-only coverage.*

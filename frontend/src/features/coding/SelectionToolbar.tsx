@@ -30,6 +30,7 @@ import {
 import { Button, Input, Menu, MenuItem, Select, Textarea } from "@/components/ui/orchestrator";
 import { api, type CodeTreeItem, type Coding } from "@/lib/api";
 import { CodePicker, type PickedCode } from "@/features/coding/CodePicker";
+import { patchCodingMemo } from "@/features/coding/codingApi";
 import { listQttSheets, sendSegmentToQtt, type QttSheet } from "@/lib/qttApi";
 import {
   copyLinkPayload,
@@ -83,8 +84,8 @@ export function SelectionToolbar({
   const activeCodeId = useCoderStore((s) => s.activeCodeId);
 
   const [pickerOpen, setPickerOpen] = useState(false);
-  const [annotateOpen, setAnnotateOpen] = useState(false);
-  const [annotateMemo, setAnnotateMemo] = useState("");
+  const [memoOpen, setMemoOpen] = useState(false);
+  const [segmentMemo, setSegmentMemo] = useState("");
   const [inVivoOpen, setInVivoOpen] = useState(false);
   const [inVivoName, setInVivoName] = useState("");
   const [inVivoCat, setInVivoCat] = useState<number | null>(null);
@@ -148,28 +149,59 @@ export function SelectionToolbar({
 
   /* ------------------------------------------------------------------ ops */
 
-  /** Code the pending selection with the given code id. */
-  function codeSelection(cid: number) {
+  /** Code the pending selection with the given code id. Resolves when the
+   *  coding exists and the host state is fresh (or the error was reported). */
+  async function codeSelection(cid: number): Promise<void> {
     const sel = selection;
     if (!sel) return;
-    void (async () => {
+    try {
+      const created = await api.createTextCoding({
+        cid,
+        fid,
+        seltext: sel.text,
+        pos0: sel.pos0,
+        pos1: sel.pos1,
+      });
+      const next = await refreshCodings();
+      onCoded?.(created, next);
+      onChanged();
+      onClose();
+    } catch (e) {
+      // Keep the selection so the user can retry without re-selecting.
+      onError(errorMessage(e, t("coder.createError")));
+    }
+  }
+
+  /** Code the pending selection with SEVERAL codes (multi-pick): create all
+   *  codings sequentially (so failures are attributable) and refresh the
+   *  host exactly once. */
+  async function codeSelectionMany(cids: number[]): Promise<void> {
+    const sel = selection;
+    if (!sel || cids.length === 0) return;
+    const created: Coding[] = [];
+    let failed = 0;
+    for (const cid of cids) {
       try {
-        const created = await api.createTextCoding({
-          cid,
-          fid,
-          seltext: sel.text,
-          pos0: sel.pos0,
-          pos1: sel.pos1,
-        });
-        const next = await refreshCodings();
-        onCoded?.(created, next);
-        onChanged();
-        onClose();
+        created.push(
+          await api.createTextCoding({
+            cid,
+            fid,
+            seltext: sel.text,
+            pos0: sel.pos0,
+            pos1: sel.pos1,
+          }),
+        );
       } catch (e) {
-        // Keep the selection so the user can retry without re-selecting.
+        failed += 1;
         onError(errorMessage(e, t("coder.createError")));
       }
-    })();
+    }
+    if (created.length > 0) {
+      const next = await refreshCodings();
+      onCoded?.(created[created.length - 1], next);
+      onChanged();
+    }
+    if (failed === 0) onClose();
   }
 
   /** In-vivo coding: create a NEW code from the selection text, then code
@@ -202,22 +234,41 @@ export function SelectionToolbar({
     })();
   }
 
-  function saveAnnotation() {
+  function saveSegmentMemo() {
     const sel = selection;
-    if (!sel || !annotateMemo.trim()) return;
+    if (!sel) return;
+    const memoText = segmentMemo.trim();
+    // Code the selection with the active code (or open picker if none)
+    const cid = activeCodeId;
+    if (cid == null) {
+      setPickerOpen(true);
+      return;
+    }
     void (async () => {
       try {
-        await api.createAnnotation({
+        const created = await api.createTextCoding({
+          cid,
           fid,
+          seltext: sel.text,
           pos0: sel.pos0,
           pos1: sel.pos1,
-          memo: annotateMemo.trim(),
         });
+        // If a memo was entered, save it to the coding. A failed memo PATCH
+        // must not look like a failed coding (a retry would duplicate the
+        // segment), so it is reported separately and the flow completes.
+        if (memoText) {
+          try {
+            await patchCodingMemo("text", created.ctid, memoText);
+          } catch (e) {
+            onError(errorMessage(e, t("coder.updateError")));
+          }
+        }
+        const next = await refreshCodings();
+        onCoded?.(created, next);
         onChanged();
         onClose();
       } catch (e) {
-        // Keep the selection so the user can retry without re-selecting.
-        onError(errorMessage(e, t("coder.annotationCreateError")));
+        onError(errorMessage(e, t("coder.createError")));
       }
     })();
   }
@@ -311,7 +362,7 @@ export function SelectionToolbar({
       const cid = (e as CustomEvent<{ cid: number }>).detail?.cid;
       if (typeof cid !== "number") return;
       setPickerOpen(false);
-      codeSelection(cid);
+      void codeSelection(cid);
     };
     window.addEventListener("qc:assign-code", onAssign);
     return () => window.removeEventListener("qc:assign-code", onAssign);
@@ -342,8 +393,8 @@ export function SelectionToolbar({
         e.stopImmediatePropagation();
         return;
       }
-      if (annotateOpen) {
-        setAnnotateOpen(false);
+      if (memoOpen) {
+        setMemoOpen(false);
         e.stopImmediatePropagation();
         return;
       }
@@ -354,7 +405,7 @@ export function SelectionToolbar({
     };
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
-  }, [qttOpen, pickerOpen, annotateOpen, inVivoOpen]);
+  }, [qttOpen, pickerOpen, memoOpen, inVivoOpen]);
 
   // Clicking outside the popup hides it (the code picker is a modal and
   // survives — matches the popup/selection split the host expects).
@@ -376,25 +427,26 @@ export function SelectionToolbar({
     <>
       {popupVisible && (
         <div ref={popupRef} className="fixed z-40" style={{ left: anchor.left, top: anchor.top }}>
-          {annotateOpen ? (
+          {memoOpen ? (
             <div
               className={`w-72 p-2 ${cls.popup}`}
               role="dialog"
               aria-modal="true"
-              aria-label={t("coder.addAnnotation")}
+              aria-label={t("coder.segmentMemo")}
             >
               <Textarea
                 autoFocus
-                value={annotateMemo}
-                onChange={(e) => setAnnotateMemo(e.target.value)}
-                placeholder={t("coder.annotationMemoPlaceholder")}
+                value={segmentMemo}
+                onChange={(e) => setSegmentMemo(e.target.value)}
+                placeholder={t("coder.segmentMemoPlaceholder")}
+                aria-label={t("coder.segmentMemoPlaceholder")}
                 className="h-20 w-full resize-none p-1.5"
               />
               <div className="mt-2 flex justify-end gap-1.5">
-                <Button variant="secondary" onClick={() => setAnnotateOpen(false)}>
+                <Button variant="secondary" onClick={() => setMemoOpen(false)}>
                   {t("common.cancel")}
                 </Button>
-                <Button variant="primary" icon={<Check size={12} aria-hidden />} onClick={saveAnnotation}>
+                <Button variant="primary" icon={<Check size={12} aria-hidden />} onClick={saveSegmentMemo}>
                   {t("common.save")}
                 </Button>
               </div>
@@ -488,7 +540,7 @@ export function SelectionToolbar({
                 icon={<Code size={12} aria-hidden />}
                 className="max-w-56"
                 onClick={() => {
-                  if (activeCodeId != null) codeSelection(activeCodeId);
+                  if (activeCodeId != null) void codeSelection(activeCodeId);
                   else setPickerOpen(true);
                 }}
                 title={
@@ -505,12 +557,12 @@ export function SelectionToolbar({
                 variant="secondary"
                 icon={<StickyNote size={12} aria-hidden />}
                 onClick={() => {
-                  setAnnotateMemo("");
+                  setSegmentMemo("");
                   setInVivoOpen(false);
-                  setAnnotateOpen(true);
+                  setMemoOpen(true);
                 }}
               >
-                {t("coder.annotate")}
+                {t("coder.segmentMemo")}
               </Button>
               <Button
                 variant="secondary"
@@ -518,7 +570,7 @@ export function SelectionToolbar({
                 onClick={() => {
                   setInVivoName("");
                   setInVivoCat(null);
-                  setAnnotateOpen(false);
+                  setMemoOpen(false);
                   setInVivoOpen(true);
                 }}
                 title={t("coder.inVivo")}
@@ -562,9 +614,9 @@ export function SelectionToolbar({
         open={pickerOpen}
         codes={codes}
         onClose={() => setPickerOpen(false)}
-        onPick={(picked: PickedCode) => {
+        onPick={(picked: PickedCode[]) => {
           setPickerOpen(false);
-          codeSelection(picked.cid);
+          void codeSelectionMany(picked.map((p) => p.cid));
         }}
       />
     </>

@@ -34,7 +34,7 @@ LEGACY_TABLES = [
     "CREATE TABLE journal (jid integer primary key, name text, jentry text, date text, owner text)",
 ]
 
-ALL_VERSIONS = [f"v{v}" for v in range(2, 32)] + ["v34"]
+ALL_VERSIONS = [f"v{v}" for v in range(2, 32)] + ["v34", "v35"]
 
 
 @pytest.fixture
@@ -98,7 +98,7 @@ async def test_full_chain_sets_final_version(v2_db):
     cur = await v2_db.cursor()
     await cur.execute("SELECT databaseversion, about FROM project")
     row = await cur.fetchone()
-    assert row[0] == "v34"
+    assert row[0] == "v35"
     assert row[1] == "4.0-test"
 
 
@@ -407,10 +407,10 @@ async def test_v34_adds_ai_chat_tables(tmp_path):
     )
     assert await cur.fetchone() is not None
     await cur.execute("SELECT databaseversion FROM project")
-    assert (await cur.fetchone())[0] == "v34"
+    assert (await cur.fetchone())[0] == "v35"
     await conn.close()
 
-    # Fresh schema: tables already exist → v34 is a no-op.
+    # Fresh schema: tables already exist → v34 and v35 are no-ops.
     fresh = tmp_path / "fresh.qda"
     conn = await aiosqlite.connect(fresh)
     await create_new_project_schema(conn, app_version="4.0-test", codername="tester")

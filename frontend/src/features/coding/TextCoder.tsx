@@ -20,6 +20,7 @@ import {
   FilePen,
   Link as LinkIcon,
   LoaderCircle,
+  MessageSquareText,
   Rows3,
   Save,
   Sparkles,
@@ -35,7 +36,10 @@ import {
   ViewHeader,
 } from "@/components/ui/orchestrator";
 import { AutocodeDialog } from "@/features/coding/AutocodeDialog";
-import { patchCodingWeight, useCodeIndex } from "@/features/coding/codingApi";
+import { useCodeIndex } from "@/features/coding/codingApi";
+import { useSegmentActions } from "@/features/coding/shared/useSegmentActions";
+import { useCodingsChanged } from "@/features/coding/shared/events";
+import { clampToolbarAnchor } from "@/features/coding/shared/toolbarAnchor";
 import {
   api,
   type Annotation,
@@ -54,8 +58,9 @@ import { getSelectionOffsets, type SelectionOffsets } from "@/features/coding/se
 import { SelectionToolbar } from "@/features/coding/SelectionToolbar";
 import {
   AnnotationDetailsBar,
-  CodingDetailsBar,
 } from "@/features/coding/DetailsBars";
+import { MemoGutter, MemoGutterBubble, toGutterRow } from "@/features/coding/MemoGutter";
+import { useGutterVisible } from "@/features/coding/viewOptions";
 import { FALLBACK_CODE_COLOR, codeTint } from "@/features/coding/tint";
 import {
   consumePendingJump,
@@ -141,12 +146,15 @@ export function TextCoder({
   forceText = false,
   onExitPlainText,
   bare = false,
+  textOverride,
   codings: codingsProp,
   annotations: annotationsProp,
   codes: codesProp,
   onCodingsChange,
   onAnnotationsChange,
   onCodesChange,
+  scrollElRef,
+  suppressGutter = false,
 }: {
   sourceId: number;
   /** Render the plain text even for PDF sources (PDF "plain text" mode). */
@@ -155,6 +163,10 @@ export function TextCoder({
   onExitPlainText?: () => void;
   /** Omit the view header — renders only the document surface (split view). */
   bare?: boolean;
+  /** Displayed document text override. When provided it replaces the source's
+   *  stored fulltext so a cleaned variant (e.g. empty lines collapsed for
+   *  website text) can be shown consistently with the other panes. */
+  textOverride?: string;
   /** Controlled mode: the parent owns the codings/annotations/codes state and
    *  is notified of every change, so all panes render from the same arrays. */
   codings?: Coding[];
@@ -163,6 +175,14 @@ export function TextCoder({
   onCodingsChange?: (codings: Coding[]) => void;
   onAnnotationsChange?: (annotations: Annotation[]) => void;
   onCodesChange?: (codes: CodeTreeItem[]) => void;
+  /** Optional parent-owned ref receiving this coder's scroll container —
+   *  lets an embedding view (PDF/webpage) link its own scrolling to the
+   *  plain text (linked position sync). */
+  scrollElRef?: React.MutableRefObject<HTMLElement | null>;
+  /** Force-hide this coder's own memo gutter + bubble — used when an
+   *  embedding view renders its own gutter anchored to the primary pane
+   *  (PDF/webpage), so only one memo column is shown. */
+  suppressGutter?: boolean;
 }) {
   const { t } = useI18n();
   const storeCodeTree = useProjectStore((s) => s.codeTree);
@@ -204,14 +224,14 @@ export function TextCoder({
   /** A jump target for ANOTHER file opened via the qc:jump-span event. */
   const [pendingFlash, setPendingFlash] = useState<PendingJump | null>(null);
 
-  const [undoStack, setUndoStack] = useState<Coding[]>([]);
-
   const [editMode, setEditMode] = useState(false);
   const [editText, setEditText] = useState("");
   const [draftPositions, setDraftPositions] = useState<DraftPositions | null>(null);
   const [saving, setSaving] = useState(false);
 
   const [autoOpen, setAutoOpen] = useState(false);
+
+  const [gutterVisible, toggleGutter] = useGutterVisible();
 
   const [bookmarkFileId, setBookmarkFileId] = useState<number | null>(null);
   const [bookmarkPos, setBookmarkPos] = useState<number | null>(null);
@@ -233,6 +253,19 @@ export function TextCoder({
   const flashTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const gotoSegment = useInspectorStore((s) => s.gotoSegment);
 
+  /** Scroll ONLY this coder's own scroll container so `el` is centered.
+   *  scrollIntoView would also scroll every scrollable ancestor (the app
+   *  shell, the window), shifting unrelated panes — e.g. it made the PDF
+   *  sync button look like it moved the whole workspace. */
+  function scrollOwnContainerTo(el: HTMLElement) {
+    const scrollEl = scrollRef.current;
+    if (!scrollEl) return;
+    const elRect = el.getBoundingClientRect();
+    const cRect = scrollEl.getBoundingClientRect();
+    const delta = elRect.top - cRect.top - scrollEl.clientHeight / 2 + elRect.height / 2;
+    scrollEl.scrollTo({ top: Math.max(0, scrollEl.scrollTop + delta), behavior: "smooth" });
+  }
+
   useEffect(() => {
     if (!gotoSegment) return;
     // The codings arrive async — wait until the segment's span is rendered.
@@ -241,7 +274,7 @@ export function TextCoder({
         ? scrollRef.current?.querySelector(`[data-ctid="${gotoSegment.ctid}"]`)
         : null;
     if (!el) return;
-    (el as HTMLElement).scrollIntoView({ block: "center", behavior: "smooth" });
+    scrollOwnContainerTo(el as HTMLElement);
     // Reset first so repeat clicks re-trigger the flash animation.
     setFlashCtid(null);
     requestAnimationFrame(() => setFlashCtid(gotoSegment.ctid));
@@ -264,7 +297,7 @@ export function TextCoder({
     if (!container) return;
     const el = elementAtTextPos(container, pos0);
     if (el) {
-      el.scrollIntoView({ block: "center", behavior: "smooth" });
+      scrollOwnContainerTo(el);
       el.classList.add("qc-seg-flash");
       if (flashTimer.current) clearTimeout(flashTimer.current);
       flashTimer.current = setTimeout(() => el.classList.remove("qc-seg-flash"), 2000);
@@ -296,6 +329,18 @@ export function TextCoder({
     return () => window.removeEventListener("qc:jump-span", handleJump);
   }, [sourceId]);
 
+  // PDF "link text/PDF position": scroll the plain text to the location that
+  // corresponds to the current PDF page (pos0 sent by PdfCoder).
+  useEffect(() => {
+    const handleSync = (e: Event) => {
+      const detail = (e as CustomEvent<{ pos0: number }>).detail;
+      if (!detail || typeof detail.pos0 !== "number") return;
+      setPendingFlash({ fid: sourceId, pos0: detail.pos0, pos1: detail.pos0 });
+    };
+    window.addEventListener("qc:pdf-sync-plain", handleSync);
+    return () => window.removeEventListener("qc:pdf-sync-plain", handleSync);
+  }, [sourceId]);
+
   // Flash once the target text is actually rendered (mounting a file loads
   // its text asynchronously, so the effect re-runs when `text` arrives).
   useEffect(() => {
@@ -308,7 +353,7 @@ export function TextCoder({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pendingFlash, source?.fulltext]);
 
-  const text = source?.fulltext ?? "";
+  const text = textOverride ?? source?.fulltext ?? "";
   const unsaved = editMode && editText !== text;
 
   /* ---------------------------------------------------------------- load */
@@ -317,6 +362,47 @@ export function TextCoder({
   // its load owns the source fetch + annotations, is conditional in
   // controlled mode, and resets most coder state on every run, so it stays
   // bespoke here.
+
+  const refreshCodings = useCallback(async (): Promise<Coding[]> => {
+    const next = await api.sourceCoding(sourceId);
+    if (controlled) onCodingsChange?.(next);
+    else setLocalCodings(next);
+    return next;
+  }, [sourceId, controlled, onCodingsChange]);
+
+  const refreshAnnotations = useCallback(async () => {
+    const next = await api.fileAnnotations(sourceId);
+    if (controlled) onAnnotationsChange?.(next);
+    else setLocalAnnotations(next);
+  }, [sourceId, controlled, onAnnotationsChange]);
+
+  const refreshSource = useCallback(async () => {
+    setSource(await api.getSource(sourceId));
+  }, [sourceId]);
+
+  const refreshCodes = useCallback(async () => {
+    const next = await api.codesFlat();
+    if (controlled) onCodesChange?.(next);
+    else setLocalCodes(next);
+  }, [controlled, onCodesChange]);
+
+  /* ------------------------------------------------- memo gutter / bubble */
+
+  // Shared mutation actions (memo/weight/important/delete) with a
+  // recoverable-delete undo stack — deletes confirm AND push here.
+  const actions = useSegmentActions({
+    kind: "text",
+    rows: codings,
+    idOf: (r) => r.ctid,
+    deleteRow: (ctid) => api.deleteTextCoding(ctid),
+    refresh: refreshCodings,
+    onError: setErrMsg,
+    onDeleted: () => {
+      setSelectedSeg(null);
+      setSelectedAnnSeg(null);
+    },
+  });
+  const { undo } = actions;
 
   useAsyncEffect(async (signal) => {
     setLoading(true);
@@ -330,7 +416,7 @@ export function TextCoder({
     setToolbarPos(null);
     setSelectedSeg(null);
     setSelectedAnnSeg(null);
-    setUndoStack([]);
+    undo.clear();
     setAutoOpen(false);
     if (!controlled) {
       setLocalCodings([]);
@@ -359,41 +445,14 @@ export function TextCoder({
       signal.throwIfAborted();
       setLoading(false);
     }
-  }, [sourceId, reloadTick, t, controlled]);
-
-  const refreshCodings = useCallback(async (): Promise<Coding[]> => {
-    const next = await api.sourceCoding(sourceId);
-    if (controlled) onCodingsChange?.(next);
-    else setLocalCodings(next);
-    return next;
-  }, [sourceId, controlled, onCodingsChange]);
-
-  const refreshAnnotations = useCallback(async () => {
-    const next = await api.fileAnnotations(sourceId);
-    if (controlled) onAnnotationsChange?.(next);
-    else setLocalAnnotations(next);
-  }, [sourceId, controlled, onAnnotationsChange]);
-
-  const refreshSource = useCallback(async () => {
-    setSource(await api.getSource(sourceId));
-  }, [sourceId]);
-
-  const refreshCodes = useCallback(async () => {
-    const next = await api.codesFlat();
-    if (controlled) onCodesChange?.(next);
-    else setLocalCodes(next);
-  }, [controlled, onCodesChange]);
+  }, [sourceId, reloadTick, t, controlled, undo]);
 
   // History undo/redo: reload codings/annotations when the audit log reverts
   // a change (the shell only refreshes project metadata).
-  useEffect(() => {
-    const handle = () => {
-      void refreshCodings();
-      void refreshAnnotations();
-    };
-    window.addEventListener("qc:codings-changed", handle);
-    return () => window.removeEventListener("qc:codings-changed", handle);
-  }, [refreshCodings, refreshAnnotations]);
+  useCodingsChanged(() => {
+    void refreshCodings();
+    void refreshAnnotations();
+  });
 
   const refreshLinks = useCallback(async () => {
     setLinks(await fetchOutgoingLinks(sourceId));
@@ -483,16 +542,6 @@ export function TextCoder({
     [draftPositions, editText],
   );
 
-  const segRows = useMemo(
-    () =>
-      selectedSeg
-        ? selectedSeg.ctids
-            .map((ctid) => codings.find((c) => c.ctid === ctid))
-            .filter((c): c is Coding => Boolean(c))
-        : [],
-    [selectedSeg, codings],
-  );
-
   const annRows = useMemo(
     () =>
       selectedAnnSeg
@@ -502,6 +551,53 @@ export function TextCoder({
         : [],
     [selectedAnnSeg, annotations],
   );
+
+  /* ------------------------------------------------ memo gutter / bubble */
+
+  const gutterRows = useMemo(
+    () =>
+      codings.map((c) =>
+        toGutterRow(
+          {
+            id: c.ctid,
+            kind: "text",
+            memo: c.memo,
+            weight: (c as Coding & { weight?: number }).weight,
+            important: c.important,
+            date: c.date,
+            seltext: c.seltext,
+          },
+          codeById.get(c.cid),
+          t("coder.fallbackCode", { id: c.cid }),
+        ),
+      ),
+    [codings, codeById, t],
+  );
+
+  const selectedIds = useMemo(() => selectedSeg?.ctids ?? [], [selectedSeg]);
+
+  const selectedBubbleRows = useMemo(
+    () => gutterRows.filter((r) => selectedIds.includes(r.id)),
+    [gutterRows, selectedIds],
+  );
+
+  const anchorOf = useCallback(
+    (ctid: number) => scrollRef.current?.querySelector<HTMLElement>(`[data-ctids~="${ctid}"]`) ?? null,
+    [],
+  );
+
+  const handleGutterSelect = useCallback(
+    (ctid: number) => {
+      const seg = segments.find((s) => s.ctids.includes(ctid));
+      if (seg) {
+        setSelectedSeg(seg);
+        setSelectedAnnSeg(null);
+      }
+    },
+    [segments],
+  );
+
+  const handleGutterDeselect = useCallback(() => setSelectedSeg(null), []);
 
   /* ------------------------------------------------------------ selection */
 
@@ -532,12 +628,8 @@ export function TextCoder({
     }
     const rect = sel.getRangeAt(0).getBoundingClientRect();
     const scrollRect = scrollRef.current?.getBoundingClientRect();
-    const left = scrollRect
-      ? Math.min(Math.max(rect.left, scrollRect.left + 4), scrollRect.right - 300)
-      : rect.left;
-    const top = scrollRect ? Math.min(rect.bottom + 6, scrollRect.bottom - 40) : rect.bottom + 6;
+    setToolbarPos(clampToolbarAnchor(rect, scrollRect));
     setSelection(offsets);
-    setToolbarPos({ left, top });
   }
 
   useEffect(() => {
@@ -589,43 +681,23 @@ export function TextCoder({
     }
   }
 
-  /** Stepper update of a segment's weight (0-100; 0 = no weight). */
-  function updateCodingWeight(row: Coding, weight: number) {
-    void (async () => {
-      try {
-        await patchCodingWeight("text", row.ctid, weight);
-        await refreshCodings();
-      } catch (e) {
-        setErrMsg(errorMessage(e, t("coder.weightError")));
-      }
-    })();
-  }
+  /* ------------------------------------------------- memo gutter / bubble */
 
-  function deleteCoding(row: Coding) {
-    void (async () => {
-      try {
-        await api.deleteTextCoding(row.ctid);
-        setUndoStack((s) => [...s.slice(-19), row]);
-        setSelectedSeg(null);
-        await refreshCodings();
-      } catch (e) {
-        setErrMsg(errorMessage(e, t("coder.removeError")));
-      }
-    })();
-  }
+  const updateGutterMemo = actions.updateMemo;
+  const updateGutterWeight = actions.updateWeight;
+  const toggleGutterImportant = actions.toggleImportant;
 
-  function unmarkLast() {
-    const row = undoStack[undoStack.length - 1];
-    if (!row) return;
-    setUndoStack((s) => s.slice(0, -1));
-    void (async () => {
-      try {
-        await api.undoCodings([row]);
-        await refreshCodings();
-      } catch (e) {
-        setErrMsg(errorMessage(e, t("coder.restoreError")));
-      }
-    })();
+  function deleteGutterCoding(ctid: number) {
+    const row = codings.find((c) => c.ctid === ctid);
+    if (
+      !window.confirm(
+        t("coder.removeConfirm", {
+          name: codeById.get(row?.cid ?? -1)?.name ?? t("coder.fallbackCodeLower", { id: ctid }),
+        }),
+      )
+    )
+      return;
+    actions.remove(ctid);
   }
 
   /* ------------------------------------------------------------- annotations */
@@ -820,6 +892,7 @@ export function TextCoder({
         <span
           key={`seg-${i}-${seg.start}`}
           data-ctid={seg.ctids[0]}
+          data-ctids={seg.ctids.join(" ")}
           className={`cursor-pointer rounded-sm qc-seg ${hidden ? "qc-seg-hidden" : ""} ${
             flashCtid != null && seg.ctids.includes(flashCtid) ? "qc-seg-flash" : ""
           } ${
@@ -831,6 +904,12 @@ export function TextCoder({
           onClick={() => {
             setSelectedSeg(seg);
             setSelectedAnnSeg(null);
+            // Choosing a code occasion also shows its details in the right-bar
+            // Inspector (not just the bottom details bar).
+            const first = seg.ctids
+              .map((ctid) => codings.find((c) => c.ctid === ctid))
+              .find(Boolean);
+            if (first) void useInspectorStore.getState().selectCode(first.cid);
           }}
         >
           {wrapColors(seg, text.slice(seg.start, seg.end))}
@@ -1021,15 +1100,15 @@ export function TextCoder({
                   >
                     <BookmarkCheck size={16} aria-hidden />
                   </IconButton>
-                  <Button
-                    variant="secondary"
-                    icon={<Undo2 size={12} aria-hidden />}
-                    onClick={unmarkLast}
-                    disabled={undoStack.length === 0}
-                    title={t("coder.unmarkTitle")}
-                  >
-                    {t("coder.unmarkLast")}
-                  </Button>
+              <Button
+                variant="toolbar"
+                icon={<Undo2 size={12} aria-hidden />}
+                onClick={undo.undoLast}
+                disabled={!undo.canUndo}
+                title={t("coder.unmarkTitle")}
+              >
+                {t("coder.unmarkLast")}
+              </Button>
                   <Button
                     variant="secondary"
                     icon={<Sparkles size={12} aria-hidden />}
@@ -1037,6 +1116,15 @@ export function TextCoder({
                     className={cn(autoOpen && "border-accent text-accent")}
                   >
                     {t("coder.autocode")}
+                  </Button>
+                  <Button
+                    variant="secondary"
+                    icon={<MessageSquareText size={12} aria-hidden />}
+                    onClick={toggleGutter}
+                    className={cn(gutterVisible && "border-accent text-accent")}
+                    title={gutterVisible ? t("coder.hideMemos") : t("coder.showMemos")}
+                  >
+                    {t("coder.memos")}
                   </Button>
                 </>
               )}
@@ -1056,65 +1144,87 @@ export function TextCoder({
       />
 
       <div
-        ref={scrollRef}
+        ref={(el) => {
+          scrollRef.current = el;
+          if (scrollElRef) scrollElRef.current = el;
+        }}
         onMouseUp={handleDocMouseUp}
         className="min-h-0 flex-1 overflow-y-auto bg-bg"
       >
-        <div className="p-6">
-          {editMode ? (
-            <div className="relative">
-              <textarea
-                ref={editAreaRef}
-                value={editText}
-                onChange={onEditChange}
-                onKeyDown={(e) => {
-                  if ((e.ctrlKey || e.metaKey) && e.key === "s") {
-                    e.preventDefault();
-                    saveEdit();
-                  }
-                }}
-                spellCheck={false}
-                aria-label={t("coder.editAria")}
-                className={cn(
-                  DOC_FONT_CLS,
-                  "relative z-10 block w-full resize-none overflow-hidden bg-transparent p-0 text-transparent caret-text-primary outline-none",
-                )}
-              />
-              <div
-                aria-hidden
-                className={cn(
-                  DOC_FONT_CLS,
-                  "pointer-events-none absolute inset-0 z-0 overflow-hidden text-text-primary",
-                )}
-              >
-                {renderEditCodingOverlay()}
+        <div className="flex">
+          <div className="flex-1 p-6">
+            {editMode ? (
+              <div className="relative">
+                <textarea
+                  ref={editAreaRef}
+                  value={editText}
+                  onChange={onEditChange}
+                  onKeyDown={(e) => {
+                    if ((e.ctrlKey || e.metaKey) && e.key === "s") {
+                      e.preventDefault();
+                      saveEdit();
+                    }
+                  }}
+                  spellCheck={false}
+                  aria-label={t("coder.editAria")}
+                  className={cn(
+                    DOC_FONT_CLS,
+                    "relative z-10 block w-full resize-none overflow-hidden bg-transparent p-0 text-transparent caret-text-primary outline-none",
+                  )}
+                />
+                <div
+                  aria-hidden
+                  className={cn(
+                    DOC_FONT_CLS,
+                    "pointer-events-none absolute inset-0 z-0 overflow-hidden text-text-primary",
+                  )}
+                >
+                  {renderEditCodingOverlay()}
+                </div>
+                <div
+                  aria-hidden
+                  className={cn(
+                    DOC_FONT_CLS,
+                    "pointer-events-none absolute inset-0 z-0 overflow-hidden text-transparent",
+                  )}
+                >
+                  {renderEditAnnotationOverlay()}
+                </div>
               </div>
-              <div
-                aria-hidden
-                className={cn(
-                  DOC_FONT_CLS,
-                  "pointer-events-none absolute inset-0 z-0 overflow-hidden text-transparent",
-                )}
-              >
-                {renderEditAnnotationOverlay()}
+            ) : (
+              <div ref={textRef} className={DOC_FONT_CLS}>
+                {renderCodedText()}
+                {renderAnnotationLayer()}
               </div>
-            </div>
-          ) : (
-            <div ref={textRef} className={DOC_FONT_CLS}>
-              {renderCodedText()}
-              {renderAnnotationLayer()}
-            </div>
+            )}
+          </div>
+          {!editMode && (
+            <MemoGutter
+              rows={gutterRows}
+              selectedIds={selectedIds}
+              scrollRef={scrollRef}
+              anchorOf={anchorOf}
+              onSelect={handleGutterSelect}
+              onDeselect={handleGutterDeselect}
+              onUpdateMemo={updateGutterMemo}
+              onUpdateWeight={updateGutterWeight}
+              onToggleImportant={toggleGutterImportant}
+              onDelete={deleteGutterCoding}
+              visible={gutterVisible && !suppressGutter}
+            />
           )}
         </div>
       </div>
 
-      {!editMode && segRows.length > 0 && (
-        <CodingDetailsBar
-          rows={segRows}
-          codeById={codeById}
-          onDelete={deleteCoding}
-          onWeight={updateCodingWeight}
-          onClose={() => setSelectedSeg(null)}
+      {!editMode && !gutterVisible && selectedBubbleRows.length > 0 && (
+        <MemoGutterBubble
+          rows={selectedBubbleRows}
+          scrollRef={scrollRef}
+          anchorOf={anchorOf}
+          onClose={handleGutterDeselect}
+          onUpdateMemo={updateGutterMemo}
+          onUpdateWeight={updateGutterWeight}
+          onDelete={deleteGutterCoding}
         />
       )}
 

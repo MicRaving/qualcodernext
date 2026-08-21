@@ -10,6 +10,7 @@ from pydantic import BaseModel
 
 from qualcoder_api.api.v1.deps import DbDep, ServiceDep
 from qualcoder_api.services import user_settings
+from qualcoder_api.services.ai_prompts import is_custom_prompt_id
 from qualcoder_api.services.ai_service import AiService, AiUnavailable
 
 router = APIRouter(prefix="/ai", tags=["ai"])
@@ -21,7 +22,22 @@ class AiSettingsRequest(BaseModel):
     api_base: str
     model: str
     api_key: str = ""
-    mcp_permissions: str = "read"
+    # Actively start LM Studio + load the model when unreachable. None =
+    # keep the stored value.
+    auto_start_backend: bool | None = None
+    # Optional: when omitted the stored value is kept (the AI tab no longer
+    # manages permissions — that moved to the AI sidebar via /mcp-permissions).
+    mcp_permissions: str | None = None
+    # The AI-chat wrapping prompt. None = keep the stored value (the settings
+    # tab auto-save must not clobber a custom wrapping prompt set in the
+    # template creator); an empty string resets to the built-in default.
+    wrapping_prompt: str | None = None
+    # MCP mode: "internal" (QCnext's own tools) or "external" (stdio server).
+    mcp_mode: str | None = None
+    # External MCP server connection (stdio).
+    mcp_server_command: str | None = None
+    mcp_server_args: list[str] | None = None
+    mcp_server_env: dict[str, str] | None = None
 
 
 class ChatRequest(BaseModel):
@@ -45,6 +61,18 @@ class ChatRequest(BaseModel):
     # Session id: when given, the exchange is appended to that chat; when
     # None, a new chat session is created for the turn.
     chat_id: int | None = None
+    # Agentic chat: give the model the project's MCP tools and loop on its
+    # tool calls (read tools always; write tools gated by mcp_permissions).
+    agentic: bool = False
+    # When agentic: pause before executing write tools and ask the user.
+    confirm_writes: bool = False
+
+
+class ChatApproveRequest(BaseModel):
+    """User decision for a paused (agentic) chat turn's pending write tools."""
+    token: str
+    approve: bool
+    chat_id: int | None = None
 
 
 class ChatCreateRequest(BaseModel):
@@ -61,11 +89,32 @@ class TemplateRequest(BaseModel):
     text: str = ""
 
 
+class PersonasRequest(BaseModel):
+    """Per-mode persona overrides (mode -> custom system prompt; blank clears)."""
+    personas: dict[str, str] = {}
+
+
+class EditorTemplateRequest(BaseModel):
+    """Save an editable template by its picker id (built-in / global: / custom:)."""
+    id: str
+    name: str = ""
+    description: str = ""
+    text: str = ""
+
+
+class ResetTemplateRequest(BaseModel):
+    """Restore a built-in template to its shipped text."""
+    id: str
+
+
 class SearchRequest(BaseModel):
     query: str
     limit: int = 10
     # Optional filter: restrict the semantic search to these text sources.
     source_ids: list[int] | None = None
+    # Optional filter: restrict the semantic search to sources coded under
+    # this category subtree.
+    category_id: int | None = None
 
 
 class IndexRequest(BaseModel):
@@ -265,7 +314,7 @@ async def ai_models(
     last_error = ""
     for url, req_headers in _models_urls(provider, api_base, api_key):
         try:
-            async with httpx.AsyncClient(timeout=3.0) as client:
+            async with httpx.AsyncClient(timeout=15.0) as client:
                 resp = await client.get(url, headers=req_headers)
                 resp.raise_for_status()
                 data = resp.json()
@@ -346,7 +395,7 @@ async def _probe_provider(ai: dict) -> tuple[bool | None, str]:
         return False, "API key required for this provider"
     for url, headers in _models_urls(provider, api_base, api_key):
         try:
-            async with httpx.AsyncClient(timeout=2.5) as client:
+            async with httpx.AsyncClient(timeout=15.0) as client:
                 resp = await client.get(url, headers=headers)
                 resp.raise_for_status()
             return True, ""
@@ -368,6 +417,8 @@ async def ai_status(probe: bool = False) -> dict:
         "base_url": api_base,
         "model": ai["model"],
         "mcp_permissions": ai.get("mcp_permissions", "read"),
+        "mcp_mode": ai.get("mcp_mode", "internal"),
+        "wrapping_prompt": user_settings.get_wrapping_prompt(),
         "reachable": None,
         "probe_error": "",
     }
@@ -381,6 +432,96 @@ async def ai_status(probe: bool = False) -> dict:
 @router.put("/settings")
 async def save_ai_settings(req: AiSettingsRequest) -> dict:
     return user_settings.save_ai_settings(req.model_dump())
+
+
+@router.post("/ensure-backend")
+async def ensure_ai_backend() -> dict:
+    """Actively start the configured local backend and load the model.
+
+    Currently implemented for the ``lmstudio`` provider: runs ``lms server
+    start`` (when nothing listens on the configured port) and ``lms load
+    <model>`` (when the model is not yet served). Idempotent — every step is
+    skipped when its goal is already met. Long-running: a cold model load can
+    take minutes, so callers should treat this as a progress-y operation.
+    """
+    import asyncio
+
+    from qualcoder_api.services import lmstudio_service
+
+    ai = user_settings.get_ai_settings()
+    provider = ai.get("provider") or ""
+    if provider != "lmstudio":
+        raise HTTPException(
+            status_code=422,
+            detail="Auto-start is only supported for the lmstudio provider",
+        )
+    if not ai.get("auto_start_backend", True):
+        raise HTTPException(
+            status_code=422,
+            detail="Auto-start of the local backend is disabled in Settings",
+        )
+    return await asyncio.to_thread(
+        lmstudio_service.ensure_lmstudio,
+        (ai.get("api_base") or "").strip(),
+        (ai.get("model") or "").strip(),
+    )
+
+
+class McpPermissionsRequest(BaseModel):
+    mcp_permissions: str = "read"
+
+
+@router.put("/mcp-permissions")
+async def save_ai_mcp_permissions(req: McpPermissionsRequest) -> dict:
+    """Change the MCP access level from the AI sidebar (no full settings body)."""
+    if req.mcp_permissions not in ("read", "write", "full"):
+        raise HTTPException(status_code=422, detail="mcp_permissions must be read, write or full")
+    ai = user_settings.get_ai_settings()
+    ai["mcp_permissions"] = req.mcp_permissions
+    saved = user_settings.save_ai_settings(ai)
+    return {"mcp_permissions": saved["mcp_permissions"]}
+
+
+@router.get("/mcp-tools")
+async def ai_mcp_tools() -> dict:
+    """The MCP tools the AI sidebar exposes, grouped by access level.
+
+    Read tools are always available; write tools only when ``mcp_permissions``
+    is "write" or "full". The sidebar lists them so the user can see exactly
+    what the assistant may do, alongside the permission selector.
+    """
+    ai = user_settings.get_ai_settings()
+    permissions = ai.get("mcp_permissions", "read")
+    from qualcoder_api.services.mcp_service import READ_TOOLS, WRITE_TOOLS
+
+    return {
+        "permissions": permissions,
+        "write_enabled": permissions in ("write", "full"),
+        "read_tools": READ_TOOLS,
+        "write_tools": WRITE_TOOLS,
+        "mcp_mode": ai.get("mcp_mode", "internal"),
+    }
+
+
+class WrappingPromptRequest(BaseModel):
+    text: str
+
+
+@router.get("/wrapping-prompt")
+async def ai_wrapping_prompt() -> dict:
+    """The effective AI-chat wrapping prompt (custom or the built-in default)."""
+    from qualcoder_api.services.user_settings import DEFAULT_WRAPPING_PROMPT, get_wrapping_prompt
+
+    return {"text": get_wrapping_prompt(), "default": DEFAULT_WRAPPING_PROMPT}
+
+
+@router.put("/wrapping-prompt")
+async def save_ai_wrapping_prompt(req: WrappingPromptRequest) -> dict:
+    """Persist the AI-chat wrapping prompt (blank resets to the default)."""
+    from qualcoder_api.services.user_settings import DEFAULT_WRAPPING_PROMPT, save_wrapping_prompt
+
+    text = save_wrapping_prompt(req.text)
+    return {"text": text, "default": DEFAULT_WRAPPING_PROMPT}
 
 
 @router.post("/chat")
@@ -420,15 +561,71 @@ async def ai_chat(req: ChatRequest, svc: ServiceDep, session: DbDep) -> dict:
             ai, req.message, req.context, mode=req.mode, prompt_id=req.prompt_id,
             memo_ids=req.memo_ids, source_id=req.source_id,
             code_ids=req.code_ids, source_ids=req.source_ids,
+            agentic=req.agentic, confirm_writes=req.confirm_writes,
         )
     except AiUnavailable as err:
         raise HTTPException(status_code=503, detail=str(err)) from err
-    await ai_history.append_message(session, chat_id, "assistant", result["reply"])
+    if result.get("status") == "awaiting_approval":
+        return {
+            "chat_id": chat_id,
+            "status": "awaiting_approval",
+            "token": result["token"],
+            "pending_tools": result["pending_tools"],
+        }
+    tool_calls = result.get("tool_calls", [])
+    await ai_history.append_message(
+        session,
+        chat_id,
+        "assistant",
+        result["reply"],
+        request_json=json.dumps({"tool_calls": tool_calls}, ensure_ascii=False),
+    )
     await ai_history.ensure_title(session, chat_id, req.message)
     return {
         "chat_id": chat_id,
         "reply": result["reply"],
         "model": result["model"],
+        "tool_calls": tool_calls,
+    }
+
+
+@router.post("/chat/approve")
+async def ai_chat_approve(req: ChatApproveRequest, svc: ServiceDep, session: DbDep) -> dict:
+    """Continue a paused agentic turn after the user decided on its pending
+    write tools; the final assistant reply is appended to the chat."""
+    import json
+
+    from qualcoder_api.services import ai_history
+    from qualcoder_api.services.ai_service import AiService
+
+    try:
+        result = await AiService(svc.session_factory).approve_agentic(req.token, req.approve)
+    except AiUnavailable as err:
+        raise HTTPException(status_code=503, detail=str(err)) from err
+    if result.get("status") == "awaiting_approval":
+        return {
+            "chat_id": req.chat_id,
+            "status": "awaiting_approval",
+            "token": result["token"],
+            "pending_tools": result["pending_tools"],
+        }
+    chat_id = req.chat_id
+    if chat_id is not None:
+        await ai_history.append_message(
+            session,
+            chat_id,
+            "assistant",
+            result["reply"],
+            request_json=json.dumps(
+                {"tool_calls": result.get("tool_calls", [])}, ensure_ascii=False
+            ),
+        )
+        await ai_history.ensure_title(session, chat_id, "AI chat")
+    return {
+        "chat_id": chat_id,
+        "reply": result["reply"],
+        "model": result["model"],
+        "tool_calls": result.get("tool_calls", []),
     }
 
 
@@ -501,6 +698,103 @@ async def ai_templates_create(req: TemplateRequest, session: DbDep) -> dict:
     return await ai_templates.create_template(session, req.name, req.description, req.text)
 
 
+@router.get("/personas")
+async def ai_personas_list() -> dict:
+    """Per-mode personas with their built-in default and current text."""
+    from qualcoder_api.services import user_settings
+    from qualcoder_api.services.ai_prompts import MODE_SYSTEM_PROMPTS
+
+    overrides = user_settings.get_ai_personas()
+    personas = [
+        {"mode": mode, "default": default, "text": overrides.get(mode, default)}
+        for mode, default in MODE_SYSTEM_PROMPTS.items()
+    ]
+    return {"personas": personas}
+
+
+@router.put("/personas")
+async def ai_personas_save(req: PersonasRequest) -> dict:
+    """Persist per-mode persona overrides (blank text restores the default)."""
+    from qualcoder_api.services import user_settings
+
+    saved = user_settings.save_ai_personas(req.personas)
+    return {"personas": [{"mode": mode, "text": text} for mode, text in saved.items()]}
+
+
+@router.get("/templates/all")
+async def ai_templates_editor(session: DbDep) -> dict:
+    """Everything the template editor can edit (built-in / app / project)."""
+    from qualcoder_api.services import ai_templates
+
+    return {"templates": await ai_templates.list_editor_templates(session)}
+
+
+@router.put("/templates/all")
+async def ai_templates_editor_save(req: EditorTemplateRequest, session: DbDep) -> dict:
+    """Save an editable template.
+
+    Built-in ids write an app-wide override; ``global:`` ids update an
+    app-wide template; ``custom:`` ids update the project's row.
+    """
+    from qualcoder_api.services import ai_templates, user_settings
+
+    if not req.text.strip():
+        raise HTTPException(status_code=422, detail="text is required")
+    if is_custom_prompt_id(req.id):
+        row_id = ai_templates.resolve_custom_row_id(req.id)
+        if row_id is None:
+            raise HTTPException(status_code=422, detail="invalid custom template id")
+        updated = await ai_templates.update_template(
+            session, row_id, name=req.name, description=req.description, text=req.text
+        )
+        if updated is None:
+            raise HTTPException(status_code=404, detail="template not found")
+        return updated
+    if req.id.startswith("global:"):
+        return user_settings.save_ai_global_prompt(
+            {
+                "id": req.id[len("global:"):],
+                "name": req.name,
+                "description": req.description,
+                "text": req.text,
+            }
+        )
+    user_settings.save_ai_prompt_override(req.id, req.text)
+    return {"id": req.id, "name": req.name, "description": req.description, "text": req.text}
+
+
+@router.post("/templates/all/reset")
+async def ai_templates_editor_reset(req: ResetTemplateRequest) -> dict:
+    """Restore a built-in template to its shipped text."""
+    from qualcoder_api.services import user_settings
+    from qualcoder_api.services.ai_prompts import CATALOG
+
+    if CATALOG.by_id(req.id) is None:
+        raise HTTPException(status_code=422, detail="not a built-in template")
+    user_settings.reset_ai_prompt_override(req.id)
+    return {"id": req.id, "reset": True}
+
+
+@router.post("/templates/global")
+async def ai_templates_global_create(req: TemplateRequest) -> dict:
+    """Create an app-wide template, available in every project."""
+    from qualcoder_api.services import user_settings
+
+    if not req.name.strip() or not req.text.strip():
+        raise HTTPException(status_code=422, detail="name and text are required")
+    return user_settings.save_ai_global_prompt(
+        {"name": req.name, "description": req.description, "text": req.text}
+    )
+
+
+@router.delete("/templates/global/{prompt_id}", status_code=204)
+async def ai_templates_global_delete(prompt_id: str) -> None:
+    from qualcoder_api.services import user_settings
+
+    if not user_settings.delete_ai_global_prompt(prompt_id):
+        raise HTTPException(status_code=404, detail="template not found")
+
+
 @router.put("/templates/{template_id}")
 async def ai_templates_update(template_id: int, req: TemplateRequest, session: DbDep) -> dict:
     from qualcoder_api.services import ai_templates
@@ -528,7 +822,7 @@ async def ai_search(req: SearchRequest, svc: ServiceDep, session: DbDep) -> dict
     ai = user_settings.get_ai_settings()
     try:
         return await AiService(svc.session_factory).semantic_search(
-            ai, req.query, req.limit, source_ids=req.source_ids
+            ai, req.query, req.limit, source_ids=req.source_ids, category_id=req.category_id
         )
     except AiUnavailable as err:
         raise HTTPException(status_code=503, detail=str(err)) from err

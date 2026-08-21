@@ -4,6 +4,7 @@ and on which file)."""
 from __future__ import annotations
 
 import json
+import socket
 import subprocess
 import sys
 import time
@@ -58,6 +59,7 @@ async def test_touch_creates_and_skips_unchanged(project):
     assert entry["coder"] == "anna"
     assert entry["file_id"] == 7
     assert entry["file_name"] == "a.txt"
+    assert entry["host"] == socket.gethostname()
 
     # Unchanged + fresh heartbeat → no rewrite (returns False).
     first_mtime = next(iter(root.glob("*.json"))).stat().st_mtime_ns
@@ -138,3 +140,91 @@ async def test_presence_endpoints(project_client):
     # The activity endpoint updated the server's current source; the read
     # excludes this instance's own entry.
     assert body["presence"] == []
+
+
+async def test_read_keeps_remote_live_entry(project):
+    """A remote host's entry stays live purely on its ts TTL — its pid is
+    meaningless in the local process table."""
+    root = Path(project.project_path) / presence_service.PRESENCE_DIR_NAME
+    root.mkdir(parents=True, exist_ok=True)
+    path = root / "1.json"
+    path.write_text(
+        json.dumps({"coder": "berta", "os_user": "u", "pid": 1,
+                    "host": "remote-host", "ts": time.time(),
+                    "file_id": 3, "file_name": "focus.txt"}),
+        encoding="utf-8",
+    )
+    entries = presence_service.read(project.project_path)
+    assert len(entries) == 1
+    assert entries[0]["coder"] == "berta"
+    assert entries[0]["file_id"] == 3
+    assert path.exists()
+
+
+async def test_read_prunes_remote_stale_entry(project):
+    """A remote entry older than the TTL is pruned."""
+    root = Path(project.project_path) / presence_service.PRESENCE_DIR_NAME
+    root.mkdir(parents=True, exist_ok=True)
+    stale = root / "1.json"
+    stale.write_text(
+        json.dumps({"coder": "berta", "os_user": "u", "pid": 1,
+                    "host": "remote-host",
+                    "ts": time.time() - presence_service.PRESENCE_TTL_SECS - 10,
+                    "file_id": None, "file_name": ""}),
+        encoding="utf-8",
+    )
+    assert presence_service.read(project.project_path) == []
+    assert not stale.exists()
+
+
+async def test_read_prunes_remote_future_ts_entry(project):
+    """Clock skew on another machine can push ts into the future; entries more
+    than a TTL ahead of now are pruned as not live."""
+    root = Path(project.project_path) / presence_service.PRESENCE_DIR_NAME
+    root.mkdir(parents=True, exist_ok=True)
+    future = root / "1.json"
+    future.write_text(
+        json.dumps({"coder": "berta", "os_user": "u", "pid": 1,
+                    "host": "remote-host",
+                    "ts": time.time() + presence_service.PRESENCE_TTL_SECS + 10,
+                    "file_id": None, "file_name": ""}),
+        encoding="utf-8",
+    )
+    assert presence_service.read(project.project_path) == []
+    assert not future.exists()
+
+
+async def test_read_prunes_local_dead_pid(project, monkeypatch):
+    """A same-host entry whose pid is not running is pruned. ``_pid_alive`` is
+    stubbed because Windows keeps terminated pids openable via OpenProcess for
+    a long time, which would make the assertion timing-dependent."""
+    monkeypatch.setattr(presence_service, "_pid_alive", lambda pid: False)
+    root = Path(project.project_path) / presence_service.PRESENCE_DIR_NAME
+    root.mkdir(parents=True, exist_ok=True)
+    dead = root / "99.json"
+    dead.write_text(
+        json.dumps({"coder": "berta", "os_user": "u", "pid": 99,
+                    "host": socket.gethostname(), "ts": time.time(),
+                    "file_id": None, "file_name": ""}),
+        encoding="utf-8",
+    )
+    assert presence_service.read(project.project_path) == []
+    assert not dead.exists()
+
+
+async def test_read_keeps_remote_entry_when_pid_dead(project, monkeypatch):
+    """A remote entry is kept even when the pid check would fail — its pid is
+    meaningless in the local process table."""
+    monkeypatch.setattr(presence_service, "_pid_alive", lambda pid: False)
+    root = Path(project.project_path) / presence_service.PRESENCE_DIR_NAME
+    root.mkdir(parents=True, exist_ok=True)
+    remote = root / "1.json"
+    remote.write_text(
+        json.dumps({"coder": "berta", "os_user": "u", "pid": 1,
+                    "host": "remote-host", "ts": time.time(),
+                    "file_id": None, "file_name": ""}),
+        encoding="utf-8",
+    )
+    entries = presence_service.read(project.project_path)
+    assert len(entries) == 1
+    assert remote.exists()

@@ -949,7 +949,14 @@ export function Inspector() {
           }
           actions={
             selection && (
-              <IconButton label={t("common.closeDetails")} size="sm" onClick={clearInspector}>
+              <IconButton
+                label={t("common.closeDetails")}
+                size="sm"
+                onClick={() => {
+                  clearInspector();
+                  window.dispatchEvent(new Event("qc:rightbar-close"));
+                }}
+              >
                 <X size={14} aria-hidden />
               </IconButton>
             )

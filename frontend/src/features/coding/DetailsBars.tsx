@@ -99,8 +99,7 @@ export function CodingDetailsBar({
   );
 }
 
-export function AnnotationDetailsBar({
-  rows,
+export function AnnotationDetailsBar({  rows,
   onUpdateMemo,
   onDelete,
   onClose,
@@ -132,6 +131,7 @@ export function AnnotationDetailsBar({
                   <Textarea
                     value={editingAnnMemo.memo}
                     onChange={(e) => setEditingAnnMemo({ anid: a.anid, memo: e.target.value })}
+                    aria-label={t("coder.annotationMemoPlaceholder")}
                     className="min-h-12 w-full resize-none p-1.5"
                   />
                   <Button

@@ -276,6 +276,20 @@ export function ContextPickerArea({
       <div className="mx-auto flex min-w-0 w-full max-w-2xl flex-col gap-2">
         {kinds.length > 1 && (
           <div className="flex items-center gap-0.5 rounded-sm border border-border bg-bg p-0.5">
+            <button
+              type="button"
+              onClick={() => pickers.setAll(!pickers.all)}
+              aria-pressed={pickers.all}
+              title={t("ai.contextAllHint")}
+              className={`flex items-center rounded-sm px-2 py-1 text-xs font-medium ${
+                pickers.all
+                  ? "bg-accent text-[var(--qc-bg)]"
+                  : "text-text-secondary hover:text-text-primary"
+              }`}
+            >
+              {t("ai.contextAll")}
+            </button>
+            <span className="mx-0.5 h-4 w-px shrink-0 bg-border" aria-hidden />
             {kinds.map((kind) => (
               <button
                 key={kind}

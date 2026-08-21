@@ -7,6 +7,7 @@ intermediate legacy version converges to v14.
 
 from __future__ import annotations
 
+import contextlib
 import logging
 
 import aiosqlite
@@ -293,6 +294,7 @@ class MigrationChain:
         applied += await self.migrate_v32(app_version)
         applied += await self.migrate_v33(app_version)
         applied += await self.migrate_v34(app_version)
+        applied += await self.migrate_v35(app_version)
         return applied
 
     async def migrate_v34(self, app_version: str) -> list[str]:
@@ -364,6 +366,95 @@ class MigrationChain:
         await cur.execute('update project set databaseversion="v33", about=?', [app_version])
         await self.conn.commit()
         return ["v33"]
+
+    async def migrate_v35(self, app_version: str) -> list[str]:
+        """v35: versioned collaboration sync — adds per-row revision tracking
+        (sync_rev table), conflict persistence (sync_conflict table), and a
+        rev column on sync_log for versioned sidecars. Existing projects
+        get backfilled rev=0 so all rows start from a known baseline."""
+        if self.conn is None:
+            return []
+        cur = await self.conn.cursor()
+        changed = False
+
+        # --- sync_rev table (per-row scalar clock) ---
+        if not await self._has_table(cur, "sync_rev"):
+            await cur.execute(
+                "CREATE TABLE sync_rev (entity text not null, pk text not null, "
+                "rev integer not null default 0, mtime text not null default '', "
+                "origin text not null default '', deleted integer not null default 0, "
+                "primary key (entity, pk))"
+            )
+            await self.conn.commit()
+            changed = True
+
+        # --- sync_conflict table ---
+        if not await self._has_table(cur, "sync_conflict"):
+            await cur.execute(
+                "CREATE TABLE sync_conflict (id integer primary key autoincrement, "
+                "entity text not null, pk text not null, pk_name text not null, "
+                "local_rev integer not null, remote_rev integer not null, "
+                "local_row text, remote_row text, remote_instance text not null, "
+                "remote_coder text not null default '', detected_at text not null, "
+                "resolved_at text, resolution text, merged_row text)"
+            )
+            await cur.execute(
+                "CREATE INDEX IF NOT EXISTS idx_sync_conflict_unresolved "
+                "ON sync_conflict(entity, pk) WHERE resolved_at IS NULL"
+            )
+            await self.conn.commit()
+            changed = True
+
+        # --- add rev column to sync_log if missing ---
+        if await self._has_table(cur, "sync_log") and not await self._has_column(
+            cur, "sync_log", "rev"
+        ):
+            await cur.execute("ALTER TABLE sync_log ADD rev integer default 0")
+            await self.conn.commit()
+            changed = True
+
+        # --- backfill sync_rev from existing data for all sync-eligible tables ---
+        # Only if sync_rev is empty (first migration) and sync_log has data.
+        if changed:
+            await cur.execute("SELECT COUNT(*) FROM sync_rev")
+            count_row = await cur.fetchone()
+            if count_row and count_row[0] == 0:
+                # Tables whose rows travel through the sidecar change log.
+                _sync_tables = (
+                    "project", "source", "code_name", "code_cat", "code_text", "code_image",
+                    "code_av", "annotation", "cases", "case_text", "attribute_type",
+                    "attribute", "journal", "stored_sql", "files_filter",
+                    "graph", "gr_cdct_text_item", "gr_case_text_item", "gr_file_text_item",
+                    "gr_free_text_item", "gr_memo_item", "gr_cdct_line_item",
+                    "gr_free_line_item", "gr_pix_item", "gr_av_item",
+                    "link", "dictionary", "dictionary_entry", "qtt_sheet", "qtt_item",
+                    "creative_item", "comment", "code_set", "code_set_member", "r_script",
+                )
+                for table_name in _sync_tables:
+                    pk_col = await self._get_pk_column(cur, table_name)
+                    if pk_col:
+                        # Insert all existing rows into sync_rev with rev=0
+                        with contextlib.suppress(Exception):
+                            await cur.execute(
+                                f"INSERT OR IGNORE INTO sync_rev (entity, pk, rev, mtime, origin, deleted) "
+                                f"SELECT '{table_name}', CAST({pk_col} AS TEXT), 0, '', '', 0 "
+                                f"FROM {table_name} WHERE {pk_col} IS NOT NULL"
+                            )
+                await self.conn.commit()
+
+        if changed:
+            await cur.execute('update project set databaseversion="v35", about=?', [app_version])
+            await self.conn.commit()
+            return ["v35"]
+        return []
+
+    async def _get_pk_column(self, cur: aiosqlite.Cursor, table: str) -> str | None:
+        """Get the primary key column name for a table."""
+        await cur.execute(f"PRAGMA table_info({table})")
+        for row in await cur.fetchall():
+            if row[5]:  # pk flag is index 5 in PRAGMA table_info
+                return row[1]
+        return None
 
     async def migrate_v21(self, app_version: str) -> list[str]:
         """v21: the ``link`` table — segment hyperlinks between source spans."""

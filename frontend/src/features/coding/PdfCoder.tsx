@@ -1,7 +1,7 @@
 /**
  * PdfCoder — PDF coding workspace: pdf.js page rendering, rectangle region
- * selection with the shared CodePicker, and per-page coded overlays with an
- * inline details/delete panel. Continuous-scroll and single-page modes.
+ * selection with the shared CodePicker, per-page coded overlays with the
+ * memo gutter / details bubble, and continuous- or single-page modes.
  */
 import {
   useCallback,
@@ -11,26 +11,23 @@ import {
   useState,
   type ChangeEvent,
   type MouseEvent as ReactMouseEvent,
+  type ReactNode,
 } from "react";
 import { useAsyncEffect } from "@/lib/useAsync";
 import * as pdfjsLib from "pdfjs-dist";
 import type { PDFDocumentProxy, RenderTask } from "pdfjs-dist";
 import {
-  Check,
   ChevronLeft,
   ChevronRight,
   CircleAlert,
   FileText,
   FileType,
+  Link as LinkIcon,
   LoaderCircle,
-  Minus,
+  MessageSquareText,
   Pencil,
-  Plus,
-  Sparkles,
-  Star,
   Rows3,
-  Trash2,
-  X,
+  Sparkles,
 } from "lucide-react";
 import {
   ApiError,
@@ -48,6 +45,12 @@ import { patchCodingWeight, useCodeIndex } from "@/features/coding/codingApi";
 import { CodePicker, type PickedCode } from "@/features/coding/CodePicker";
 import { AutocodeDialog } from "@/features/coding/AutocodeDialog";
 import { TextCoder } from "@/features/coding/TextCoder";
+import {
+  MemoGutter,
+  MemoGutterBubble,
+  toGutterRow,
+} from "@/features/coding/MemoGutter";
+import { useGutterVisible } from "@/features/coding/viewOptions";
 import {
   buildPageOverlays,
   clampRect,
@@ -147,13 +150,6 @@ type PendingAction =
   | { kind: "region"; pageNumber: number; rect: NormalizedRect }
   | { kind: "text"; pos0: number; pos1: number; seltext: string };
 
-/** The row shown in the details footer: either a page region or a text
- *  segment, always resolved from the LOADED client lists (never from a
- *  freshly created object). */
-type FooterRow =
-  | { kind: "image"; coding: ImageCoding }
-  | { kind: "text"; coding: Coding };
-
 /** String draft of a region's geometry (+ page) while the inline editor
  *  is open. Coordinates are in PDF units; the page is pdf_page-aware. */
 interface RectDraft {
@@ -248,6 +244,12 @@ export function PdfCoder({ source }: { source: Source }) {
   const [textW, setTextW] = useState(420);
   const [textDragging, setTextDragging] = useState(false);
   const textResizeRef = useRef<{ startX: number; startW: number } | null>(null);
+  /** Linked position sync: when both panes are visible, scrolling either
+   *  one keeps the other at the corresponding location. The toolbar link
+   *  button toggles this off/on. */
+  const [autoSync, setAutoSync] = useState(true);
+  /** The embedded plain-text pane's scroll container (set by TextCoder). */
+  const textScrollElRef = useRef<HTMLElement | null>(null);
   const [autoOpen, setAutoOpen] = useState(false);
   const [codings, setCodings] = useState<ImageCoding[]>([]);
   const [textCodings, setTextCodings] = useState<Coding[]>([]);
@@ -279,20 +281,20 @@ export function PdfCoder({ source }: { source: Source }) {
   const [selectedImid, setSelectedImid] = useState<number | null>(null);
   const [selectedTextCtid, setSelectedTextCtid] = useState<number | null>(null);
   const [editDraft, setEditDraft] = useState<RectDraft | null>(null);
-  /** Draft while the footer's memo field is being edited inline (null =
-   *  not editing). */
-  const [memoDraft, setMemoDraft] = useState<string | null>(null);
-  /** Inline error line inside the details footer: a background refresh of
-   *  the codings failed while a segment is selected — the footer keeps
+  /** Inline error line inside the details bubble: a background refresh of
+   *  the codings failed while a segment is selected — the bubble keeps
    *  showing the client-side data instead of vanishing or toasting a bare
    *  "Failed to fetch". */
   const [footerError, setFooterError] = useState<string | null>(null);
   /** Freshly created text coding flashed on its matched overlay (~2s). */
   const [flashTextCtid, setFlashTextCtid] = useState<number | null>(null);
   const flashTextTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /** Bumped whenever overlays/page geometry change, so the memo gutter
+   *  re-measures its card anchors. */
+  const [measureTick, setMeasureTick] = useState(0);
+  const [gutterVisible, toggleGutter] = useGutterVisible();
 
   const containerRef = useRef<HTMLDivElement | null>(null);
-  const footerRef = useRef<HTMLDivElement | null>(null);
   const canvasRefs = useRef(new Map<number, HTMLCanvasElement>());
   const dragRef = useRef(drag);
   const pendingRectRef = useRef(pendingRect);
@@ -337,6 +339,142 @@ export function PdfCoder({ source }: { source: Source }) {
 
   const numPages = pdf?.numPages ?? 0;
   const scale = zoom === "fit" ? fittedScale : zoom;
+
+  /* ------------------------------------------------- linked position sync */
+
+  /** Approximate character offset where each page begins in the extracted
+   *  fulltext. Per-page weights come from the pdf.js text items (so a text-
+   *  dense page maps to more characters than a sparse one), normalized to
+   *  the fulltext length; falls back to uniform pages when no items are
+   *  loaded yet. Piecewise-linear interpolation over these offsets is what
+   *  keeps the linked scrolling smooth instead of snapping per page. */
+  const pageCharOffsets = useMemo(() => {
+    const len = source?.fulltext?.length ?? 0;
+    const raw: number[] = [];
+    let sum = 0;
+    for (let p = 1; p <= numPages; p++) {
+      let c = 0;
+      for (const it of textItems.get(p) ?? []) c += (it.str?.length ?? 0) + 1;
+      raw.push(c);
+      sum += c;
+    }
+    const k = sum > 0 && len > 0 ? len / sum : 0;
+    const starts: number[] = new Array(Math.max(0, numPages));
+    let acc = 0;
+    for (let i = 0; i < numPages; i++) {
+      starts[i] = acc;
+      acc += numPages > 0 && k === 0 ? len / numPages : raw[i] * k;
+    }
+    return { starts, total: len > 0 ? len : acc };
+  }, [textItems, numPages, source?.fulltext]);
+
+  // When both panes are visible and autoSync is on, scrolling either pane
+  // scrolls the other to the corresponding location (piecewise-linear page
+  // interpolation, rAF-throttled). A short-lived lock on the receiving side
+  // suppresses the feedback loop from our own programmatic scrolls.
+  useEffect(() => {
+    if (!autoSync || !pdfVisible || !plainVisible) return;
+    const pdfEl = containerRef.current;
+    if (!pdfEl) return;
+    const lock = { pdf: 0, text: 0 };
+
+    /** Character offset matching the PDF's current scroll position:
+     *  the top-visible page plus the fractional progress into it. */
+    const posFromPdf = (): number | null => {
+      const cRect = pdfEl.getBoundingClientRect();
+      for (const el of Array.from(pdfEl.querySelectorAll<HTMLElement>("[data-page]"))) {
+        const r = el.getBoundingClientRect();
+        if (r.bottom <= cRect.top + 1) continue;
+        const p = Number(el.dataset.page);
+        if (!Number.isFinite(p) || p < 1) continue;
+        const start = pageCharOffsets.starts[p - 1] ?? 0;
+        const end =
+          p < pageCharOffsets.starts.length ? pageCharOffsets.starts[p] : pageCharOffsets.total;
+        const frac = r.height > 0 ? Math.min(1, Math.max(0, (cRect.top - r.top) / r.height)) : 0;
+        return start + frac * (end - start);
+      }
+      return null;
+    };
+
+    /** Scroll the PDF so that character offset `pos` sits at the top edge,
+     *  interpolating inside the containing page. */
+    const scrollPdfToPos = (pos: number) => {
+      const { starts, total } = pageCharOffsets;
+      const n = starts.length;
+      if (n === 0) return;
+      let p = n;
+      for (let i = 0; i < n; i++) {
+        const end = i + 1 < n ? starts[i + 1] : total;
+        if (pos <= end || i === n - 1) {
+          p = i + 1;
+          break;
+        }
+      }
+      const start = starts[p - 1] ?? 0;
+      const end = p < n ? starts[p] : total;
+      const frac = end > start ? Math.min(1, Math.max(0, (pos - start) / (end - start))) : 0;
+      const pageEl = pdfEl.querySelector<HTMLElement>(`[data-page="${p}"]`);
+      if (!pageEl) return;
+      const r = pageEl.getBoundingClientRect();
+      const c = pdfEl.getBoundingClientRect();
+      pdfEl.scrollTop = pdfEl.scrollTop + (r.top - c.top) + frac * r.height;
+    };
+
+    const ratioOf = (el: HTMLElement) => {
+      const range = el.scrollHeight - el.clientHeight;
+      return range > 0 ? el.scrollTop / range : 0;
+    };
+    const setRatio = (el: HTMLElement | null, ratio: number) => {
+      if (!el) return;
+      const range = el.scrollHeight - el.clientHeight;
+      el.scrollTop = Math.min(1, Math.max(0, ratio)) * Math.max(0, range);
+    };
+
+    let rafPdf = 0;
+    let rafText = 0;
+    const onPdfScroll = () => {
+      if (Date.now() < lock.pdf) return;
+      cancelAnimationFrame(rafPdf);
+      rafPdf = requestAnimationFrame(() => {
+        const t = textScrollElRef.current;
+        const pos = posFromPdf();
+        if (t && pos != null && pageCharOffsets.total > 0) {
+          lock.text = Date.now() + 250;
+          setRatio(t, pos / pageCharOffsets.total);
+        }
+      });
+    };
+    const onTextScroll = () => {
+      if (Date.now() < lock.text) return;
+      cancelAnimationFrame(rafText);
+      rafText = requestAnimationFrame(() => {
+        const t = textScrollElRef.current;
+        if (!t || pageCharOffsets.total <= 0) return;
+        const pos = ratioOf(t) * pageCharOffsets.total;
+        lock.pdf = Date.now() + 250;
+        scrollPdfToPos(pos);
+      });
+    };
+
+    pdfEl.addEventListener("scroll", onPdfScroll, { passive: true });
+    // The TextCoder (and thus its scroll element) mounts asynchronously —
+    // retry until the ref is populated.
+    let textEl = textScrollElRef.current;
+    let retryTimer = 0;
+    const attachText = () => {
+      textEl = textScrollElRef.current;
+      if (textEl) textEl.addEventListener("scroll", onTextScroll, { passive: true });
+      else retryTimer = window.setTimeout(attachText, 100);
+    };
+    attachText();
+    return () => {
+      cancelAnimationFrame(rafPdf);
+      cancelAnimationFrame(rafText);
+      pdfEl.removeEventListener("scroll", onPdfScroll);
+      window.clearTimeout(retryTimer);
+      textEl?.removeEventListener("scroll", onTextScroll);
+    };
+  }, [autoSync, pdfVisible, plainVisible, pageCharOffsets]);
 
   /* ---------------------------------------------------------------- load */
 
@@ -438,6 +576,8 @@ export function PdfCoder({ source }: { source: Source }) {
       signal.throwIfAborted();
       setPageSizes(sizes);
       setTextItems(items);
+      // Overlays (and thus gutter anchors) can now be built — re-measure.
+      setMeasureTick((n) => n + 1);
     } catch (e) {
       signal.throwIfAborted();
       setPdfError(errorMessage(e, t("pdfCoder.loadDocumentError")));
@@ -495,6 +635,11 @@ export function PdfCoder({ source }: { source: Source }) {
     // PDF pane, which unmounts the page canvases.
   }, [pdf, scale, currentPage, continuous, pdfVisible, t]);
 
+  // Zoom / pane-layout changes move the overlays — re-measure gutter anchors.
+  useEffect(() => {
+    setMeasureTick((n) => n + 1);
+  }, [scale, continuous, currentPage, pdfVisible]);
+
   /* ---------------------------------------------------------------- fit */
 
   const applyFit = useCallback(async () => {
@@ -536,23 +681,6 @@ export function PdfCoder({ source }: { source: Source }) {
     [selectedImid, codings],
   );
 
-  const selectedTextCoding = useMemo(
-    () =>
-      selectedTextCtid != null
-        ? textCodings.find((c) => c.ctid === selectedTextCtid) ?? null
-        : null,
-    [selectedTextCtid, textCodings],
-  );
-
-  /** The details footer renders ONLY from the loaded client lists — the
-   *  selected row must exist in them, so a row deleted elsewhere just
-   *  closes the footer. */
-  const footerRow = useMemo<FooterRow | null>(() => {
-    if (selectedCoding) return { kind: "image", coding: selectedCoding };
-    if (selectedTextCoding) return { kind: "text", coding: selectedTextCoding };
-    return null;
-  }, [selectedCoding, selectedTextCoding]);
-
   /** Text codings mapped back onto their pages' pdf.js items (best-effort
    *  word matching) so they show as overlays in the rendered view. */
   const textOverlays = useMemo(() => {
@@ -577,18 +705,6 @@ export function PdfCoder({ source }: { source: Source }) {
     }
     return out;
   }, [textCodings, textItems, colorByCid]);
-
-  /** Best-effort page number of a text coding (the page whose items
-   *  matched its text); used for the footer's page label. */
-  const pageByTextCtid = useMemo(() => {
-    const m = new Map<number, number>();
-    for (const [page, list] of textOverlays) {
-      for (const ov of list) {
-        if (!m.has(ov.ctid)) m.set(ov.ctid, page);
-      }
-    }
-    return m;
-  }, [textOverlays]);
 
   /* ------------------------------------------------------------- actions */
 
@@ -619,10 +735,204 @@ export function PdfCoder({ source }: { source: Source }) {
     try {
       setCodes(await api.codesFlat());
     } catch (e) {
-      // Fallback names/colors stay; the footer renders from client state.
+      // Fallback names/colors stay; the bubble renders from client state.
       console.warn("[pdf coder] codes refresh failed:", e);
     }
   }, []);
+
+  /* ---- memo gutter (anchored to the rendered PDF pages) ---------------
+     Both region (image) codings and text codings render as overlays carrying
+     a `data-ctid` marker, so the gutter can measure their vertical position
+     inside the PDF scroll container even when the plain-text pane is hidden.
+     The gutter's id is the image coding's `imid` for regions and the text
+     coding's real `ctid` for text segments; callbacks route back by kind. */
+  const gutterRows = useMemo(() => {
+    const rows = [];
+    for (const c of codings) {
+      rows.push(
+        toGutterRow(
+          {
+            id: c.imid,
+            kind: "image",
+            memo: c.memo,
+            weight: (c as ImageCoding & { weight?: number }).weight,
+            important: c.important,
+            date: c.date,
+          },
+          byId.get(c.cid),
+          t("coder.fallbackCode", { id: c.cid }),
+        ),
+      );
+    }
+    for (const c of textCodings) {
+      rows.push(
+        toGutterRow(
+          {
+            id: c.ctid,
+            kind: "text",
+            memo: c.memo,
+            weight: (c as Coding & { weight?: number }).weight,
+            important: c.important,
+            date: c.date,
+            seltext: c.seltext,
+          },
+          byId.get(c.cid),
+          t("coder.fallbackCode", { id: c.cid }),
+        ),
+      );
+    }
+    return rows;
+  }, [codings, textCodings, byId, t]);
+
+  const isImageGutterId = useCallback(
+    (id: number) => codings.some((c) => c.imid === id),
+    [codings],
+  );
+
+  const gutterUpdate = useCallback(
+    (id: number, patch: { memo?: string; weight?: number }, refresh: () => Promise<void>) => {
+      const kind: "text" | "image" = isImageGutterId(id) ? "image" : "text";
+      void (async () => {
+        try {
+          if (patch.memo !== undefined) {
+            await patchCodingRow(kind, id, { memo: patch.memo });
+          }
+          if (patch.weight !== undefined) {
+            await patchCodingWeight(kind, id, patch.weight);
+          }
+          await refresh();
+        } catch (e) {
+          setErrMsg(errorMessage(e, t("coder.memoUpdateError")));
+        }
+      })();
+    },
+    [isImageGutterId, t],
+  );
+
+  const gutterDelete = useCallback(
+    (id: number) => {
+      void (async () => {
+        try {
+          const kind: "text" | "image" = isImageGutterId(id) ? "image" : "text";
+          if (kind === "image") {
+            await api.deleteImageCoding(id);
+          } else {
+            await api.deleteTextCoding(id);
+          }
+          clearSelection();
+          if (kind === "image") await refreshCodings();
+          else await refreshTextCodings();
+        } catch (e) {
+          setErrMsg(errorMessage(e, t("coder.removeError")));
+        }
+      })();
+    },
+    [isImageGutterId, refreshCodings, refreshTextCodings, t],
+  );
+
+  /** Toggle the important flag of a gutter/bubble row (by id). */
+  function gutterToggleImportant(id: number) {
+    const row = gutterRows.find((r) => r.id === id);
+    if (!row) return;
+    const next = row.important ? 0 : 1;
+    void (async () => {
+      try {
+        if (isImageGutterId(id)) {
+          await patchCodingRow("image", id, { important: next });
+          await refreshCodings();
+        } else {
+          await patchCodingRow("text", id, { important: next });
+          await refreshTextCodings();
+        }
+      } catch (e) {
+        setErrMsg(errorMessage(e, t("pdfCoder.updateError")));
+      }
+    })();
+  }
+
+  /** The details bubble's segment id (image imid or text ctid). */
+  const bubbleCtid = useMemo(
+    () => selectedImid ?? selectedTextCtid,
+    [selectedImid, selectedTextCtid],
+  );
+
+  /** Rows for the floating details bubble (hidden-gutter mode) — the SAME
+   *  GutterRow shape the gutter cards render, resolved from client state. */
+  const bubbleRows = useMemo(
+    () => (bubbleCtid != null ? gutterRows.filter((r) => r.id === bubbleCtid) : []),
+    [gutterRows, bubbleCtid],
+  );
+
+  /** Per-row extension below an expanded card: the region-geometry editor
+   *  for image codings (shared by gutter cards AND the details bubble, so
+   *  both surfaces offer identical functions). Also surfaces refresh errors
+   *  that used to live in the deprecated bottom bar. */
+  function gutterExtrasFor(id: number): ReactNode {
+    const row = codings.find((c) => c.imid === id);
+    const isSelected = selectedCoding != null && selectedCoding.imid === id;
+    if (!row || !isSelected) {
+      return footerError ? (
+        <p className="flex items-center gap-1.5 pt-1 text-xs text-warning">
+          <CircleAlert size={12} aria-hidden />
+          {footerError}
+        </p>
+      ) : null;
+    }
+    return (
+      <div className="pt-1">
+        {footerError && (
+          <p className="mb-1 flex items-center gap-1.5 text-xs text-warning">
+            <CircleAlert size={12} aria-hidden />
+            {footerError}
+          </p>
+        )}
+        {!editDraft ? (
+          <Button
+            variant="toolbar"
+            icon={<Pencil size={12} aria-hidden />}
+            onClick={() => startEditGeometry(row)}
+          >
+            {t("pdfCoder.editRegion")}
+          </Button>
+        ) : (
+          <div className="flex flex-wrap items-end gap-2 rounded-sm border border-border bg-bg px-2 py-1.5">
+            <CoordField
+              label={t("imageCoder.x")}
+              value={editDraft.x1}
+              onChange={(v) => setEditDraft((d) => (d ? { ...d, x1: v } : d))}
+            />
+            <CoordField
+              label={t("imageCoder.y")}
+              value={editDraft.y1}
+              onChange={(v) => setEditDraft((d) => (d ? { ...d, y1: v } : d))}
+            />
+            <CoordField
+              label={t("imageCoder.w")}
+              value={editDraft.width}
+              onChange={(v) => setEditDraft((d) => (d ? { ...d, width: v } : d))}
+            />
+            <CoordField
+              label={t("imageCoder.h")}
+              value={editDraft.height}
+              onChange={(v) => setEditDraft((d) => (d ? { ...d, height: v } : d))}
+            />
+            <CoordField
+              label={t("imageCoder.page")}
+              value={editDraft.page}
+              onChange={(v) => setEditDraft((d) => (d ? { ...d, page: v } : d))}
+            />
+            <div className="flex-1" />
+            <Button variant="secondary" onClick={() => setEditDraft(null)}>
+              {t("common.cancel")}
+            </Button>
+            <Button variant="primaryCompact" onClick={() => void applyEditGeometry()}>
+              {t("common.apply")}
+            </Button>
+          </div>
+        )}
+      </div>
+    );
+  }
 
   /** Flash a freshly created text coding's overlay and scroll its page into
    *  view (the text overlays are best-effort word matches, so a missing
@@ -633,9 +943,19 @@ export function PdfCoder({ source }: { source: Source }) {
       if (!coding || !coding.seltext) return;
       for (const [page, items] of textItems) {
         if (matchCodingItems(items, coding.seltext)) {
-          containerRef.current
-            ?.querySelector(`[data-page="${page}"]`)
-            ?.scrollIntoView({ block: "nearest" });
+          // Scroll only the PDF's own container — scrollIntoView would also
+          // shift outer ancestors (app shell/window).
+          const pageEl = containerRef.current?.querySelector<HTMLElement>(
+            `[data-page="${page}"]`,
+          );
+          const scrollEl = containerRef.current;
+          if (pageEl && scrollEl) {
+            const r = pageEl.getBoundingClientRect();
+            const c = scrollEl.getBoundingClientRect();
+            if (r.top < c.top || r.bottom > c.bottom) {
+              scrollEl.scrollTo({ top: scrollEl.scrollTop + r.top - c.top, behavior: "smooth" });
+            }
+          }
           break;
         }
       }
@@ -669,13 +989,12 @@ export function PdfCoder({ source }: { source: Source }) {
     return Math.min(Math.max(1, p), Math.max(1, numPages));
   }
 
-  /** Close the details footer (pure client state — nothing is fetched or
+  /** Close the details bubble (pure client state — nothing is fetched or
    *  written). */
   function clearSelection() {
     setSelectedImid(null);
     setSelectedTextCtid(null);
     setEditDraft(null);
-    setMemoDraft(null);
   }
 
   function setCanvasRef(pageNumber: number, el: HTMLCanvasElement | null) {
@@ -926,114 +1245,30 @@ export function PdfCoder({ source }: { source: Source }) {
     return () => window.removeEventListener("keydown", onKey);
   }, [pickerOpen]);
 
-  // Click-away closes the details footer. Overlay mousedowns stop
-  // propagation, so a click that SELECTS a segment never reaches this
-  // handler; any other mousedown (page, bars, dialogs) dismisses it.
+  // Click-away clears the selection. Overlay mousedowns stop propagation,
+  // so a click that SELECTS a segment never reaches this handler; the
+  // details bubble dismisses itself (its own outside-click handler), and
+  // gutter clicks are excluded via [data-gutter].
   useEffect(() => {
     const onDown = (e: MouseEvent) => {
       const target = e.target instanceof Node ? e.target : null;
-      if (!target || footerRef.current?.contains(target)) return;
+      if (!target) return;
+      if ((target as HTMLElement).closest?.("[data-gutter]")) return;
       clearSelection();
     };
     document.addEventListener("mousedown", onDown);
     return () => document.removeEventListener("mousedown", onDown);
   }, []);
 
-  function handlePickCode(picked: PickedCode) {
+  function handlePickCode(picked: PickedCode[]) {
     setPickerOpen(false);
-    if (pendingActionRef.current?.kind === "text") {
-      codePendingText(picked.cid);
-    } else {
-      codePendingRect(picked.cid);
+    for (const p of picked) {
+      if (pendingActionRef.current?.kind === "text") {
+        codePendingText(p.cid);
+      } else {
+        codePendingRect(p.cid);
+      }
     }
-  }
-
-  function deleteRow(row: FooterRow) {
-    const code = byId.get(row.coding.cid);
-    if (!window.confirm(t("pdfCoder.removeConfirm", { name: code?.name ?? t("coder.fallbackCodeLower", { id: row.coding.cid }) }))) return;
-    void (async () => {
-      try {
-        if (row.kind === "image") {
-          await api.deleteImageCoding(row.coding.imid);
-        } else {
-          await api.deleteTextCoding(row.coding.ctid);
-        }
-        clearSelection();
-        if (row.kind === "image") {
-          await refreshCodings();
-        } else {
-          await refreshTextCodings();
-        }
-      } catch (e) {
-        setErrMsg(errorMessage(e, t("coder.removeError")));
-      }
-    })();
-  }
-
-  /** Segment weight (backend rows carry it; 0 = no weight). */
-  const rowWeight = (row: FooterRow): number =>
-    (row.coding as FooterRow["coding"] & { weight?: number }).weight ?? 0;
-
-  /** Stepper update of a segment's weight (0-100; 0 = no weight). */
-  function updateRowWeight(row: FooterRow, weight: number) {
-    void (async () => {
-      try {
-        if (row.kind === "image") {
-          await patchCodingWeight("image", row.coding.imid, weight);
-          await refreshCodings();
-        } else {
-          await patchCodingWeight("text", row.coding.ctid, weight);
-          await refreshTextCodings();
-        }
-      } catch (e) {
-        setErrMsg(errorMessage(e, t("coder.weightError")));
-      }
-    })();
-  }
-
-  /** Open the footer's inline memo editor for the selected row. */
-  function startEditMemo() {
-    if (!footerRow) return;
-    setMemoDraft(footerRow.coding.memo ?? "");
-  }
-
-  /** Save the memo draft for the selected row, then refresh its list. */
-  function saveMemo() {
-    if (memoDraft == null || !footerRow) return;
-    const draft = memoDraft;
-    setMemoDraft(null);
-    void (async () => {
-      try {
-        if (footerRow.kind === "image") {
-          await patchCodingRow("image", footerRow.coding.imid, { memo: draft });
-          await refreshCodings();
-        } else {
-          await patchCodingRow("text", footerRow.coding.ctid, { memo: draft });
-          await refreshTextCodings();
-        }
-      } catch (e) {
-        setErrMsg(errorMessage(e, t("pdfCoder.updateError")));
-      }
-    })();
-  }
-
-  /** Toggle the important flag of the selected row. */
-  function toggleImportant() {
-    if (!footerRow) return;
-    const next = footerRow.coding.important ? 0 : 1;
-    void (async () => {
-      try {
-        if (footerRow.kind === "image") {
-          await patchCodingRow("image", footerRow.coding.imid, { important: next });
-          await refreshCodings();
-        } else {
-          await patchCodingRow("text", footerRow.coding.ctid, { important: next });
-          await refreshTextCodings();
-        }
-      } catch (e) {
-        setErrMsg(errorMessage(e, t("pdfCoder.updateError")));
-      }
-    })();
   }
 
   function startEditGeometry(row: ImageCoding) {
@@ -1178,8 +1413,9 @@ export function PdfCoder({ source }: { source: Source }) {
               <div className="mx-1 h-4 w-px bg-border" aria-hidden />
               <Button
                 variant="toolbar"
-                className={cn(continuous && "border-accent text-accent")}
+                className={cn(continuous && "border-accent text-accent qc-glow")}
                 onClick={() => setContinuous((c) => !c)}
+                aria-pressed={continuous}
                 icon={<Rows3 size={12} aria-hidden />}
               >
                 {t("pdfCoder.continuous")}
@@ -1221,6 +1457,32 @@ export function PdfCoder({ source }: { source: Source }) {
               >
                 {t("pdfCoder.pdfView")}
               </Button>
+
+              {/* Linked position sync toggle: when both panes are shown the
+                  views follow each other; click to turn the linking off. */}
+              <IconButton
+                label={t("pdfCoder.linkPosition")}
+                title={t("pdfCoder.linkPosition")}
+                size="sm"
+                disabled={!plainVisible || !pdfVisible}
+                aria-pressed={autoSync}
+                onClick={() => setAutoSync((v) => !v)}
+                className={cn(autoSync && "border-accent text-accent qc-glow")}
+              >
+                <LinkIcon size={14} aria-hidden />
+              </IconButton>
+
+              <div className="mx-1 h-4 w-px bg-border" aria-hidden />
+              <Button
+                variant="toolbar"
+                icon={<MessageSquareText size={12} aria-hidden />}
+                onClick={toggleGutter}
+                className={cn(gutterVisible && "border-accent text-accent qc-glow")}
+                aria-pressed={gutterVisible}
+                title={gutterVisible ? t("coder.hideMemos") : t("coder.showMemos")}
+              >
+                {t("coder.memosToggle")}
+              </Button>
             </div>
           </>
         }
@@ -1229,8 +1491,44 @@ export function PdfCoder({ source }: { source: Source }) {
       {errMsg && <ErrorBanner onClose={() => setErrMsg(null)}>{errMsg}</ErrorBanner>}
 
       <div className="flex min-h-0 flex-1">
+        {plainVisible && (
+          <div
+            className={cn(
+              "flex min-h-0 flex-col overflow-hidden bg-bg",
+              pdfVisible ? "shrink-0" : "flex-1",
+            )}
+            style={pdfVisible ? { width: textW } : undefined}
+          >
+            <TextCoder
+              sourceId={source.id}
+              forceText
+              bare
+              codings={textCodings}
+              annotations={annotations}
+              codes={codes}
+              onCodingsChange={setTextCodings}
+              onAnnotationsChange={setAnnotations}
+              onCodesChange={setCodes}
+              scrollElRef={textScrollElRef}
+              suppressGutter={pdfVisible}
+            />
+          </div>
+        )}
+        {pdfVisible && plainVisible && (
+          <div
+            onMouseDown={startTextResize}
+            className={cn(
+              "w-1 shrink-0 cursor-col-resize border-l border-border",
+              textDragging ? "bg-accent/40" : "bg-surface hover:bg-accent/40",
+            )}
+            role="separator"
+            aria-orientation="vertical"
+            aria-label="Resize text panel"
+            title="Resize text panel"
+          />
+        )}
         {pdfVisible && (
-          <div ref={containerRef} className="min-h-0 min-w-0 flex-1 overflow-y-auto bg-bg">
+          <div ref={containerRef} className="relative min-h-0 min-w-0 flex-1 overflow-y-auto bg-bg">
             <div className="mx-auto flex w-max min-w-full flex-col items-center gap-4 p-6">
             {pageNumbers.map((p) => {
               const size = pageSizes.get(p);
@@ -1252,6 +1550,7 @@ export function PdfCoder({ source }: { source: Source }) {
                   {overlays.map((o) => (
                     <div
                       key={o.key}
+                      data-ctid={o.key}
                       className={cn(
                         "absolute cursor-pointer qc-seg",
                         hiddenCodes.includes(o.coding.cid) && "qc-seg-hidden",
@@ -1303,6 +1602,7 @@ export function PdfCoder({ source }: { source: Source }) {
                     ov.items.map((it, i) => (
                       <div
                         key={`t-${ov.ctid}-${i}`}
+                        data-ctid={ov.ctid}
                         className={cn(
                           "pointer-events-none absolute qc-seg",
                           hiddenCodes.includes(
@@ -1355,230 +1655,74 @@ export function PdfCoder({ source }: { source: Source }) {
               );
             })}
           </div>
-        </div>
-        )}
-        {pdfVisible && plainVisible && (
-          <div
-            onMouseDown={startTextResize}
-            className={cn(
-              "w-1 shrink-0 cursor-col-resize border-r border-border",
-              textDragging ? "bg-accent/40" : "bg-surface hover:bg-accent/40",
-            )}
-            role="separator"
-            aria-orientation="vertical"
-            aria-label="Resize text panel"
-            title="Resize text panel"
-          />
-        )}
-        {plainVisible && (
-          <div
-            className={cn(
-              "flex min-h-0 flex-col overflow-hidden bg-bg",
-              pdfVisible ? "shrink-0" : "flex-1",
-            )}
-            style={pdfVisible ? { width: textW } : undefined}
-          >
-            <TextCoder
-              sourceId={source.id}
-              forceText
-              bare
-              codings={textCodings}
-              annotations={annotations}
-              codes={codes}
-              onCodingsChange={setTextCodings}
-              onAnnotationsChange={setAnnotations}
-              onCodesChange={setCodes}
-            />
-          </div>
-        )}
-      </div>
-
-      {footerRow && (
-        <div ref={footerRef} className="shrink-0 border-t border-border bg-surface px-3 py-2">
-          {footerError && (
-            <p className="mb-1.5 flex items-center gap-1.5 text-xs text-warning">
-              <CircleAlert size={12} aria-hidden />
-              {footerError}
-            </p>
-          )}
-          <div className="flex items-center gap-2">
-            <span className="text-xs font-medium text-text-secondary">{t("coder.codingDetails")}</span>
-            <div className="flex-1" />
-            <IconButton label={t("common.closeDetails")} size="sm" onClick={clearSelection}>
-              <X size={14} aria-hidden />
-            </IconButton>
-          </div>
-          <ul className="mt-1.5 space-y-1.5">
-            <li className="flex items-center gap-2 rounded-sm border border-border bg-bg px-2 py-1.5 text-sm">
-              <span
-                className="h-3 w-3 shrink-0 rounded-sm border border-border"
-                style={{
-                  backgroundColor: byId.get(footerRow.coding.cid)?.color ?? DEFAULT_CODING_COLOR,
+          {/* Gutter anchored to the PDF overlays. When only the plain text
+              pane is shown, TextCoder's own internal gutter takes over
+              (same global toggle), anchored to the text spans. */}
+          {gutterVisible && pdfVisible && (
+            <div className="absolute top-0 bottom-0 right-0 z-10">
+              <MemoGutter
+                rows={gutterRows}
+                selectedIds={
+                  selectedImid != null
+                    ? [selectedImid]
+                    : selectedTextCtid != null
+                      ? [selectedTextCtid]
+                      : []
+                }
+                scrollRef={containerRef}
+                anchorOf={(id) =>
+                  containerRef.current?.querySelector<HTMLElement>(`[data-ctid="${id}"]`) ?? null
+                }
+                onSelect={(id) => {
+                  if (isImageGutterId(id)) {
+                    setSelectedTextCtid(null);
+                    setEditDraft(null);
+                    setSelectedImid(id);
+                    setFooterError(null);
+                  } else {
+                    setSelectedImid(null);
+                    setEditDraft(null);
+                    setSelectedTextCtid(id);
+                    setFooterError(null);
+                  }
                 }}
-                aria-hidden
+                onDeselect={() => clearSelection()}
+                onUpdateMemo={(id, memo) =>
+                  gutterUpdate(id, { memo }, isImageGutterId(id) ? refreshCodings : refreshTextCodings)
+                }
+                onUpdateWeight={(id, weight) =>
+                  gutterUpdate(id, { weight }, isImageGutterId(id) ? refreshCodings : refreshTextCodings)
+                }
+                onDelete={gutterDelete}
+                onToggleImportant={gutterToggleImportant}
+                extrasFor={gutterExtrasFor}
+                visible={gutterVisible}
+                measureSignal={measureTick}
               />
-              <span className="font-medium">
-                {byId.get(footerRow.coding.cid)?.name ?? t("coder.fallbackCode", { id: footerRow.coding.cid })}
-              </span>
-              {footerRow.kind === "text" && footerRow.coding.seltext && (
-                <span className="max-w-48 truncate text-xs text-text-secondary" title={footerRow.coding.seltext}>
-                  {footerRow.coding.seltext}
-                </span>
-              )}
-              <span
-                className="text-xs text-text-secondary"
-                title={footerRow.coding.date ? t("pdfCoder.codedOn", { date: footerRow.coding.date }) : undefined}
-                aria-label={footerRow.coding.date ? t("pdfCoder.codedOn", { date: footerRow.coding.date }) : undefined}
-              >
-                {t("pdfCoder.pageLabel", {
-                  page:
-                    footerRow.kind === "image"
-                      ? footerRow.coding.pdf_page ?? "?"
-                      : pageByTextCtid.get(footerRow.coding.ctid) ?? "?",
-                })}
-              </span>
-
-              {memoDraft != null ? (
-                <div className="flex items-center gap-1">
-                  <Input
-                    value={memoDraft}
-                    placeholder={t("pdfCoder.memoPlaceholder")}
-                    aria-label={t("pdfCoder.memoPlaceholder")}
-                    className="w-48"
-                    onChange={(e) => setMemoDraft(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter") void saveMemo();
-                    }}
-                  />
-                  <Button
-                    variant="toolbarIconPrimary"
-                    icon={<Check size={12} aria-hidden />}
-                    title={t("common.save")}
-                    aria-label={t("common.save")}
-                    onClick={() => void saveMemo()}
-                  />
-                  <Button
-                    variant="toolbarIcon"
-                    icon={<X size={12} aria-hidden />}
-                    title={t("common.cancel")}
-                    aria-label={t("common.cancel")}
-                    onClick={() => setMemoDraft(null)}
-                  />
-                </div>
-              ) : (
-                <button
-                  type="button"
-                  onClick={startEditMemo}
-                  title={t("pdfCoder.editMemo")}
-                  className="flex min-w-0 max-w-64 items-center gap-1 text-left text-xs text-text-secondary hover:text-text-primary"
-                >
-                  {footerRow.coding.memo ? (
-                    <span className="truncate">{footerRow.coding.memo}</span>
-                  ) : (
-                    <span className="italic">{t("coder.noMemoInline")}</span>
-                  )}
-                  <Pencil size={10} aria-hidden />
-                </button>
-              )}
-
-              <span className="flex items-center gap-1">
-                <span className="text-xs text-text-secondary">{t("coder.weight")}</span>
-                <Button
-                  variant="toolbarIcon"
-                  icon={<Minus size={12} aria-hidden />}
-                  title={t("coder.weightDec")}
-                  aria-label={t("coder.weightDec")}
-                  disabled={rowWeight(footerRow) === 0}
-                  onClick={() => updateRowWeight(footerRow, rowWeight(footerRow) - 1)}
-                />
-                <span
-                  className="min-w-5 text-center text-xs text-text-secondary"
-                  aria-label={t("coder.weight")}
-                >
-                  {rowWeight(footerRow)}
-                </span>
-                <Button
-                  variant="toolbarIcon"
-                  icon={<Plus size={12} aria-hidden />}
-                  title={t("coder.weightInc")}
-                  aria-label={t("coder.weightInc")}
-                  disabled={rowWeight(footerRow) >= 100}
-                  onClick={() => updateRowWeight(footerRow, rowWeight(footerRow) + 1)}
-                />
-              </span>
-              <IconButton
-                label={t("pdfCoder.importantToggle")}
-                title={t("pdfCoder.importantToggle")}
-                size="sm"
-                className={cn(footerRow.coding.important !== 0 && "text-warning")}
-                onClick={toggleImportant}
-              >
-                <Star
-                  size={14}
-                  className={footerRow.coding.important !== 0 ? "fill-current" : ""}
-                  aria-hidden
-                />
-              </IconButton>
-              <div className="flex-1" />
-              {footerRow.kind === "image" && !editDraft && (
-                <IconButton
-                  label={t("pdfCoder.editRegion")}
-                  title={t("pdfCoder.editRegion")}
-                  size="sm"
-                  onClick={() => startEditGeometry(footerRow.coding)}
-                >
-                  <Pencil size={14} aria-hidden />
-                </IconButton>
-              )}
-              <IconButton
-                label={t("coder.removeThis")}
-                title={t("coder.removeThis")}
-                size="sm"
-                onClick={() => deleteRow(footerRow)}
-                className="hover:text-danger"
-              >
-                <Trash2 size={14} aria-hidden />
-              </IconButton>
-            </li>
-          </ul>
-          {editDraft && (
-            <div className="mt-1.5 flex flex-wrap items-end gap-2 rounded-sm border border-border bg-bg px-2 py-1.5">
-              <CoordField
-                label={t("imageCoder.x")}
-                value={editDraft.x1}
-                onChange={(v) => setEditDraft((d) => (d ? { ...d, x1: v } : d))}
-              />
-              <CoordField
-                label={t("imageCoder.y")}
-                value={editDraft.y1}
-                onChange={(v) => setEditDraft((d) => (d ? { ...d, y1: v } : d))}
-              />
-              <CoordField
-                label={t("imageCoder.w")}
-                value={editDraft.width}
-                onChange={(v) => setEditDraft((d) => (d ? { ...d, width: v } : d))}
-              />
-              <CoordField
-                label={t("imageCoder.h")}
-                value={editDraft.height}
-                onChange={(v) => setEditDraft((d) => (d ? { ...d, height: v } : d))}
-              />
-              <CoordField
-                label={t("imageCoder.page")}
-                value={editDraft.page}
-                onChange={(v) => setEditDraft((d) => (d ? { ...d, page: v } : d))}
-              />
-              <div className="flex-1" />
-              <Button variant="secondary" onClick={() => setEditDraft(null)}>
-                {t("common.cancel")}
-              </Button>
-              <Button variant="primaryCompact" onClick={() => void applyEditGeometry()}>
-                {t("common.apply")}
-              </Button>
             </div>
           )}
         </div>
+        )}
+      </div>
+
+      {!gutterVisible && bubbleRows.length > 0 && (
+        <MemoGutterBubble
+          rows={bubbleRows}
+          scrollRef={containerRef}
+          anchorOf={(id) => containerRef.current?.querySelector<HTMLElement>(`[data-ctid="${id}"]`) ?? null}
+          onClose={clearSelection}
+          onUpdateMemo={(id, memo) =>
+            gutterUpdate(id, { memo }, isImageGutterId(id) ? refreshCodings : refreshTextCodings)
+          }
+          onUpdateWeight={(id, weight) =>
+            gutterUpdate(id, { weight }, isImageGutterId(id) ? refreshCodings : refreshTextCodings)
+          }
+          onDelete={gutterDelete}
+          onToggleImportant={gutterToggleImportant}
+          extrasFor={gutterExtrasFor}
+        />
       )}
+
 
       <CodePicker
         open={pickerOpen}

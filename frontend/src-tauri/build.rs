@@ -4,8 +4,8 @@
 //!
 //! The backend is NOT embedded here anymore: it ships as a PyInstaller
 //! onedir under `src-tauri/resources/backend/` (copied there by
-//! compile.ps1 and bundled via `bundle.resources`), so nothing needs to be
-//! extracted at launch.
+//! `release.ps1 -Compile` and bundled via `bundle.resources`), so nothing
+//! needs to be extracted at launch.
 
 use std::env;
 

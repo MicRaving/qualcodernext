@@ -56,41 +56,39 @@ import {
   useMemo,
   useRef,
   useState,
-  type MouseEvent as ReactMouseEvent,
 } from "react";
 import { useAsyncEffect } from "@/lib/useAsync";
 import {
-  Check,
   CircleAlert,
   Code,
+  Undo2,
   Eye,
   FileText,
   Globe,
+  Link as LinkIcon,
   LoaderCircle,
-  Minus,
-  Pencil,
-  Plus,
-  Star,
+  MessageSquareText,
   Tag,
   Trash2,
-  X,
 } from "lucide-react";
 import {
   api,
-  ApiError,
   fetchSourceFile,
-  fetchWithTimeout,
-  initApiBase,
   type Annotation,
   type CodeTreeItem,
   type Coding,
   type Source,
 } from "@/lib/api";
-import { patchCodingWeight, useCodeIndex } from "@/features/coding/codingApi";
+import { useCodeIndex } from "@/features/coding/codingApi";
+import { useSegmentActions } from "@/features/coding/shared/useSegmentActions";
+import { useCodingsChanged, useAssignCode } from "@/features/coding/shared/events";
+import { useEscapeStack } from "@/features/coding/shared/useEscapeStack";
+import { useSplitResize } from "@/features/coding/shared/useSplitResize";
 import {
   MAX_HIGHLIGHTS,
   buildHighlightedHtml,
   buildViewModel,
+  cleanEmptyLines,
   codingsOverlappingRange,
   injectHighlightScript,
   locateInFulltext,
@@ -102,57 +100,24 @@ import {
 } from "@/features/coding/htmlHighlight";
 import { CodePicker } from "@/features/coding/CodePicker";
 import { TextCoder } from "@/features/coding/TextCoder";
-import { FALLBACK_CODE_COLOR } from "@/features/coding/tint";
+import { MemoGutter, MemoGutterBubble, toGutterRow } from "@/features/coding/MemoGutter";
+import { useGutterVisible } from "@/features/coding/viewOptions";
 import { cn, errorMessage } from "@/lib/utils";
 import { useI18n } from "@/lib/i18n";
 import { cls } from "@/components/ui/tokens";
 import { Menu, MenuItem } from "@/components/ui/orchestrator";
 import { useCoderStore } from "@/stores/coder";
+import { useInspectorStore } from "@/stores/inspector";
 import { usePrefsStore } from "@/stores/prefs";
 import {
   Button,
   ErrorBanner,
   IconButton,
-  Input,
   LoadingState,
   ViewHeader,
 } from "@/components/ui/orchestrator";
 
 /** Fallback color for codings whose code has no stored color. */
-
-/** PATCH a text coding's memo/important with a local fetch, mirroring
- *  codingApi's pattern — no lib/api.ts additions needed. */
-async function patchHtmlCodingRow(
-  id: number,
-  body: { memo?: string; important?: number },
-): Promise<unknown> {
-  const path = `/codings/text/${id}`;
-  const doFetch = async (): Promise<unknown> => {
-    const base = await initApiBase();
-    const res = await fetchWithTimeout(`${base}${path}`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    });
-    if (!res.ok) {
-      let detail: unknown;
-      try {
-        detail = (await res.json()).detail;
-      } catch {
-        /* non-JSON error body */
-      }
-      const suffix = typeof detail === "string" && detail ? `: ${detail}` : "";
-      throw new ApiError(res.status, `API error ${res.status} on ${path}${suffix}`, detail);
-    }
-    return (await res.json()) as unknown;
-  };
-  try {
-    return await doFetch();
-  } catch (err) {
-    if (err instanceof ApiError) throw err;
-    return doFetch();
-  }
-}
 
 /* --------------------------------------------------------- html decoding */
 
@@ -375,7 +340,7 @@ const QC_HIGHLIGHT_SCRIPT = `(function () {
     var mark = document.createElement("mark");
     mark.className = "qc-live-coding";
     if (seg.name) mark.setAttribute("title", seg.name);
-    mark.setAttribute("style", styleFor(seg.color));
+    mark.setAttribute("style", styleFor(seg.color) + (seg.hidden ? ";opacity:.2" : ""));
     // The owning coding travels with the mark so a click can be forwarded
     // to the parent (which resolves the full row from its own state).
     if (seg.ctid !== undefined && seg.ctid !== null) {
@@ -701,9 +666,12 @@ export function HtmlCoder({ source }: { source: Source }) {
 
   const [webpageVisible, setWebpageVisible] = useState(true);
   const [plainVisible, setPlainVisible] = useState(false);
-  const [textW, setTextW] = useState(420);
-  const [textDragging, setTextDragging] = useState(false);
-  const textResizeRef = useRef<{ startX: number; startW: number } | null>(null);
+  /** Linked position sync: when both panes are visible, scrolling either one
+   *  keeps the other at the corresponding location. The toolbar link button
+   *  toggles this off/on. */
+  const [autoSync, setAutoSync] = useState(true);
+  /** The embedded plain-text pane's scroll container (set by TextCoder). */
+  const textScrollElRef = useRef<HTMLElement | null>(null);
 
   /** The raw captured HTML, loaded through the file-serving endpoint. */
   const [html, setHtml] = useState<string | null>(null);
@@ -740,24 +708,28 @@ export function HtmlCoder({ source }: { source: Source }) {
     null,
   );
 
-  /** The webpage-side coding whose details the bottom bar shows — selected
+  /** The webpage-side coding whose details show in the memo bubble — selected
    *  by clicking a highlight mark (qc:mark-click) or via the context menu's
    *  "View details" entry. Purely client state, never fetched on open. */
   const [selectedCtid, setSelectedCtid] = useState<number | null>(null);
-  /** Draft while the footer's memo field is being edited inline (null =
-   *  not editing). */
-  const [memoDraft, setMemoDraft] = useState<string | null>(null);
+  const [gutterVisible, toggleGutter] = useGutterVisible();
 
   const activeCodeId = useCoderStore((s) => s.activeCodeId);
+  const hiddenCodes = useCoderStore((s) => s.hiddenCodes);
   /** When OFF, creating a coding does NOT auto-select it in the details
    *  footer (clicking a segment still views it). */
   const autoShowDetails = usePrefsStore((s) => s.autoShowSegmentDetails);
 
   const containerRef = useRef<HTMLDivElement | null>(null);
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
+  /** The iframe's contentDocument, set on load — the memo gutter measures
+   *  the rendered highlights against it. */
+  const iframeDocRef = useRef<Document | null>(null);
+  /** Incremented each time the iframe finishes loading, so the memo gutter
+   *  (which measures the rendered highlights) re-anchors once marks exist. */
+  const [frameTick, setFrameTick] = useState(0);
   const frameToolbarRef = useRef<HTMLDivElement | null>(null);
   const ctxMenuRef = useRef<HTMLDivElement | null>(null);
-  const footerRef = useRef<HTMLDivElement | null>(null);
 
   /* ------------------------------------------------------ live highlights */
   // cid -> { name, color } from the flat code tree, used to color the marks
@@ -813,11 +785,12 @@ export function HtmlCoder({ source }: { source: Source }) {
         ctid: c.ctid,
         pos0: c.pos0,
         pos1: c.pos1,
+        hidden: hiddenCodes.includes(c.cid),
       });
     }
     highlightPayloadRef.current = payload;
     postCodingsToFrame();
-  }, [codings, codeInfo, postCodingsToFrame]);
+  }, [codings, codeInfo, hiddenCodes, postCodingsToFrame]);
 
   // The srcDoc carries PRE-COMPUTED highlight marks (baked by
   // buildHighlightedHtml) plus our live-update script. It is frozen per
@@ -903,7 +876,6 @@ export function HtmlCoder({ source }: { source: Source }) {
         await refreshCodings();
         // Auto-show the freshly created coding in the bottom bar (gated on
         // the "Auto-show segment details" pref).
-        setMemoDraft(null);
         if (autoShowDetails) {
           setSelectedCtid(created.ctid);
         } else {
@@ -934,88 +906,142 @@ export function HtmlCoder({ source }: { source: Source }) {
     [refreshCodings, t],
   );
 
-  /* -------------------------------------------- webpage segment details bar */
+  /* -------------------------------------- memo gutter / bubble (webpage) */
 
-  /** The footer row — resolved from the LOADED client list, so a row
-   *  deleted elsewhere just closes the bar (never a fetch on open). */
-  const selectedCoding = useMemo(
-    () => (selectedCtid != null ? codings.find((c) => c.ctid === selectedCtid) ?? null : null),
-    [selectedCtid, codings],
+  const gutterRows = useMemo(
+    () =>
+      codings.map((c) =>
+        toGutterRow(
+          {
+            id: c.ctid,
+            kind: "text",
+            memo: c.memo,
+            weight: (c as Coding & { weight?: number }).weight,
+            important: c.important,
+            date: c.date,
+            seltext: c.seltext,
+          },
+          byId.get(c.cid),
+          t("coder.fallbackCode", { id: c.cid }),
+        ),
+      ),
+    [codings, byId, t],
   );
 
-  /** Segment weight (backend rows carry it; 0 = no weight). */
-  const rowWeight = (row: Coding & { weight?: number }): number => row.weight ?? 0;
+  const selectedBubbleRows = useMemo(
+    () => (selectedCtid != null ? gutterRows.filter((r) => r.id === selectedCtid) : []),
+    [gutterRows, selectedCtid],
+  );
 
-  /** Stepper update of the selected coding's weight (0-100; 0 = no weight). */
-  function updateSelectedWeight(weight: number) {
-    if (!selectedCoding) return;
-    void (async () => {
-      try {
-        await patchCodingWeight("text", selectedCoding.ctid, weight);
-        await refreshCodings();
-      } catch (e) {
-        setErrMsg(errorMessage(e, t("coder.weightError")));
-      }
-    })();
-  }
+  /** Anchor resolution prefers the rendered webpage's mark, then the plain
+   *  text pane's span (both now carry `data-ctids`). */
+  const anchorOf = useCallback(
+    (ctid: number): HTMLElement | null =>
+      iframeDocRef.current?.querySelector<HTMLElement>(`[data-ctid="${ctid}"]`) ??
+      containerRef.current?.querySelector<HTMLElement>(`[data-ctids~="${ctid}"]`) ??
+      null,
+    [],
+  );
 
-  /** Open the footer's inline memo editor for the selected coding. */
-  function startEditMemo() {
-    if (!selectedCoding) return;
-    setMemoDraft(selectedCoding.memo ?? "");
-  }
+  /* ------------------------------------------------- linked position sync */
 
-  /** Save the memo draft for the selected coding, then refresh its list. */
-  function saveMemo() {
-    if (memoDraft == null || !selectedCoding) return;
-    const draft = memoDraft;
-    setMemoDraft(null);
-    void (async () => {
-      try {
-        await patchHtmlCodingRow(selectedCoding.ctid, { memo: draft });
-        await refreshCodings();
-      } catch (e) {
-        setErrMsg(errorMessage(e, t("htmlCoder.updateError")));
-      }
-    })();
-  }
+  // When both panes are visible and autoSync is on, scrolling either pane
+  // scrolls the other to the corresponding location (ratio-based — rendered
+  // DOM and extracted text differ in length, so this is best-effort, same
+  // spirit as the pdf-text-locate fallback). A short-lived lock on the
+  // receiving side suppresses the feedback loop. The iframe side listens in
+  // CAPTURE phase on its document so scrolls of nested inner scrollers are
+  // caught too.
+  useEffect(() => {
+    if (!autoSync || !webpageVisible || !plainVisible) return;
+    const doc = iframeDocRef.current;
+    if (!doc) return;
+    const lock = { web: 0, text: 0 };
 
-  /** Toggle the important flag of the selected coding. */
-  function toggleImportant() {
-    if (!selectedCoding) return;
-    const next = selectedCoding.important ? 0 : 1;
-    void (async () => {
-      try {
-        await patchHtmlCodingRow(selectedCoding.ctid, { important: next });
-        await refreshCodings();
-      } catch (e) {
-        setErrMsg(errorMessage(e, t("htmlCoder.updateError")));
-      }
-    })();
-  }
+    const ratioOf = (el: HTMLElement) => {
+      const range = el.scrollHeight - el.clientHeight;
+      return range > 0 ? el.scrollTop / range : 0;
+    };
+    const setRatio = (el: HTMLElement | null, ratio: number) => {
+      if (!el) return;
+      const range = el.scrollHeight - el.clientHeight;
+      el.scrollTop = Math.max(0, Math.min(1, ratio)) * Math.max(0, range);
+    };
+    const scrollElOf = () => {
+      const se = doc.scrollingElement ?? doc.documentElement;
+      return se as HTMLElement;
+    };
 
-  /** Delete the selected coding (with confirm), then refresh. */
-  function deleteSelected() {
-    if (!selectedCoding) return;
-    const code = byId.get(selectedCoding.cid);
+    let rafWeb = 0;
+    let rafText = 0;
+    const onWebScroll = () => {
+      if (Date.now() < lock.web) return;
+      cancelAnimationFrame(rafWeb);
+      rafWeb = requestAnimationFrame(() => {
+        const t = textScrollElRef.current;
+        if (!t) return;
+        lock.text = Date.now() + 200;
+        setRatio(t, ratioOf(scrollElOf()));
+      });
+    };
+    const onTextScroll = () => {
+      if (Date.now() < lock.text) return;
+      cancelAnimationFrame(rafText);
+      rafText = requestAnimationFrame(() => {
+        const t = textScrollElRef.current;
+        if (!t) return;
+        lock.web = Date.now() + 200;
+        setRatio(scrollElOf(), ratioOf(t));
+      });
+    };
+
+    doc.addEventListener("scroll", onWebScroll, true);
+    let textEl = textScrollElRef.current;
+    let retryTimer = 0;
+    const attachText = () => {
+      textEl = textScrollElRef.current;
+      if (textEl) textEl.addEventListener("scroll", onTextScroll, { passive: true });
+      else retryTimer = window.setTimeout(attachText, 100);
+    };
+    attachText();
+    return () => {
+      cancelAnimationFrame(rafWeb);
+      cancelAnimationFrame(rafText);
+      doc.removeEventListener("scroll", onWebScroll, true);
+      window.clearTimeout(retryTimer);
+      textEl?.removeEventListener("scroll", onTextScroll);
+    };
+  }, [autoSync, webpageVisible, plainVisible, frameTick]);
+
+  // Shared mutation actions (memo/weight/important/delete) with a
+  // recoverable-delete undo stack — deletes confirm AND push here.
+  const actions = useSegmentActions({
+    kind: "text",
+    rows: codings,
+    idOf: (r) => r.ctid,
+    deleteRow: (ctid) => api.deleteTextCoding(ctid),
+    refresh: refreshCodings,
+    onError: setErrMsg,
+    onDeleted: () => setSelectedCtid(null),
+  });
+  const { undo } = actions;
+
+  const gutterUpdateMemo = actions.updateMemo;
+  const gutterUpdateWeight = actions.updateWeight;
+  const gutterToggleImportant = actions.toggleImportant;
+
+  function gutterDelete(ctid: number) {
+    const row = codings.find((c) => c.ctid === ctid);
+    const code = row ? byId.get(row.cid) : undefined;
     if (
       !window.confirm(
-        t("pdfCoder.removeConfirm", {
-          name: code?.name ?? t("coder.fallbackCodeLower", { id: selectedCoding.cid }),
+        t("coder.removeConfirm", {
+          name: code?.name ?? t("coder.fallbackCodeLower", { id: ctid }),
         }),
       )
     )
       return;
-    void (async () => {
-      try {
-        await api.deleteTextCoding(selectedCoding.ctid);
-        setSelectedCtid(null);
-        setMemoDraft(null);
-        await refreshCodings();
-      } catch (e) {
-        setErrMsg(errorMessage(e, t("coder.removeError")));
-      }
-    })();
+    actions.remove(ctid);
   }
 
   // The frame → parent message router: selection reports, right-click
@@ -1036,9 +1062,12 @@ export function HtmlCoder({ source }: { source: Source }) {
         if (ctid == null) return;
         if (!codings.some((c) => c.ctid === ctid)) return;
         setSelectedCtid(ctid);
-        setMemoDraft(null);
         setCtxMenu(null);
         clearFrameSelection();
+        // Choosing a code occasion also shows its details in the right-bar
+        // Inspector (not just the bottom details bar).
+        const coding = codings.find((c) => c.ctid === ctid);
+        if (coding) void useInspectorStore.getState().selectCode(coding.cid);
         return;
       }
       const msg = parseFrameMessage(e.data);
@@ -1118,11 +1147,10 @@ export function HtmlCoder({ source }: { source: Source }) {
         // Any click inside the webpage dismisses the context menu. The
         // selection toolbar survives a right-click (right-click preserves
         // the selection) and is re-anchored by the next qc:selection. The
-        // details footer closes too — a click on a highlight mark re-opens
-        // it via the following qc:mark-click.
+        // memo bubble closes too — a click on a highlight mark re-opens it
+        // via the following qc:mark-click.
         setCtxMenu(null);
         setSelectedCtid(null);
-        setMemoDraft(null);
         return;
       }
 
@@ -1168,42 +1196,26 @@ export function HtmlCoder({ source }: { source: Source }) {
 
   // Escape closes the picker, then the context menu, the frame toolbar and
   // the segment-details footer.
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key !== "Escape") return;
-      if (pickerOpen) {
-        setPickerOpen(false);
-        return;
-      }
+  useEscapeStack([
+    () => {
+      if (!pickerOpen) return false;
+      setPickerOpen(false);
+      return true;
+    },
+    () => {
+      if (!ctxMenu && !frameSel && selectedCtid == null) return false;
       setCtxMenu(null);
       clearFrameSelection();
       setSelectedCtid(null);
-      setMemoDraft(null);
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  });
+      return true;
+    },
+  ]);
 
   // Clicks outside the context menu (in the parent document) close it.
   useEffect(() => {
     const onDown = (e: MouseEvent) => {
       const target = e.target instanceof Node ? e.target : null;
       if (target && ctxMenuRef.current && !ctxMenuRef.current.contains(target)) setCtxMenu(null);
-    };
-    document.addEventListener("mousedown", onDown);
-    return () => document.removeEventListener("mousedown", onDown);
-  }, []);
-
-  // Click-away closes the segment-details footer (the PDF coder pattern).
-  // Clicks INSIDE the iframe never reach the parent document — the frame's
-  // own click handler re-selects a coding or the frame-mousedown signal
-  // dismisses transient UI.
-  useEffect(() => {
-    const onDown = (e: MouseEvent) => {
-      const target = e.target instanceof Node ? e.target : null;
-      if (!target || footerRef.current?.contains(target)) return;
-      setSelectedCtid(null);
-      setMemoDraft(null);
     };
     document.addEventListener("mousedown", onDown);
     return () => document.removeEventListener("mousedown", onDown);
@@ -1222,46 +1234,24 @@ export function HtmlCoder({ source }: { source: Source }) {
   }, []);
 
   // A code clicked in the left sidebar codes the pending webpage selection.
-  useEffect(() => {
-    const onAssign = (e: Event) => {
-      const cid = (e as CustomEvent<{ cid: number }>).detail?.cid;
-      if (typeof cid !== "number") return;
-      setPickerOpen(false);
-      setCtxMenu(null);
-      void codeFrameSelection(cid);
-    };
-    window.addEventListener("qc:assign-code", onAssign);
-    return () => window.removeEventListener("qc:assign-code", onAssign);
-  }, [codeFrameSelection]);
+  useAssignCode((cid) => {
+    setPickerOpen(false);
+    setCtxMenu(null);
+    void codeFrameSelection(cid);
+  });
 
   /* ------------------------------------------------------- split resize */
 
-  function startTextResize(e: ReactMouseEvent<HTMLDivElement>) {
-    e.preventDefault();
-    textResizeRef.current = { startX: e.clientX, startW: textW };
-    setTextDragging(true);
-  }
-
-  useEffect(() => {
-    if (!textDragging) return;
-    const onMove = (e: MouseEvent) => {
-      const drag = textResizeRef.current;
-      if (!drag) return;
-      const containerW = containerRef.current?.clientWidth ?? 0;
-      const maxW = containerW > 0 ? Math.round(containerW * 0.7) : 0;
-      setTextW(Math.min(maxW, Math.max(220, Math.round(drag.startW + (e.clientX - drag.startX)))));
-    };
-    const onUp = () => {
-      textResizeRef.current = null;
-      setTextDragging(false);
-    };
-    window.addEventListener("mousemove", onMove);
-    window.addEventListener("mouseup", onUp);
-    return () => {
-      window.removeEventListener("mousemove", onMove);
-      window.removeEventListener("mouseup", onUp);
-    };
-  }, [textDragging]);
+  const resize = useSplitResize({
+    axis: "x",
+    min: 220,
+    max: Number.POSITIVE_INFINITY,
+    initial: 420,
+    containerSize: () => containerRef.current?.clientWidth,
+  });
+  const textW = resize.size;
+  const textDragging = resize.dragging;
+  const startTextResize = resize.onDown;
 
   /* ---------------------------------------------------------------- load */
 
@@ -1279,7 +1269,6 @@ export function HtmlCoder({ source }: { source: Source }) {
     clearFrameSelection();
     setCtxMenu(null);
     setSelectedCtid(null);
-    setMemoDraft(null);
     try {
       const [cod, anns, flat, src] = await Promise.all([
         api.sourceCoding(source.id),
@@ -1293,7 +1282,7 @@ export function HtmlCoder({ source }: { source: Source }) {
       setCodes(flat);
       // The extraction the plain-text pane codes against — the anchor for
       // validating webpage selections (the prop may already carry it).
-      setFulltext(src.fulltext ?? source.fulltext ?? null);
+      setFulltext(cleanEmptyLines(src.fulltext ?? source.fulltext ?? ""));
     } catch (e) {
       signal.throwIfAborted();
       setLoadError(errorMessage(e, t("htmlCoder.loadCodingsError")));
@@ -1332,15 +1321,11 @@ export function HtmlCoder({ source }: { source: Source }) {
 
   // History undo/redo: reload codings/annotations when the audit log reverts
   // a change (the shell only refreshes project metadata).
-  useEffect(() => {
-    const handle = () => {
-      void refreshCodings();
-      void refreshAnnotations();
-      void refreshCodes();
-    };
-    window.addEventListener("qc:codings-changed", handle);
-    return () => window.removeEventListener("qc:codings-changed", handle);
-  }, [refreshCodings, refreshAnnotations, refreshCodes]);
+  useCodingsChanged(() => {
+    void refreshCodings();
+    void refreshAnnotations();
+    void refreshCodes();
+  });
 
   /* ------------------------------------------------------------- actions */
 
@@ -1411,6 +1396,38 @@ export function HtmlCoder({ source }: { source: Source }) {
               >
                 {t("htmlCoder.webpage")}
               </Button>
+              {/* Linked position sync toggle: when both panes are shown the
+                  views follow each other; click to turn the linking off. */}
+              <IconButton
+                label={t("htmlCoder.linkPosition")}
+                title={t("htmlCoder.linkPosition")}
+                size="sm"
+                disabled={!plainVisible || !webpageVisible}
+                aria-pressed={autoSync}
+                onClick={() => setAutoSync((v) => !v)}
+                className={cn(autoSync && "border-accent text-accent qc-glow")}
+              >
+                <LinkIcon size={14} aria-hidden />
+              </IconButton>
+              <Button
+                variant="toolbar"
+                icon={<MessageSquareText size={12} aria-hidden />}
+                onClick={toggleGutter}
+                className={cn(gutterVisible && "border-accent text-accent")}
+                title={gutterVisible ? t("coder.hideMemos") : t("coder.showMemos")}
+              >
+                {t("coder.memos")}
+              </Button>
+              {undo.canUndo && (
+                <Button
+                  variant="toolbar"
+                  icon={<Undo2 size={12} aria-hidden />}
+                  onClick={undo.undoLast}
+                  title={t("coder.unmarkTitle")}
+                >
+                  {t("coder.unmarkLast")}
+                </Button>
+              )}
             </div>
           </>
         }
@@ -1419,19 +1436,56 @@ export function HtmlCoder({ source }: { source: Source }) {
       {errMsg && <ErrorBanner onClose={() => setErrMsg(null)}>{errMsg}</ErrorBanner>}
 
       <div className="flex min-h-0 flex-1">
+        {plainVisible && (
+          <div
+            className={cn(
+              "flex min-h-0 flex-col overflow-hidden bg-bg",
+              webpageVisible ? "shrink-0" : "flex-1",
+            )}
+            style={webpageVisible ? { width: textW } : undefined}
+          >
+            <TextCoder
+              sourceId={source.id}
+              forceText
+              bare
+              textOverride={fulltext ?? undefined}
+              codings={codings}
+              annotations={annotations}
+              codes={codes}
+              onCodingsChange={setCodings}
+              onAnnotationsChange={setAnnotations}
+              onCodesChange={setCodes}
+              scrollElRef={textScrollElRef}
+              suppressGutter={webpageVisible}
+            />
+          </div>
+        )}
+        {webpageVisible && plainVisible && (
+          <div
+            onMouseDown={startTextResize}
+            className={cn(
+              "w-1 shrink-0 cursor-col-resize border-l border-border",
+              textDragging ? "bg-accent/40" : "bg-surface hover:bg-accent/40",
+            )}
+            role="separator"
+            aria-orientation="vertical"
+            aria-label="Resize text panel"
+            title="Resize text panel"
+          />
+        )}
         {webpageVisible && (
-          <div ref={containerRef} className="min-h-0 min-w-0 flex-1 overflow-auto bg-bg">
+          <div ref={containerRef} className="relative min-h-0 min-w-0 flex-1 overflow-auto bg-bg">
             {html != null ? (
               <iframe
                 ref={iframeRef}
                 title={t("htmlCoder.webpage")}
                 srcDoc={srcDoc ?? undefined}
-                // allow-scripts runs ONLY our injected highlight script — the
-                // page's own scripts/handlers were stripped from the srcDoc
-                // (see stripPageScripts); same-origin keeps relative
-                // images/css resolving.
                 sandbox="allow-same-origin allow-scripts"
-                onLoad={postCodingsToFrame}
+                onLoad={() => {
+                  iframeDocRef.current = iframeRef.current?.contentDocument ?? null;
+                  setFrameTick((v) => v + 1);
+                  postCodingsToFrame();
+                }}
                 className="h-full w-full border-0"
               />
             ) : htmlLoading ? (
@@ -1453,40 +1507,28 @@ export function HtmlCoder({ source }: { source: Source }) {
                 </Button>
               </div>
             )}
-          </div>
-        )}
-        {webpageVisible && plainVisible && (
-          <div
-            onMouseDown={startTextResize}
-            className={cn(
-              "w-1 shrink-0 cursor-col-resize border-r border-border",
-              textDragging ? "bg-accent/40" : "bg-surface hover:bg-accent/40",
+            {/* Gutter anchored to the rendered webpage's marks. When only the
+                plain text pane is shown, TextCoder's own internal gutter takes
+                over (same global toggle), anchored to the text spans. */}
+            {gutterVisible && webpageVisible && (
+              <div className="absolute top-0 bottom-0 right-0 z-10 overflow-hidden">
+                <MemoGutter
+                  rows={gutterRows}
+                  selectedIds={selectedCtid != null ? [selectedCtid] : []}
+                  scrollRef={iframeDocRef}
+                  anchorOf={anchorOf}
+                  onSelect={setSelectedCtid}
+                  onDeselect={() => setSelectedCtid(null)}
+                  onUpdateMemo={gutterUpdateMemo}
+                  onUpdateWeight={gutterUpdateWeight}
+                  onDelete={gutterDelete}
+                  onToggleImportant={gutterToggleImportant}
+                  visible={gutterVisible}
+                  measureSignal={frameTick}
+                  scrollSync="transform"
+                />
+              </div>
             )}
-            role="separator"
-            aria-orientation="vertical"
-            aria-label="Resize text panel"
-            title="Resize text panel"
-          />
-        )}
-        {plainVisible && (
-          <div
-            className={cn(
-              "flex min-h-0 flex-col overflow-hidden bg-bg",
-              webpageVisible ? "shrink-0" : "flex-1",
-            )}
-            style={webpageVisible ? { width: textW } : undefined}
-          >
-            <TextCoder
-              sourceId={source.id}
-              forceText
-              bare
-              codings={codings}
-              annotations={annotations}
-              codes={codes}
-              onCodingsChange={setCodings}
-              onAnnotationsChange={setAnnotations}
-              onCodesChange={setCodes}
-            />
           </div>
         )}
       </div>
@@ -1553,11 +1595,10 @@ export function HtmlCoder({ source }: { source: Source }) {
                   <MenuItem
                     role="menuitem"
                     onClick={() => {
-                      // Open the coding's details in the bottom bar (purely
-                      // client state — the footer resolves the row from the
+                      // Open the coding's details in the memo bubble (purely
+                      // client state — the bubble resolves the row from the
                       // loaded codings list).
                       setSelectedCtid(row.ctid);
-                      setMemoDraft(null);
                       setCtxMenu(null);
                     }}
                   >
@@ -1615,141 +1656,21 @@ export function HtmlCoder({ source }: { source: Source }) {
         </div>
       )}
 
-      {/* Segment-details footer for the WEBPAGE side: opened by clicking a
-          highlight mark or the context menu's "View details". Renders only
-          from the loaded client list — never fetches on open. */}
-      {selectedCoding && (
-        <div ref={footerRef} className="shrink-0 border-t border-border bg-surface px-3 py-2">
-          <div className="flex items-center gap-2">
-            <span className="text-xs font-medium text-text-secondary">{t("coder.codingDetails")}</span>
-            <div className="flex-1" />
-            <IconButton
-              label={t("common.closeDetails")}
-              size="sm"
-              onClick={() => {
-                setSelectedCtid(null);
-                setMemoDraft(null);
-              }}
-            >
-              <X size={14} aria-hidden />
-            </IconButton>
-          </div>
-          <ul className="mt-1.5 space-y-1.5">
-            <li className="flex items-center gap-2 rounded-sm border border-border bg-bg px-2 py-1.5 text-sm">
-              <span
-                className="h-3 w-3 shrink-0 rounded-sm border border-border"
-                style={{
-                  backgroundColor: byId.get(selectedCoding.cid)?.color ?? FALLBACK_CODE_COLOR,
-                }}
-                aria-hidden
-              />
-              <span className="font-medium">
-                {byId.get(selectedCoding.cid)?.name ??
-                  t("coder.fallbackCode", { id: selectedCoding.cid })}
-              </span>
-              {selectedCoding.seltext && (
-                <span
-                  className="max-w-48 truncate text-xs text-text-secondary"
-                  title={selectedCoding.seltext}
-                >
-                  {selectedCoding.seltext}
-                </span>
-              )}
-
-              {memoDraft != null ? (
-                <div className="flex items-center gap-1">
-                  <Input
-                    value={memoDraft}
-                    placeholder={t("pdfCoder.memoPlaceholder")}
-                    aria-label={t("pdfCoder.memoPlaceholder")}
-                    className="w-48"
-                    onChange={(e) => setMemoDraft(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter") void saveMemo();
-                    }}
-                  />
-                  <Button
-                    variant="toolbarIconPrimary"
-                    icon={<Check size={12} aria-hidden />}
-                    title={t("common.save")}
-                    aria-label={t("common.save")}
-                    onClick={() => void saveMemo()}
-                  />
-                  <Button
-                    variant="toolbarIcon"
-                    icon={<X size={12} aria-hidden />}
-                    title={t("common.cancel")}
-                    aria-label={t("common.cancel")}
-                    onClick={() => setMemoDraft(null)}
-                  />
-                </div>
-              ) : (
-                <button
-                  type="button"
-                  onClick={startEditMemo}
-                  title={t("pdfCoder.editMemo")}
-                  className="flex min-w-0 max-w-64 items-center gap-1 text-left text-xs text-text-secondary hover:text-text-primary"
-                >
-                  {selectedCoding.memo ? (
-                    <span className="truncate">{selectedCoding.memo}</span>
-                  ) : (
-                    <span className="italic">{t("coder.noMemoInline")}</span>
-                  )}
-                  <Pencil size={10} aria-hidden />
-                </button>
-              )}
-
-              <span className="flex items-center gap-1">
-                <span className="text-xs text-text-secondary">{t("coder.weight")}</span>
-                <Button
-                  variant="toolbarIcon"
-                  icon={<Minus size={12} aria-hidden />}
-                  title={t("coder.weightDec")}
-                  aria-label={t("coder.weightDec")}
-                  disabled={rowWeight(selectedCoding) === 0}
-                  onClick={() => updateSelectedWeight(rowWeight(selectedCoding) - 1)}
-                />
-                <span
-                  className="min-w-5 text-center text-xs text-text-secondary"
-                  aria-label={t("coder.weight")}
-                >
-                  {rowWeight(selectedCoding)}
-                </span>
-                <Button
-                  variant="toolbarIcon"
-                  icon={<Plus size={12} aria-hidden />}
-                  title={t("coder.weightInc")}
-                  aria-label={t("coder.weightInc")}
-                  disabled={rowWeight(selectedCoding) >= 100}
-                  onClick={() => updateSelectedWeight(rowWeight(selectedCoding) + 1)}
-                />
-              </span>
-              <IconButton
-                label={t("pdfCoder.importantToggle")}
-                title={t("pdfCoder.importantToggle")}
-                size="sm"
-                className={cn(selectedCoding.important !== 0 && "text-warning")}
-                onClick={toggleImportant}
-              >
-                <Star
-                  size={14}
-                  className={selectedCoding.important !== 0 ? "fill-current" : ""}
-                  aria-hidden
-                />
-              </IconButton>
-              <div className="flex-1" />
-              <IconButton
-                label={t("coder.removeThis")}
-                title={t("coder.removeThis")}
-                size="sm"
-                onClick={deleteSelected}
-                className="hover:text-danger"
-              >
-                <Trash2 size={14} aria-hidden />
-              </IconButton>
-            </li>
-          </ul>
-        </div>
+      {/* Memo bubble for the WEBPAGE side: opened by clicking a highlight
+          mark or the context menu's "View details". Renders only from the
+          loaded client list — never fetches on open. */}
+      {!gutterVisible && selectedBubbleRows.length > 0 && (
+        <MemoGutterBubble
+          rows={selectedBubbleRows}
+          scrollRef={iframeDocRef}
+          anchorOf={anchorOf}
+          onClose={() => setSelectedCtid(null)}
+          onUpdateMemo={gutterUpdateMemo}
+          onUpdateWeight={gutterUpdateWeight}
+          onDelete={gutterDelete}
+          onToggleImportant={gutterToggleImportant}
+          measureSignal={frameTick}
+        />
       )}
 
       <CodePicker
@@ -1758,7 +1679,9 @@ export function HtmlCoder({ source }: { source: Source }) {
         onClose={() => setPickerOpen(false)}
         onPick={(picked) => {
           setPickerOpen(false);
-          void codeFrameSelection(picked.cid);
+          for (const p of picked) {
+            void codeFrameSelection(p.cid);
+          }
         }}
       />
     </div>

@@ -19,6 +19,11 @@ from qualcoder_api.api.v1.deps import DbDep, ServiceDep
 
 router = APIRouter(prefix="/audit", tags=["audit"])
 
+#: System-internal marker rows that must still be written (they drive the redo
+#: stack and the undoable checks) but are hidden from the user-facing history
+#: list and stats.
+INTERNAL_ACTIONS = frozenset({"sync.toggle", "audit.undo", "audit.redo"})
+
 
 class AuditRow(BaseModel):
     id: int
@@ -132,6 +137,13 @@ async def list_audit(
                 "(entity LIKE :q OR action LIKE :q OR user LIKE :q OR detail LIKE :q)"
             )
             params["q"] = f"%{needle}%"
+    internal = sorted(INTERNAL_ACTIONS)
+    if internal:
+        where.append(
+            "action NOT IN (" + ", ".join(f":ia{i}" for i in range(len(internal))) + ")"
+        )
+        for i, action in enumerate(internal):
+            params[f"ia{i}"] = action
     clause = f"WHERE {' AND '.join(where)}" if where else ""
 
     total = (
@@ -155,7 +167,11 @@ async def audit_stats(db: DbDep) -> list[AuditStatsRow]:
     rows = await db.execute(
         select(text("action"), func.count()).select_from(text("audit_log")).group_by(text("action"))
     )
-    return [AuditStatsRow(action=r[0] or "", count=int(r[1])) for r in rows]
+    return [
+        AuditStatsRow(action=r[0] or "", count=int(r[1]))
+        for r in rows
+        if r[0] not in INTERNAL_ACTIONS
+    ]
 
 
 @router.get("/users", response_model=list[str])

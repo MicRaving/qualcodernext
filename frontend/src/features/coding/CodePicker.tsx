@@ -1,9 +1,13 @@
 /**
  * CodePicker — modal for picking an existing code (or creating a new one)
  * before applying a text selection coding.
+ *
+ * Supports multi-select: single click codes + closes; Ctrl/Shift click
+ * accumulates selection. On close (X, Escape, or single click) all
+ * selected codes are applied.
  */
-import { errorMessage } from "@/lib/utils";
-import { useEffect, useMemo, useState } from "react";
+import { errorMessage, cn } from "@/lib/utils";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { LoaderCircle, Plus, Search, X } from "lucide-react";
 import { api, type CodeTreeItem } from "@/lib/api";
 import { FALLBACK_CODE_COLOR } from "@/features/coding/tint";
@@ -20,7 +24,7 @@ interface CodePickerProps {
   open: boolean;
   codes: CodeTreeItem[];
   onClose: () => void;
-  onPick: (code: PickedCode) => void;
+  onPick: (codes: PickedCode[]) => void;
 }
 
 /** Breadcrumb path of categories leading to a code, e.g. "Interviews / Core". */
@@ -45,12 +49,16 @@ export function CodePicker({ open, codes, onClose, onPick }: CodePickerProps) {
   const [newName, setNewName] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
+  const pendingPickRef = useRef<PickedCode[]>([]);
 
   useEffect(() => {
     if (open) {
       setQuery("");
       setNewName("");
       setError(null);
+      setSelectedIds(new Set());
+      pendingPickRef.current = [];
     }
   }, [open]);
 
@@ -61,6 +69,18 @@ export function CodePicker({ open, codes, onClose, onPick }: CodePickerProps) {
       .sort((a, b) => a.name.localeCompare(b.name));
   }, [codes, query]);
 
+  const applySelection = useCallback(() => {
+    const items: PickedCode[] = [];
+    for (const id of selectedIds) {
+      const c = codes.find((code) => code.id === id);
+      if (c) items.push({ cid: c.id, name: c.name, color: c.color });
+    }
+    if (items.length > 0) {
+      onPick(items);
+    }
+    setSelectedIds(new Set());
+  }, [selectedIds, codes, onPick]);
+
   if (!open) return null;
 
   async function handleCreate() {
@@ -70,7 +90,7 @@ export function CodePicker({ open, codes, onClose, onPick }: CodePickerProps) {
     setError(null);
     try {
       const res = await api.createCode(name);
-      onPick({ cid: res.cid, name, color: null });
+      onPick([{ cid: res.cid, name, color: null }]);
     } catch (e) {
       setError(errorMessage(e, t("codePicker.createError")));
     } finally {
@@ -78,8 +98,24 @@ export function CodePicker({ open, codes, onClose, onPick }: CodePickerProps) {
     }
   }
 
+  function handleCodeClick(c: CodeTreeItem, e: React.MouseEvent) {
+    if (e.ctrlKey || e.metaKey || e.shiftKey) {
+      // Multi-select: toggle in selection, keep flyout open
+      e.preventDefault();
+      setSelectedIds((prev) => {
+        const next = new Set(prev);
+        if (next.has(c.id)) next.delete(c.id);
+        else next.add(c.id);
+        return next;
+      });
+    } else {
+      // Single click: code with that code and close flyout
+      onPick([{ cid: c.id, name: c.name, color: c.color }]);
+    }
+  }
+
   return (
-    <Modal open={open} onClose={onClose} size="sm" ariaLabel={t("codePicker.ariaTitle")}>
+    <Modal open={open} onClose={() => { applySelection(); onClose(); }} size="sm" ariaLabel={t("codePicker.ariaTitle")}>
       <div className="flex items-center gap-2 border-b border-border px-3 py-2">
         <Search size={14} className="text-text-secondary" aria-hidden />
         <input
@@ -89,7 +125,10 @@ export function CodePicker({ open, codes, onClose, onPick }: CodePickerProps) {
           placeholder={t("codePicker.searchPlaceholder")}
           className="min-w-0 flex-1 bg-transparent text-sm text-text-primary outline-none placeholder:text-text-secondary"
         />
-        <IconButton label={t("common.close")} size="sm" onClick={onClose}>
+        {selectedIds.size > 0 && (
+          <span className="text-[10px] text-accent">{selectedIds.size} selected</span>
+        )}
+        <IconButton label={t("common.close")} size="sm" onClick={() => { applySelection(); onClose(); }}>
           <X size={14} aria-hidden />
         </IconButton>
       </div>
@@ -102,11 +141,12 @@ export function CodePicker({ open, codes, onClose, onPick }: CodePickerProps) {
         )}
         {codeItems.map((c) => {
           const path = categoryPath(codes, c);
+          const isSelected = selectedIds.has(c.id);
           return (
             <li key={c.id}>
               <MenuItem
-                className="rounded-sm"
-                onClick={() => onPick({ cid: c.id, name: c.name, color: c.color })}
+                className={cn("rounded-sm", isSelected && "bg-accent/10")}
+                onClick={(e) => handleCodeClick(c, e)}
               >
                 <span
                   className="h-3 w-3 shrink-0 rounded-sm border border-border"

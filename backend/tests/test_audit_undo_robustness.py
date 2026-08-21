@@ -59,11 +59,22 @@ def _insert_legacy_audit(
         conn.commit()
 
 
-async def _find_audit_id(client, action: str, index: int = 0) -> int:
+async def _find_audit_id(client, action: str, index: int = 0, *, target=None) -> int:
     res = await client.get("/api/v1/audit", params={"action": action})
     rows = res.json()["rows"]
-    assert rows, f"no audit rows for {action}"
-    return rows[index]["id"]
+    if rows:
+        return rows[index]["id"]
+    # Internal actions (e.g. sync.toggle) are hidden from the list; read the
+    # raw log instead.
+    if target is not None:
+        with sqlite3.connect(str(target / "data.qda")) as conn:
+            found = conn.execute(
+                "SELECT id FROM audit_log WHERE action = ? ORDER BY id DESC",
+                (action,),
+            ).fetchmany(index + 1)
+        assert found, f"no audit rows for {action}"
+        return found[index][0]
+    raise AssertionError(f"no audit rows for {action}")
 
 
 async def _call(client, path: str, aid: int) -> dict:
@@ -211,7 +222,7 @@ async def test_legacy_rows_never_500(
     _insert_legacy_audit(
         open_project, action, entity, entity_id=entity_id, source_id=source_id
     )
-    aid = await _find_audit_id(client, action)
+    aid = await _find_audit_id(client, action, target=open_project)
 
     undo = await _call(client, "/api/v1/audit/undo", aid)
     assert undo["status"] == expect_undo, (action, undo)

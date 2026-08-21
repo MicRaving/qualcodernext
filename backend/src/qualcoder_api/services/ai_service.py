@@ -3,9 +3,21 @@
 Supports chat completions and embeddings (Ollama, LM Studio, OpenAI,
 gateways). Pure async, no langchain/torch/faiss/sentence-transformers — the
 ``httpx`` dependency is already part of the dev toolchain.
+
+Agentic chat: when ``agentic`` is enabled the chat loop hands the model the
+project's MCP tools (read-only, or write too when the AI setting
+``mcp_permissions`` allows it) and executes the tool calls it makes, feeding
+the results back until the model answers. Every tool execution is
+audit-logged by the MCP service; writes can be gated behind an explicit
+user approval (``confirm_writes``).
 """
 
 from __future__ import annotations
+
+import asyncio
+import json
+import uuid
+from typing import Any
 
 import httpx
 from httpx import AsyncClient
@@ -15,6 +27,12 @@ from qualcoder_api.persistence import tables
 
 CHAT_PATH = "/chat/completions"
 EMBEDDINGS_PATH = "/embeddings"
+
+# Local backends (Ollama, LM Studio) can take a long time to produce a
+# non-streaming reply — model load plus generation on CPU/limited GPU. The
+# read timeout must be generous or interactive chats start failing.
+LLM_TIMEOUT_SECONDS = 300
+EMBED_TIMEOUT_SECONDS = 120
 
 # Providers that authenticate with an API key (local ones ignore it).
 CLOUD_PROVIDERS = ("gemini", "gpt", "claude")
@@ -30,6 +48,14 @@ PROJECT_CONTEXT_MAX_CHARS = 3000
 PROJECT_CONTEXT_MODES = ("general", "topic_exploration", "code_analysis", "text_analysis")
 PROJECT_CONTEXT_CODE_LINES = 30
 PROJECT_CONTEXT_SOURCE_LINES = 20
+
+# Agentic chat: how many model↔tool round trips a single user turn may take
+# before we stop and return whatever the model produced last.
+MAX_AGENTIC_ITERATIONS = 8
+
+# In-flight agentic chat states waiting for user approval of write tools.
+# Keyed by a random single-use token; dropped on approval or rejection.
+_pending_agentic: dict[str, dict] = {}
 
 # Code-analysis context: the code tree (name + category path) plus per-code
 # memo, coding count and 1-2 example coded segments, whole block capped.
@@ -96,6 +122,52 @@ def _body_snippet(response: httpx.Response) -> str:
         return str(response.json())[:200]
     except Exception:
         return (getattr(response, "text", "") or "")[:200] or "no body"
+
+
+def _openai_tool(tool: dict) -> dict:
+    """Convert an MCP tool definition to the OpenAI ``tools`` format."""
+    return {
+        "type": "function",
+        "function": {
+            "name": tool["name"],
+            "description": tool.get("description", ""),
+            "parameters": tool.get("inputSchema", {"type": "object", "properties": {}}),
+        },
+    }
+
+
+def _tool_call_name(tool_call: dict) -> str:
+    return (tool_call.get("function") or {}).get("name") or ""
+
+
+def _tool_call_args(tool_call: dict) -> dict:
+    raw = (tool_call.get("function") or {}).get("arguments") or "{}"
+    try:
+        parsed = json.loads(raw)
+        return parsed if isinstance(parsed, dict) else {}
+    except (TypeError, ValueError):
+        return {}
+
+
+def _text_result(text: str) -> Any:
+    """Best-effort parse of a tool-result string back into structured data."""
+    try:
+        return json.loads(text)
+    except (TypeError, ValueError):
+        return {"raw": text}
+
+
+def _tools_rejected(message: str) -> bool:
+    """True when an AI-backend error looks like a rejection of the ``tools``
+    field (older OpenAI-compatible servers) rather than a real failure."""
+    lowered = message.lower()
+    return (
+        "400" in lowered
+        or "404" in lowered
+        or "422" in lowered
+        or "not support" in lowered
+        or "unknown parameter" in lowered
+    )
 
 
 def _cosine(a: list[float], b: list[float]) -> float:
@@ -190,6 +262,8 @@ class AiService:
         source_id: int | None = None,
         code_ids: list[int] | None = None,
         source_ids: list[int] | None = None,
+        agentic: bool = False,
+        confirm_writes: bool = False,
     ) -> dict:
         ok, _ = self.is_configured(ai)
         if not ok:
@@ -199,6 +273,7 @@ class AiService:
             persona_for,
             prompt_for,
         )
+        from qualcoder_api.services.user_settings import DEFAULT_WRAPPING_PROMPT
 
         # ``auto`` derives the mode from the picker selections; an explicit
         # mode (e.g. sentiment's ``general`` + ``sentiment`` prompt) is kept.
@@ -266,8 +341,13 @@ class AiService:
             joined = _cap_text("\n\n".join(blocks), CHAT_CONTEXT_MAX_CHARS)
             context = f"{joined}\n\n{context}" if context else joined
         # The persona is the instruction's own mode when a built-in prompt_id
-        # is given, else the (derived) chat mode's system prompt.
+        # is given, else the (derived) chat mode's system prompt. The wrapping
+        # prompt — a user-editable "be short and concise" directive — is
+        # appended so it applies to every chat turn.
         system_prompt = persona_for(prompt_id, mode)
+        wrapping = (ai.get("wrapping_prompt") or "").strip() or DEFAULT_WRAPPING_PROMPT
+        if wrapping:
+            system_prompt = f"{system_prompt}\n\n{wrapping}"
         extra_prompt = None
         if prompt_id and is_custom_prompt_id(prompt_id):
             # User-defined template: resolve its body from the ai_prompt table.
@@ -281,6 +361,8 @@ class AiService:
             content = f"{context}\n\n{message}"
         if extra_prompt:
             content = f"Instructions:\n{extra_prompt}\n\n---\n\n{content}"
+        if agentic:
+            return await self._chat_agentic(ai, system_prompt, content, confirm_writes)
         payload = {
             "model": ai["model"],
             "messages": [
@@ -289,21 +371,249 @@ class AiService:
             ],
             "stream": False,
         }
-        try:
-            async with AsyncClient(timeout=60) as client:
-                response = await client.post(url, json=payload, headers=self._headers(ai))
-        except httpx.RequestError as err:
-            raise AiUnavailable(
-                f"AI backend unreachable at {api_base} — start Ollama/LM Studio or check Settings."
-            ) from err
-        if response.status_code >= 400:
-            raise AiUnavailable(f"AI backend error {response.status_code}: {_body_snippet(response)}")
+        response = await self._post_chat(url, payload, ai)
         data = response.json()
         content = ""
         choices = data.get("choices") or []
         if choices:
             content = (choices[0].get("message") or {}).get("content") or ""
-        return {"reply": content, "model": ai["model"]}
+        return {"reply": content, "model": ai["model"], "tool_calls": []}
+
+    # ------------------------------------------------------------------
+    # Agentic chat — the model can call the project's MCP tools
+    # ------------------------------------------------------------------
+
+    async def _ensure_local_backend(self, ai: dict) -> bool:
+        """Actively start the local backend when an AI request found nothing.
+
+        For provider ``lmstudio`` with ``auto_start_backend`` on, launches the
+        LM Studio server via its ``lms`` CLI and loads the configured model
+        (blocking call, run in a thread — a cold model load can take minutes).
+        Returns True when an attempt was made and reported success (worth
+        retrying the request once), False when auto-start does not apply or
+        failed.
+        """
+        if (ai.get("provider") or "") != "lmstudio":
+            return False
+        if not ai.get("auto_start_backend", True):
+            return False
+        from qualcoder_api.services import lmstudio_service
+
+        try:
+            result = await asyncio.to_thread(
+                lmstudio_service.ensure_lmstudio,
+                (ai.get("api_base") or "").strip(),
+                (ai.get("model") or "").strip(),
+            )
+            return bool(result.get("ok"))
+        except Exception:
+            return False
+
+    async def _post_chat(self, url: str, payload: dict, ai: dict) -> httpx.Response:
+        """POST one chat-completions payload with the shared error handling.
+
+        On connection failure, QCnext first tries to actively start the
+        configured local backend (LM Studio: start server + load model) and
+        retries once before surfacing the unreachable error.
+        """
+        try:
+            async with AsyncClient(timeout=LLM_TIMEOUT_SECONDS) as client:
+                response = await client.post(url, json=payload, headers=self._headers(ai))
+        except httpx.RequestError as err:
+            api_base = ai["api_base"].rstrip("/")
+            if not await self._ensure_local_backend(ai):
+                raise AiUnavailable(
+                    f"AI backend unreachable at {api_base} — start Ollama/LM Studio or check Settings."
+                ) from err
+            try:
+                async with AsyncClient(timeout=LLM_TIMEOUT_SECONDS) as client:
+                    response = await client.post(url, json=payload, headers=self._headers(ai))
+            except httpx.RequestError as retry_err:
+                raise AiUnavailable(
+                    f"AI backend unreachable at {api_base} — QCnext attempted to start "
+                    "LM Studio and load the model, but the backend is still not "
+                    "responding. Check LM Studio or Settings."
+                ) from retry_err
+        if response.status_code >= 400:
+            raise AiUnavailable(f"AI backend error {response.status_code}: {_body_snippet(response)}")
+        return response
+
+    async def _chat_agentic(self, ai: dict, system_prompt: str, content: str, confirm_writes: bool) -> dict:
+        """Run the model with the project's MCP tools available.
+
+        Loops up to ``MAX_AGENTIC_ITERATIONS`` times: the model may call tools
+        (read tools always; write tools only when ``mcp_permissions`` allows)
+        and the results are fed back until it answers in plain text. When
+        ``confirm_writes`` is set, the first batch of write-tool calls is
+        paused for user approval instead of being executed immediately.
+        """
+        from qualcoder_api.services.mcp_provider import make_provider
+
+        if self.session_factory is None:
+            raise AiUnavailable("Open a project to use AI tools.")
+        provider = make_provider(ai, self.session_factory)
+        await provider.__aenter__()
+        try:
+            tools = [_openai_tool(t) for t in provider.tools]
+            if not tools:
+                raise AiUnavailable("No project tools available — open a project to use AI tools.")
+            api_base = ai["api_base"].rstrip("/")
+            url = f"{api_base}{CHAT_PATH}"
+            state = {
+                "messages": [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": content},
+                ],
+                "tools": tools,
+                "ai": ai,
+                "url": url,
+                "approved": False,
+                "trace": [],
+                "provider": provider,
+            }
+            result = await self._agentic_step(state, confirm_writes)
+            # Clean up the provider unless we are pausing for write approval
+            # (in which case approve_agentic will clean it up later).
+            if result.get("status") != "awaiting_approval":
+                await provider.__aexit__(None, None, None)
+            return result
+        except BaseException as err:
+            await provider.__aexit__(type(err), err, err.__traceback__)
+            raise
+
+    async def _agentic_step(self, state: dict, confirm_writes: bool) -> dict:
+        """Advance the agentic loop until the model answers or the cap is hit."""
+        from qualcoder_api.services.mcp_provider import ExternalMcpProvider
+        from qualcoder_api.services.mcp_service import WRITE_TOOLS
+
+        messages = state["messages"]
+        tools = state["tools"]
+        ai = state["ai"]
+        url = state["url"]
+        trace = state["trace"]
+        provider = state["provider"]
+        write_names = {t["name"] for t in WRITE_TOOLS}
+        # External MCP servers handle their own write safety — skip the
+        # confirm_writes pause for external providers.
+        external = isinstance(provider, ExternalMcpProvider)
+        for _ in range(MAX_AGENTIC_ITERATIONS):
+            payload = {
+                "model": ai["model"],
+                "messages": messages,
+                "tools": tools,
+                "tool_choice": "auto",
+                "stream": False,
+            }
+            try:
+                response = await self._post_chat(url, payload, ai)
+            except AiUnavailable as err:
+                if not _tools_rejected(str(err)):
+                    raise
+                # Backend doesn't accept the tools field — degrade to plain chat.
+                plain = {"model": ai["model"], "messages": messages, "stream": False}
+                response = await self._post_chat(url, plain, ai)
+                data = response.json()
+                choices = data.get("choices") or []
+                if choices:
+                    msg = choices[0].get("message") or {}
+                    return {"reply": msg.get("content") or "", "model": ai["model"], "tool_calls": trace}
+                return {"reply": "", "model": ai["model"], "tool_calls": trace}
+            data = response.json()
+            choices = data.get("choices") or []
+            if not choices:
+                break
+            msg = choices[0].get("message") or {}
+            tool_calls = msg.get("tool_calls") or []
+            if not tool_calls:
+                return {"reply": msg.get("content") or "", "model": ai["model"], "tool_calls": trace}
+            messages.append(
+                {"role": "assistant", "content": msg.get("content"), "tool_calls": tool_calls}
+            )
+            if confirm_writes and not state["approved"] and not external:
+                pending = [tc for tc in tool_calls if _tool_call_name(tc) in write_names]
+                if pending:
+                    # Execute the non-write tools of this batch right away so
+                    # no tool_call_id is left dangling while we wait for the
+                    # user's decision on the writes.
+                    for tc in tool_calls:
+                        if tc in pending:
+                            continue
+                        name = _tool_call_name(tc)
+                        args = _tool_call_args(tc)
+                        text = await self._run_tool(provider, name, args)
+                        messages.append(
+                            {"role": "tool", "tool_call_id": tc.get("id") or uuid.uuid4().hex, "content": text}
+                        )
+                        trace.append(
+                            {
+                                "tool": name,
+                                "arguments": args,
+                                "result": _text_result(text),
+                            }
+                        )
+                    token = uuid.uuid4().hex
+                    state["pending"] = pending
+                    _pending_agentic[token] = state
+                    return {
+                        "status": "awaiting_approval",
+                        "token": token,
+                        "pending_tools": [
+                            {"name": _tool_call_name(tc), "arguments": _tool_call_args(tc)}
+                            for tc in pending
+                        ],
+                    }
+            for tc in tool_calls:
+                name = _tool_call_name(tc)
+                args = _tool_call_args(tc)
+                text = await self._run_tool(provider, name, args)
+                messages.append(
+                    {"role": "tool", "tool_call_id": tc.get("id") or uuid.uuid4().hex, "content": text}
+                )
+                trace.append(
+                    {"tool": name, "arguments": args, "result": _text_result(text)}
+                )
+        return {
+            "reply": "The assistant did not produce a final answer.",
+            "model": ai["model"],
+            "tool_calls": trace,
+        }
+
+    async def _run_tool(self, provider: Any, name: str, args: dict) -> str:
+        """Execute one MCP tool; a failure becomes an error tool-result so the
+        model can recover instead of aborting the whole turn."""
+        try:
+            return await provider.call(name, args)
+        except Exception as err:  # pragma: no cover - defensive
+            return json.dumps({"error": str(err)}, ensure_ascii=False)
+
+    async def approve_agentic(self, token: str, approve: bool) -> dict:
+        """Continue a paused agentic turn: execute (or reject) the pending
+        write-tool calls, then run the loop to completion."""
+        state = _pending_agentic.pop(token, None)
+        if state is None:
+            raise AiUnavailable("The pending tool approval expired or is no longer available.")
+        provider = state.get("provider")
+        pending = state.pop("pending", [])
+        messages = state["messages"]
+        state["approved"] = True
+        for tc in pending:
+            name = _tool_call_name(tc)
+            args = _tool_call_args(tc)
+            if approve:
+                text = await self._run_tool(provider, name, args)
+            else:
+                text = json.dumps({"status": "rejected by the user"}, ensure_ascii=False)
+            messages.append(
+                {"role": "tool", "tool_call_id": tc.get("id") or uuid.uuid4().hex, "content": text}
+            )
+            state["trace"].append(
+                {"tool": name, "arguments": args, "result": _text_result(text), "approved": approve}
+            )
+        try:
+            return await self._agentic_step(state, confirm_writes=False)
+        finally:
+            if provider is not None:
+                await provider.__aexit__(None, None, None)
 
     async def _custom_prompt_text(self, prompt_id: str) -> str | None:
         """Body of a user-defined template (``custom:<row-id>``), or None."""
@@ -635,11 +945,26 @@ class AiService:
         return _cap_text("\n\n".join(blocks), TOPIC_SELECTION_MAX_CHARS)
 
     async def semantic_search(
-        self, ai: dict, query: str, limit: int = 10, source_ids: list[int] | None = None
+        self,
+        ai: dict,
+        query: str,
+        limit: int = 10,
+        source_ids: list[int] | None = None,
+        category_id: int | None = None,
     ) -> dict:
         ok, _ = self.is_configured(ai)
         if not ok:
             raise AiUnavailable("AI is not configured")
+
+        if category_id is not None:
+            if self.session_factory is None:
+                raise AiUnavailable("AI is not configured")
+            from qualcoder_api.services.search_service import category_source_ids
+
+            async with self.session_factory() as session:
+                source_ids = await category_source_ids(session, category_id, source_ids)
+            if not source_ids:
+                return {"results": [], "indexed": False}
 
         # Use the persistent index when one exists for the same project
         # (built via POST /ai/index); otherwise fall back to the stateless
@@ -701,14 +1026,23 @@ class AiService:
 
         payload = {"model": ai["model"], "input": [query] + [c["text"] for c in chunks]}
         try:
-            async with AsyncClient(timeout=60) as client:
+            async with AsyncClient(timeout=EMBED_TIMEOUT_SECONDS) as client:
                 response = await client.post(url, json=payload, headers=self._headers(ai))
         except httpx.RequestError as err:
-            raise AiUnavailable(
-                f"AI backend unreachable at {api_base} — start Ollama/LM Studio or check "
-                "Settings. The /embeddings call failed, so this backend may not support "
-                "embeddings."
-            ) from err
+            if not await self._ensure_local_backend(ai):
+                raise AiUnavailable(
+                    f"AI backend unreachable at {api_base} — start Ollama/LM Studio or check "
+                    "Settings. The /embeddings call failed, so this backend may not support "
+                    "embeddings."
+                ) from err
+            try:
+                async with AsyncClient(timeout=EMBED_TIMEOUT_SECONDS) as client:
+                    response = await client.post(url, json=payload, headers=self._headers(ai))
+            except httpx.RequestError as retry_err:
+                raise AiUnavailable(
+                    f"AI backend unreachable at {api_base} — QCnext attempted to start "
+                    "LM Studio and load the model, but the backend is still not responding."
+                ) from retry_err
         if response.status_code >= 400:
             raise AiUnavailable(
                 f"AI backend error {response.status_code}: {_body_snippet(response)} "

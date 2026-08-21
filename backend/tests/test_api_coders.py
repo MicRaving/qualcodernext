@@ -82,6 +82,37 @@ async def test_list_coders_merges_project_owners(client, open_project, monkeypat
     assert res.json()["current"] == "marvin"
 
 
+async def test_coding_count_counts_segments_not_all_owner_rows(client, open_project, monkeypatch, tmp_path):
+    """The coder flyout's "coded segments" number must reflect codings only —
+    NOT every owned record (sources, codes, ... which would inflate it)."""
+    from qualcoder_api.services import user_settings
+
+    monkeypatch.setattr(user_settings, "SETTINGS_FILE", tmp_path / "settings.json")
+
+    import os
+
+    source = open_project / "documents" / "a.txt"
+    os.makedirs(source.parent, exist_ok=True)
+    source.write_text("hello world", encoding="utf-8")
+    await client.post(
+        "/api/v1/sources/import",
+        files={"file": ("a.txt", "hello world", "text/plain")},
+    )
+    fid = (await client.get("/api/v1/sources")).json()[0]["id"]
+    await client.post("/api/v1/codes", json={"name": "T", "owner": None, "catid": None})
+    cid = (await client.get("/api/v1/codes")).json()[-1]["id"]
+    await client.post(
+        "/api/v1/codings/text",
+        json={"cid": cid, "fid": fid, "seltext": "hello", "pos0": 0, "pos1": 5},
+    )
+
+    # "default" owns a source + a code + a coding: the displayed count is the
+    # number of coding SEGMENTS (1), not the owner-row total (3).
+    res = await client.get("/api/v1/coders")
+    by_name = {c["name"]: c["coding_count"] for c in res.json()["coders"]}
+    assert by_name.get("default") == 1
+
+
 async def test_rename_coder_updates_owners(client, open_project, monkeypatch, tmp_path):
     """Renaming a coder moves their rows, the visibility registry and the
     per-machine settings."""

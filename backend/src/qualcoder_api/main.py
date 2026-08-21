@@ -15,7 +15,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from qualcoder_api.api.v1.router import router as v1_router
-from qualcoder_api.services import sync, user_settings
+from qualcoder_api.services import sync, sync_engine, user_settings
 from qualcoder_api.services.project_service import ProjectService
 
 logger = logging.getLogger(__name__)
@@ -65,16 +65,16 @@ def _unhandled_exception_handler(request: Request, exc: Exception) -> JSONRespon
 
 async def _sync_loop() -> None:
     """Collaboration sync: while the per-machine switch is on, export local
-    changes and import other raters' sidecar files every ``SYNC_INTERVAL_SECS``."""
+    changes and import other instances' sidecar files every ``SYNC_INTERVAL_SECS``."""
     while True:
-        await asyncio.sleep(sync.SYNC_INTERVAL_SECS)
+        await asyncio.sleep(sync_engine.SYNC_INTERVAL_SECS)
         if not sync.sync_enabled():
             continue
         if service.project_path and service.session_factory:
             try:
-                await sync.run_sync_cycle(
+                await sync_engine.run_sync_cycle(
                     service.session_factory, service.project_path,
-                    user_settings.get_codername(),
+                    user_settings.get_instance_id(),
                 )
             except Exception as err:  # pragma: no cover - defensive
                 logger.exception("background sync cycle failed: %s", err)
@@ -96,6 +96,7 @@ async def _presence_loop() -> None:
                 user_settings.get_codername(),
                 file_id=service.current_source_id,
                 file_name=service.current_source_name,
+                instance_id=user_settings.get_instance_id(),
             )
         except Exception as err:  # pragma: no cover - defensive
             logger.exception("presence heartbeat failed: %s", err)

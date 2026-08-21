@@ -62,20 +62,24 @@ The specs run alphabetically in one serial worker (see "Why serial" below):
 7. **Media** (`media.spec.ts`) — AV coding on a generated WAV: timeline
    segments, delete, play/pause, the manual-transcription mode toggle, and a
    whisper transcription run (skipped when no spoken fixture exists).
-8. **Roadmap** (`roadmap.spec.ts`) — v0.2.0 features: code promote/demote via
-   the sidebar context menu, the reports registry (dictionary / statistics /
+8. **Roadmap** (`roadmap.spec.ts`) — later-round features: code promote/demote
+   via the sidebar context menu, the reports registry (dictionary / statistics /
    summary table / sentiment / document comparison), QTT worksheet creation +
    note entry, the creative scratchpad, and value-labels selects in the
    attribute editor. Shares ONE project across its five tests.
 9. **Smoke** (`smoke-features.spec.ts`) — reports menu bar, graphs under
    reports, journal ribbon.
-10. **Tasks + a11y** (`tasks-a11y.spec.ts`) — batch autocode with eligible
+10. **Sync** (`sync.spec.ts`) — collaboration sync end to end: the coder-flyout
+    sync switch + status + "Sync now", the shared-folder auto-detect notice
+    (project under a "OneDrive" path), and live coder presence (active-coder
+    indicator + current file) via a simulated peer presence file.
+11. **Tasks + a11y** (`tasks-a11y.spec.ts`) — batch autocode with eligible
     counts on the batch buttons, the background-tasks queue flyout (pause/
     resume/delete/clear), the coder flyout (viewport bounds, per-coder
     trashcan incl. the reassignment prompt, background-tasks section), sidebar
     drag-hide, display-mode a11y classes, and the PDF coder's plain-text pane
     (PDF + text side by side). Shares ONE project across its first four tests.
-11. **Coverage wave** (`coverage-wave.spec.ts`) — History per-row undo/redo of
+12. **Coverage wave** (`coverage-wave.spec.ts`) — History per-row undo/redo of
     a coding, Notes journal entry + code memo via the memos tab, the Files row
     context menu (rename/delete, Assign-to-case/Replace presence), the
     Sentiment lexicon report, the Statistics crosstab (chi-square) and the
@@ -103,8 +107,9 @@ weakening the assertions.
 ## Speedups applied (2026-08)
 
 Before: **37 tests, 1.9 m wall** (104 s of test time; the first test paid a
-32.3 s cold-vite transform). After: **42 tests, 1.9 m wall** (93 s of test
-time — 5 more tests, ~11 s faster summed).
+32.3 s cold-vite transform). After (current): **53 tests, ~4 m wall** across
+12 specs — the growth is new specs (sync, tasks+a11y, coverage-wave), not
+slower tests.
 
 - **Vite prewarm in `global-setup.ts`** — fetches `/src/main.tsx` once the
   dev server is up; vite transforms the whole static module graph

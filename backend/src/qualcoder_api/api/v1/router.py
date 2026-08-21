@@ -26,6 +26,7 @@ from qualcoder_api.api.v1.entities import (
     journal_router,
 )
 from qualcoder_api.api.v1.graphs import router as graphs_router
+from qualcoder_api.api.v1.help import router as help_router
 from qualcoder_api.api.v1.importers import router as importers_router
 from qualcoder_api.api.v1.interchange import router as interchange_router
 from qualcoder_api.api.v1.links import router as links_router
@@ -35,6 +36,7 @@ from qualcoder_api.api.v1.r import router as r_router
 from qualcoder_api.api.v1.r_scripts import router as r_scripts_router
 from qualcoder_api.api.v1.reports import router as reports_router
 from qualcoder_api.api.v1.scrape import router as scrape_router
+from qualcoder_api.api.v1.search import router as search_router
 from qualcoder_api.api.v1.sentiment import router as sentiment_router
 from qualcoder_api.api.v1.sources import router as sources_router
 from qualcoder_api.api.v1.sql_reports import router as sql_router
@@ -81,6 +83,8 @@ router.include_router(comments_router)
 router.include_router(code_sets_router)
 router.include_router(r_router)
 router.include_router(r_scripts_router)
+router.include_router(search_router)
+router.include_router(help_router)
 
 
 class HealthResponse(BaseModel):
@@ -384,3 +388,65 @@ class OpenersResponse(BaseModel):
 async def project_openers(svc: ServiceDep) -> OpenersResponse:
     """Other live instances currently holding the project open."""
     return OpenersResponse(openers=svc.openers())
+
+
+class ProjectModeResponse(BaseModel):
+    mode: str = "single"  # "single" | "collaboration"
+    uuid: str = ""
+
+
+class CollaborationResponse(BaseModel):
+    ok: bool
+    reason: str = ""
+    uuid: str = ""
+
+
+@router.get("/projects/mode", response_model=ProjectModeResponse)
+async def project_mode(svc: ServiceDep) -> ProjectModeResponse:
+    """Whether the open project runs in collaboration (sandbox) mode."""
+    if svc.collaboration_mode():
+        return ProjectModeResponse(mode="collaboration", uuid=svc.uuid)
+    return ProjectModeResponse(mode="single")
+
+
+@router.post("/projects/activate-collaboration", response_model=CollaborationResponse)
+async def activate_collaboration(svc: ServiceDep) -> CollaborationResponse:
+    """Switch the open project to collaboration (sandbox) mode.
+
+    Gated on sync being enabled and ≥2 real coders.  Idempotent.
+    """
+    if svc.engine is None or not svc.project_path:
+        raise HTTPException(status_code=409, detail="no project is open")
+    from qualcoder_api.services.user_settings import get_codername
+
+    result = await svc.activate_collaboration(codername=get_codername())
+    if not result.get("ok"):
+        raise HTTPException(status_code=409, detail=result.get("reason", "cannot activate"))
+    return CollaborationResponse(
+        ok=True, reason=result.get("reason", ""), uuid=result.get("uuid", "")
+    )
+
+
+@router.post("/projects/revert-collaboration", response_model=CollaborationResponse)
+async def revert_collaboration(svc: ServiceDep) -> CollaborationResponse:
+    """Consolidate to ``data.qda`` and return to single-coder mode.
+
+    Destructive: removes the marker, sandbox, sidecars and disables sync.
+    """
+    if svc.engine is None or not svc.project_path:
+        raise HTTPException(status_code=409, detail="no project is open")
+    result = await svc.revert_collaboration()
+    if not result.get("ok"):
+        raise HTTPException(status_code=409, detail=result.get("reason", "cannot revert"))
+    return CollaborationResponse(ok=True, reason=result.get("reason", ""))
+
+
+@router.post("/projects/consolidate", response_model=CollaborationResponse)
+async def consolidate_project(svc: ServiceDep) -> CollaborationResponse:
+    """Refresh the cold ``data.qda`` archive from the live sandbox."""
+    if svc.engine is None or not svc.project_path:
+        raise HTTPException(status_code=409, detail="no project is open")
+    result = await svc.consolidate()
+    if not result.get("ok"):
+        raise HTTPException(status_code=409, detail=result.get("reason", "cannot consolidate"))
+    return CollaborationResponse(ok=True, reason=result.get("reason", ""))

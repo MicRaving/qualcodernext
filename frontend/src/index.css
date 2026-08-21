@@ -115,6 +115,15 @@ footer,
   -webkit-user-select: none;
 }
 
+/* Active-toggle indicator: an orange accent glow for toolbar buttons that
+   represent a persistent on/off state (linked position sync, continuous
+   scroll). Applied alongside border-accent text-accent. */
+.qc-glow {
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--qc-accent) 55%, transparent),
+    0 0 8px color-mix(in srgb, var(--qc-accent) 45%, transparent);
+}
+
 main:not(:has(.qc-selectable)) {
   user-select: none;
   -webkit-user-select: none;

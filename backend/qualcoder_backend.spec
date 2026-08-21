@@ -6,7 +6,7 @@ so nothing is unpacked at launch — the current onefile variant re-extracted
 ~140 MB to a temp dir on every start, which dominated the startup time.
 
 Build:  .\.venv\Scripts\python.exe -m PyInstaller --noconfirm qualcoder_backend.spec
-Output: dist/qualcoder-backend/  (copied into the Tauri resources by compile.ps1)
+Output: dist/qualcoder-backend/  (copied into the Tauri resources by release.ps1 -Compile)
 
 All paths are relative to this spec file so the same build runs on Windows,
 Linux and macOS (CI matrix).
@@ -67,7 +67,14 @@ datas += collect_data_files("pymupdf")
 # --- AI prompt library (markdown package data) ------------------------------------
 datas += collect_data_files("qualcoder_api.ai_prompts")
 
+# --- In-app help library (bundled markdown docs) -----------------------------------
+datas += collect_data_files("qualcoder_api.help_docs")
+
 # --- faster-whisper (lazy import; ctranslate2/onnxruntime native binaries) -------
+# NOTE: faster_whisper/audio.py decodes media through PyAV — the `av` package
+# (~63 MB of FFmpeg DLLs) is REQUIRED for transcription and must NEVER be added
+# to `excludes`; doing so silently disables the whisper engine (the top-level
+# `import faster_whisper` fails and engines_available() reports whisper=False).
 hiddenimports += collect_submodules("faster_whisper")
 hiddenimports += ["ctranslate2", "onnxruntime", "tokenizers", "huggingface_hub"]
 datas += collect_data_files("tokenizers")

@@ -391,5 +391,5 @@ async def test_v31_adds_position_columns_and_stamps_version(tmp_path):
         cols = {row[1] for row in await cur.fetchall()}
         assert "position" in cols, f"missing position on {table}"
     await cur.execute("SELECT databaseversion FROM project")
-    assert (await cur.fetchone())[0] == "v34"
+    assert (await cur.fetchone())[0] == "v35"
     await conn.close()

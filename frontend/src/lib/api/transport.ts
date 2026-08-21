@@ -266,6 +266,37 @@ export async function localRequest<T>(
   }
 }
 
+/** Same contract as {@link localRequest} for binary (Blob) responses. */
+export async function localRequestBlob(
+  path: string,
+  init: RequestInit = {},
+  timeoutMs = REQUEST_TIMEOUT_MS,
+): Promise<Blob> {
+  const doFetch = async (): Promise<Blob> => {
+    const base = await initApiBase();
+    const headers =
+      init.body instanceof FormData ? undefined : { "Content-Type": "application/json" };
+    const res = await fetchWithTimeout(`${base}${path}`, { headers, ...init }, timeoutMs);
+    if (!res.ok) {
+      let detail: unknown;
+      try {
+        detail = (await res.json()).detail;
+      } catch {
+        /* non-JSON error body */
+      }
+      const suffix = typeof detail === "string" && detail ? `: ${detail}` : "";
+      throw new ApiError(res.status, `API error ${res.status} on ${path}${suffix}`, detail);
+    }
+    return res.blob();
+  };
+  try {
+    return await doFetch();
+  } catch (err) {
+    if (err instanceof ApiError) throw err;
+    return doFetch();
+  }
+}
+
 /** URL to an R artifact (PNG/CSV written by an R job into the exchange dir). */
 export function rArtifactUrl(name: string): string {
   return `${apiBaseSync()}/r/artifacts/${encodeURIComponent(name)}`;

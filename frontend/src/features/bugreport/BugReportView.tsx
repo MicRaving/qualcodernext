@@ -31,6 +31,7 @@ import {
 } from "lucide-react";
 import { Button, Field, IconButton, Input, Modal, Textarea } from "@/components/ui/orchestrator";
 import { useI18n } from "@/lib/i18n";
+import { APP_VERSION } from "@/lib/version";
 import { useProjectStore, type BugReportState } from "@/stores/project";
 import { errorDetail } from "@/features/ai/format";
 import {
@@ -319,7 +320,7 @@ export function BugReportView() {
     const st = useProjectStore.getState().bugReport;
     if (!open || st.body) return;
     const block = envBlock(
-      t("app.version"),
+      APP_VERSION,
       typeof navigator !== "undefined" ? navigator.userAgent : "unknown",
       st.lastAction,
       st.lastError,

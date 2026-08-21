@@ -96,6 +96,57 @@ class SourceRepository:
         await self.session.commit()
         return source
 
+    async def create_transcript_companion(
+        self, *, media_source_id: int, name: str, owner: str
+    ) -> Source | None:
+        """Create an EMPTY transcript companion and link it to the media
+        source via ``av_text_id`` — atomically.
+
+        Both writes (companion insert + media backlink) land in ONE commit,
+        so a crash can never strand an orphan companion that is invisible in
+        the file list yet has no owning AV source. Sync/audit capture mirrors
+        add_source + update_source.
+        """
+        from qualcoder_api.persistence import audit_capture
+
+        result = await self.session.execute(
+            insert(tables.source).values(
+                name=name,
+                fulltext="",
+                mediapath=None,
+                memo="",
+                owner=owner,
+                date=_now(),
+                av_text_id=None,
+                risid=None,
+            )
+        )
+        new_id = _inserted_pk(result)
+        await self.session.execute(
+            update(tables.source)
+            .where(tables.source.c.id == media_source_id)
+            .values(av_text_id=new_id)
+        )
+        for sid, is_insert in ((new_id, True), (media_source_id, False)):
+            row = (
+                await self.session.execute(
+                    select(tables.source).where(tables.source.c.id == sid)
+                )
+            ).first()
+            if row is None:  # pragma: no cover - defensive
+                continue
+            payload = audit_capture.table_row(row._mapping)
+            if is_insert:
+                await audit_capture.capture_insert(
+                    self.session, entity="source", pk_name="id", pk_value=sid, row=payload
+                )
+            else:
+                await audit_capture.capture_update(
+                    self.session, entity="source", pk_name="id", pk_value=sid, row=payload
+                )
+        await self.session.commit()
+        return await self.get_source(new_id)
+
     async def update_source(self, source_id: int, **fields) -> Source | None:
         allowed = {
             "name",

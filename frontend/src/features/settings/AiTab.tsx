@@ -1,6 +1,7 @@
 /**
  * AiTab — Settings "AI" tab: the AI assistant toggle, provider / model /
- * base URL / API key / MCP permissions and the live service-status row.
+ * base URL / API key / MCP permissions, MCP mode (internal vs. external),
+ * and the live service-status row.
  * All settings auto-save (debounced); the semantic index lives on the
  * Maintenance tab.
  *
@@ -10,12 +11,12 @@
  * lifetime and is re-used on reopen; it dies with the app session.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
-import { LoaderCircle, RotateCw } from "lucide-react";
+import { LoaderCircle } from "lucide-react";
 import { api } from "@/lib/api";
 import { AI_REFRESH_MS } from "@/lib/config";
 import { errorDetail } from "@/features/ai/format";
 import { useI18n } from "@/lib/i18n";
-import { ErrorBanner, Field, IconButton, Input, Select } from "@/components/ui/orchestrator";
+import { ErrorBanner, Field, Input, Select } from "@/components/ui/orchestrator";
 
 interface AiDraft {
   enabled: boolean;
@@ -23,12 +24,15 @@ interface AiDraft {
   apiBase: string;
   model: string;
   apiKey: string;
-  mcpPermissions: string;
+  mcpMode: string;
+  mcpCommand: string;
+  mcpArgs: string;
+  mcpEnv: string;
 }
 
 let aiDraftCache: AiDraft | null = null;
 
-const PROVIDER_ORDER = ["ollama", "lmstudio", "opencode-go", "gemini", "gpt", "claude", "custom"];
+const PROVIDER_ORDER = ["lmstudio", "ollama", "opencode-go", "gemini", "gpt", "claude", "custom"];
 const PROVIDER_LABEL_KEYS: Record<string, string> = {
   ollama: "settings.aiProviderOllama",
   lmstudio: "settings.aiProviderLmStudio",
@@ -51,26 +55,45 @@ const PROVIDER_PRESETS: Record<string, { url: string; model: string }> = {
   claude: { url: "https://api.anthropic.com/v1", model: "claude-sonnet-4-6" },
 };
 
+// Providers that call a remote (online) API and therefore need an API key.
+// Local providers (Ollama, LM Studio, opencode-go) run on this machine and
+// need no key — the key field is hidden for them.
+const ONLINE_PROVIDERS = ["gemini", "gpt", "claude", "custom"];
+const needsApiKey = (provider: string) => ONLINE_PROVIDERS.includes(provider);
+
+/** Parse a "key=value\nkey2=value2" string into a record, dropping blanks. */
+function parseEnvLines(raw: string): Record<string, string> {
+  const env: Record<string, string> = {};
+  for (const line of raw.split("\n")) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith("#")) continue;
+    const eq = trimmed.indexOf("=");
+    if (eq < 1) continue;
+    const key = trimmed.slice(0, eq).trim();
+    const val = trimmed.slice(eq + 1).trim();
+    if (key) env[key] = val;
+  }
+  return env;
+}
+
 export function AiTab() {
   const { t } = useI18n();
 
   const [enabled, setEnabled] = useState(() => aiDraftCache?.enabled ?? false);
-  const [provider, setProvider] = useState(() => aiDraftCache?.provider ?? "ollama");
-  const [apiBase, setApiBase] = useState(() => aiDraftCache?.apiBase ?? "");
+  const [provider, setProvider] = useState(() => aiDraftCache?.provider ?? "lmstudio");
+  const [apiBase, setApiBase] = useState(
+    () => aiDraftCache?.apiBase ?? "http://127.0.0.1:1234/v1",
+  );
   const [model, setModel] = useState(() => aiDraftCache?.model ?? "");
   const [apiKey, setApiKey] = useState(() => aiDraftCache?.apiKey ?? "");
-  const [mcpPermissions, setMcpPermissions] = useState(
-    () => aiDraftCache?.mcpPermissions ?? "read",
-  );
+  const [mcpMode, setMcpMode] = useState(() => aiDraftCache?.mcpMode ?? "internal");
+  const [mcpCommand, setMcpCommand] = useState(() => aiDraftCache?.mcpCommand ?? "");
+  const [mcpArgs, setMcpArgs] = useState(() => aiDraftCache?.mcpArgs ?? "");
+  const [mcpEnv, setMcpEnv] = useState(() => aiDraftCache?.mcpEnv ?? "");
   const [models, setModels] = useState<string[]>([]);
   const [modelsLoading, setModelsLoading] = useState(false);
   const [modelsError, setModelsError] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
-
-  /** Service-status check button: "checking" → "ok"/"broken" for 3s. */
-  const [serviceCheck, setServiceCheck] = useState<"idle" | "checking" | "ok" | "broken">("idle");
-  const [serviceProbeError, setServiceProbeError] = useState<string | null>(null);
-  const serviceCheckTimer = useRef<number | null>(null);
 
   /** Sequence guard for model fetches — a stale response (previous provider)
    *  must never overwrite the current provider's list. */
@@ -91,7 +114,7 @@ export function AiTab() {
       setProvider(s.provider);
       setApiBase(s.base_url);
       setModel(s.model);
-      setMcpPermissions(s.mcp_permissions ?? "read");
+      setMcpMode(s.mcp_mode ?? "internal");
     } catch {
       /* fields keep their defaults when the backend is unreachable */
     }
@@ -132,9 +155,12 @@ export function AiTab() {
       apiBase,
       model,
       apiKey,
-      mcpPermissions,
+      mcpMode,
+      mcpCommand,
+      mcpArgs,
+      mcpEnv,
     };
-  }, [enabled, provider, apiBase, model, apiKey, mcpPermissions]);
+  }, [enabled, provider, apiBase, model, apiKey, mcpMode, mcpCommand, mcpArgs, mcpEnv]);
 
   // Model polling: fetch whenever the provider or base URL changes (with the
   // previous list cleared — no leftover models from other providers), and
@@ -153,31 +179,6 @@ export function AiTab() {
     return () => window.clearInterval(timer);
   }, [provider, apiBase, loadModels, enabled]);
 
-  /** Probe the configured provider; the button shows OK/broken for 3s. */
-  async function checkService() {
-    if (serviceCheck === "checking") return;
-    setServiceCheck("checking");
-    setServiceProbeError(null);
-    try {
-      const s = await api.aiStatus(true);
-      const ok = s.reachable === true;
-      setServiceCheck(ok ? "ok" : "broken");
-      if (!ok && s.probe_error) setServiceProbeError(s.probe_error);
-    } catch (e) {
-      setServiceCheck("broken");
-      setServiceProbeError(errorDetail(e, t("settings.aiLoadError")));
-    }
-    if (serviceCheckTimer.current !== null) window.clearTimeout(serviceCheckTimer.current);
-    serviceCheckTimer.current = window.setTimeout(() => setServiceCheck("idle"), 3000);
-  }
-
-  useEffect(
-    () => () => {
-      if (serviceCheckTimer.current !== null) window.clearTimeout(serviceCheckTimer.current);
-    },
-    [],
-  );
-
   /** Auto-save the AI settings (debounced) — no Save button, no "Saved"
    *  flash; only errors surface. Only runs after the user actually edited
    *  something: a bare mount must never write defaults over stored settings
@@ -188,20 +189,39 @@ export function AiTab() {
     if (!touchedRef.current) return;
     saveTimer.current = window.setTimeout(() => {
       setSaveError(null);
+      // Parse space-separated args string into an array.
+      const argsArray = mcpArgs
+        .trim()
+        .split(/\s+/)
+        .filter(Boolean);
       const body = {
         enabled,
         provider,
         api_base: apiBase.trim(),
         model: model.trim(),
         api_key: apiKey,
-        mcp_permissions: mcpPermissions,
+        mcp_mode: mcpMode,
+        mcp_server_command: mcpCommand.trim(),
+        mcp_server_args: argsArray.length > 0 ? argsArray : [],
+        mcp_server_env: parseEnvLines(mcpEnv),
       };
       void api.aiSaveSettings(body).catch((e) => setSaveError(errorDetail(e, t("settings.aiSaveError"))));
     }, 600);
     return () => {
       if (saveTimer.current !== null) window.clearTimeout(saveTimer.current);
     };
-  }, [enabled, provider, apiBase, model, apiKey, mcpPermissions, t]);
+  }, [
+    enabled,
+    provider,
+    apiBase,
+    model,
+    apiKey,
+    mcpMode,
+    mcpCommand,
+    mcpArgs,
+    mcpEnv,
+    t,
+  ]);
 
   function handleProviderChange(next: string) {
     markTouched();
@@ -316,7 +336,7 @@ export function AiTab() {
                 className="w-full"
               />
             </Field>
-            <div className="grid grid-cols-2 gap-3">
+            {needsApiKey(provider) && (
               <Field label={t("settings.apiKey")}>
                 <Input
                   type="password"
@@ -334,73 +354,70 @@ export function AiTab() {
                   </span>
                 )}
               </Field>
-              <Field label={t("ai.mcpPermissions")}>
-                <Select
-                  value={mcpPermissions}
-                  onChange={(e) => {
-                    markTouched();
-                    setMcpPermissions(e.target.value);
-                  }}
-                  className="w-full"
-                >
-                  <option value="read">{t("ai.mcpRead")}</option>
-                  <option value="write">{t("ai.mcpWrite")}</option>
-                  <option value="full">{t("ai.mcpFull")}</option>
-                </Select>
-              </Field>
-            </div>
-          </div>
-        )}
+            )}
 
-        {/* Service status — a fixed-height inline row: a status dot + short
-            label and a small re-probe button. The dot stays success/danger/
-            warning-colored; no banners, no height jumps. */}
-        {enabled && (
-          <div className="mt-3 border-t border-border pt-3">
-            <div className="flex items-center gap-1.5">
-              <h3 className="text-xs font-semibold text-text-primary">{t("settings.aiServiceStatus")}</h3>
-            </div>
-            <div className="mt-2 flex h-6 items-center gap-1.5" title={serviceProbeError ?? undefined}>
-              <span
-                className={`h-1.5 w-1.5 shrink-0 rounded-full ${
-                  serviceCheck === "ok"
-                    ? "bg-success"
-                    : serviceCheck === "broken"
-                      ? "bg-danger"
-                      : serviceCheck === "checking"
-                        ? "bg-warning"
-                        : "bg-border"
-                }`}
-                aria-hidden
-              />
-              <span className="min-w-0 truncate text-xs text-text-secondary">
-                {serviceCheck === "checking"
-                  ? t("settings.aiChecking")
-                  : serviceCheck === "ok"
-                    ? t("settings.aiStatusConnected")
-                    : serviceCheck === "broken"
-                      ? t("settings.aiStatusUnreachable")
-                      : t("settings.aiCheckStatus")}
-              </span>
-              <IconButton
-                label={t("settings.aiCheckStatus")}
-                title={t("settings.aiCheckStatus")}
-                size="sm"
-                disabled={serviceCheck === "checking"}
-                onClick={() => void checkService()}
-                className="ml-auto"
+            {/* MCP Mode */}
+            <Field label={t("settings.mcpMode")}>
+              <Select
+                value={mcpMode}
+                onChange={(e) => {
+                  markTouched();
+                  setMcpMode(e.target.value);
+                }}
+                className="w-full"
               >
-                {serviceCheck === "checking" ? (
-                  <LoaderCircle size={12} className="animate-spin" aria-hidden />
-                ) : (
-                  <RotateCw size={12} aria-hidden />
-                )}
-              </IconButton>
-            </div>
+                <option value="internal">{t("settings.mcpModeInternal")}</option>
+                <option value="external">{t("settings.mcpModeExternal")}</option>
+              </Select>
+              <span className="mt-1 block text-xs text-text-secondary">
+                {t("settings.mcpModeHint")}
+              </span>
+            </Field>
+
+            {/* External MCP server fields */}
+            {mcpMode === "external" && (
+              <>
+                <Field label={t("settings.mcpServerCommand")}>
+                  <Input
+                    type="text"
+                    value={mcpCommand}
+                    onChange={(e) => {
+                      markTouched();
+                      setMcpCommand(e.target.value);
+                    }}
+                    placeholder={t("settings.mcpServerCommandPlaceholder")}
+                    className="w-full"
+                  />
+                </Field>
+                <Field label={t("settings.mcpServerArgs")}>
+                  <Input
+                    type="text"
+                    value={mcpArgs}
+                    onChange={(e) => {
+                      markTouched();
+                      setMcpArgs(e.target.value);
+                    }}
+                    placeholder={t("settings.mcpServerArgsPlaceholder")}
+                    className="w-full"
+                  />
+                </Field>
+                <Field label={t("settings.mcpServerEnv")}>
+                  <textarea
+                    value={mcpEnv}
+                    onChange={(e) => {
+                      markTouched();
+                      setMcpEnv(e.target.value);
+                    }}
+                    placeholder={t("settings.mcpServerEnvPlaceholder")}
+                    rows={3}
+                    className="w-full rounded-sm border border-border bg-bg px-2 py-1.5 font-mono text-xs text-text-primary placeholder:text-text-secondary"
+                  />
+                </Field>
+              </>
+            )}
           </div>
         )}
       </div>
     </div>
   );
 }
-

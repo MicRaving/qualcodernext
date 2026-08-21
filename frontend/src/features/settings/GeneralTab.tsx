@@ -17,8 +17,6 @@ export function GeneralTab() {
   const { t, locale, setLocale } = useI18n();
   const themeMode = usePrefsStore((s) => s.themeMode);
   const setThemeMode = usePrefsStore((s) => s.setThemeMode);
-  const autoShowSegmentDetails = usePrefsStore((s) => s.autoShowSegmentDetails);
-  const setAutoShowSegmentDetails = usePrefsStore((s) => s.setAutoShowSegmentDetails);
 
   // Auto-load project on start (packaged app only; harmless elsewhere).
   const [autoLoadProject, setAutoLoadProject] = useState(true);
@@ -126,15 +124,6 @@ export function GeneralTab() {
             onChange={() => void toggleAutoLoadProject()}
             label={t("settings.autoLoadProject")}
             hint={t("settings.autoLoadProjectHint")}
-          />
-        </div>
-
-        <div className="mt-3 border-t border-border pt-3">
-          <Toggle
-            checked={autoShowSegmentDetails}
-            onChange={() => setAutoShowSegmentDetails(!autoShowSegmentDetails)}
-            label={t("settings.autoShowSegmentDetails")}
-            hint={t("settings.autoShowSegmentDetailsHint")}
           />
         </div>
 

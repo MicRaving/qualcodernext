@@ -65,6 +65,18 @@ async def _find_audit_id(client, action: str, index: int = 0) -> int:
     return rows[index]["id"]
 
 
+def _find_marker_id(target, action: str) -> int:
+    """Internal marker rows (audit.undo / audit.redo) are hidden from the API
+    list — read the raw log to find one."""
+    with sqlite3.connect(str(target / "data.qda")) as conn:
+        row = conn.execute(
+            "SELECT id FROM audit_log WHERE action = ? ORDER BY id DESC LIMIT 1",
+            (action,),
+        ).fetchone()
+    assert row, f"no {action} marker row"
+    return row[0]
+
+
 async def _import_text(client, open_project, name: str, content: str) -> int:
     path = open_project / "documents" / name
     os.makedirs(path.parent, exist_ok=True)
@@ -205,7 +217,7 @@ async def test_undo_records_marker_and_redo_pending(client, open_project):
     assert res.status_code == 200, res.text
 
     # An audit.undo marker exists and redo-pending reports it.
-    marker = await _find_audit_id(client, "audit.undo")
+    marker = _find_marker_id(open_project, "audit.undo")
     assert marker
     res = await client.get("/api/v1/audit/redo-pending")
     assert res.status_code == 200
@@ -231,6 +243,24 @@ async def test_undo_marker_is_not_itself_undoable(client, open_project):
     )
     aid = await _find_audit_id(client, "coding.create")
     await client.post("/api/v1/audit/undo", json={"id": aid})
-    marker = await _find_audit_id(client, "audit.undo")
+    marker = _find_marker_id(open_project, "audit.undo")
     res = await client.get(f"/api/v1/audit/{marker}/undoable")
     assert res.json()["undoable"] is False
+
+
+async def test_internal_actions_hidden_from_list_and_stats(client, open_project, settings_file):
+    # sync.toggle is an internal marker (drives the sync UI) — recorded in the
+    # raw log but excluded from the user-facing list and stats.
+    await client.put("/api/v1/sync/settings", json={"enabled": True})
+    res = await client.get("/api/v1/audit", params={"action": "sync.toggle"})
+    assert res.status_code == 200
+    assert res.json()["total"] == 0
+    res = await client.get("/api/v1/audit")
+    assert all(r["action"] != "sync.toggle" for r in res.json()["rows"])
+    stats = {row["action"] for row in (await client.get("/api/v1/audit/stats")).json()}
+    assert "sync.toggle" not in stats
+
+    marker = _find_marker_id(open_project, "sync.toggle")
+    res = await client.get(f"/api/v1/audit/{marker}")
+    assert res.status_code == 200
+    assert res.json()["action"] == "sync.toggle"

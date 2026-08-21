@@ -12,6 +12,7 @@ import { api } from "@/lib/api";
 import { Button, Input, Modal, ViewHeader } from "@/components/ui/orchestrator";
 import { useI18n } from "@/lib/i18n";
 import { useProjectStore } from "@/stores/project";
+import { APP_VERSION } from "@/lib/version";
 import { A11yControls } from "@/features/accessibility/A11yControls";
 
 /** True inside the Tauri shell (native dialogs available); false in plain-browser dev. */
@@ -218,7 +219,7 @@ export function DashboardView() {
         meta={
           projectOpen && summary
             ? `Database version ${summary.databaseversion} · created ${summary.project_date}`
-            : t("app.version")
+            : `v${APP_VERSION}`
         }
       />
       <div className="min-h-0 flex-1 overflow-y-auto p-6">

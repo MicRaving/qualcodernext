@@ -5,7 +5,7 @@ name: Release
 # artifacts with the repo's TAURI_SIGNING_PRIVATE_KEY secret, publishes the
 # installers to a GitHub release and assembles the static update manifest the
 # app's updater endpoint points at
-# (https://github.com/MicRaving/QCnext/releases/latest/download/qualcoder-latest.json).
+# (https://github.com/MicRaving/QCnext/releases/latest/download/qcnext-latest.json).
 #
 # Required repository secret: TAURI_SIGNING_PRIVATE_KEY — the content of
 # updater.key (the app's built-in pubkey lives in tauri.conf.json and must
@@ -39,6 +39,7 @@ jobs:
             target: windows-x86_64
             bundles: nsis
             release_files: |
+              frontend/src-tauri/target/release/qcnext.exe
               frontend/src-tauri/target/release/bundle/nsis/*setup.exe
               frontend/src-tauri/target/release/bundle/nsis/*setup.exe.sig
           - os: ubuntu-22.04
@@ -170,7 +171,7 @@ jobs:
           generate_release_notes: true
 
   manifest:
-    name: Assemble qualcoder-latest.json
+    name: Assemble qcnext-latest.json
     needs: build
     runs-on: ubuntu-22.04
     steps:
@@ -206,10 +207,10 @@ jobs:
             pub_date  = (Get-Date).ToUniversalTime().ToString("o")
             platforms = $platforms
           }
-          $manifest | ConvertTo-Json -Depth 6 | Set-Content "qualcoder-latest.json" -Encoding utf8
+          $manifest | ConvertTo-Json -Depth 6 | Set-Content "qcnext-latest.json" -Encoding utf8
 
       - name: Upload the update manifest
-        if: hashFiles('qualcoder-latest.json') != ''
+        if: hashFiles('qcnext-latest.json') != ''
         uses: softprops/action-gh-release@v2
         with:
-          files: qualcoder-latest.json
+          files: qcnext-latest.json

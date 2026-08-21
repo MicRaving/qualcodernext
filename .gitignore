@@ -20,7 +20,7 @@ src/lib/_locale_report.json
 # Project databases (user data)
 *.qda
 
-# Packaged backend onedir (copied by compile.ps1; regenerable, ~150 MB)
+# Packaged backend onedir (copied by release.ps1 -Compile; regenerable, ~150 MB)
 frontend/src-tauri/resources/backend/
 
 # OS / editor
@@ -35,15 +35,8 @@ playwright-report/
 **/tests-e2e/.servers.json
 **/tests-e2e/*.log
 
-
 # Rust / Tauri (build cache — multi-GB, fully regenerable)
 **/src-tauri/target/
 
-# Tauri updater signing (SECRET — never commit)
+# Tauri updater key - NEVER commit
 updater.key
-
-# Mic's notes - don't touch!
-00 ToDo.md
-
-# Old QualCoder - for reference only
-upstreamQualcoder

@@ -395,6 +395,7 @@ export const useProjectStore = create<ProjectLifecycleState>((set, get) => ({
         usePrefsStore.setState({ syncAutoNotice: true });
         void usePrefsStore.getState().setSyncEnabled(true, { remember: false });
       }
+      void usePrefsStore.getState().loadProjectMode();
       return true;
     } catch (e) {
       set({ busy: false, error: errorMessage(e, "Could not open project")});
@@ -425,7 +426,7 @@ export const useProjectStore = create<ProjectLifecycleState>((set, get) => ({
       inspectorError: null,
     });
     useCoderStore.setState({ activeCodeId: null });
-    usePrefsStore.setState({ syncAutoNotice: false, presence: [] });
+    usePrefsStore.setState({ syncAutoNotice: false, presence: [], collabMode: "single" });
   },
 
   refreshProject: async () => {

@@ -150,8 +150,34 @@ def is_custom_prompt_id(prompt_id: str) -> bool:
     return prompt_id.startswith(CUSTOM_PROMPT_PREFIX)
 
 
+# App-wide templates stored in the user settings are exposed with ids of the
+# form ``global:<uuid>``.
+GLOBAL_PROMPT_PREFIX = "global:"
+
+
+def is_global_prompt_id(prompt_id: str) -> bool:
+    return prompt_id.startswith(GLOBAL_PROMPT_PREFIX)
+
+
+def global_prompt_by_id(prompt_id: str) -> dict | None:
+    """Resolve an app-wide template by its ``global:`` id (or None)."""
+    if not is_global_prompt_id(prompt_id):
+        return None
+    from qualcoder_api.services import user_settings
+
+    wanted = prompt_id[len(GLOBAL_PROMPT_PREFIX):]
+    for prompt in user_settings.get_ai_global_prompts():
+        if prompt.get("id") == wanted:
+            return prompt
+    return None
+
+
 def system_prompt_for(mode: str) -> str:
-    return MODE_SYSTEM_PROMPTS.get(mode, MODE_SYSTEM_PROMPTS["general"])
+    default = MODE_SYSTEM_PROMPTS.get(mode, MODE_SYSTEM_PROMPTS["general"])
+    from qualcoder_api.services import user_settings
+
+    override = user_settings.get_ai_personas().get(mode, "")
+    return override.strip() or default
 
 
 def prompt_mode(prompt_id: str | None) -> str | None:
@@ -177,9 +203,17 @@ def persona_for(prompt_id: str | None, mode: str) -> str:
 def prompt_for(prompt_id: str | None, mode: str = "general") -> str | None:
     """Resolve a prompt: by explicit id, else the mode's root prompt."""
     if prompt_id:
+        from qualcoder_api.services import user_settings
+
+        override = user_settings.get_ai_prompt_overrides().get(prompt_id, "")
+        if override.strip():
+            return override.strip()
         prompt = CATALOG.by_id(prompt_id)
         if prompt is not None:
             return prompt.text
+        global_prompt = global_prompt_by_id(prompt_id)
+        if global_prompt is not None:
+            return str(global_prompt.get("text") or "")
     if mode == "general":
         return None
     # Root prompts carry underscore prefixes (e.g. ``_init``, ``_bootstrap``).

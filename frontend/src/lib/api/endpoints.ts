@@ -6,6 +6,7 @@
  */
 
 import { request, apiBaseSync, handleJson } from "./transport";
+import { AI_CHAT_TIMEOUT_MS } from "@/lib/config";
 import type {
   Annotation,
   AppSettings,
@@ -24,6 +25,10 @@ import type {
   AiChatInfo,
   AiChatDetail,
   AiTemplateInfo,
+  AiPersonaInfo,
+  AiEditorTemplate,
+  AiSearchResponse,
+  AiWrappingPrompt,
   AVCoding,
   BadLink,
   Bookmarks,
@@ -42,6 +47,11 @@ import type {
   CodeTreeItem,
   CodesBySegmentRow,
   Category,
+  HelpSearchResult,
+  HelpTopic,
+  HelpTopicDetail,
+  SearchEntityType,
+  SearchResponse,
   Coding,
   CoderComparisonRow,
   CooccurrenceTable,
@@ -81,6 +91,7 @@ import type {
   SyncResult,
   SyncStatus,
   PresenceResponse,
+  SyncConflictV2,
   TranscribeJob,
   TranscribeStatus,
   UndoCodingsResponse,
@@ -133,6 +144,22 @@ export const api = {
   closeProject: () => request<OpenProjectResult>("/projects/close", { method: "POST" }),
   projectSummary: () => request<{ summary: ProjectSummary }>("/projects/current/summary"),
   projectOpeners: () => request<{ openers: { user: string; pid: number; ts: number }[] }>("/projects/openers"),
+
+  // --- Collaboration (Golden Master + sandbox) --------------------------
+
+  /** Whether the open project runs in collaboration (sandbox) mode. */
+  projectMode: () => request<{ mode: "single" | "collaboration"; uuid: string }>("/projects/mode"),
+  /** Switch the open project to collaboration mode (needs ≥2 coders + sync on). */
+  activateCollaboration: () =>
+    request<{ ok: boolean; reason: string; uuid: string }>("/projects/activate-collaboration", {
+      method: "POST",
+    }),
+  /** Consolidate to data.qda and return to single-coder mode (destructive). */
+  revertCollaboration: () =>
+    request<{ ok: boolean; reason: string }>("/projects/revert-collaboration", { method: "POST" }),
+  /** Refresh the cold data.qda archive from the live sandbox. */
+  consolidateProject: () =>
+    request<{ ok: boolean; reason: string }>("/projects/consolidate", { method: "POST" }),
 
   // --- Coders ------------------------------------------------------------
 
@@ -569,28 +596,64 @@ export const api = {
     model: string;
     api_key: string;
     mcp_permissions?: string;
+    mcp_mode?: string;
+    mcp_server_command?: string;
+    mcp_server_args?: string[];
+    mcp_server_env?: Record<string, string>;
   }) =>
     request<unknown>("/ai/settings", { method: "PUT", body: JSON.stringify(body) }),
+  aiSetMcpPermissions: (mcpPermissions: string) =>
+    request<{ mcp_permissions: string }>("/ai/mcp-permissions", {
+      method: "PUT",
+      body: JSON.stringify({ mcp_permissions: mcpPermissions }),
+    }),
+  aiMcpTools: () =>
+    request<{
+      permissions: string;
+      write_enabled: boolean;
+      read_tools: { name: string; description: string }[];
+      write_tools: { name: string; description: string }[];
+      mcp_mode?: string;
+    }>("/ai/mcp-tools"),
+  aiWrappingPrompt: () => request<AiWrappingPrompt>("/ai/wrapping-prompt"),
+  aiSaveWrappingPrompt: (text: string) =>
+    request<AiWrappingPrompt>("/ai/wrapping-prompt", {
+      method: "PUT",
+      body: JSON.stringify({ text }),
+    }),
   aiChat: (
     message: string,
     context = "",
     mode = "auto",
     promptId?: string,
     ids?: { memoIds?: number[]; codeIds?: number[]; sourceIds?: number[]; sourceId?: number; chatId?: number },
+    agentic = false,
+    confirmWrites = false,
   ) =>
-    request<AiChatReply>("/ai/chat", {
+    request<AiChatReply>(
+      "/ai/chat",
+      {
+        method: "POST",
+        body: JSON.stringify({
+          message,
+          context,
+          mode,
+          prompt_id: promptId,
+          memo_ids: ids?.memoIds,
+          code_ids: ids?.codeIds,
+          source_ids: ids?.sourceIds,
+          source_id: ids?.sourceId,
+          chat_id: ids?.chatId,
+          agentic,
+          confirm_writes: confirmWrites,
+        }),
+      },
+      AI_CHAT_TIMEOUT_MS,
+    ),
+  aiChatApprove: (token: string, approve: boolean, chatId?: number) =>
+    request<AiChatReply>("/ai/chat/approve", {
       method: "POST",
-      body: JSON.stringify({
-        message,
-        context,
-        mode,
-        prompt_id: promptId,
-        memo_ids: ids?.memoIds,
-        code_ids: ids?.codeIds,
-        source_ids: ids?.sourceIds,
-        source_id: ids?.sourceId,
-        chat_id: ids?.chatId,
-      }),
+      body: JSON.stringify({ token, approve, chat_id: chatId }),
     }),
   aiPrompts: () => request<{ prompts: AiPromptInfo[] }>("/ai/prompts"),
   aiChats: () => request<{ chats: AiChatInfo[] }>("/ai/chats"),
@@ -616,9 +679,39 @@ export const api = {
     }),
   aiTemplateDelete: (templateId: number) =>
     request<void>(`/ai/templates/${templateId}`, { method: "DELETE" }),
+  aiPersonas: () => request<{ personas: AiPersonaInfo[] }>("/ai/personas"),
+  aiSavePersonas: (personas: Record<string, string>) =>
+    request<{ personas: { mode: string; text: string }[] }>("/ai/personas", {
+      method: "PUT",
+      body: JSON.stringify({ personas }),
+    }),
+  aiTemplatesAll: () => request<{ templates: AiEditorTemplate[] }>("/ai/templates/all"),
+  aiTemplateSaveAll: (body: { id: string; name: string; description: string; text: string }) =>
+    request<unknown>("/ai/templates/all", {
+      method: "PUT",
+      body: JSON.stringify(body),
+    }),
+  aiTemplateReset: (id: string) =>
+    request<{ id: string; reset: boolean }>("/ai/templates/all/reset", {
+      method: "POST",
+      body: JSON.stringify({ id }),
+    }),
+  aiTemplateGlobalCreate: (body: { name: string; description?: string; text: string }) =>
+    request<{ id: string; name: string; description: string; text: string }>(
+      "/ai/templates/global",
+      { method: "POST", body: JSON.stringify(body) },
+    ),
+  aiTemplateGlobalDelete: (promptId: string) =>
+    request<void>(`/ai/templates/global/${promptId}`, { method: "DELETE" }),
   aiIndexStatus: () => request<AiIndexStatus>("/ai/index"),
   aiIndexBuild: () => request<AiIndexStatus>("/ai/index", { method: "POST", body: "{}" }),
   aiIndexDelete: () => request<void>("/ai/index", { method: "DELETE" }),
+  /** Semantic search over text sources (persistent index or on-the-fly). */
+  aiSearch: (body: { query: string; limit?: number; category_id?: number | null; source_ids?: number[] }) =>
+    request<AiSearchResponse>("/ai/search", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
   sqlRun: (sql: string) =>
     request<SqlResult>("/sql/run", { method: "POST", body: JSON.stringify({ sql }) }),
   savedQueries: () => request<{ rows: SavedQuery[] }>("/sql/saved"),
@@ -865,6 +958,50 @@ export const api = {
       method: "PUT",
       body: JSON.stringify({ project_path: projectPath, mode }),
     }),
+
+  // --- Conflict resolution -------------------------------------------------
+
+  /** List all unresolved conflicts with local + remote row snapshots. */
+  syncConflicts: () =>
+    request<{ ok: boolean; conflicts: SyncConflictV2[] }>("/sync/conflicts"),
+  /** Resolve a conflict by choosing local, remote, or a merged version. */
+  resolveConflict: (req: {
+    conflict_id: number;
+    resolution: "local" | "remote" | "merged";
+    merged_row?: Record<string, unknown>;
+  }) =>
+    request<{ ok: boolean; resolution: string }>("/sync/conflicts/resolve", {
+      method: "POST",
+      body: JSON.stringify(req),
+    }),
+  /** Resolve every pending conflict with one strategy ("local" | "remote"). */
+  resolveAllConflicts: (resolution: "local" | "remote") =>
+    request<{ ok: boolean; resolved: number }>("/sync/conflicts/resolve-all", {
+      method: "POST",
+      body: JSON.stringify({ resolution }),
+    }),
+
+  // --- Full-text search + in-app help --------------------------------------
+
+  search: (body: {
+    query: string;
+    regex?: boolean;
+    category_id?: number | null;
+    entities?: SearchEntityType[];
+    limit?: number;
+    offset?: number;
+  }) =>
+    request<SearchResponse>("/search", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  helpTopics: () => request<{ topics: HelpTopic[] }>("/help/topics"),
+  helpTopic: (topicId: string) =>
+    request<{ topic: HelpTopicDetail }>(`/help/topic/${encodeURIComponent(topicId)}`),
+  helpSearch: (q: string, regex = false) =>
+    request<{ query: string; results: HelpSearchResult[] }>(
+      `/help/search?q=${encodeURIComponent(q)}&regex=${regex}`,
+    ),
 
   // --- App settings -----------------------------------------------------
 

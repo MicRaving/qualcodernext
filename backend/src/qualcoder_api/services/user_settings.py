@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import uuid
 from pathlib import Path
 
 from qualcoder_api.core.timeutil import now
@@ -20,21 +21,41 @@ logger = logging.getLogger(__name__)
 QUALCODER_HOME = Path(os.path.expanduser("~")) / ".qualcoder"
 SETTINGS_FILE = QUALCODER_HOME / "settings.json"
 
+#: The default wrapping prompt for AI chat: appended to the mode persona as a
+#: system-level directive. Users can override it via the template creator (an
+#: empty stored value falls back to this).
+DEFAULT_WRAPPING_PROMPT = (
+    "Be short and concise: answer directly, keep responses brief and to the "
+    "point, and avoid unnecessary detail."
+)
+
 AI_DEFAULTS: dict = {
     "enabled": False,
-    "provider": "ollama",
-    "api_base": "http://localhost:11434/v1",  # Ollama default
-    "model": "llama3.2",
+    "provider": "lmstudio",
+    "api_base": "http://127.0.0.1:1234/v1",  # LM Studio default
+    "model": "",
     "api_key": "",
+    #: Actively start LM Studio (server + configured model) when an AI
+    #: request finds the backend unreachable. lmstudio provider only.
+    "auto_start_backend": True,
     "mcp_permissions": "read",
+    #: Custom wrapping prompt for AI chat ("" = DEFAULT_WRAPPING_PROMPT).
+    "wrapping_prompt": "",
+    #: MCP mode: "internal" (QCnext's own tools) or "external" (stdio server).
+    "mcp_mode": "internal",
+    #: External MCP server connection (stdio).
+    "mcp_server_command": "",
+    "mcp_server_args": [],
+    "mcp_server_env": {},
 }
 
 # OpenAI-compatible providers. Gemini's OpenAI endpoint is on
 # generativelanguage.googleapis.com; Claude uses Anthropic's OpenAI-compat
-# layer. Model names track the current standard models.
+# layer. Model names track the current standard models. LM Studio serves any
+# locally-loaded model, so no default model is pinned.
 AI_PROVIDER_DEFAULTS: dict = {
-    "ollama": {"api_base": "http://localhost:11434/v1", "model": "llama3.2"},
     "lmstudio": {"api_base": "http://127.0.0.1:1234/v1", "model": ""},
+    "ollama": {"api_base": "http://localhost:11434/v1", "model": "llama3.2"},
     "opencode-go": {"api_base": "http://localhost:8080/v1", "model": "deepseek-v4-flash"},
     "gemini": {
         "api_base": "https://generativelanguage.googleapis.com/v1beta/openai",
@@ -290,6 +311,7 @@ def get_ai_settings(settings: dict | None = None) -> dict:
     merged = dict(AI_DEFAULTS)
     merged.update({k: v for k, v in ai.items() if k in AI_DEFAULTS})
     merged["enabled"] = bool(merged["enabled"])
+    merged["auto_start_backend"] = bool(merged.get("auto_start_backend", True))
     provider = merged["provider"]
     if not isinstance(provider, str) or provider not in AI_PROVIDER_DEFAULTS:
         provider = "custom"
@@ -299,9 +321,35 @@ def get_ai_settings(settings: dict | None = None) -> dict:
         value = merged[key]
         if not isinstance(value, str):
             merged[key] = AI_DEFAULTS[key] if value is None else str(value)
+    wrapping = merged.get("wrapping_prompt")
+    if not isinstance(wrapping, str):
+        wrapping = AI_DEFAULTS["wrapping_prompt"]
+    merged["wrapping_prompt"] = wrapping
     # Missing/empty base URL falls back to the provider's default.
     if not merged["api_base"].strip() and preset.get("api_base"):
         merged["api_base"] = preset["api_base"]
+    # MCP mode validation.
+    mcp_mode = merged.get("mcp_mode", "internal")
+    if mcp_mode not in ("internal", "external"):
+        mcp_mode = "internal"
+    merged["mcp_mode"] = mcp_mode
+    # External MCP server connection fields.
+    cmd = merged.get("mcp_server_command")
+    merged["mcp_server_command"] = str(cmd).strip() if isinstance(cmd, str) else ""
+    args = merged.get("mcp_server_args")
+    if isinstance(args, list):
+        merged["mcp_server_args"] = [str(a) for a in args if isinstance(a, str)]
+    else:
+        merged["mcp_server_args"] = []
+    env = merged.get("mcp_server_env")
+    if isinstance(env, dict):
+        merged["mcp_server_env"] = {
+            str(k): str(v)
+            for k, v in env.items()
+            if isinstance(k, str) and isinstance(v, str)
+        }
+    else:
+        merged["mcp_server_env"] = {}
     return merged
 
 
@@ -338,21 +386,190 @@ def save_ai_settings(ai: dict, settings: dict | None = None) -> dict:
     if not api_key:
         # Blank key = keep the stored one (the UI cannot read it back).
         api_key = str(stored_ai.get("api_key") or "").strip()
+    wrapping_prompt = ai.get("wrapping_prompt")
+    if wrapping_prompt is None:
+        # Not part of the request (e.g. the settings tab's auto-save) —
+        # keep whatever is stored so the template creator's value survives.
+        wrapping_prompt = str(stored_ai.get("wrapping_prompt") or "")
+    else:
+        wrapping_prompt = str(wrapping_prompt).strip()
     clean = {
         "enabled": bool(ai.get("enabled", False)),
         "provider": provider,
         "api_base": api_base or AI_DEFAULTS["api_base"],
         "model": model or AI_DEFAULTS["model"],
         "api_key": api_key,
+        "auto_start_backend": (
+            bool(ai["auto_start_backend"])
+            if isinstance(ai.get("auto_start_backend"), bool)
+            else bool(stored_ai.get("auto_start_backend", True))
+        ),
         "mcp_permissions": (
-            str(ai.get("mcp_permissions") or "read")
-            if str(ai.get("mcp_permissions") or "read") in ("read", "write", "full")
-            else "read"
+            str(ai.get("mcp_permissions") or "")
+            if str(ai.get("mcp_permissions") or "") in ("read", "write", "full")
+            else str(stored_ai.get("mcp_permissions") or "read")
+        ),
+        "wrapping_prompt": wrapping_prompt,
+        "mcp_mode": (
+            str(ai["mcp_mode"])
+            if isinstance(ai.get("mcp_mode"), str) and ai["mcp_mode"] in ("internal", "external")
+            else str(stored_ai.get("mcp_mode") or "internal")
+        ),
+        "mcp_server_command": (
+            str(ai["mcp_server_command"] or "").strip()
+            if ai.get("mcp_server_command") is not None
+            else str(stored_ai.get("mcp_server_command") or "")
+        ),
+        "mcp_server_args": (
+            [str(a) for a in ai["mcp_server_args"]]
+            if isinstance(ai.get("mcp_server_args"), list)
+            else list(stored_ai.get("mcp_server_args") or [])
+        ),
+        "mcp_server_env": (
+            {str(k): str(v) for k, v in ai["mcp_server_env"].items()
+             if isinstance(k, str) and isinstance(v, str)}
+            if isinstance(ai.get("mcp_server_env"), dict)
+            else dict(stored_ai.get("mcp_server_env") or {})
         ),
     }
     settings["ai"] = clean
     save_settings(settings)
     return dict(clean)
+
+
+def get_wrapping_prompt(settings: dict | None = None) -> str:
+    """The effective AI-chat wrapping prompt (custom or the default)."""
+    settings = settings or load_settings()
+    ai = settings.get("ai")
+    text = ai.get("wrapping_prompt", "") if isinstance(ai, dict) else ""
+    return text.strip() if isinstance(text, str) and text.strip() else DEFAULT_WRAPPING_PROMPT
+
+
+def save_wrapping_prompt(text: str, settings: dict | None = None) -> str:
+    """Persist the AI-chat wrapping prompt (blank resets to the default)."""
+    settings = settings or load_settings()
+    ai = settings.get("ai")
+    if not isinstance(ai, dict):
+        ai = {}
+    ai["wrapping_prompt"] = (text or "").strip()
+    settings["ai"] = ai
+    save_settings(settings)
+    return get_wrapping_prompt(settings)
+
+
+# ----------------------------------------------------------------------
+# Per-mode personas + editable built-in templates + app-wide templates
+# (stored app-wide in settings.json, so they work in every project).
+# ----------------------------------------------------------------------
+
+
+def get_ai_personas(settings: dict | None = None) -> dict[str, str]:
+    """Stored per-mode persona overrides (mode -> custom system prompt).
+
+    Only overrides are stored — a missing mode falls back to the built-in
+    persona in ``ai_prompts.MODE_SYSTEM_PROMPTS``.
+    """
+    settings = settings or load_settings()
+    personas = settings.get("ai_personas")
+    if not isinstance(personas, dict):
+        return {}
+    return {str(k): v for k, v in personas.items() if isinstance(v, str) and v.strip()}
+
+
+def save_ai_personas(overrides: dict, settings: dict | None = None) -> dict[str, str]:
+    """Persist per-mode persona overrides (blank text clears the override)."""
+    settings = settings or load_settings()
+    if not isinstance(overrides, dict):
+        raise ValueError("personas must be a dict")
+    clean = {}
+    for mode, text in overrides.items():
+        if isinstance(text, str) and text.strip():
+            clean[str(mode)] = text.strip()
+    settings["ai_personas"] = clean
+    save_settings(settings)
+    return dict(clean)
+
+
+def get_ai_prompt_overrides(settings: dict | None = None) -> dict[str, str]:
+    """Stored overrides for built-in catalog templates (id -> custom text)."""
+    settings = settings or load_settings()
+    overrides = settings.get("ai_prompt_overrides")
+    if not isinstance(overrides, dict):
+        return {}
+    return {str(k): v for k, v in overrides.items() if isinstance(v, str) and v.strip()}
+
+
+def save_ai_prompt_override(prompt_id: str, text: str, settings: dict | None = None) -> dict[str, str]:
+    """Persist an override for a built-in template (blank clears it)."""
+    settings = settings or load_settings()
+    overrides = get_ai_prompt_overrides(settings)
+    text = (text or "").strip()
+    if text:
+        overrides[str(prompt_id)] = text
+    else:
+        overrides.pop(str(prompt_id), None)
+    settings["ai_prompt_overrides"] = overrides
+    save_settings(settings)
+    return dict(overrides)
+
+
+def reset_ai_prompt_override(prompt_id: str, settings: dict | None = None) -> dict[str, str]:
+    """Clear a built-in template override, restoring the shipped text."""
+    settings = settings or load_settings()
+    overrides = get_ai_prompt_overrides(settings)
+    overrides.pop(str(prompt_id), None)
+    settings["ai_prompt_overrides"] = overrides
+    save_settings(settings)
+    return dict(overrides)
+
+
+def get_ai_global_prompts(settings: dict | None = None) -> list[dict]:
+    """App-wide custom templates, available in every project."""
+    settings = settings or load_settings()
+    prompts = settings.get("ai_global_prompts")
+    if not isinstance(prompts, list):
+        return []
+    return [p for p in prompts if isinstance(p, dict) and p.get("id") and p.get("name")]
+
+
+def save_ai_global_prompt(prompt: dict, settings: dict | None = None) -> dict:
+    """Create or update an app-wide template (matched by ``id``)."""
+    settings = settings or load_settings()
+    prompts = get_ai_global_prompts(settings)
+    name = str(prompt.get("name") or "").strip()
+    text = str(prompt.get("text") or "").strip()
+    if not name or not text:
+        raise ValueError("template name and text are required")
+    prompt_id = str(prompt.get("id") or uuid.uuid4().hex)
+    entry = {
+        "id": prompt_id,
+        "name": name,
+        "description": str(prompt.get("description") or "").strip(),
+        "text": text,
+        "created": str(prompt.get("created") or now()),
+        "updated": now(),
+    }
+    for i, existing in enumerate(prompts):
+        if existing.get("id") == prompt_id:
+            entry["created"] = existing.get("created") or entry["created"]
+            prompts[i] = entry
+            break
+    else:
+        prompts.append(entry)
+    settings["ai_global_prompts"] = prompts
+    save_settings(settings)
+    return dict(entry)
+
+
+def delete_ai_global_prompt(prompt_id: str, settings: dict | None = None) -> bool:
+    """Remove an app-wide template; True when one was actually deleted."""
+    settings = settings or load_settings()
+    prompts = get_ai_global_prompts(settings)
+    before = len(prompts)
+    prompts = [p for p in prompts if p.get("id") != prompt_id]
+    settings["ai_global_prompts"] = prompts
+    save_settings(settings)
+    return len(prompts) < before
 
 
 def get_codername(settings: dict | None = None) -> str:
@@ -477,3 +694,33 @@ def reset_color_scheme(settings: dict | None = None) -> dict:
     settings.pop("color_scheme", None)
     save_settings(settings)
     return get_color_scheme(settings)
+
+
+# Instance identity — stable per-machine UUID used for sidecar paths and
+# presence identification. Stored outside the synced folder so it never
+# travels with the project.
+_INSTANCE_ID_PATH = QUALCODER_HOME / "sync" / "instance_id"
+_instance_id: str | None = None
+
+
+def get_instance_id() -> str:
+    """Stable per-machine instance ID (12-char hex). Generated on first call,
+    cached in memory for the process lifetime."""
+    global _instance_id
+    if _instance_id is not None:
+        return _instance_id
+    try:
+        existing = _INSTANCE_ID_PATH.read_text(encoding="utf-8").strip()
+        if existing and len(existing) >= 8:
+            _instance_id = existing
+            return existing
+    except OSError:
+        pass
+    new_id = uuid.uuid4().hex[:12]
+    try:
+        _INSTANCE_ID_PATH.parent.mkdir(parents=True, exist_ok=True)
+        _INSTANCE_ID_PATH.write_text(new_id, encoding="utf-8")
+    except OSError as err:
+        logger.warning("could not persist instance_id: %s", err)
+    _instance_id = new_id
+    return new_id

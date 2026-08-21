@@ -1,12 +1,16 @@
 /**
  * CoderSwitcher — shows the current coder; the dropdown switches coders or
  * adds a new one with an inline name input. The flyout also hosts the
- * collaboration-sync switch (Option B): toggle the background sync cycle,
- * see last-sync time / pending changes / errors and run an immediate sync.
+ * collaboration-sync switch: toggle the background sync cycle, see last-sync
+ * time / pending changes / errors and run an immediate sync.
  *
- * When sync is enabled a tiny indicator sits next to the coder button in
- * the top bar, showing the time since the last successful sync (red on
- * errors); clicking it opens the flyout.
+ * Indicator model:
+ * - The RIBBON button carries a single overall sync dot (off / pending /
+ *   conflict / error / in-sync) — never a per-coder indicator.
+ * - The FLYOUT shows a per-coder activity dot on every coder row, combining
+ *   live presence (who is actively working right now) with the collaborator
+ *   sync state, plus a "Live now" section listing who is working and on which
+ *   file.
  */
 import { errorMessage } from "@/lib/utils";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -33,6 +37,7 @@ import { usePrefsStore } from "@/stores/prefs";
 import { useProjectStore } from "@/stores/project";
 import { useToast } from "@/lib/toast";
 import { Button, HelpFlyout, IconButton, Menu, MenuItem, Modal } from "@/components/ui/orchestrator";
+import { ConflictResolver } from "@/components/collaboration/ConflictResolver";
 
 const FLYOUT_WIDTH = 260;
 const FLYOUT_MIN_HEIGHT = 240;
@@ -61,6 +66,9 @@ interface CoderStats {
   total: number;
 }
 
+/** Per-coder activity state derived from presence + collaborator sync data. */
+type CoderActivity = "live" | "active" | "stale" | "offline";
+
 export function CoderSwitcher() {
   const { t } = useI18n();
   const toast = useToast();
@@ -70,9 +78,12 @@ export function CoderSwitcher() {
   const createCoder = useCoderStore((s) => s.createCoder);
   const syncStatus = usePrefsStore((s) => s.syncStatus);
   const setSyncStatus = usePrefsStore((s) => s.setSyncStatus);
-  const setSyncEnabled = usePrefsStore((s) => s.setSyncEnabled);
   const runSyncNow = usePrefsStore((s) => s.runSyncNow);
   const presence = usePrefsStore((s) => s.presence);
+  const collabMode = usePrefsStore((s) => s.collabMode);
+  const activateCollaboration = usePrefsStore((s) => s.activateCollaboration);
+  const revertCollaboration = usePrefsStore((s) => s.revertCollaboration);
+  const consolidate = usePrefsStore((s) => s.consolidate);
   const [open, setOpen] = useState(false);
   const [adding, setAdding] = useState(false);
   const [newName, setNewName] = useState("");
@@ -85,6 +96,7 @@ export function CoderSwitcher() {
   const [refreshHelpAnchorEl, setRefreshHelpAnchorEl] = useState<HTMLElement | null>(null);
   const [stats, setStats] = useState<CoderStats | null>(null);
   const [statsLoading, setStatsLoading] = useState(false);
+  const [conflictOpen, setConflictOpen] = useState(false);
   const [viewportTick, setViewportTick] = useState(0);
   const rootRef = useRef<HTMLDivElement | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
@@ -93,16 +105,84 @@ export function CoderSwitcher() {
   const syncError = Boolean(syncStatus?.last_error);
   const refreshHelpAnchor = helpOpen === "refresh" ? refreshHelpAnchorEl : null;
 
-  // Coders with live activity in OTHER instances (fresh presence heartbeat).
-  // Excludes the current coder to avoid self-redundancy (the coder list
-  // already highlights the active coder; only other instances are "live").
-  const liveCoders = useMemo(() => {
-    const set = new Set<string>();
+  // Latest live presence entry per coder (fresh heartbeat wins).
+  const liveByCoder = useMemo(() => {
+    const map = new Map<string, { ts: number; file_name: string }>();
     for (const e of presence) {
-      if (isLive(e.ts) && e.coder !== coderName) set.add(e.coder);
+      if (!e.coder) continue;
+      const prev = map.get(e.coder);
+      if (!prev || e.ts > prev.ts) map.set(e.coder, { ts: e.ts, file_name: e.file_name });
     }
-    return set;
-  }, [presence, coderName]);
+    return map;
+  }, [presence]);
+
+  // Per-coder sync state from collaborator data (instance → coder name).
+  const coderSyncState = useMemo(() => {
+    const map: Record<string, { state: string; pending: number; last_sync: number }> = {};
+    if (syncStatus?.collaborators) {
+      for (const c of syncStatus.collaborators) {
+        const name = c.coder || c.instance;
+        // A live presence heartbeat wins over a stale sidecar mtime.
+        map[name] = { state: c.state, pending: c.pending_import, last_sync: c.last_sync };
+      }
+    }
+    return map;
+  }, [syncStatus]);
+
+  /** Per-coder activity: live presence first, then collaborator sync state. */
+  function coderActivity(name: string): CoderActivity {
+    if (!syncEnabled) return "offline";
+    const live = liveByCoder.get(name);
+    if (live && isLive(live.ts)) return "live";
+    const cs = coderSyncState[name];
+    if (cs?.state === "active") return "active";
+    if (cs?.state === "stale") return "stale";
+    return "offline";
+  }
+
+  function activityDot(activity: CoderActivity): string {
+    switch (activity) {
+      case "live":
+      case "active":
+        return "bg-success";
+      case "stale":
+        return "bg-warning";
+      default:
+        return "bg-border";
+    }
+  }
+
+  function activityTitle(activity: CoderActivity): string {
+    switch (activity) {
+      case "live":
+        return t("sync.presenceLive");
+      case "active":
+        return t("sync.stateActive");
+      case "stale":
+        return t("sync.stateStale");
+      default:
+        return t("sync.stateOffline");
+    }
+  }
+
+  // Overall sync dot in the ribbon (single, not per-coder).
+  const overallState = syncStatus?.state;
+  const overallDot = !syncEnabled
+    ? "bg-border"
+    : overallState === "conflict" || overallState === "error"
+      ? "bg-danger"
+      : overallState === "syncing"
+        ? "bg-warning"
+        : "bg-success";
+  const overallTitle = !syncEnabled
+    ? t("sync.indicatorOff")
+    : overallState === "conflict"
+      ? t("sync.indicatorConflict")
+      : overallState === "error"
+        ? t("sync.indicatorError")
+        : overallState === "syncing"
+          ? t("sync.indicatorPending")
+          : t("sync.indicatorActive");
 
   /* Recompute the flyout position whenever the window is resized. */
   useEffect(() => {
@@ -139,6 +219,8 @@ export function CoderSwitcher() {
       .coderVisibility()
       .then((res) => setVisibility(res.visibility))
       .catch(() => setVisibility({}));
+    // Refresh presence immediately so the "Live now" section is fresh.
+    void usePrefsStore.getState().refreshPresence();
     const onDown = (e: MouseEvent) => {
       const target = e.target instanceof Node ? e.target : null;
       if (target && !rootRef.current?.contains(target)) {
@@ -184,18 +266,11 @@ export function CoderSwitcher() {
     try {
       await api.setCoderVisibility(name, next === 1);
       setVisibility((v) => ({ ...v, [name]: next }));
+      // Force all open coder views to re-fetch — the backend *_visible
+      // views now exclude/include the toggled coder's rows.
+      window.dispatchEvent(new CustomEvent("qc:codings-changed"));
     } catch {
       setError(t("coder.visibilityHint"));
-    }
-  }
-
-  async function toggleSync() {
-    const next = !syncEnabled;
-    setSyncBusy(true);
-    try {
-      await setSyncEnabled(next);
-    } finally {
-      setSyncBusy(false);
     }
   }
 
@@ -220,6 +295,49 @@ export function CoderSwitcher() {
     await switchCoder(name);
     setAdding(false);
     setNewName("");
+    // Adding a second coder with sync on starts collaboration mode.
+    if (syncEnabled && collabMode !== "collaboration") {
+      const activated = await activateCollaboration();
+      if (activated) {
+        toast.success(t("collab.activated"));
+      } else {
+        toast.error(t("collab.activateFailed"));
+      }
+    }
+  }
+
+  async function handleActivateCollab() {
+    setSyncBusy(true);
+    try {
+      const ok = await activateCollaboration();
+      if (ok) toast.success(t("collab.activated"));
+      else toast.error(t("collab.activateFailed"));
+    } finally {
+      setSyncBusy(false);
+    }
+  }
+
+  async function handleRevertCollab() {
+    if (!window.confirm(t("collab.revertConfirm"))) return;
+    setSyncBusy(true);
+    try {
+      const ok = await revertCollaboration();
+      if (ok) toast.success(t("collab.reverted"));
+      else toast.error(t("collab.activateFailed"));
+    } finally {
+      setSyncBusy(false);
+    }
+  }
+
+  async function handleRefresh() {
+    // Unified refresh: reload the project data and, in collaboration mode,
+    // also refresh the cold data.qda archive from the sandbox.
+    await useProjectStore.getState().refreshProject();
+    if (collabMode === "collaboration") {
+      const ok = await consolidate();
+      if (ok) toast.success(t("collab.consolidated"));
+    }
+    closeAll();
   }
 
   async function refreshCoders() {
@@ -347,17 +465,9 @@ export function CoderSwitcher() {
         <span className="min-w-0 flex-1 overflow-hidden text-ellipsis whitespace-nowrap">{coderName}</span>
         <span
           role="status"
-          aria-label={syncEnabled ? (syncError ? "sync-error" : "sync-on") : "sync-off"}
-          title={
-            syncEnabled
-              ? syncError
-                ? syncStatus?.last_error ?? t("sync.error")
-                : t("sync.lastSyncShort", { when: formatSince(syncStatus?.last_sync ?? 0) })
-              : undefined
-          }
-          className={`h-1.5 w-1.5 shrink-0 rounded-full ${
-            syncEnabled ? (syncError ? "bg-danger" : "bg-success") : "bg-border"
-          }`}
+          aria-label={overallTitle}
+          title={overallTitle}
+          className={`h-1.5 w-1.5 shrink-0 rounded-full ${overallDot}`}
         />
         <ChevronDown size={12} className="shrink-0 text-text-secondary" aria-hidden />
       </Button>
@@ -370,78 +480,88 @@ export function CoderSwitcher() {
           className="min-w-60 overflow-y-auto"
           style={{ ...menuPos, width: FLYOUT_WIDTH }}
         >
-          {coders.map((c) => (
-            <div
-              key={c.name}
-              role="option"
-              aria-selected={c.name === coderName}
-              onContextMenu={(e) => {
-                e.preventDefault();
-                e.stopPropagation();
-                setMenu({ name: c.name, x: e.clientX, y: e.clientY });
-              }}
-              className={`flex w-full items-center gap-2 px-2 py-1.5 text-left text-sm hover:bg-surface-higher ${
-                c.name === coderName ? "text-accent" : ""
-              }`}
-            >
-              <button
-                type="button"
-                onClick={() => {
-                  if (c.name !== coderName) void switchCoder(c.name);
-                  closeAll();
+          {coders.map((c) => {
+            const activity = coderActivity(c.name);
+            const dotColor = activityDot(activity);
+            const dotTitle = activityTitle(activity);
+            const cs = coderSyncState[c.name];
+            return (
+              <div
+                key={c.name}
+                role="option"
+                aria-selected={c.name === coderName}
+                onContextMenu={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  setMenu({ name: c.name, x: e.clientX, y: e.clientY });
                 }}
-                className="flex min-w-0 flex-1 items-center gap-2"
+                className={`flex w-full items-center gap-2 px-2 py-1.5 text-left text-sm hover:bg-surface-higher ${
+                  c.name === coderName ? "text-accent" : ""
+                }`}
               >
-                <User size={13} aria-hidden />
-                <span className="truncate">{c.name}</span>
-                {liveCoders.has(c.name) && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (c.name !== coderName) void switchCoder(c.name);
+                    closeAll();
+                  }}
+                  className="flex min-w-0 flex-1 items-center gap-2"
+                >
+                  <User size={13} aria-hidden />
+                  <span className="truncate">{c.name}</span>
                   <span
-                    aria-hidden
-                    className="ml-0.5 inline-block h-2 w-2 shrink-0 rounded-full bg-[var(--qc-success)]"
-                    title={t("sync.presenceLive")}
+                    role="status"
+                    aria-label={dotTitle}
+                    title={dotTitle}
+                    className={`h-1.5 w-1.5 shrink-0 rounded-full ${dotColor}`}
                   />
-                )}
-                {c.coding_count > 0 && (
-                  <span className="ml-auto text-xs text-text-secondary">{c.coding_count}</span>
-                )}
-              </button>
-              <button
-                type="button"
-                title={t((visibility[c.name] ?? 1) === 1 ? "coder.hide" : "coder.show")}
-                aria-label={t((visibility[c.name] ?? 1) === 1 ? "coder.hide" : "coder.show")}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  void toggleVisibility(c.name);
-                }}
-                className={`shrink-0 rounded-sm p-1 hover:bg-surface-higher ${
-                  (visibility[c.name] ?? 1) === 1 ? "text-text-secondary" : "text-danger"
-                }`}
-              >
-                {(visibility[c.name] ?? 1) === 1 ? (
-                  <Eye size={13} aria-hidden />
-                ) : (
-                  <EyeOff size={13} aria-hidden />
-                )}
-              </button>
-              <button
-                type="button"
-                title={c.name === coderName ? t("coder.deleteCurrent") : t("coder.delete")}
-                aria-label={t("coder.delete")}
-                disabled={c.name === coderName}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  void handleDeleteCoder(c.name);
-                }}
-                className={`shrink-0 rounded-sm p-1 hover:bg-surface-higher ${
-                  c.name === coderName
-                    ? "cursor-not-allowed opacity-40"
-                    : "text-text-secondary hover:text-danger"
-                }`}
-              >
-                <Trash2 size={13} aria-hidden />
-              </button>
-            </div>
-          ))}
+                  {cs && cs.last_sync > 0 && (
+                    <span className="text-[10px] text-text-secondary" title={t("sync.lastSyncShort", { when: formatSince(cs.last_sync) })}>
+                      {formatSince(cs.last_sync)}
+                    </span>
+                  )}
+                  {c.coding_count > 0 && (
+                    <span className="ml-auto text-xs text-text-secondary">{c.coding_count}</span>
+                  )}
+                </button>
+                <button
+                  type="button"
+                  title={t((visibility[c.name] ?? 1) === 1 ? "coder.hide" : "coder.show")}
+                  aria-label={t((visibility[c.name] ?? 1) === 1 ? "coder.hide" : "coder.show")}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    void toggleVisibility(c.name);
+                  }}
+                  className={`shrink-0 rounded-sm p-1 hover:bg-surface-higher ${
+                    (visibility[c.name] ?? 1) === 1 ? "text-text-secondary" : "text-danger"
+                  }`}
+                >
+                  {(visibility[c.name] ?? 1) === 1 ? (
+                    <Eye size={13} aria-hidden />
+                  ) : (
+                    <EyeOff size={13} aria-hidden />
+                  )}
+                </button>
+                <button
+                  type="button"
+                  title={c.name === coderName ? t("coder.deleteCurrent") : t("coder.delete")}
+                  aria-label={t("coder.delete")}
+                  disabled={c.name === coderName}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    void handleDeleteCoder(c.name);
+                  }}
+                  className={`shrink-0 rounded-sm p-1 hover:bg-surface-higher ${
+                    c.name === coderName
+                      ? "cursor-not-allowed opacity-40"
+                      : "text-text-secondary hover:text-danger"
+                  }`}
+                >
+                  <Trash2 size={13} aria-hidden />
+                </button>
+              </div>
+            );
+          })}
           <div className="my-1 h-px bg-border" aria-hidden />
           {adding ? (
             <div className="px-2 py-1.5">
@@ -523,10 +643,7 @@ export function CoderSwitcher() {
             </span>
             <button
               type="button"
-              onClick={() => {
-                void useProjectStore.getState().refreshProject();
-                closeAll();
-              }}
+              onClick={() => void handleRefresh()}
               aria-label={t("coder.refreshProject")}
               title={t("coder.refreshProject")}
               className="shrink-0 rounded-sm p-1 text-text-secondary hover:bg-surface-higher hover:text-text-primary"
@@ -535,90 +652,72 @@ export function CoderSwitcher() {
             </button>
           </div>
 
-          {/* Live presence: who is actively working and on which file */}
-          <div className="px-2 py-1.5">
-            <span className="text-[10px] font-medium uppercase tracking-wide text-text-secondary">
-              {t("sync.liveNow")}
-            </span>
-            {presence.length === 0 ? (
-              <p className="mt-1 text-[11px] text-text-secondary">{t("sync.liveNone")}</p>
-            ) : (
-              <ul className="mt-1 space-y-0.5">
-                {presence.slice(0, 6).map((e) => (
-                  <li key={e.pid} className="flex items-center gap-1.5 text-[11px] leading-snug">
-                    <span
-                      aria-hidden
-                      className={`h-2 w-2 shrink-0 rounded-full ${
-                        isLive(e.ts) ? "bg-[var(--qc-success)]" : "bg-border"
-                      }`}
-                    />
-                    <span className={`truncate ${isLive(e.ts) ? "text-text-primary" : "text-text-secondary"}`}>
-                      {e.coder}
-                    </span>
-                    {e.file_name ? (
-                      <span className="ml-auto min-w-0 truncate text-text-secondary" title={e.file_name}>
-                        {e.file_name}
-                      </span>
-                    ) : (
-                      <span className="ml-auto shrink-0 text-text-secondary">
-                        {t("sync.liveNoFile")}
-                      </span>
-                    )}
-                  </li>
-                ))}
-              </ul>
-            )}
-          </div>
+          {/* Collaboration + sync */}
           <div className="my-1 h-px bg-border" aria-hidden />
-
-          {/* Enable collaboration */}
           <div className="px-2 py-1.5">
             <div className="flex items-center justify-between gap-2">
-              <span className="min-w-0 truncate text-sm text-text-primary">
-                {t("coder.enableCollaboration")}
+              <span className="flex min-w-0 items-center gap-1 text-sm text-text-primary">
+                <span className="truncate">{t("collab.mode")}</span>
+                <IconButton
+                  label={t("collab.activateHint")}
+                  title={t("collab.activateHint")}
+                  size="sm"
+                >
+                  <HelpCircle size={12} aria-hidden />
+                </IconButton>
               </span>
-              <div className="flex shrink-0 items-center gap-1.5">
+              <span
+                role="status"
+                className={`shrink-0 rounded-sm px-1.5 py-0.5 text-[10px] font-medium leading-none ${
+                  collabMode === "collaboration"
+                    ? "bg-accent/15 text-accent"
+                    : "bg-border/50 text-text-secondary"
+                }`}
+              >
+                {collabMode === "collaboration" ? t("collab.active") : t("collab.single")}
+              </span>
+            </div>
+            <div className="mt-1.5 flex items-center gap-1.5">
+              <button
+                type="button"
+                onClick={() => void syncNow()}
+                disabled={syncBusy}
+                title={syncError ? (syncStatus?.last_error ?? t("sync.error")) : t("sync.now")}
+                // Solid warning/yellow button: the app's warning color
+                // (--qc-warning) with the solid-button text convention
+                // (--qc-bg, as in cls.primary) so it reads as an obvious
+                // action in both themes and in high-contrast mode.
+                className="flex shrink-0 items-center gap-1 whitespace-nowrap rounded-sm bg-warning px-2 py-0.5 text-xs font-medium leading-none text-[var(--qc-bg)] hover:bg-warning/90 disabled:opacity-50"
+              >
+                <RefreshCw
+                  size={9}
+                  className={`shrink-0 ${syncBusy ? "animate-spin" : ""}`}
+                  aria-hidden
+                />
+                {syncStatus?.last_sync
+                  ? t("sync.lastSyncShort", { when: formatSince(syncStatus.last_sync) })
+                  : t("sync.never")}
+              </button>
+              {collabMode === "collaboration" ? (
                 <button
                   type="button"
-                  role="switch"
-                  aria-checked={syncEnabled}
-                  onClick={() => void toggleSync()}
+                  onClick={() => void handleRevertCollab()}
                   disabled={syncBusy}
-                  className={`relative h-4 w-8 rounded-full transition-colors ${
-                    syncEnabled ? "bg-accent" : "bg-border"
-                  } disabled:opacity-50`}
-                  aria-label={t("sync.toggle")}
+                  className="shrink-0 rounded-sm border border-danger/30 bg-danger/5 px-2 py-0.5 text-xs text-danger hover:bg-danger/10 disabled:opacity-50"
                 >
-                  <span
-                    className={`absolute top-0.5 h-3 w-3 rounded-full bg-white transition-all ${
-                      syncEnabled ? "left-4.5" : "left-0.5"
-                    }`}
-                    style={{ left: syncEnabled ? 18 : 2 }}
-                  />
+                  {t("collab.revert")}
                 </button>
+              ) : (
                 <button
                   type="button"
-                  onClick={() => void syncNow()}
-                  disabled={syncBusy}
-                  title={
-                    syncError ? (syncStatus?.last_error ?? t("sync.error")) : t("sync.now")
-                  }
-                  // Solid warning/yellow button: the app's warning color
-                  // (--qc-warning) with the solid-button text convention
-                  // (--qc-bg, as in cls.primary) so it reads as an obvious
-                  // action in both themes and in high-contrast mode.
-                  className="flex shrink-0 items-center gap-1 whitespace-nowrap rounded-sm bg-warning px-2 py-0.5 text-xs font-medium leading-none text-[var(--qc-bg)] hover:bg-warning/90 disabled:opacity-50"
+                  onClick={() => void handleActivateCollab()}
+                  disabled={syncBusy || !syncEnabled}
+                  title={!syncEnabled ? t("collab.needsTwoCoders") : undefined}
+                  className="flex-1 rounded-sm bg-accent px-2 py-0.5 text-xs font-medium leading-none text-[var(--qc-bg)] hover:bg-accent-hover disabled:opacity-50"
                 >
-                  <RefreshCw
-                    size={9}
-                    className={`shrink-0 ${syncBusy ? "animate-spin" : ""}`}
-                    aria-hidden
-                  />
-                  {syncStatus?.last_sync
-                    ? t("sync.lastSyncShort", { when: formatSince(syncStatus.last_sync) })
-                    : t("sync.never")}
+                  {t("collab.activate")}
                 </button>
-              </div>
+              )}
             </div>
             {syncEnabled && (
               <div className="mt-1.5 space-y-1 text-[11px] leading-snug text-text-secondary">
@@ -629,64 +728,21 @@ export function CoderSwitcher() {
                     })}
                   </p>
                 )}
-                {syncStatus?.collaborators.map((c) => {
-                  const fresh = Date.now() / 1000 - c.last_sync < 120;
-                  const stale = Date.now() / 1000 - c.last_sync < 600;
-                  return (
-                    <p key={c.user} className="flex items-center gap-1.5 truncate">
-                      <span
-                        aria-hidden
-                        className={`h-1.5 w-1.5 shrink-0 rounded-full ${
-                          fresh ? "bg-[var(--qc-success)]" : stale ? "bg-warning" : "bg-border"
-                        }`}
-                      />
-                      <span className="truncate">
-                        {c.user} · {t("sync.lastSyncShort", { when: formatSince(c.last_sync) })}
-                      </span>
-                      {c.pending_import > 0 && (
-                        <span className="text-warning">
-                          · {t("sync.pending", { n: String(c.pending_import) })}
-                        </span>
-                      )}
-                      {c.pending_conflicts > 0 && (
-                        <span className="text-danger">
-                          · {t("sync.conflicts", { n: String(c.pending_conflicts) })}
-                        </span>
-                      )}
-                    </p>
-                  );
-                })}
                 {syncStatus && syncStatus.pending_conflicts > 0 && (
                   <div className="space-y-1 rounded-sm border border-danger/30 bg-danger/5 p-1.5">
                     <div className="flex items-center justify-between">
                       <span className="font-medium text-text-primary">
-                        {t("sync.conflictList")}
+                        {t("sync.conflicts", { n: String(syncStatus.pending_conflicts) })}
                       </span>
                       <button
                         type="button"
-                        onClick={() => void syncNow()}
+                        onClick={() => void usePrefsStore.getState().loadConflicts().then(() => setConflictOpen(true))}
                         disabled={syncBusy}
-                        className="rounded-sm bg-warning px-1.5 py-0.5 text-[10px] font-medium leading-none text-[var(--qc-bg)] hover:bg-warning/90 disabled:opacity-50"
+                        className="rounded-sm bg-danger px-1.5 py-0.5 text-[10px] font-medium leading-none text-white hover:bg-danger/90 disabled:opacity-50"
                       >
-                        {t("sync.retryAll")}
+                        {t("sync.conflictsResolve", { n: String(syncStatus.pending_conflicts) })}
                       </button>
                     </div>
-                    <ul className="max-h-20 space-y-0.5 overflow-y-auto">
-                      {syncStatus.collaborators
-                        .flatMap((c) =>
-                          (c.conflicts ?? []).map((conf) => ({ ...conf, user: c.user })),
-                        )
-                        .slice(0, 8)
-                        .map((conf) => (
-                          <li key={`${conf.user}-${conf.seq}`} className="truncate text-danger/90">
-                            {t("sync.conflictItem", {
-                              entity: conf.entity,
-                              pk: conf.pk,
-                              reason: conf.reason,
-                            })}
-                          </li>
-                        ))}
-                    </ul>
                   </div>
                 )}
                 {syncError && (
@@ -758,6 +814,11 @@ export function CoderSwitcher() {
             )}
           </div>
         </Modal>
+      )}
+
+      {/* Conflict Resolution Modal */}
+      {conflictOpen && (
+        <ConflictResolver open={conflictOpen} onClose={() => setConflictOpen(false)} />
       )}
     </div>
   );

@@ -18,6 +18,7 @@ import contextlib
 import json
 import logging
 import os
+import socket
 import time
 from pathlib import Path
 
@@ -70,6 +71,7 @@ def touch(
     *,
     file_id: int | None = None,
     file_name: str = "",
+    instance_id: str = "",
 ) -> bool:
     """Write/refresh this instance's presence file. Returns True when written
     (or a real change was recorded), False when skipped (nothing changed and
@@ -103,9 +105,11 @@ def touch(
                     "coder": coder,
                     "os_user": os.environ.get("USERNAME") or os.environ.get("USER", ""),
                     "pid": os.getpid(),
+                    "host": socket.gethostname(),
                     "ts": now,
                     "file_id": file_id,
                     "file_name": file_name,
+                    "instance": instance_id,
                 },
                 ensure_ascii=False,
             ),
@@ -133,11 +137,18 @@ def read(project_path: str, exclude_pid: int | None = None) -> list[dict]:
 
     ``exclude_pid`` skips a pid (the caller's own). Returns the entries sorted
     by last activity (newest first).
+
+    Liveness is only meaningful for entries on THIS host: a remote rater's pid
+    is meaningless in the local process table, so remote entries (different
+    ``host``, or legacy files without one) are kept while their ``ts`` is
+    within the TTL window and pruned when it is stale or absurdly in the
+    future (clock skew on another machine).
     """
     root = _state_path(project_path)
     if not root.is_dir():
         return []
     exclude = exclude_pid if exclude_pid is not None else os.getpid()
+    this_host = socket.gethostname()
     now = time.time()
     out: list[dict] = []
     for path in sorted(root.glob("*.json")):
@@ -153,7 +164,9 @@ def read(project_path: str, exclude_pid: int | None = None) -> list[dict]:
         ts = float(entry.get("ts", 0))
         if pid == exclude:
             continue
-        if pid <= 0 or not _pid_alive(pid) or now - ts > PRESENCE_TTL_SECS:
+        local = entry.get("host") == this_host
+        stale = now - ts > PRESENCE_TTL_SECS or ts - now > PRESENCE_TTL_SECS
+        if stale or (local and (pid <= 0 or not _pid_alive(pid))):
             with contextlib.suppress(OSError):
                 path.unlink(missing_ok=True)
             continue
@@ -165,6 +178,7 @@ def read(project_path: str, exclude_pid: int | None = None) -> list[dict]:
                 "ts": ts,
                 "file_id": entry.get("file_id"),
                 "file_name": entry.get("file_name", ""),
+                "instance": entry.get("instance", ""),
             }
         )
     return sorted(out, key=lambda e: e["ts"], reverse=True)

@@ -470,8 +470,43 @@ sync_log = Table(
     Column("action", String),  # insert | update | delete
     Column("pk_name", String),
     Column("pk_value", String),  # primary key value (int or name string)
+    Column("rev", Integer, default=0),  # per-row scalar clock (Lamport)
     Column("row_json", Text),  # full row snapshot (JSON)
     UniqueConstraint("user", "seq", name="u_sync_log_user_seq"),
+)
+
+sync_rev = Table(
+    "sync_rev",
+    metadata,
+    # Per-row revision tracking for versioned sync.
+    # Primary key is (entity, pk) — the table name and the row's primary key.
+    Column("entity", String, primary_key=True),
+    Column("pk", String, primary_key=True),
+    # Scalar clock: incremented on every mutation, set to incoming on import.
+    # Equal rev + different content = concurrent edit = conflict.
+    Column("rev", Integer, nullable=False, default=0),
+    Column("mtime", String, nullable=False, default=""),  # last mutation time
+    Column("origin", String, nullable=False, default=""),  # instance_id of last modifier
+    Column("deleted", Integer, nullable=False, default=0),  # tombstone flag
+)
+
+sync_conflict = Table(
+    "sync_conflict",
+    metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("entity", String, nullable=False),
+    Column("pk", String, nullable=False),
+    Column("pk_name", String, nullable=False),
+    Column("local_rev", Integer, nullable=False),
+    Column("remote_rev", Integer, nullable=False),
+    Column("local_row", Text),  # JSON snapshot of local row (null = deleted locally)
+    Column("remote_row", Text),  # JSON snapshot of remote row (null = remote delete)
+    Column("remote_instance", String, nullable=False),  # which instance sent this
+    Column("remote_coder", String, nullable=False, default=""),  # coder name of remote
+    Column("detected_at", String, nullable=False),  # ISO timestamp when detected
+    Column("resolved_at", Text),  # null = pending, ISO timestamp when resolved
+    Column("resolution", Text),  # "local" | "remote" | "merged" | null
+    Column("merged_row", Text),  # JSON of merged row if resolution='merged'
 )
 
 audit_log = Table(

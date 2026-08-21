@@ -567,10 +567,11 @@ async def create_transcript(
         name = f"{stem}-{counter}.{ext}" if sep else f"{base_name}-{counter}"
         counter += 1
 
-    trans = await repo.add_source(
-        name=name, mediapath=None, fulltext="", owner=resolve_owner(None)
+    trans = await repo.create_transcript_companion(
+        media_source_id=source_id, name=name, owner=resolve_owner(None)
     )
-    await repo.update_source(source_id, av_text_id=trans.id)
+    if trans is None:  # pragma: no cover - defensive
+        raise HTTPException(status_code=500, detail="transcript companion vanished after insert")
     companion_row = (
         await db.execute(select(tables.source).where(tables.source.c.id == trans.id))
     ).first()

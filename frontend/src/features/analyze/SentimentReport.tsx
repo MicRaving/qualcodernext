@@ -12,7 +12,7 @@
  */
 import { useState } from "react";
 import { useAsyncEffect } from "@/lib/useAsync";
-import { api, ApiError, fetchWithTimeout, initApiBase, type AiStatus } from "@/lib/api";
+import { api, localRequest, type AiStatus } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 import { EmptyState, Select } from "@/components/ui/orchestrator";
@@ -56,32 +56,6 @@ export interface SentimentResult {
 const POSITIVE_COMPOUND = 0.05;
 const NEGATIVE_COMPOUND = -0.05;
 
-async function requestJson<T>(path: string): Promise<T> {
-  const doFetch = async (): Promise<T> => {
-    const base = await initApiBase();
-    const res = await fetchWithTimeout(`${base}${path}`);
-    if (!res.ok) {
-      let detail: unknown;
-      try {
-        detail = (await res.json()).detail;
-      } catch {
-        /* non-JSON error body */
-      }
-      const suffix = typeof detail === "string" && detail ? `: ${detail}` : "";
-      throw new ApiError(res.status, `API error ${res.status} on ${path}${suffix}`, detail);
-    }
-    return (await res.json()) as T;
-  };
-  try {
-    return await doFetch();
-  } catch (err) {
-    if (err instanceof ApiError) throw err;
-    // Network-level failure (packaged backend restarted): retry once so the
-    // base URL is resolved afresh.
-    return doFetch();
-  }
-}
-
 function fetchSentiment(opts: {
   scope: SentimentScope;
   mode: SentimentMode;
@@ -91,7 +65,7 @@ function fetchSentiment(opts: {
   const params = new URLSearchParams({ scope: opts.scope, mode: opts.mode });
   if (opts.fid !== undefined) params.set("fid", String(opts.fid));
   if (opts.mode === "ai") params.set("limit", String(opts.limit ?? 100));
-  return requestJson<SentimentResult>(`/reports/sentiment?${params.toString()}`);
+  return localRequest<SentimentResult>(`/reports/sentiment?${params.toString()}`);
 }
 
 /** Sentiment label for a row: AI rows carry it, lexicon rows derive it

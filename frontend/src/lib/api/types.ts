@@ -340,9 +340,32 @@ export interface AiStatus {
   base_url: string;
   model: string;
   mcp_permissions?: string;
+  /** MCP mode: "internal" (QCnext's own tools) or "external" (stdio server). */
+  mcp_mode?: string;
+  /** Effective AI-chat wrapping prompt (custom or the built-in default). */
+  wrapping_prompt?: string;
   /** Live reachability of the provider (only when probed). */
   reachable?: boolean | null;
   probe_error?: string;
+}
+
+/** The AI-chat wrapping prompt + the built-in default (for "reset"). */
+export interface AiWrappingPrompt {
+  text: string;
+  default: string;
+}
+
+export interface AiToolCallEvent {
+  tool: string;
+  arguments: Record<string, unknown>;
+  result: unknown;
+  /** True when the write was approved; false when rejected by the user. */
+  approved?: boolean;
+}
+
+export interface AiPendingTool {
+  name: string;
+  arguments: Record<string, unknown>;
 }
 
 export interface AiChatReply {
@@ -350,6 +373,12 @@ export interface AiChatReply {
   model: string;
   /** Chat session the exchange was appended to (auto-created when new). */
   chat_id?: number;
+  /** Agentic chat: the tools the model executed during this turn. */
+  tool_calls?: AiToolCallEvent[];
+  /** Present when an agentic turn is paused awaiting write approval. */
+  status?: "awaiting_approval";
+  token?: string;
+  pending_tools?: AiPendingTool[];
 }
 
 export interface AiSearchResult {
@@ -357,6 +386,11 @@ export interface AiSearchResult {
   file_name: string;
   text: string;
   score: number;
+}
+
+export interface AiSearchResponse {
+  results: AiSearchResult[];
+  indexed: boolean;
 }
 
 export interface AiPromptInfo {
@@ -372,6 +406,8 @@ export interface AiPromptInfo {
   group?: string;
   /** True for user-defined templates stored in the project. */
   custom?: boolean;
+  /** True for app-wide templates (usable in every project). */
+  global?: boolean;
 }
 
 export interface AiChatInfo {
@@ -403,10 +439,120 @@ export interface AiTemplateInfo {
   updated: string;
 }
 
+/** A per-chat-mode persona: the mode's system prompt, with its built-in
+ *  default and the current text (default unless the user overrode it). */
+export interface AiPersonaInfo {
+  mode: string;
+  default: string;
+  text: string;
+}
+
+/** An editable entry in the template editor. */
+export interface AiEditorTemplate {
+  id: string;
+  name: string;
+  label: string;
+  description: string;
+  text: string;
+  /** The shipped text for built-ins (null for user-created ones). */
+  default: string | null;
+  group: string;
+  /** builtin = shipped template (editable via an app-wide override),
+   *  app = saved app-wide, project = this project's row. */
+  scope: "builtin" | "app" | "project";
+}
+
 export interface AiIndexStatus {
   indexed: boolean;
   model: string;
   chunks: number;
+}
+
+// --- Full-text search (literal/regex across project entities) ----------------
+
+/** Backend entity-type names (the ``entities`` search-scope param). */
+export type SearchEntityType =
+  | "files"
+  | "codes"
+  | "categories"
+  | "cases"
+  | "journal"
+  | "memos"
+  | "attributes"
+  | "comments";
+
+/** Result ``kind`` value (singular) returned by the backend. */
+export type SearchEntityKind =
+  | "file"
+  | "code"
+  | "category"
+  | "case"
+  | "journal"
+  | "memo"
+  | "attribute"
+  | "comment";
+
+/** Entity types in stable display order (all preselectable scopes). */
+export const SEARCH_ENTITY_TYPES: SearchEntityType[] = [
+  "files",
+  "codes",
+  "categories",
+  "cases",
+  "journal",
+  "memos",
+  "attributes",
+  "comments",
+];
+
+export interface SearchHit {
+  pos0: number;
+  pos1: number;
+  /** Match offsets relative to ``context`` (yellow highlight in the UI). */
+  rel0: number;
+  rel1: number;
+  context: string;
+}
+
+export interface SearchResultItem {
+  /** Entity type the hit lives in (backend ``kind``). */
+  kind: SearchEntityKind;
+  /** Primary key of the matched entity (source id for files). */
+  id: number;
+  name: string;
+  mediapath: string;
+  match_count: number;
+  hits: SearchHit[];
+  /** Set for file hits (and file-owned memo hits) — the coder target. */
+  source_id: number | null;
+  /** Memo/comment hits: the owning entity kind + id. */
+  ref_kind: string | null;
+  ref_id: number | null;
+}
+
+export interface SearchResponse {
+  total: number;
+  results: SearchResultItem[];
+}
+
+// --- In-app help topics -----------------------------------------------------
+
+export interface HelpTopic {
+  id: string;
+  title: string;
+  description: string;
+}
+
+export interface HelpTopicDetail extends HelpTopic {
+  content: string;
+}
+
+export interface HelpSearchResult {
+  id: string;
+  title: string;
+  snippet: string;
+  /** Match span within ``snippet`` (for hit highlighting). */
+  rel0?: number;
+  rel1?: number;
 }
 
 export interface Pseudonym {
@@ -823,14 +969,24 @@ export const GRAPH_MODELS = [
   "cooccurrence-network",
 ] as const;
 
-// --- Collaboration sync (Option B) ------------------------------------
+// --- Collaboration sync (Option C: versioned sidecars + conflict resolution) --
 
-export interface SyncConflict {
-  seq: number;
+/** Pending conflict detected during sync — both local and remote row
+ *  snapshots are stored so the user can resolve via the ConflictResolver. */
+export interface SyncConflictV2 {
+  id: number;
   entity: string;
   pk: string;
-  action: string;
-  reason: string;
+  pk_name: string;
+  local_rev: number;
+  remote_rev: number;
+  local_row: Record<string, unknown> | null;
+  remote_row: Record<string, unknown> | null;
+  remote_instance: string;
+  remote_coder: string;
+  detected_at: string;
+  /** Human-readable label for the entity (e.g. "Code (5)"). */
+  entity_label: string;
 }
 
 /** Live coder presence — an instance actively working on the open project
@@ -844,6 +1000,8 @@ export interface PresenceEntry {
   /** The source currently being worked on (null = not in a file). */
   file_id: number | null;
   file_name: string;
+  /** Stable instance identifier (UUID). */
+  instance: string;
 }
 
 export interface PresenceResponse {
@@ -851,29 +1009,50 @@ export interface PresenceResponse {
   presence: PresenceEntry[];
 }
 
-export interface SyncCollaborator {
-  user: string;
+/** Per-instance collaborator info (replaces SyncCollaborator). */
+export interface SyncCollaboratorV2 {
+  instance: string;
+  coder: string;
   last_sync: number; // sidecar mtime (epoch seconds)
   pending_import: number;
-  /** Number of that rater's changes still blocked by conflicts. */
-  pending_conflicts: number;
-  /** Structured conflict summaries for that rater (empty when none). */
-  conflicts?: SyncConflict[];
+  state: "active" | "stale" | "offline";
 }
 
 export interface SyncStatus {
   ok: boolean;
   reason?: string;
   enabled?: boolean;
+  /** This instance's stable ID. */
+  instance_id?: string;
+  /** Authoritative sync state: "active" | "syncing" | "conflict" | "error". */
+  state?: "active" | "syncing" | "conflict" | "error" | "offline";
   user?: string;
   pending_export: number;
   pending_import: number;
-  /** Total pending conflicts across collaborators (drives the warning UI). */
+  /** Total pending conflicts (drives the red indicator). */
   pending_conflicts: number;
-  collaborators: SyncCollaborator[];
+  collaborators: SyncCollaboratorV2[];
   last_sync: number; // epoch seconds of the last successful cycle (0 = never)
   last_error: string;
   last_error_at: number;
+}
+
+/** Legacy conflict type (kept for SyncResult backward compat). */
+export interface SyncConflict {
+  seq: number;
+  entity: string;
+  pk: string;
+  action: string;
+  reason: string;
+}
+
+/** Legacy collaborator type (kept for backwards compat). */
+export interface SyncCollaborator {
+  user: string;
+  last_sync: number;
+  pending_import: number;
+  pending_conflicts: number;
+  conflicts?: SyncConflict[];
 }
 
 export interface UpdatesSettings {

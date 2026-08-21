@@ -1,10 +1,10 @@
 """Sync API — collaboration toggle, status and manual sync trigger.
 
-Option B: change-log sidecars exchanged via folder-sync tools (Nextcloud,
-Sync&Share, Syncthing). The backend exports local changes as JSONL files
-under ``<project>/changes/<user>/`` and imports/replays other raters'
-files on a 60-second cycle (see ``services/sync``). The cycle only runs
-while the per-machine sync switch is enabled.
+Versioned sidecars with in-app conflict resolution (Option C).  The backend
+exports local changes as JSONL files under ``<project>/changes/<instance_id>/``
+and imports/replays other instances' files on a 60-second cycle (see
+``services.sync_engine``).  The cycle only runs while the per-machine sync
+switch is enabled.
 """
 
 from __future__ import annotations
@@ -13,7 +13,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from qualcoder_api.api.v1.deps import ServiceDep
-from qualcoder_api.services import sync, user_settings
+from qualcoder_api.services import sync, sync_engine, user_settings
 
 router = APIRouter(prefix="/sync", tags=["sync"])
 
@@ -33,6 +33,16 @@ class PresenceActivityRequest(BaseModel):
     file_name: str = ""
 
 
+class ConflictResolutionRequest(BaseModel):
+    conflict_id: int
+    resolution: str  # "local" | "remote" | "merged"
+    merged_row: dict | None = None
+
+
+class ConflictResolveAllRequest(BaseModel):
+    resolution: str  # "local" | "remote"
+
+
 @router.get("/settings")
 async def get_sync_settings() -> dict:
     """The per-machine sync switch state."""
@@ -49,8 +59,9 @@ async def put_sync_settings(req: SyncSettingsRequest, svc: ServiceDep) -> dict:
         import asyncio
 
         asyncio.get_running_loop().create_task(
-            sync.run_sync_cycle(
-                svc.session_factory, svc.project_path, user_settings.get_codername()
+            sync_engine.run_sync_cycle(
+                svc.session_factory, svc.project_path,
+                user_settings.get_instance_id(),
             )
         )
     # Record the toggle in the open project's history (best effort).
@@ -68,12 +79,12 @@ async def put_sync_settings(req: SyncSettingsRequest, svc: ServiceDep) -> dict:
 
 @router.get("/status")
 async def sync_status(svc: ServiceDep) -> dict:
-    """Pending outbound changes, pending inbound changes, the other raters
+    """Pending outbound changes, pending inbound changes, the other instances
     seen in the project's ``changes/`` folder, and the sync switch state."""
     if svc.project_path == "" or svc.session_factory is None:
         return {"ok": False, "reason": "no project open"}
-    return await sync.sync_status(
-        svc.session_factory, svc.project_path, user_settings.get_codername()
+    return await sync_engine.sync_status(
+        svc.session_factory, svc.project_path, user_settings.get_instance_id()
     )
 
 
@@ -112,6 +123,7 @@ async def sync_presence_activity(req: PresenceActivityRequest, svc: ServiceDep) 
             user_settings.get_codername(),
             file_id=req.file_id,
             file_name=req.file_name,
+            instance_id=user_settings.get_instance_id(),
         )
     except Exception as err:  # pragma: no cover - defensive
         return {"ok": False, "reason": str(err)}
@@ -121,8 +133,12 @@ async def sync_presence_activity(req: PresenceActivityRequest, svc: ServiceDep) 
 @router.get("/auto-detect")
 async def sync_auto_detect(project_path: str) -> dict:
     """Report whether a project path looks like a shared/synced folder
-    (marker file, UNC path or change sidecars from other raters)."""
-    return sync.detect_shared(project_path, user=user_settings.get_codername())
+    (marker file, UNC path or change sidecars from other instances)."""
+    return sync.detect_shared(
+        project_path,
+        user=user_settings.get_codername(),
+        instance_id=user_settings.get_instance_id(),
+    )
 
 
 @router.put("/override")
@@ -142,6 +158,42 @@ async def sync_now(svc: ServiceDep) -> dict:
     """Run one export + import cycle immediately."""
     if svc.project_path == "" or svc.session_factory is None:
         raise HTTPException(status_code=409, detail="no project is open")
-    return await sync.run_sync_cycle(
-        svc.session_factory, svc.project_path, user_settings.get_codername()
+    return await sync_engine.run_sync_cycle(
+        svc.session_factory, svc.project_path, user_settings.get_instance_id()
     )
+
+
+@router.get("/conflicts")
+async def list_conflicts(svc: ServiceDep) -> dict:
+    """Unresolved conflicts with local + remote row snapshots."""
+    if svc.project_path == "" or svc.session_factory is None:
+        return {"ok": False, "reason": "no project open"}
+    conflicts = await sync_engine.list_conflicts(svc.session_factory)
+    return {"ok": True, "conflicts": conflicts}
+
+
+@router.post("/conflicts/resolve")
+async def resolve_conflict_endpoint(req: ConflictResolutionRequest, svc: ServiceDep) -> dict:
+    """Resolve a conflict by choosing local, remote, or a merged version."""
+    if svc.project_path == "" or svc.session_factory is None:
+        raise HTTPException(status_code=409, detail="no project is open")
+    result = await sync_engine.resolve_conflict(
+        svc.session_factory, svc.project_path,
+        req.conflict_id, req.resolution, req.merged_row,
+    )
+    if not result.get("ok"):
+        raise HTTPException(status_code=422, detail=result.get("reason", "resolution failed"))
+    return result
+
+
+@router.post("/conflicts/resolve-all")
+async def resolve_all_conflicts_endpoint(req: ConflictResolveAllRequest, svc: ServiceDep) -> dict:
+    """Resolve every pending conflict with one strategy ("local" or "remote")."""
+    if svc.project_path == "" or svc.session_factory is None:
+        raise HTTPException(status_code=409, detail="no project is open")
+    result = await sync_engine.resolve_all_conflicts(
+        svc.session_factory, svc.project_path, req.resolution,
+    )
+    if not result.get("ok"):
+        raise HTTPException(status_code=422, detail=result.get("reason", "resolution failed"))
+    return result

@@ -24,8 +24,8 @@ export type WorkspaceView =
   | { kind: "ai" };
 
 /** Which panel the right bar shows. Inspector is the default; AI, Settings,
- *  History and Creative are toggleable panes driven from the top bar. */
-export type RightPane = "inspector" | "ai" | "settings" | "history" | "creative";
+ *  History, Creative and Help are toggleable panes driven from the top bar. */
+export type RightPane = "inspector" | "ai" | "settings" | "history" | "creative" | "help";
 
 /** The report screens of the Analysis area (see analyze/registry.ts). */
 export type ReportId =

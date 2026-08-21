@@ -16,9 +16,7 @@ import { useAsyncEffect } from "@/lib/useAsync";
 import { CircleAlert, FileImage, LoaderCircle } from "lucide-react";
 import {
   api,
-  ApiError,
-  fetchWithTimeout,
-  initApiBase,
+  localRequest,
   type ChartMatrix,
   type CodeFrequencyRow,
   type CodeRelation,
@@ -995,40 +993,17 @@ interface InterraterReport extends InterraterResult {
 }
 
 /** POST the interrater request with an explicit coder selection. The
- *  report client's `interrater` helper only sends coder_a/coder_b; reuse
- *  the exported request primitives to send the `coders` list as well. */
+ *  report client's `interrater` helper only sends coder_a/coder_b; the
+ *  shared localRequest primitive sends the `coders` list as well. */
 async function postInterrater(body: {
   coder_a: string;
   coder_b: string;
   coders: string[];
 }): Promise<InterraterReport> {
-  const doPost = async (): Promise<InterraterReport> => {
-    const base = await initApiBase();
-    const res = await fetchWithTimeout(`${base}/reports/interrater`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    });
-    if (!res.ok) {
-      let detail: unknown;
-      try {
-        detail = (await res.json()).detail;
-      } catch {
-        /* non-JSON error body */
-      }
-      const suffix = typeof detail === "string" && detail ? `: ${detail}` : "";
-      throw new ApiError(res.status, `API error ${res.status} on /reports/interrater${suffix}`, detail);
-    }
-    return (await res.json()) as InterraterReport;
-  };
-  try {
-    return await doPost();
-  } catch (err) {
-    if (err instanceof ApiError) throw err;
-    // Network-level failure (the packaged backend restarted): retry once
-    // so the base URL is resolved afresh.
-    return doPost();
-  }
+  return localRequest<InterraterReport>("/reports/interrater", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
 }
 
 const fmtValue = (v: number | null) => (v == null ? "—" : v.toFixed(4));

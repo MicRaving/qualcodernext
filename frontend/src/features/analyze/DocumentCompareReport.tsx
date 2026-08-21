@@ -24,7 +24,7 @@ import {
   LoaderCircle,
   MousePointerClick,
 } from "lucide-react";
-import { ApiError, fetchWithTimeout, initApiBase } from "@/lib/api";
+import { localRequest } from "@/lib/api";
 import { cn, errorMessage } from "@/lib/utils";
 import { useWorkspaceStore } from "@/stores/workspace";
 import { useInspectorStore } from "@/stores/inspector";
@@ -81,30 +81,7 @@ export interface CompareResult {
 }
 
 async function fetchCompare(fid1: number, fid2: number): Promise<CompareResult> {
-  const path = `/compare?fid1=${fid1}&fid2=${fid2}`;
-  const doFetch = async (): Promise<CompareResult> => {
-    const base = await initApiBase();
-    const res = await fetchWithTimeout(`${base}${path}`);
-    if (!res.ok) {
-      let detail: unknown;
-      try {
-        detail = (await res.json()).detail;
-      } catch {
-        /* non-JSON error body */
-      }
-      const suffix = typeof detail === "string" && detail ? `: ${detail}` : "";
-      throw new ApiError(res.status, `API error ${res.status} on /compare${suffix}`, detail);
-    }
-    return (await res.json()) as CompareResult;
-  };
-  try {
-    return await doFetch();
-  } catch (err) {
-    if (err instanceof ApiError) throw err;
-    // Network-level failure (the packaged backend restarted): retry once
-    // so the base URL is resolved afresh.
-    return doFetch();
-  }
+  return localRequest<CompareResult>(`/compare?fid1=${fid1}&fid2=${fid2}`);
 }
 
 /** Readable label color on a code's block background. */

@@ -7,7 +7,7 @@
  * legacy ``file:<id>``/``code:<id>`` shape; codes use ``c:<cid>`` and files
  * ``f:<sid>`` so the three pickers never collide.
  */
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useAsyncEffect } from "@/lib/useAsync";
 import { ApiError, api, fetchWithTimeout, initApiBase, type CodeTreeItem, type Source } from "@/lib/api";
 import { type ContextPickerKind } from "@/features/ai/aiModes";
@@ -69,6 +69,10 @@ export interface ContextPickerState {
   query: Record<ContextPickerKind, string>;
   setQuery: (kind: ContextPickerKind, value: string) => void;
   selectedKeys: Set<string>;
+  /** True when every loaded memos/codes/files key is selected ("All"). */
+  all: boolean;
+  /** Select or clear the whole dataset at once. */
+  setAll: (on: boolean) => void;
   toggle: (key: string) => void;
   selectAll: (keys: string[]) => void;
   deselectAll: () => void;
@@ -91,6 +95,31 @@ export function useContextPickers(): ContextPickerState {
     files: "",
   });
   const [selectedKeys, setSelectedKeys] = useState<Set<string>>(new Set());
+
+  // All keys across the three pickers (memo keys keep their ``file:``/``code:``
+  // prefixes, code rows use ``c:`` and files ``f:`` so nothing collides).
+  const allKeys = useMemo(() => {
+    const keys = new Set<string>();
+    for (const memo of data.memos ?? []) keys.add(`${memo.kind}:${memo.id}`);
+    for (const code of data.codes ?? []) if (code.kind === "code") keys.add(`c:${code.id}`);
+    for (const source of data.sources ?? []) keys.add(`f:${source.id}`);
+    return keys;
+  }, [data.memos, data.codes, data.sources]);
+
+  // All is the default: on the first full data load, select everything.
+  const seeded = useRef(false);
+  useEffect(() => {
+    if (seeded.current) return;
+    if (data.memos === null || data.codes === null || data.sources === null) return;
+    seeded.current = true;
+    setSelectedKeys(new Set(allKeys));
+  }, [data.memos, data.codes, data.sources, allKeys]);
+
+  const all = allKeys.size > 0 && [...allKeys].every((key) => selectedKeys.has(key));
+
+  function setAll(on: boolean) {
+    setSelectedKeys(on ? new Set(allKeys) : new Set());
+  }
 
   useAsyncEffect(async (signal) => {
     setSelectedKeys(new Set());
@@ -196,6 +225,8 @@ export function useContextPickers(): ContextPickerState {
     query,
     setQuery: (kind, value) => setQueryState((prev) => ({ ...prev, [kind]: value })),
     selectedKeys,
+    all,
+    setAll,
     toggle,
     selectAll,
     deselectAll,

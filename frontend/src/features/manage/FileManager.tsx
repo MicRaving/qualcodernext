@@ -20,7 +20,6 @@ import {
   FileAudio,
   FileImage,
   FileText,
-  Globe,
   Link2,
   LoaderCircle,
   Pencil,
@@ -65,7 +64,6 @@ import {
 } from "@/features/manage/files";
 import { ROW_HEIGHT, visibleRange } from "@/features/manage/virtual";
 import { extendRangeSelection } from "@/features/manage/selection";
-import { UrlImportDialog } from "@/features/manage/UrlImportDialog";
 import { canTranscribeSource, hasRealTranscript } from "@/lib/media";
 
 function fileIcon(mediaType: string) {
@@ -183,7 +181,6 @@ export function FileManager() {
   const [batchTranscribe, setBatchTranscribe] = useState<number[] | null>(null);
   const [batchAutocode, setBatchAutocode] = useState<number[] | null>(null);
   const [deleting, setDeleting] = useState<{ done: number; total: number } | null>(null);
-  const [urlImportOpen, setUrlImportOpen] = useState(false);
 
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const replaceInputRef = useRef<HTMLInputElement | null>(null);
@@ -792,13 +789,6 @@ export function FileManager() {
           </>
         )}
         <IconButton
-          label={t("files.urlImport")}
-          title={t("files.urlImport")}
-          onClick={() => setUrlImportOpen(true)}
-        >
-          <Globe size={15} aria-hidden />
-        </IconButton>
-        <IconButton
           label={t("files.badLinks")}
           title={t("files.badLinks")}
           onClick={() => void openLinkModal()}
@@ -1171,9 +1161,6 @@ export function FileManager() {
           onDone={() => setBatchAutocode(null)}
         />
       )}
-
-      {/* Import from URL dialog */}
-      {urlImportOpen && <UrlImportDialog onClose={() => setUrlImportOpen(false)} />}
     </div>
   );
 }

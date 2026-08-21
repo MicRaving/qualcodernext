@@ -10,20 +10,40 @@
  */
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { useAsyncEffect } from "@/lib/useAsync";
-import { LoaderCircle, Send } from "lucide-react";
-import { api, type AiStatus } from "@/lib/api";
-import { errorDetail, welcomeMessage } from "@/features/ai/format";
+import { Check, ChevronDown, ChevronRight, LoaderCircle, Send, Wrench, X } from "lucide-react";
+import { api, type AiPendingTool, type AiStatus, type AiToolCallEvent } from "@/lib/api";
+import { describePendingTool, describeToolCall, errorDetail, welcomeMessage } from "@/features/ai/format";
 import { useI18n } from "@/lib/i18n";
 import { ErrorBanner, IconButton, Textarea } from "@/components/ui/orchestrator";
+import { Markdown } from "@/components/ui/Markdown";
 import { AI_MODE_LABELS, CONTEXT_PICKER_KINDS, deriveModeLabel } from "@/features/ai/aiModes";
 import { ContextPickerArea } from "@/features/ai/ContextPickers";
 import { useContextPickers } from "@/features/ai/contextPickerData";
+import { useWorkspaceStore } from "@/stores/workspace";
+
+interface McpTool {
+  name: string;
+  description: string;
+}
 
 type ChatRole = "user" | "assistant" | "error";
 
 interface ChatMessage {
   role: ChatRole;
   text: string;
+  /** Agentic chat: the MCP tools the model executed in this turn. */
+  toolCalls?: AiToolCallEvent[];
+}
+
+function parseToolCalls(requestJson: string): AiToolCallEvent[] {
+  if (!requestJson) return [];
+  try {
+    const parsed: unknown = JSON.parse(requestJson);
+    const calls = (parsed as { tool_calls?: unknown } | null)?.tool_calls;
+    return Array.isArray(calls) ? (calls as AiToolCallEvent[]) : [];
+  } catch {
+    return [];
+  }
 }
 
 export function AiChatPanel({
@@ -45,7 +65,32 @@ export function AiChatPanel({
   const [waiting, setWaiting] = useState(false);
   const [status, setStatus] = useState<AiStatus | null>(null);
   const [loadedChatId, setLoadedChatId] = useState<number | null>(null);
+  const [agentic, setAgentic] = useState(true);
+  const [confirmWrites, setConfirmWrites] = useState(true);
+  const [configExpanded, setConfigExpanded] = useState(true);
+  const [pending, setPending] = useState<{
+    token: string;
+    tools: AiPendingTool[];
+    chatId?: number;
+  } | null>(null);
+  const [toolsOpen, setToolsOpen] = useState(true);
+  const [mcpTools, setMcpTools] = useState<{
+    read_tools: McpTool[];
+    write_tools: McpTool[];
+    write_enabled: boolean;
+  } | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
+
+  useAsyncEffect(async (signal) => {
+    try {
+      const res = await api.aiMcpTools();
+      signal.throwIfAborted();
+      setMcpTools(res);
+    } catch {
+      signal.throwIfAborted();
+      setMcpTools(null);
+    }
+  }, []);
 
   useAsyncEffect(async (signal) => {
     try {
@@ -74,6 +119,7 @@ export function AiChatPanel({
           detail.messages.map((m) => ({
             role: m.role === "user" ? "user" : "assistant",
             text: m.text,
+            toolCalls: parseToolCalls(m.request_json),
           })),
         );
         setLoadedChatId(chatId);
@@ -97,24 +143,81 @@ export function AiChatPanel({
     sourceIds: pickers.selectedSourceIds,
   });
 
+  async function updateMcpPermissions(value: string) {
+    if (!status) return;
+    setStatus((s) => (s ? { ...s, mcp_permissions: value } : s));
+    try {
+      const res = await api.aiSetMcpPermissions(value);
+      setStatus((s) => (s ? { ...s, mcp_permissions: res.mcp_permissions } : s));
+      const tools = await api.aiMcpTools();
+      setMcpTools(tools);
+    } catch {
+      // Revert to the known value on failure by refetching.
+      try {
+        const s = await api.aiStatus();
+        setStatus(s);
+      } catch {
+        /* leave the optimistic value; the next open refreshes it */
+      }
+    }
+  }
+
   async function sendWith() {
     const text = input.trim();
     if (!text || waiting || disabled) return;
     setInput("");
+    setPending(null);
     setMessages((m) => [...m, { role: "user", text }]);
     setWaiting(true);
     try {
-      const res = await api.aiChat(text, "", "auto", promptId || undefined, {
-        memoIds: kinds.includes("memos") ? pickers.selectedMemoIds : undefined,
-        codeIds: kinds.includes("codes") ? pickers.selectedCodeIds : undefined,
-        sourceIds: kinds.includes("files") ? pickers.selectedSourceIds : undefined,
-        chatId: chatId ?? undefined,
-      });
+      const res = await api.aiChat(
+        text,
+        "",
+        "auto",
+        promptId || undefined,
+        {
+          memoIds: kinds.includes("memos") ? pickers.selectedMemoIds : undefined,
+          codeIds: kinds.includes("codes") ? pickers.selectedCodeIds : undefined,
+          sourceIds: kinds.includes("files") ? pickers.selectedSourceIds : undefined,
+          chatId: chatId ?? undefined,
+        },
+        agentic,
+        confirmWrites,
+      );
       if (res.chat_id != null && res.chat_id !== chatId) {
         setLoadedChatId(res.chat_id);
         onChatId?.(res.chat_id);
       }
-      setMessages((m) => [...m, { role: "assistant", text: res.reply }]);
+      if (res.status === "awaiting_approval" && res.token && res.pending_tools) {
+        setPending({ token: res.token, tools: res.pending_tools, chatId: res.chat_id });
+        return;
+      }
+      setMessages((m) => [
+        ...m,
+        { role: "assistant", text: res.reply, toolCalls: res.tool_calls ?? [] },
+      ]);
+    } catch (e) {
+      setMessages((m) => [...m, { role: "error", text: errorDetail(e) }]);
+    } finally {
+      setWaiting(false);
+    }
+  }
+
+  async function handleApprove(approve: boolean) {
+    if (!pending) return;
+    const p = pending;
+    setPending(null);
+    setWaiting(true);
+    try {
+      const res = await api.aiChatApprove(p.token, approve, p.chatId);
+      if (res.chat_id != null && res.chat_id !== chatId) {
+        setLoadedChatId(res.chat_id);
+        onChatId?.(res.chat_id);
+      }
+      setMessages((m) => [
+        ...m,
+        { role: "assistant", text: res.reply, toolCalls: res.tool_calls ?? [] },
+      ]);
     } catch (e) {
       setMessages((m) => [...m, { role: "error", text: errorDetail(e) }]);
     } finally {
@@ -133,7 +236,16 @@ export function AiChatPanel({
 
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-bg">
-      {disabled && <ErrorBanner tone="warning">{welcomeMessage(false)}</ErrorBanner>}
+      {disabled && (
+        <button
+          type="button"
+          onClick={() => useWorkspaceStore.getState().setRightPane("settings")}
+          title={t("ai.openSettingsTitle")}
+          className="block w-full text-left"
+        >
+          <ErrorBanner tone="warning">{welcomeMessage(false)}</ErrorBanner>
+        </button>
+      )}
 
       {/* Messages */}
       <div ref={scrollRef} className="min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto p-3">
@@ -157,7 +269,35 @@ export function AiChatPanel({
                   <span className="mb-0.5 block text-xs font-medium text-text-secondary">
                     {t("ai.assistantLabel")}
                   </span>
-                  {m.text}
+                  {m.toolCalls && m.toolCalls.length > 0 && (
+                    <div className="mb-1.5 flex min-w-0 flex-col gap-1">
+                      <span className="text-[10px] font-semibold uppercase tracking-wide text-text-secondary">
+                        {t("ai.toolsRan")}
+                      </span>
+                      {m.toolCalls.map((tc, j) => (
+                        <div
+                          key={j}
+                          className="flex min-w-0 items-center gap-1.5 rounded-sm border border-border bg-bg px-2 py-1 text-xs"
+                        >
+                          <Wrench size={12} className="shrink-0 text-text-secondary" aria-hidden />
+                          <span className="min-w-0 flex-1 break-words">{describeToolCall(tc)}</span>
+                          {tc.approved === true && (
+                            <span className="flex shrink-0 items-center gap-1 text-success">
+                              <Check size={12} aria-hidden />
+                              {t("ai.toolsApprovedTag")}
+                            </span>
+                          )}
+                          {tc.approved === false && (
+                            <span className="flex shrink-0 items-center gap-1 text-danger">
+                              <X size={12} aria-hidden />
+                              {t("ai.toolsRejectedTag")}
+                            </span>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  <Markdown text={m.text} size="sm" />
                 </div>
               </div>
             ),
@@ -178,20 +318,184 @@ export function AiChatPanel({
         </div>
       </div>
 
-      {/* Context pickers (additive: memos / codes / files) */}
+      {/* Context data config — collapsible via the arrow in its header */}
       {kinds.length > 0 && (
         <div className="min-w-0 shrink-0">
-          <p className="px-3 pb-1 pt-2 text-[10px] font-semibold uppercase tracking-wide text-text-secondary">
-            {t("ai.modeLabel")}{" "}
-            <span className="normal-case font-normal">{t(AI_MODE_LABELS[modeLabelKey])}</span>
-          </p>
-          <ContextPickerArea pickers={pickers} />
+          <button
+            type="button"
+            onClick={() => setConfigExpanded((v) => !v)}
+            aria-expanded={configExpanded}
+            title={configExpanded ? t("ai.contextCollapse") : t("ai.contextExpand")}
+            className="flex w-full min-w-0 items-center gap-1.5 px-3 py-1.5 text-left hover:bg-surface-higher"
+          >
+            {configExpanded ? (
+              <ChevronDown size={12} className="shrink-0 text-text-secondary" aria-hidden />
+            ) : (
+              <ChevronRight size={12} className="shrink-0 text-text-secondary" aria-hidden />
+            )}
+            <span className="text-[10px] font-semibold uppercase tracking-wide text-text-secondary">
+              {t("ai.modeLabel")}
+            </span>
+            <span className="normal-case text-[10px] font-normal text-text-secondary">
+              {t(AI_MODE_LABELS[modeLabelKey])}
+            </span>
+          </button>
+          {configExpanded && <ContextPickerArea pickers={pickers} />}
+        </div>
+      )}
+
+      {/* Pending write approval (agentic chat paused) */}
+      {pending && (
+        <div className="min-w-0 shrink-0 border-t border-border bg-surface p-3">
+          <div className="mx-auto flex w-full max-w-2xl flex-col gap-2">
+            <p className="text-xs font-semibold text-text-secondary">
+              {t("ai.toolsPendingTitle")}
+            </p>
+            <ul className="flex flex-col gap-1">
+              {pending.tools.map((tool, j) => (
+                <li
+                  key={j}
+                  className="flex min-w-0 items-center gap-1.5 rounded-sm border border-border bg-bg px-2 py-1 text-xs"
+                >
+                  <Wrench size={12} className="shrink-0 text-text-secondary" aria-hidden />
+                  <span className="min-w-0 flex-1 break-words">
+                    {describePendingTool(tool)}
+                  </span>
+                </li>
+              ))}
+            </ul>
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={() => void handleApprove(true)}
+                disabled={waiting}
+                className="flex h-7 items-center gap-1 rounded-sm bg-accent px-2.5 text-xs font-medium text-[var(--qc-bg)] hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                <Check size={12} aria-hidden />
+                {t("ai.toolsApprove")}
+              </button>
+              <button
+                type="button"
+                onClick={() => void handleApprove(false)}
+                disabled={waiting}
+                className="flex h-7 items-center gap-1 rounded-sm border border-border bg-bg px-2.5 text-xs text-text-secondary hover:bg-surface-higher disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                <X size={12} aria-hidden />
+                {t("ai.toolsReject")}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Tools & permissions — MCP tool list + access level */}
+      {!disabled && (
+        <div className="min-w-0 shrink-0">
+          <div className="flex items-center gap-1.5 border-t border-border px-3 py-1.5">
+            <button
+              type="button"
+              onClick={() => setToolsOpen((v) => !v)}
+              aria-expanded={toolsOpen}
+              className="flex min-w-0 flex-1 items-center gap-1.5 text-left hover:bg-surface-higher"
+            >
+              {toolsOpen ? (
+                <ChevronDown size={12} className="shrink-0 text-text-secondary" aria-hidden />
+              ) : (
+                <ChevronRight size={12} className="shrink-0 text-text-secondary" aria-hidden />
+              )}
+              <span className="flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wide text-text-secondary">
+                <Wrench size={11} aria-hidden />
+                {t("ai.toolsTitle")}
+              </span>
+            </button>
+            {status?.mcp_mode === "external" ? (
+              <span className="shrink-0 rounded-sm bg-accent/10 px-1.5 py-0.5 text-[10px] font-semibold text-accent">
+                {t("ai.mcpExternal")}
+              </span>
+            ) : (
+              <label className="flex shrink-0 items-center gap-1 text-[11px] text-text-secondary">
+                <span>{t("ai.mcpPermissions")}</span>
+                <select
+                  value={status?.mcp_permissions ?? "read"}
+                  onChange={(e) => void updateMcpPermissions(e.target.value)}
+                  aria-label={t("ai.mcpPermissions")}
+                  className="h-6 rounded-sm border border-border bg-bg px-1 text-[11px] text-text-secondary focus:border-accent focus:outline-none"
+                >
+                  <option value="read">{t("ai.mcpRead")}</option>
+                  <option value="write">{t("ai.mcpWrite")}</option>
+                  <option value="full">{t("ai.mcpFull")}</option>
+                </select>
+              </label>
+            )}
+          </div>
+          {toolsOpen && mcpTools && (
+            <div className="max-h-40 overflow-y-auto border-t border-border px-3 py-1.5">
+              <p className="text-[10px] font-medium uppercase tracking-wide text-text-secondary">
+                {t("ai.toolsReadTitle")}
+              </p>
+              <ul className="mt-0.5 space-y-0.5">
+                {mcpTools.read_tools.map((tool) => (
+                  <li key={tool.name} className="flex items-baseline gap-1.5 text-[11px] leading-snug">
+                    <span className="shrink-0 font-medium text-text-primary">{tool.name}</span>
+                    <span className="min-w-0 truncate text-text-secondary" title={tool.description}>
+                      {tool.description}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+              <p className="mt-1.5 flex items-center gap-1 text-[10px] font-medium uppercase tracking-wide text-text-secondary">
+                <span className={mcpTools.write_enabled ? "" : "text-text-secondary/60"}>
+                  {t("ai.toolsWriteTitle")}
+                </span>
+                {!mcpTools.write_enabled && (
+                  <span className="normal-case font-normal text-warning">{t("ai.toolsWriteLocked")}</span>
+                )}
+              </p>
+              <ul className="mt-0.5 space-y-0.5">
+                {mcpTools.write_tools.map((tool) => (
+                  <li
+                    key={tool.name}
+                    className={`flex items-baseline gap-1.5 text-[11px] leading-snug ${
+                      mcpTools.write_enabled ? "" : "opacity-50"
+                    }`}
+                  >
+                    <span className="shrink-0 font-medium text-text-primary">{tool.name}</span>
+                    <span className="min-w-0 truncate text-text-secondary" title={tool.description}>
+                      {tool.description}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
         </div>
       )}
 
       {/* Input row */}
       <div className="min-w-0 shrink-0 border-t border-border bg-surface p-3">
         <div className="mx-auto flex min-w-0 w-full max-w-2xl flex-col gap-1.5">
+          <div className="flex min-w-0 items-center gap-3 text-[11px] text-text-secondary">
+            <label className="flex items-center gap-1.5" title={t("ai.agenticTitle")}>
+              <input
+                type="checkbox"
+                checked={agentic}
+                onChange={(e) => setAgentic(e.target.checked)}
+                disabled={disabled}
+                className="accent-accent"
+              />
+              {t("ai.agenticToggle")}
+            </label>
+            <label className="flex items-center gap-1.5" title={t("ai.confirmWritesTitle")}>
+              <input
+                type="checkbox"
+                checked={confirmWrites}
+                onChange={(e) => setConfirmWrites(e.target.checked)}
+                disabled={disabled || !agentic}
+                className="accent-accent"
+              />
+              {t("ai.confirmWritesToggle")}
+            </label>
+          </div>
           <div className="flex min-w-0 items-end gap-2">
             <Textarea
               value={input}

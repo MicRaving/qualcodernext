@@ -4,6 +4,7 @@ import {
   buildHighlightedHtml,
   buildHighlights,
   buildViewModel,
+  cleanEmptyLines,
   codingsOverlappingRange,
   collapseWhitespace,
   decodeHtmlEntities,
@@ -683,5 +684,36 @@ describe("parseFrameMessage", () => {
     expect(parseFrameMessage(null)).toBeNull();
     expect(parseFrameMessage("hi")).toBeNull();
     expect(parseFrameMessage({ type: "qc:highlight-ready" })).toBeNull();
+  });
+});
+
+describe("cleanEmptyLines", () => {
+  it("collapses runs of blank lines to a single newline", () => {
+    expect(cleanEmptyLines("a\n\n\nb")).toBe("a\nb");
+  });
+
+  it("strips trailing whitespace per line", () => {
+    expect(cleanEmptyLines("a  \nb\t\n")).toBe("a\nb");
+  });
+
+  it("normalizes CRLF to LF", () => {
+    expect(cleanEmptyLines("a\r\n\r\nb")).toBe("a\nb");
+  });
+
+  it("handles CR-only line endings", () => {
+    expect(cleanEmptyLines("a\r\rb")).toBe("a\nb");
+  });
+
+  it("trims leading and trailing whitespace", () => {
+    expect(cleanEmptyLines("  \n\nhello\n\n  ")).toBe("hello");
+  });
+
+  it("preserves single newlines as paragraph breaks", () => {
+    expect(cleanEmptyLines("para1\npara2")).toBe("para1\npara2");
+  });
+
+  it("returns empty string for blank input", () => {
+    expect(cleanEmptyLines("")).toBe("");
+    expect(cleanEmptyLines("  \n  \n  ")).toBe("");
   });
 });

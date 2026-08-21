@@ -16,23 +16,21 @@ import {
   LoaderCircle,
   Mic,
   Minus,
+  MessageSquareText,
   Music,
   Pause,
-  Pencil,
   Play,
   Plus,
   Sparkles,
-  Star,
   StickyNote,
   Tag,
   Trash2,
+  Undo2,
   Video,
   X,
 } from "lucide-react";
 import {
   api,
-  ApiError,
-  fetchWithTimeout,
   initApiBase,
   invalidateApiBase,
   sourceFileUrl,
@@ -40,9 +38,19 @@ import {
   type Coding,
   type Source,
 } from "@/lib/api";
-import { patchCodingWeight, useCodeMaps } from "@/features/coding/codingApi";
+import {
+  patchCodingWeight,
+  useCodeIndex,
+  useCodeMaps,
+} from "@/features/coding/codingApi";
 import { useCoder } from "@/features/coding/useCoder";
+import { useSegmentActions } from "@/features/coding/shared/useSegmentActions";
+import { useCodingsChanged, useAssignCode } from "@/features/coding/shared/events";
+import { useEscapeStack } from "@/features/coding/shared/useEscapeStack";
+import { useSplitResize } from "@/features/coding/shared/useSplitResize";
 import { CodePicker, type PickedCode } from "@/features/coding/CodePicker";
+import { MemoGutter, MemoGutterBubble, toGutterRow } from "@/features/coding/MemoGutter";
+import { useGutterVisible } from "@/features/coding/viewOptions";
 import { AutocodeDialog } from "@/features/coding/AutocodeDialog";
 import { TranscribeDialog } from "@/features/coding/TranscribeDialog";
 import { formatTime, insertTimestampAtCaret, parseTranscript, segmentLeft, secondsToMs, segmentWidth, buildCrAt, rawToRendered, renderedToRaw, stripCr, normalizeCodingPositions } from "@/features/coding/media";
@@ -68,6 +76,7 @@ import {
   ViewHeader,
 } from "@/components/ui/orchestrator";
 import { useCoderStore } from "@/stores/coder";
+import { useInspectorStore } from "@/stores/inspector";
 import { usePrefsStore } from "@/stores/prefs";
 import { useWorkspaceStore } from "@/stores/workspace";
 import { useProjectStore } from "@/stores/project";
@@ -84,40 +93,6 @@ function transcriptTimestamp(ms: number): string {
     return `[${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}]`;
   }
   return `[${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}]`;
-}
-
-/** PATCH a transcript text coding's memo/important with a local fetch,
- *  mirroring codingApi's pattern — no lib/api.ts additions needed. */
-async function patchTextCodingRow(
-  id: number,
-  body: { memo?: string; important?: number },
-): Promise<unknown> {
-  const path = `/codings/text/${id}`;
-  const doFetch = async (): Promise<unknown> => {
-    const base = await initApiBase();
-    const res = await fetchWithTimeout(`${base}${path}`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    });
-    if (!res.ok) {
-      let detail: unknown;
-      try {
-        detail = (await res.json()).detail;
-      } catch {
-        /* non-JSON error body */
-      }
-      const suffix = typeof detail === "string" && detail ? `: ${detail}` : "";
-      throw new ApiError(res.status, `API error ${res.status} on ${path}${suffix}`, detail);
-    }
-    return (await res.json()) as unknown;
-  };
-  try {
-    return await doFetch();
-  } catch (err) {
-    if (err instanceof ApiError) throw err;
-    return doFetch();
-  }
 }
 
 export function AvCoder({ source }: { source: Source }) {
@@ -171,48 +146,35 @@ export function AvCoder({ source }: { source: Source }) {
   // re-resolved once before the real error surfaces.
   const [mediaSrc, setMediaSrc] = useState(() => sourceFileUrl(source.id));
   const mediaRetriedRef = useRef(false);
+  // A new file must start with a fresh retry budget and a freshly built src —
+  // the mount-time initialization above only covers the first source.
+  useEffect(() => {
+    mediaRetriedRef.current = false;
+    setMediaError(null);
+    setMediaSrc(sourceFileUrl(source.id));
+  }, [source.id]);
 
   const [startMark, setStartMark] = useState<number | null>(null);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [pendingStart, setPendingStart] = useState<number | null>(null);
   const [selected, setSelected] = useState<AVCoding | null>(null);
-  /** The transcript text coding whose details the footer shows (click a
+  /** The transcript text coding whose details the memo bubble shows (click a
    *  coded transcript segment). */
   const [selectedText, setSelectedText] = useState<Coding | null>(null);
-  /** Draft while the footer's memo field is being edited inline (null =
-   *  not editing). */
-  const [memoDraft, setMemoDraft] = useState<string | null>(null);
+  const [gutterVisible, toggleGutter] = useGutterVisible();
   const [transcript, setTranscript] = useState<Source | null>(null);
   const [playbackRate, setPlaybackRate] = useState(1);
   const [videoVisible, setVideoVisible] = useState(true);
-  const [videoH, setVideoH] = useState(260);
-  const [videoDragging, setVideoDragging] = useState(false);
-  const videoResizeRef = useRef<{ startY: number; startH: number } | null>(null);
 
-  function startVideoResize(e: React.MouseEvent) {
-    e.preventDefault();
-    videoResizeRef.current = { startY: e.clientY, startH: videoH };
-    setVideoDragging(true);
-  }
-
-  useEffect(() => {
-    if (!videoDragging) return;
-    const onMove = (e: MouseEvent) => {
-      const drag = videoResizeRef.current;
-      if (!drag) return;
-      setVideoH(Math.min(560, Math.max(100, Math.round(drag.startH + (e.clientY - drag.startY)))));
-    };
-    const onUp = () => {
-      videoResizeRef.current = null;
-      setVideoDragging(false);
-    };
-    window.addEventListener("mousemove", onMove);
-    window.addEventListener("mouseup", onUp);
-    return () => {
-      window.removeEventListener("mousemove", onMove);
-      window.removeEventListener("mouseup", onUp);
-    };
-  }, [videoDragging]);
+  const videoResize = useSplitResize({
+    axis: "y",
+    min: 100,
+    max: 560,
+    initial: 260,
+  });
+  const videoH = videoResize.size;
+  const videoDragging = videoResize.dragging;
+  const startVideoResize = videoResize.onDown;
 
   // Lower-half panel: the transcript with text-coder functions
   const [transcriptVisible, setTranscriptVisible] = useState(true);
@@ -454,10 +416,8 @@ export function AvCoder({ source }: { source: Source }) {
       if (autoShowDetails) {
         setSelected(null);
         setSelectedText(next.find((c) => c.ctid === created.ctid) ?? null);
-        setMemoDraft(null);
       } else {
         setSelectedText(null);
-        setMemoDraft(null);
       }
     } catch (e) {
       setTError(errorMessage(e, t("coder.createError")));
@@ -492,10 +452,8 @@ export function AvCoder({ source }: { source: Source }) {
       if (autoShowDetails) {
         setSelected(null);
         setSelectedText(next.find((c) => c.ctid === created.ctid) ?? null);
-        setMemoDraft(null);
       } else {
         setSelectedText(null);
-        setMemoDraft(null);
       }
     } catch (e) {
       setTError(errorMessage(e, t("coder.inVivoCreateError")));
@@ -505,23 +463,17 @@ export function AvCoder({ source }: { source: Source }) {
   }
 
   // Clicking a code in the left sidebar codes the selected transcript part.
-  // The listener must always use the LATEST handler: a fresh closure would
+  // The hook always dispatches to the LATEST handler: a stale closure would
   // capture the first render's transcriptId (null before the transcript
   // exists), so the highlight reload would silently no-op.
   const codeTranscriptSelectionRef = useRef(codeTranscriptSelection);
   codeTranscriptSelectionRef.current = codeTranscriptSelection;
-  useEffect(() => {
-    const onAssign = (e: Event) => {
-      const cid = (e as CustomEvent<{ cid: number }>).detail?.cid;
-      if (typeof cid !== "number") return;
-      setTPickerOpen(false);
-      if (codingIntentRef.current === "text" && tSelRef.current) {
-        void codeTranscriptSelectionRef.current(cid);
-      }
-    };
-    window.addEventListener("qc:assign-code", onAssign);
-    return () => window.removeEventListener("qc:assign-code", onAssign);
-  }, []);
+  useAssignCode((cid) => {
+    setTPickerOpen(false);
+    if (codingIntentRef.current === "text" && tSelRef.current) {
+      void codeTranscriptSelectionRef.current(cid);
+    }
+  });
 
   async function saveTranscriptAnnotation() {
     const sel = tSelRef.current;
@@ -574,15 +526,17 @@ export function AvCoder({ source }: { source: Source }) {
       out.push(
         <span
           key={c.ctid}
+          data-ctid={c.ctid}
           className="cursor-pointer rounded-sm qc-seg"
           style={{ backgroundColor: codeTint(color ?? FALLBACK_CODE_COLOR) }}
           onClick={() => {
             // A click on a coded transcript segment opens its details in
-            // the bottom footer (pure client state — no fetch).
+            // the memo bubble (pure client state — no fetch) and also in
+            // the right-bar Inspector.
             setSelected(null);
             setSelectedText(c);
-            setMemoDraft(null);
             setTSel(null);
+            void useInspectorStore.getState().selectCode(c.cid);
           }}
         >
           {text.slice(s, e)}
@@ -605,9 +559,18 @@ export function AvCoder({ source }: { source: Source }) {
 
   useEffect(() => {
     if (!activeSubtitle) return;
-    transcriptTextRef.current
-      ?.querySelector(`[data-start="${activeSubtitle.startMs}"]`)
-      ?.scrollIntoView({ block: "nearest" });
+    // Scroll only the transcript's own container — scrollIntoView would also
+    // shift outer ancestors (app shell/window).
+    const el = transcriptTextRef.current?.querySelector<HTMLElement>(
+      `[data-start="${activeSubtitle.startMs}"]`,
+    );
+    const scrollEl = transcriptTextRef.current;
+    if (!el || !scrollEl) return;
+    const r = el.getBoundingClientRect();
+    const c = scrollEl.getBoundingClientRect();
+    if (r.top < c.top || r.bottom > c.bottom) {
+      scrollEl.scrollTo({ top: scrollEl.scrollTop + r.top - c.top, behavior: "smooth" });
+    }
   }, [activeSubtitle]);
 
   function setSpeed(rate: number) {
@@ -626,6 +589,7 @@ export function AvCoder({ source }: { source: Source }) {
   }, [pendingStart]);
 
   const { colorByCid, nameByCid } = useCodeMaps(codes);
+  const { byId: codeById } = useCodeIndex(codes);
 
   /** Top-level code categories for the in-vivo popover's optional target. */
   const categories = useMemo(
@@ -670,6 +634,9 @@ export function AvCoder({ source }: { source: Source }) {
 
   // --- transcript codings (highlight the already coded text) ---
   const [transcriptCodings, setTranscriptCodings] = useState<Coding[]>([]);
+  /** Incremented when transcript codings change so the memo gutter
+   *  re-measures span positions. */
+  const [gutterTick, setGutterTick] = useState(0);
 
   const loadTranscriptCodings = useCallback(async (): Promise<Coding[]> => {
     if (transcriptId == null) {
@@ -684,6 +651,7 @@ export function AvCoder({ source }: { source: Source }) {
       // highlights land where they were marked.
       const next = codings.map((c) => normalizeCodingPositions(transcriptRaw, crAt, c));
       setTranscriptCodings(next);
+      setGutterTick((n) => n + 1);
       return next;
     } catch {
       setTranscriptCodings([]);
@@ -697,11 +665,7 @@ export function AvCoder({ source }: { source: Source }) {
 
   // History undo/redo: reload transcript codings when the audit log reverts
   // a change (the shell only refreshes project metadata).
-  useEffect(() => {
-    const handle = () => void loadTranscriptCodings();
-    window.addEventListener("qc:codings-changed", handle);
-    return () => window.removeEventListener("qc:codings-changed", handle);
-  }, [loadTranscriptCodings]);
+  useCodingsChanged(() => void loadTranscriptCodings());
 
   // --- media element wiring --------------------------------------------
 
@@ -1195,7 +1159,6 @@ export function AvCoder({ source }: { source: Source }) {
         setSelected(null);
       }
       setSelectedText(null);
-      setMemoDraft(null);
     } catch (e) {
       setError(errorMessage(e, t("coder.createError")));
     }
@@ -1209,17 +1172,19 @@ export function AvCoder({ source }: { source: Source }) {
       setPickerOpen(false);
       const start = pendingStartRef.current;
       if (codingIntentRef.current === "range" && start !== null) {
-        void codeRange(cid, start, currentMs);
+        void codeRange(cid, start, currentMsRef.current);
       }
     };
     window.addEventListener("qc:assign-code", onAssign);
     return () => window.removeEventListener("qc:assign-code", onAssign);
   });
 
-  async function handlePick(code: PickedCode) {
+  async function handlePick(codes: PickedCode[]) {
     setPickerOpen(false);
     if (pendingStart === null) return;
-    await codeRange(code.cid, pendingStart, currentMs);
+    for (const code of codes) {
+      await codeRange(code.cid, pendingStart, currentMs);
+    }
   }
 
   /** Segment weight (backend rows carry it; 0 = no weight). */
@@ -1257,90 +1222,107 @@ export function AvCoder({ source }: { source: Source }) {
     }
   }
 
-  /* --------------------------------------- transcript coding details row */
+  /* ------------------------------- memo gutter / bubble (transcript) */
 
-  /** Stepper update of a transcript coding's weight (0-100; 0 = no weight). */
-  function updateTranscriptWeight(row: Coding, weight: number) {
-    void (async () => {
-      try {
-        await patchCodingWeight("text", row.ctid, weight);
-        await loadTranscriptCodings();
-      } catch (e) {
-        setTError(errorMessage(e, t("coder.weightError")));
+  const gutterRows = useMemo(
+    () =>
+      transcriptCodings.map((c) =>
+        toGutterRow(
+          {
+            id: c.ctid,
+            kind: "text",
+            memo: c.memo,
+            weight: (c as Coding & { weight?: number }).weight,
+            important: c.important,
+            date: c.date,
+            seltext: c.seltext,
+          },
+          codeById.get(c.cid),
+          t("coder.fallbackCode", { id: c.cid }),
+        ),
+      ),
+    [transcriptCodings, codeById, t],
+  );
+
+  const selectedBubbleRows = useMemo(
+    () => (selectedText ? gutterRows.filter((r) => r.id === selectedText.ctid) : []),
+    [gutterRows, selectedText],
+  );
+
+  const anchorOf = useCallback(
+    (ctid: number) => transcriptTextRef.current?.querySelector<HTMLElement>(`[data-ctid="${ctid}"]`) ?? null,
+    [],
+  );
+
+  const handleGutterSelect = useCallback(
+    (ctid: number) => {
+      const coding = transcriptCodings.find((c) => c.ctid === ctid);
+      if (coding) {
+        setSelected(null);
+        setSelectedText(coding);
       }
-    })();
-  }
+    },
+    [transcriptCodings],
+  );
 
-  /** Open the footer's inline memo editor for the selected transcript coding. */
-  function startEditTranscriptMemo() {
-    if (!selectedText) return;
-    setMemoDraft(selectedText.memo ?? "");
-  }
+  // Shared mutation actions for the transcript's text codings (memo/
+  // weight/important/delete) with a recoverable-delete undo stack —
+  // deletes confirm AND push here.
+  const tActions = useSegmentActions({
+    kind: "text",
+    rows: transcriptCodings,
+    idOf: (r) => r.ctid,
+    deleteRow: (ctid) => api.deleteTextCoding(ctid),
+    refresh: loadTranscriptCodings,
+    onError: setTError,
+    onDeleted: () => setSelectedText(null),
+  });
+  const { undo: tUndo } = tActions;
 
-  /** Save the memo draft of the selected transcript coding, then refresh. */
-  function saveTranscriptMemo() {
-    if (memoDraft == null || !selectedText) return;
-    const draft = memoDraft;
-    setMemoDraft(null);
-    void (async () => {
-      try {
-        await patchTextCodingRow(selectedText.ctid, { memo: draft });
-        await loadTranscriptCodings();
-      } catch (e) {
-        setTError(errorMessage(e, t("htmlCoder.updateError")));
-      }
-    })();
-  }
-
-  /** Toggle the important flag of the selected transcript coding. */
-  function toggleTranscriptImportant() {
-    if (!selectedText) return;
-    const next = selectedText.important ? 0 : 1;
-    void (async () => {
-      try {
-        await patchTextCodingRow(selectedText.ctid, { important: next });
-        await loadTranscriptCodings();
-      } catch (e) {
-        setTError(errorMessage(e, t("htmlCoder.updateError")));
-      }
-    })();
-  }
+  const gutterUpdateMemo = tActions.updateMemo;
+  const gutterUpdateWeight = tActions.updateWeight;
+  const gutterToggleImportant = tActions.toggleImportant;
 
   /** Delete a transcript text coding (the timeline/AV codings are removed
    *  via handleDelete). */
-  function handleTranscriptDelete(row: Coding) {
+  function handleTranscriptDelete(ctid: number) {
+    const row = transcriptCodings.find((c) => c.ctid === ctid);
     if (
       !window.confirm(
         t("avCoder.deleteConfirm", {
-          name: nameByCid.get(row.cid) ?? t("coder.plainCode"),
+          name: row ? (nameByCid.get(row.cid) ?? t("coder.plainCode")) : t("coder.plainCode"),
         }),
       )
     )
       return;
-    void (async () => {
-      try {
-        await api.deleteTextCoding(row.ctid);
-        setSelectedText(null);
-        setMemoDraft(null);
-        await loadTranscriptCodings();
-      } catch (e) {
-        setTError(errorMessage(e, t("coder.removeError")));
-      }
-    })();
+    tActions.remove(ctid);
   }
 
-  // Escape closes the details footer (timeline segment or transcript coding).
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key !== "Escape") return;
-      if (selected == null && selectedText == null) return;
+  // Escape dismisses the topmost transcript/timeline UI layer: popovers
+  // (picker, in-vivo, annotate) first, then the details footers.
+  useEscapeStack([
+    () => {
+      if (!tPickerOpen) return false;
+      setTPickerOpen(false);
+      return true;
+    },
+    () => {
+      if (!tInVivoOpen) return false;
+      setTInVivoOpen(false);
+      return true;
+    },
+    () => {
+      if (!tAnnotateOpen) return false;
+      setTAnnotateOpen(false);
+      return true;
+    },
+    () => {
+      if (selected == null && selectedText == null) return false;
       setSelected(null);
       setSelectedText(null);
-      setMemoDraft(null);
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  });
+      return true;
+    },
+  ]);
 
   if (loading) {
     return <LoadingState>{t("avCoder.loading")}</LoadingState>;
@@ -1499,7 +1481,6 @@ export function AvCoder({ source }: { source: Source }) {
                     seekToMs(coding.pos0);
                     setSelected(coding);
                     setSelectedText(null);
-                    setMemoDraft(null);
                   }}
                   title={`${nameByCid.get(coding.cid) ?? t("coder.plainCode")} · ${formatTime(coding.pos0)} – ${formatTime(coding.pos1)}`}
                   className={`absolute top-0 h-full cursor-pointer border qc-seg ${
@@ -1574,6 +1555,27 @@ export function AvCoder({ source }: { source: Source }) {
                   </Button>
                 )
               )}
+              {transcriptId != null && (
+                <Button
+                  variant="toolbar"
+                  icon={<MessageSquareText size={12} aria-hidden />}
+                  onClick={toggleGutter}
+                  className={cn(gutterVisible && "border-accent text-accent")}
+                  title={gutterVisible ? t("coder.hideMemos") : t("coder.showMemos")}
+                >
+                  {t("coder.memos")}
+                </Button>
+              )}
+              {tUndo.canUndo && (
+                <Button
+                  variant="toolbar"
+                  icon={<Undo2 size={12} aria-hidden />}
+                  onClick={tUndo.undoLast}
+                  title={t("coder.unmarkTitle")}
+                >
+                  {t("coder.unmarkLast")}
+                </Button>
+              )}
               {transcriptId != null && !transcribeSaving && (
                 <Button
                   variant="toolbarDanger"
@@ -1647,6 +1649,8 @@ export function AvCoder({ source }: { source: Source }) {
               role="log"
               aria-live="off"
             >
+            <div className="flex">
+            <div className="flex-1">
               {subtitleSegments.length === 0 ? (
                 jobPending ? (
                   <p className="py-6 text-center text-sm text-text-secondary" role="status">
@@ -1699,6 +1703,22 @@ export function AvCoder({ source }: { source: Source }) {
                   });
                 })()
               )}
+            </div>
+              <MemoGutter
+                rows={gutterRows}
+                selectedIds={selectedText ? [selectedText.ctid] : []}
+                scrollRef={transcriptTextRef}
+                anchorOf={anchorOf}
+                onSelect={handleGutterSelect}
+                onDeselect={() => setSelectedText(null)}
+                onUpdateMemo={gutterUpdateMemo}
+                onUpdateWeight={gutterUpdateWeight}
+                onDelete={handleTranscriptDelete}
+                onToggleImportant={gutterToggleImportant}
+                visible={gutterVisible}
+                measureSignal={gutterTick}
+              />
+            </div>
             </div>
             )}
             {/* Floating selection toolbar (code / annotate) */}
@@ -1833,6 +1853,7 @@ export function AvCoder({ source }: { source: Source }) {
                   value={tAnnotateMemo}
                   onChange={(e) => setTAnnotateMemo(e.target.value)}
                   placeholder={t("coder.annotationMemoPlaceholder")}
+                  aria-label={t("coder.annotationMemoPlaceholder")}
                   className="h-20 w-full resize-none p-1.5"
                 />
                 <div className="mt-2 flex justify-end gap-1.5">
@@ -1853,7 +1874,11 @@ export function AvCoder({ source }: { source: Source }) {
               open={tPickerOpen}
               codes={storeCodeTree}
               onClose={() => setTPickerOpen(false)}
-              onPick={(picked) => void codeTranscriptSelection(picked.cid)}
+              onPick={(picked) => {
+                for (const p of picked) {
+                  void codeTranscriptSelection(p.cid);
+                }
+              }}
             />
           </div>
         );
@@ -1910,10 +1935,10 @@ export function AvCoder({ source }: { source: Source }) {
       {mediaError && <ErrorBanner>{mediaError}</ErrorBanner>}
       {error && <ErrorBanner>{error}</ErrorBanner>}
 
-      {/* Details panel: a timeline AVCoding or a transcript text coding
-          (clicked `.qc-seg` in the transcript panel). Renders purely from
-          client state — nothing is fetched on open. */}
-      {(selected || selectedText) && (
+      {/* Details panel: a timeline AVCoding (clicked on the timeline). The
+          transcript coding's details open in the memo bubble instead.
+          Renders purely from client state — nothing is fetched on open. */}
+      {selected && (
         <div className="flex shrink-0 flex-wrap items-center gap-3 border-b border-border bg-surface px-3 py-2">
           {selected && (
             <>
@@ -1964,121 +1989,23 @@ export function AvCoder({ source }: { source: Source }) {
               </Button>
             </>
           )}
-          {!selected && selectedText && (
-            <>
-              <span
-                className="h-3 w-3 shrink-0 rounded-sm border border-border"
-                style={{ backgroundColor: colorByCid.get(selectedText.cid) ?? FALLBACK_CODE_COLOR }}
-                aria-hidden
-              />
-              <span className="truncate text-sm font-medium text-text-primary" title={selectedText.date}>
-                {nameByCid.get(selectedText.cid) ?? t("coder.fallbackCode", { id: selectedText.cid })}
-              </span>
-              {selectedText.seltext && (
-                <span
-                  className="max-w-56 truncate text-xs text-text-secondary"
-                  title={selectedText.seltext}
-                >
-                  {selectedText.seltext}
-                </span>
-              )}
-              {memoDraft != null ? (
-                <div className="flex items-center gap-1">
-                  <Input
-                    value={memoDraft}
-                    placeholder={t("pdfCoder.memoPlaceholder")}
-                    aria-label={t("pdfCoder.memoPlaceholder")}
-                    className="w-48"
-                    onChange={(e) => setMemoDraft(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter") void saveTranscriptMemo();
-                    }}
-                  />
-                  <Button
-                    variant="toolbarIconPrimary"
-                    icon={<Check size={12} aria-hidden />}
-                    title={t("common.save")}
-                    aria-label={t("common.save")}
-                    onClick={() => void saveTranscriptMemo()}
-                  />
-                  <Button
-                    variant="toolbarIcon"
-                    icon={<X size={12} aria-hidden />}
-                    title={t("common.cancel")}
-                    aria-label={t("common.cancel")}
-                    onClick={() => setMemoDraft(null)}
-                  />
-                </div>
-              ) : (
-                <button
-                  type="button"
-                  onClick={startEditTranscriptMemo}
-                  title={t("pdfCoder.editMemo")}
-                  className="flex min-w-0 max-w-64 items-center gap-1 text-left text-xs text-text-secondary hover:text-text-primary"
-                >
-                  {selectedText.memo ? (
-                    <span className="truncate">{selectedText.memo}</span>
-                  ) : (
-                    <span className="italic">{t("coder.noMemoInline")}</span>
-                  )}
-                  <Pencil size={10} aria-hidden />
-                </button>
-              )}
-              <span className="flex items-center gap-1">
-                <span className="text-xs text-text-secondary">{t("coder.weight")}</span>
-                <Button
-                  variant="toolbarIcon"
-                  icon={<Minus size={12} aria-hidden />}
-                  title={t("coder.weightDec")}
-                  aria-label={t("coder.weightDec")}
-                  disabled={avWeight(selectedText) === 0}
-                  onClick={() => updateTranscriptWeight(selectedText, avWeight(selectedText) - 1)}
-                />
-                <span className="min-w-5 text-center text-xs text-text-secondary" aria-label={t("coder.weight")}>
-                  {avWeight(selectedText)}
-                </span>
-                <Button
-                  variant="toolbarIcon"
-                  icon={<Plus size={12} aria-hidden />}
-                  title={t("coder.weightInc")}
-                  aria-label={t("coder.weightInc")}
-                  disabled={avWeight(selectedText) >= 100}
-                  onClick={() => updateTranscriptWeight(selectedText, avWeight(selectedText) + 1)}
-                />
-              </span>
-              <IconButton
-                label={t("pdfCoder.importantToggle")}
-                title={t("pdfCoder.importantToggle")}
-                size="sm"
-                className={cn(selectedText.important !== 0 && "text-warning")}
-                onClick={toggleTranscriptImportant}
-              >
-                <Star
-                  size={14}
-                  className={selectedText.important !== 0 ? "fill-current" : ""}
-                  aria-hidden
-                />
-              </IconButton>
-              <div className="flex-1" />
-              <Button
-                variant="danger"
-                icon={<Trash2 size={12} aria-hidden />}
-                onClick={() => void handleTranscriptDelete(selectedText)}
-              >
-                {t("common.delete")}
-              </Button>
-              <Button
-                variant="secondary"
-                onClick={() => {
-                  setSelectedText(null);
-                  setMemoDraft(null);
-                }}
-              >
-                {t("common.close")}
-              </Button>
-            </>
-          )}
         </div>
+      )}
+
+      {/* Memo bubble for the selected transcript coding (when the memo
+          gutter is deactivated). */}
+      {!gutterVisible && selectedBubbleRows.length > 0 && (
+        <MemoGutterBubble
+          rows={selectedBubbleRows}
+          scrollRef={transcriptTextRef}
+          anchorOf={anchorOf}
+          onClose={() => setSelectedText(null)}
+          onUpdateMemo={gutterUpdateMemo}
+          onUpdateWeight={gutterUpdateWeight}
+          onDelete={handleTranscriptDelete}
+          onToggleImportant={gutterToggleImportant}
+          measureSignal={gutterTick}
+        />
       )}
 
       <CodePicker

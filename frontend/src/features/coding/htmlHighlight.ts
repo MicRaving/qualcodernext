@@ -33,6 +33,12 @@ export interface QcCodingPayload {
   seltext: string;
   color: string | null;
   name: string;
+  /** Optional segment identity; when present it is baked into the mark so
+   *  the memo gutter can anchor to the rendered highlight. */
+  ctid?: number;
+  /** The code is hidden in the coder — the mark renders dimmed (matches the
+   *  `.qc-seg-hidden` treatment of the native coder surfaces). */
+  hidden?: boolean;
 }
 
 /** One matched segment, positioned in the text coordinate space of `mode`. */
@@ -1061,7 +1067,10 @@ export function buildHighlightedHtml(html: string, codings: QcCodingPayload[]): 
     out += html.slice(pos, g.start);
     out += `<mark class="qc-live-coding"`;
     if (coding.name) out += ` title="${escapeAttr(coding.name)}"`;
-    out += ` style="${markStyleFor(coding.color)}">`;
+    if (coding.ctid !== undefined) {
+      out += ` data-ctid="${coding.ctid}" data-ctids="${coding.ctid}"`;
+    }
+    out += ` style="${markStyleFor(coding.color)}${coding.hidden ? ";opacity:.2" : ""}">`;
     out += escapeMarkText(html.slice(g.start, g.end));
     out += `</mark>`;
     pos = g.end;
@@ -1069,4 +1078,17 @@ export function buildHighlightedHtml(html: string, codings: QcCodingPayload[]): 
   }
   out += html.slice(pos);
   return out;
+}
+
+/**
+ * Normalize extracted website text: normalize line endings, strip trailing
+ * whitespace, and collapse runs of blank lines to a single newline so the
+ * plaintext view reads as continuous paragraphs.
+ */
+export function cleanEmptyLines(text: string): string {
+  return text
+    .replace(/\r\n?/g, "\n")    // normalize CRLF / CR
+    .replace(/[ \t]+\n/g, "\n") // strip trailing spaces per line
+    .replace(/\n{2,}/g, "\n")   // collapse blank lines
+    .trim();
 }

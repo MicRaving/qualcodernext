@@ -1,5 +1,6 @@
 ---
 name: themes-generation-friese-2024
+label: Theme Generation (Friese, 2024)
 description: |-
   This prompt will extract a list of themes from the empirical data.
 

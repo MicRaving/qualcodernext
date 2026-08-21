@@ -8,10 +8,11 @@
  */
 import { useState } from "react";
 import { useAsyncEffect } from "@/lib/useAsync";
-import { CircleAlert, CircleCheck, LoaderCircle } from "lucide-react";
+import { Bug, CircleAlert, CircleCheck, LoaderCircle } from "lucide-react";
 import { useI18n } from "@/lib/i18n";
 import { api, type RStatus } from "@/lib/api";
-import { BarHeader, LeftBar } from "@/components/ui/orchestrator";
+import { BarHeader, IconButton, LeftBar } from "@/components/ui/orchestrator";
+import { useProjectStore } from "@/stores/project";
 import { GeneralTab } from "@/features/settings/GeneralTab";
 import { AiTab } from "@/features/settings/AiTab";
 import { UpdatesTab } from "@/features/settings/UpdatesTab";
@@ -34,7 +35,20 @@ export function SettingsView() {
       borderSide="l"
       width="lg"
       className="h-full min-h-0"
-      header={<BarHeader title={t("settings.title")} />}
+      header={
+        <BarHeader
+          title={t("settings.title")}
+          actions={
+            <IconButton
+              label={t("nav.bugReport")}
+              title={t("nav.bugReport")}
+              onClick={() => void useProjectStore.getState().openBugReport()}
+            >
+              <Bug size={14} aria-hidden />
+            </IconButton>
+          }
+        />
+      }
     >
       <div className="min-h-0 flex-1 divide-y divide-border overflow-y-auto">
         <GeneralTab />

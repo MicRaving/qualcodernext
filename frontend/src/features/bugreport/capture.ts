@@ -21,7 +21,7 @@
  */
 import { errorMessage } from "@/lib/utils";
 import html2canvas from "html2canvas";
-import { t } from "@/lib/i18n";
+import { APP_VERSION } from "@/lib/version";
 
 export interface CaptureResult {
   /** PNG data-URL of the captured view. */
@@ -442,7 +442,7 @@ async function snapshotContext(): Promise<SnapshotContext> {
   } catch {
     /* store unreachable (e.g. bare unit test) — keep the unknowns */
   }
-  return { version: t("app.version"), view, lastAction, lastError };
+  return { version: APP_VERSION, view, lastAction, lastError };
 }
 
 /**

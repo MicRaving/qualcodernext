@@ -4,13 +4,13 @@
  * one the dashboard empty state provides New/Open project (the app always
  * starts on the dashboard).
  */
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   AudioLines,
   BarChart3,
-  Bug,
   Download,
   Files,
+  HelpCircle,
   History,
   LayoutDashboard,
   Lightbulb,
@@ -18,12 +18,14 @@ import {
   Pause,
   Play,
   ScrollText,
+  Search,
   Settings,
   Sparkles,
   Terminal,
   Trash2,
   Upload,
   Users,
+  X,
 } from "lucide-react";
 import type { TaskInfo } from "@/stores/project";
 import { Sidebar } from "@/components/shell/Sidebar";
@@ -44,6 +46,9 @@ import { CreativePanel } from "@/features/creative/CreativePanel";
 import { SettingsView } from "@/features/settings/SettingsView";
 import { AiView } from "@/features/ai/AiView";
 import { BugReportView } from "@/features/bugreport/BugReportView";
+import { SearchDialog } from "@/features/search/SearchDialog";
+import { HelpView } from "@/features/help/HelpView";
+import { APP_VERSION } from "@/lib/version";
 import { api } from "@/lib/api";
 import { useToast } from "@/lib/toast";
 import { useI18n } from "@/lib/i18n";
@@ -154,7 +159,7 @@ function StatusBar() {
       {annotations.length > 0 && <span>{annotations.length} {t("status.annotations")}</span>}
       {memoCount > 0 && <span>{memoCount} {t("status.memos")}</span>}
       <span className="flex-1" />
-      <span>{t("app.version")}</span>
+      <span title={t("app.versionLabel")}>v{APP_VERSION}</span>
     </footer>
   );
 }
@@ -168,7 +173,8 @@ const NAV_BUTTONS: { kind: WorkspaceView["kind"]; labelKey: string; icon: typeof
   { kind: "analyze", labelKey: "nav.analyze", icon: BarChart3 },
 ];
 
-const RIGHT_ICON_BUTTONS: { pane: "history" | "ai" | "creative"; labelKey: string; icon: typeof Files }[] = [
+const RIGHT_ICON_BUTTONS: { pane: "history" | "ai" | "creative" | "help"; labelKey: string; icon: typeof Files }[] = [
+  { pane: "help", labelKey: "nav.help", icon: HelpCircle },
   { pane: "history", labelKey: "nav.history", icon: History },
   { pane: "ai", labelKey: "nav.ai", icon: Sparkles },
   { pane: "creative", labelKey: "nav.creative", icon: Lightbulb },
@@ -190,6 +196,13 @@ export function ProjectShell() {
   const syncAutoNotice = usePrefsStore((s) => s.syncAutoNotice);
   const [queueOpen, setQueueOpen] = useState(false);
   const [dragId, setDragId] = useState<string | null>(null);
+  const searchRef = useRef<HTMLInputElement>(null);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchOpen, setSearchOpen] = useState(false);
+  const closeSearch = useCallback(() => {
+    setSearchOpen(false);
+    searchRef.current?.blur();
+  }, []);
   const announceRef = useRef<HTMLDivElement>(null);
   const a11yMode = usePrefsStore((s) => s.a11yMode);
 
@@ -444,6 +457,39 @@ export function ProjectShell() {
             );
           })}
           <div className="h-5 w-px bg-border" aria-hidden />
+          {projectOpen && (
+            <div className="relative">
+              <Search
+                size={13}
+                className="pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 text-text-secondary"
+                aria-hidden
+              />
+              <input
+                ref={searchRef}
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                onFocus={() => setSearchOpen(true)}
+                placeholder={t("nav.search")}
+                aria-label={t("nav.search")}
+                title={t("nav.search")}
+                className={`${cls.input} h-7 w-48 pl-7 pr-7 text-xs`}
+              />
+              {searchQuery !== "" && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSearchQuery("");
+                    searchRef.current?.focus();
+                  }}
+                  aria-label={t("search.clear")}
+                  title={t("search.clear")}
+                  className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded-sm p-0.5 text-text-secondary hover:bg-surface-higher hover:text-text-primary"
+                >
+                  <X size={13} aria-hidden />
+                </button>
+              )}
+            </div>
+          )}
           <div className="flex-1" />
           {projectOpen && showIndicator && (
             <div className="relative">
@@ -623,7 +669,16 @@ export function ProjectShell() {
                 <button
                   key={pane}
                   type="button"
-                  onClick={() => setRightPane(active ? "inspector" : pane)}
+                  onClick={() => {
+                    if (active) {
+                      // Clicking the active pane button collapses the right bar.
+                      window.dispatchEvent(new Event("qc:rightbar-close"));
+                      setRightPane("inspector");
+                    } else {
+                      window.dispatchEvent(new Event("qc:rightbar-open"));
+                      setRightPane(pane);
+                    }
+                  }}
                   aria-label={label}
                   title={label}
                   aria-pressed={active}
@@ -637,22 +692,21 @@ export function ProjectShell() {
             })}
           </>
         )}
-        {/* Report a bug: screenshot + GitHub issue composer (works with and
-            without a project — same availability as Settings). */}
+        {/* Report a bug moved into the Help pane (Help top bar); Settings is
+            available without a project (theme, AI and transcription options
+            are machine-level). */}
         <button
           type="button"
-          onClick={() => void useProjectStore.getState().openBugReport()}
-          aria-label={t("nav.bugReport")}
-          title={t("nav.bugReport")}
-          className="rounded-sm px-2 py-1 text-text-secondary hover:bg-surface-higher"
-        >
-          <Bug size={20} aria-hidden />
-        </button>
-        {/* Settings is available without a project (theme, AI and
-            transcription options are machine-level). */}
-        <button
-          type="button"
-          onClick={() => setRightPane(rightPane === "settings" ? "inspector" : "settings")}
+          onClick={() => {
+            const isSettingsActive = rightPane === "settings";
+            if (isSettingsActive) {
+              window.dispatchEvent(new Event("qc:rightbar-close"));
+              setRightPane("inspector");
+            } else {
+              window.dispatchEvent(new Event("qc:rightbar-open"));
+              setRightPane("settings");
+            }
+          }}
           aria-label={t("nav.settings")}
           title={t("nav.settings")}
           aria-pressed={rightPane === "settings"}
@@ -684,6 +738,8 @@ export function ProjectShell() {
           <AiView />
         ) : rightPane === "settings" ? (
           <SettingsView />
+        ) : rightPane === "help" ? (
+          <HelpView />
         ) : rightPane === "history" ? (
           <HistoryView />
         ) : rightPane === "creative" ? (
@@ -723,6 +779,12 @@ export function ProjectShell() {
       )}
       </WorkspaceLayout>
       <BugReportView />
+      <SearchDialog
+        open={searchOpen}
+        anchor={searchRef.current}
+        query={searchQuery}
+        onClose={closeSearch}
+      />
     </>
   );
 }

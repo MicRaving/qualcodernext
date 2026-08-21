@@ -1,10 +1,11 @@
 # QCnext - A Rework of Qualcoder
 
-This is a rework of [QualCoder](https://github.com/ccbogel/QualCoder), the open-source qualitative data analysis (QDA) tool. The central focus of the software is to load text and multimedia files for qualitative coding. It can transcribe audio/video files, organize codes and files, generate reports like coding graphs and coder comparisons, and integrates LLMs to explore the data, support coding, and analyze the results.
+This is a rework of [QualCoder](https://github.com/ccbogel/QualCoder), an awesome open-source qualitative data analysis (QDA) tool. The central focus of the software is to load text and multimedia files for qualitative coding. It can transcribe audio/video files, organize codes and files, generate reports like coding graphs and coder comparisons, and integrates LLMs to explore the data, support coding, and analyze the results.
 
+> \[!NOTE]
+> This software is currently in beta. While I consider it mostly feature-complete and use it as may daily driver, you may encounter bugs or visual quirks, etc. Please report any issues and suggestions for improvements!
 
-
-!\\\[Active Project Dashboard](screenshots/dashboard.jpg)
+!\[Active Project Dashboard](docs/screenshots/dashboard.jpg)
 
 
 
@@ -17,7 +18,7 @@ QCnext uses a single-window **Workspace Layout** organized into
 
 
 
-This rework is based on the upstream QualCoder source code as per 10.08.2026 with the following major goals:
+This rework is based on the QualCoder 4.0 beta source code (10.08.2026) with the following major goals (full [changelog](Changelog.md)):
 
 * **Simplified UI**: The rework tries to simplify and reorganize the UI as much as possible while retaining full functionality.
 * **Simultaneous collaboration**: Simultaneous collaboration is now possible by saving the project in a shared folder and enabling collaboration in the coder flyout.
@@ -34,7 +35,7 @@ All releases are available on: [https://github.com/MicRaving/qualcodernext/relea
 * Windows: Download the portable version and unpack it or install the installer from
 * Linux: Install the flatpack (untested)
 * MacOS: Install the .dmg (untested)
-* Compilation: Clone the repo and run compile.ps1 (Windows) to build the portable folder and installer. Scripts for Linux and MacOS will follow soon.
+* Compilation: Clone the repo and run `release.ps1 -Compile` (Windows) to build the portable folder and installer. Scripts for Linux and MacOS will follow soon.
 
 ## Documentation
 
@@ -52,52 +53,34 @@ You can find the documentation here:
 
 The typical workflow will look similar to this:
 
-1. **Start QCnext**: Launch the application to view the [Dashboard](workspace.md).
+1. **Start QCnext**: Launch the application to view the [Dashboard](docs/workspace.md).
 2. **Create a Project**: Click **New project** and specify a `.qda` location or open an existing project.
-3. **(optional) Collaborate**: Save the file in a shared location and enable [Collaboration Sync](workspace.md) in the ribbon to work simultaneously with team members via shared cloud folders.
-4. **Import Material**: Open the [File Manager](files.md) and import your interview transcripts, PDFs, images, or media files.
-5. **Define Codes**: Create codes and categories in the left-bar [Code Tree](coders.md).
-6. **Code Your Data**: Open a source file in one of the specialized [Coders](coders.md), select passages or regions, and assign codes.
-7. **Synthesize \& Memos**: Write analytical memos and synthesize findings in [Crafter](notes.md).
-8. **Analyze \& Export**: Generate [Reports \& Visual Code Maps](reports.md), test interrater reliability, and publish reports to Word, Excel, or REFI-QDA.
+3. **(optional) Collaborate**: Save the file in a shared location and enable [Collaboration Sync](docs/workspace.md) in the ribbon to work simultaneously with team members via shared cloud folders.
+4. **Import Material**: Open the [File Manager](docs/files.md) and import your interview transcripts, PDFs, images, or media files.
+5. **Define Codes**: Create codes and categories in the left-bar [Code Tree](docs/coders.md).
+6. **Code Your Data**: Open a source file in one of the specialized [Coders](docs/coders.md), select passages or regions, and assign codes.
+7. **Synthesize \& Memos**: Write analytical memos and synthesize findings in [Crafter](docs/notes.md).
+8. **Analyze \& Export**: Generate [Reports \& Visual Code Maps](docs/reports.md), test interrater reliability, and publish reports to Word, Excel, or REFI-QDA.
 
 \---
-
-## Glossary
-
-|Term|Description|
-|-|-|
-|**Project (`.qda`)**|A dedicated directory containing source files and a SQLite database storing codes, codings, cases, notes, and settings.|
-|**Source / File**|Any primary material imported into the project (Text, PDF, Image, Audio, Video, HTML, CSV).|
-|**Code**|An analytical label attached to data segments. Codes can be hierarchical (sub-codes) and grouped into **Categories**.|
-|**Category**|A container node in the codebook tree used to group related codes logically.|
-|**Coding (Segment)**|A marked passage or region bound to a specific code, recording exact position (character offsets, coordinates, or timestamps) and owner.|
-|**Coder**|A registered researcher name. Every coding, note, and modification records the coder who created it.|
-|**Memo**|Analytical commentary attached to a code, file, or project entity.|
-|**Annotation**|A targeted note attached to a specific passage of a document (distinct from a code).|
-|**Case**|A unit of analysis (e.g., participant, organization, school) linked to files/spans and carrying structured **Attributes**.|
-|**QTT Worksheet**|A Crafter workspace for synthesizing Questions, Themes, and Theories into structured analytical arguments.|
 
 
 
 ## License
 
-QualCoder is distributed under the GNU LGPL-3.0 (see the upstream project). QCnext follows the same licensing intent; the upstream reference checkout carries its own license text in `upstreamQualcoder/`.
+QualCoder is distributed under the [GNU LGPL-3.0](LICENSE.txt), QCnext follows the same licensing intent.
+
+## Authors
+
+QCnext is a rework by Marvin Fendt ([Ludwig Maximilians University Munich](https://www.lmu.de/psy/de/personen/kontaktseite/marvin-fendt-b5fc2511.html)). It is based on the QualCoder 4.0 beta code by [**Dr. Colin Curtain**](https://www.utas.edu.au/profiles/staff/umore/colin-curtain), [**Dr. rer. soc. Kai Dröge,**](https://www.hslu.ch/de-ch/hochschule-luzern/ueber-uns/personensuche/profile/?pid=823), [**Dr. Justin Missaghieh--Poncet**](https://www.univ-pau.fr/fr/index.html), and [**Dr. Lorenzo Salomón**](https://www.uas.edu.mx/).
 
 ## Future
 
-Here is a non-exhaustive list of planned features
-
-* Improve documentation and tutorials
-* Fully implement client-server architecture
-* Implement more use cases for LLMs
+This is a non-exhaustive list of planned features:
+* Expand the rudimentary Creative Coding and Crafter
+* Working web app and server (after UI and bug-fixing)
+* Further improvements for collaboration, AI (particularly MCP), and server
 * Further refine the UI
-* Organize History in hierarchical structure: Right now, every action can be undone regardless of whether it destroys other actions, too.
+* Support other languages than EN/DE
 * Bug-fixing - You tell me!
-* Rework the search: Include a search bar in the ribbon that lets users search for exact words in the projects (filter by categories) and via semantic search (move the build index button and the semantic search here).
-* Implement a proper help bar with regex and semantic search.
-
-## What will (likely) not be implemented
-
-* ATLAS.ti: Closed format, other migration paths exist, not worth the effort.
-
+* For the coders, the files need to be shortened and modules centralized.

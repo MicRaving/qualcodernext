@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 from httpx import ASGITransport, AsyncClient
 
+from qualcoder_api.core import APP_VERSION
 from qualcoder_api.main import app
 
 
@@ -20,7 +21,7 @@ async def test_health(client):
     assert res.status_code == 200
     body = res.json()
     assert body["status"] == "ok"
-    assert body["version"] == "0.2.0"
+    assert body["version"] == APP_VERSION
 
 
 async def test_unhandled_exception_500_has_cors_headers_and_json_body():
@@ -32,8 +33,6 @@ async def test_unhandled_exception_500_has_cors_headers_and_json_body():
     and the frontend browser masks it as "Failed to fetch". The catch-all
     handler must echo the allowed origin itself.
     """
-    from qualcoder_api.main import app
-
     async def _boom(request) -> None:
         raise RuntimeError("boom-test")
 
