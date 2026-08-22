@@ -1,23 +1,20 @@
 # QualCoder v4 — Server Deployment: Full Implementation Plan
 
-> **Implementation status:** Phase 0 ✓ · **Phase 1 ✓** (metadata DB,
-> argon2 passwords, opaque tokens, passkeys end-to-end, frontend auth
-> subset §6.7: session storage, transport header injection, LoginScreen
-> with native WebAuthn, App boot gate). · **Phase 2 ✓**: session pool +
-> registry + ACL + upload/download (`services/session_manager.py`,
-> `api/v1/server_projects.py`, runtime gate `gate_project_scoped` attached
-> to every project-scoped router — resolves AT REQUEST TIME so import
-> order can never freeze local behavior; local lifecycle endpoints return
-> 410 in server mode; idle-session reaper). · **Phase 5 ✓**:
-> `backend/Dockerfile` (multi-stage, non-root, ffmpeg+rclone),
-> `docker-compose.yml` (+ optional `tls`/`cloud` profiles),
-> `scripts/docker-entrypoint.sh`, `cli.py`
-> (migrate/bootstrap-admin/check-config/secret), `.env.example`,
-> `deploy/Caddyfile`, rclone template.
-> Remaining: **Phase 3** (sync hub — SyncTransport indirection + push/pull
-> endpoints) and **Phase 4 runtime** (backup_service/scheduler +
-> endpoints; rclone scripts already shipped). Each as its own change with
-> its acceptance checklist.
+> **Implementation status:** Phase 0 ✓ · Phase 1 ✓ · **Phase 2 ✓** ·
+> **Phase 3 ✓** (sync hub: `api/v1/server_sync.py` push/pull/state/
+> presence, X-Project-Id gated, replay machinery reused untouched;
+> two-instance convergence + conflict surfacing covered by
+> `tests/test_server_sync.py`) · **Phase 4 runtime ✓** (backup_service,
+> scheduler sweep, endpoints, cli backup/restore/apply-retention) ·
+> **Phase 5 ✓** (Dockerfile/compose/entrypoint/cli/Caddyfile).
+>
+> Remaining (documented follow-ups, not blockers for deployment):
+> - §8.4 desktop-client transport swap: the LOCAL desktop app pointed at
+>   a remote server currently syncs via shared folders only; wiring its
+>   background loop to hub push/pull is a separate client change.
+> - Cloud mirror scheduling runs via the compose `cloud` profile; the
+>   in-app backup UI (list/restore buttons) lands with server settings UI.
+> - smoke-test script §11.3.
 
 Audience: an implementer model (e.g. MiMo-class). This document is written to
 be followed mechanically: each phase lists exact files to create/modify, exact
