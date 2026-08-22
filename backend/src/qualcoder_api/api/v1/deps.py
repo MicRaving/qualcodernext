@@ -28,6 +28,13 @@ def get_service() -> ProjectService:
     scoped = CURRENT_SERVICE.get()
     if scoped is not None:
         return scoped
+    import logging
+    import os
+
+    if os.environ.get("QC_SERVER_MODE", "").lower() in ("1", "true"):
+        logging.getLogger("dbg").warning(
+            "GET_SERVICE FALLBACK TO SINGLETON (server mode!) — caller stack lost the context"
+        )
     from qualcoder_api.main import service
 
     return service

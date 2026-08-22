@@ -5,11 +5,12 @@ from __future__ import annotations
 import contextlib
 import logging
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from qualcoder_api.api.v1.ai import router as ai_router
 from qualcoder_api.api.v1.audit import router as audit_router
+from qualcoder_api.api.v1.auth_deps import gate_project_scoped
 from qualcoder_api.api.v1.code_sets import router as code_sets_router
 from qualcoder_api.api.v1.coders import router as coders_router
 from qualcoder_api.api.v1.codes import router as codes_router
@@ -44,6 +45,7 @@ from qualcoder_api.api.v1.sync_api import router as sync_router
 from qualcoder_api.api.v1.tools import router as tools_router
 from qualcoder_api.api.v1.transcribe import router as transcribe_router
 from qualcoder_api.core import APP_VERSION
+from qualcoder_api.core.server_config import is_server_mode
 from qualcoder_api.persistence import tables
 from qualcoder_api.services.project_service import OpenResult
 
@@ -51,40 +53,54 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
+# Server mode (SERVER_PLAN.md §7.3): every project-scoped router is gated by
+# bearer auth + X-Project-Id session resolution WITHOUT touching endpoint
+# functions — deps.get_service reads the ContextVar this dependency sets.
+# Local mode: no gating, byte-identical behavior.
+
+
+_PROJECT_GATE = [Depends(gate_project_scoped)]
+
+
+def _include(r: APIRouter) -> None:
+    # Always attached; the gate no-ops in local mode (runtime check) and
+    # performs bearer + X-Project-Id session resolution in server mode.
+    router.include_router(r, dependencies=_PROJECT_GATE)
+
 # tools_router first: its literal GET /sources/bad-links and
 # GET /sources/filters paths must win over the dynamic GET /sources/{source_id}.
-router.include_router(tools_router)
-router.include_router(sources_router)
-router.include_router(codes_router)
-router.include_router(codings_router)
-router.include_router(case_router)
-router.include_router(attr_router)
-router.include_router(journal_router)
-router.include_router(annotation_router)
-router.include_router(reports_router)
-router.include_router(interchange_router)
-router.include_router(importers_router)
-router.include_router(sql_router)
-router.include_router(ai_router)
-router.include_router(coders_router)
-router.include_router(audit_router)
-router.include_router(transcribe_router)
-router.include_router(graphs_router)
-router.include_router(sync_router)
-router.include_router(dictionaries_router)
-router.include_router(links_router)
-router.include_router(sentiment_router)
-router.include_router(compare_router)
-router.include_router(scrape_router)
-router.include_router(creative_router)
-router.include_router(publish_router)
-router.include_router(qtt_router)
-router.include_router(comments_router)
-router.include_router(code_sets_router)
-router.include_router(r_router)
-router.include_router(r_scripts_router)
-router.include_router(search_router)
-router.include_router(help_router)
+_include(tools_router)
+_include(sources_router)
+_include(codes_router)
+_include(codings_router)
+_include(case_router)
+_include(attr_router)
+_include(journal_router)
+_include(annotation_router)
+_include(reports_router)
+_include(interchange_router)
+_include(importers_router)
+_include(sql_router)
+_include(ai_router)
+_include(coders_router)
+_include(audit_router)
+_include(transcribe_router)
+_include(graphs_router)
+_include(sync_router)
+_include(dictionaries_router)
+_include(links_router)
+_include(sentiment_router)
+_include(compare_router)
+_include(scrape_router)
+_include(creative_router)
+_include(publish_router)
+_include(qtt_router)
+_include(comments_router)
+_include(code_sets_router)
+_include(r_router)
+_include(r_scripts_router)
+_include(search_router)
+_include(help_router)
 
 
 class HealthResponse(BaseModel):
@@ -273,6 +289,10 @@ async def recent_projects() -> RecentProjectsResponse:
 
 @router.post("/projects", response_model=ProjectResponse)
 async def create_project(req: CreateProjectRequest, svc: ServiceDep) -> ProjectResponse:
+    if is_server_mode():
+        raise HTTPException(
+            status_code=410, detail='projects are managed by the server project API'
+        )
     from qualcoder_api.services.user_settings import resolve_owner
 
     ok = await svc.create_project(req.project_path, codername=resolve_owner(req.codername))
@@ -283,6 +303,10 @@ async def create_project(req: CreateProjectRequest, svc: ServiceDep) -> ProjectR
 
 @router.post("/projects/open", response_model=ProjectResponse)
 async def open_project(req: OpenProjectRequest, svc: ServiceDep) -> ProjectResponse:
+    if is_server_mode():
+        raise HTTPException(
+            status_code=410, detail='projects are managed by the server project API'
+        )
     from qualcoder_api.services.user_settings import resolve_owner
 
     result: OpenResult = await svc.open_project(
@@ -325,6 +349,10 @@ async def open_project(req: OpenProjectRequest, svc: ServiceDep) -> ProjectRespo
 
 @router.post("/projects/close", response_model=ProjectResponse)
 async def close_project(svc: ServiceDep) -> ProjectResponse:
+    if is_server_mode():
+        raise HTTPException(
+            status_code=410, detail='projects are managed by the server project API'
+        )
     name = svc.project_name
     await svc.close_project()
     return ProjectResponse(ok=True, project_name=name)
@@ -332,6 +360,10 @@ async def close_project(svc: ServiceDep) -> ProjectResponse:
 
 @router.post("/projects/compact", response_model=CompactResponse)
 async def compact_project(svc: ServiceDep) -> CompactResponse:
+    if is_server_mode():
+        raise HTTPException(
+            status_code=410, detail='projects are managed by the server project API'
+        )
     """Maintenance pass on the open project: flush the WAL, drop the
     rebuildable ``idx_*`` indexes, VACUUM, recreate the indexes.
 

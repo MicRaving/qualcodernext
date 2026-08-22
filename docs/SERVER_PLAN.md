@@ -1,13 +1,18 @@
 # QualCoder v4 — Server Deployment: Full Implementation Plan
 
-> **Implementation status:** Phase 0 ✓ and **Phase 1 (backend) ✓**:
-> metadata DB + migrations, argon2 passwords, opaque tokens, full auth API
-> including **passkeys** (`services/passkey_service.py`,
-> `tests/test_passkey_api.py` with a software ES256 authenticator — real
-> WebAuthn wire format end-to-end).
-> Remaining for Phase 1 completeness: the §6.7 frontend subset
-> (session.ts / LoginScreen / passkey UI). Then Phases 2–5, each as its
-> own change passing its acceptance checklist before the next.
+> **Implementation status:** Phase 0 ✓ · **Phase 1 ✓** (metadata DB,
+> argon2 passwords, opaque tokens, passkeys end-to-end, frontend auth
+> subset §6.7: session storage, transport header injection, LoginScreen
+> with native WebAuthn, App boot gate). · **Phase 2 ✓**: session pool +
+> registry + ACL + upload/download (`services/session_manager.py`,
+> `api/v1/server_projects.py`, runtime gate `gate_project_scoped` attached
+> to every project-scoped router — resolves AT REQUEST TIME so import
+> order can never freeze local behavior; local lifecycle endpoints return
+> 410 in server mode; idle-session reaper).
+> Remaining: Phase 1b' passkey UI polish is done via LoginScreen; next
+> units are **Phase 3** (sync hub) → **Phase 4** (backups/rclone) →
+> **Phase 5** (Docker packaging), each as its own change with its own
+> acceptance checklist.
 
 Audience: an implementer model (e.g. MiMo-class). This document is written to
 be followed mechanically: each phase lists exact files to create/modify, exact

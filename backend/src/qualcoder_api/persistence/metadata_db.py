@@ -236,6 +236,163 @@ async def prune_expired_tokens() -> int:
         return result.rowcount or 0
 
 
+# ── Projects registry + memberships (SERVER_PLAN.md Phase 2) ───────────
+
+
+async def create_project(project_id: str, name: str, owner_id: int, data_path: str) -> dict:
+    ts = _utcnow()
+    factory = metadata_factory()
+    async with factory() as session:
+        await session.execute(
+            text(
+                "INSERT INTO projects (id, name, owner_id, data_path, status, size_bytes,"
+                " created_at, updated_at)"
+                " VALUES (:id, :name, :oid, :path, 'active', 0, :ts, :ts)"
+            ),
+            {"id": project_id, "name": name, "oid": owner_id, "path": data_path, "ts": ts},
+        )
+        await session.execute(
+            text(
+                "INSERT INTO project_members (project_id, user_id, role)"
+                " VALUES (:pid, :uid, 'owner')"
+            ),
+            {"pid": project_id, "uid": owner_id},
+        )
+        await session.commit()
+    row = await get_project(project_id)
+    assert row is not None
+    return row
+
+
+async def get_project(project_id: str) -> dict | None:
+    factory = metadata_factory()
+    async with factory() as session:
+        row = (
+            await session.execute(
+                text("SELECT * FROM projects WHERE id = :id AND status = 'active'"),
+                {"id": project_id},
+            )
+        ).mappings().first()
+        return dict(row) if row else None
+
+
+async def list_projects_for_user(user_id: int, is_admin: bool = False) -> list[dict]:
+    """Active projects the user is a member of (admin: every project)."""
+    factory = metadata_factory()
+    async with factory() as session:
+        if is_admin:
+            rows = (
+                await session.execute(
+                    text(
+                        "SELECT p.*, m.role FROM projects p"
+                        " LEFT JOIN project_members m ON m.project_id = p.id"
+                        " AND m.user_id = :uid WHERE p.status = 'active' ORDER BY p.updated_at DESC"
+                    ),
+                    {"uid": user_id},
+                )
+            ).mappings().all()
+        else:
+            rows = (
+                await session.execute(
+                    text(
+                        "SELECT p.*, m.role FROM projects p"
+                        " JOIN project_members m ON m.project_id = p.id"
+                        " WHERE m.user_id = :uid AND p.status = 'active'"
+                        " ORDER BY p.updated_at DESC"
+                    ),
+                    {"uid": user_id},
+                )
+            ).mappings().all()
+        return [dict(r) for r in rows]
+
+
+async def touch_project(project_id: str, size_bytes: int | None = None) -> None:
+    factory = metadata_factory()
+    async with factory() as session:
+        if size_bytes is None:
+            await session.execute(
+                text("UPDATE projects SET updated_at = :ts WHERE id = :id"),
+                {"ts": _utcnow(), "id": project_id},
+            )
+        else:
+            await session.execute(
+                text("UPDATE projects SET updated_at = :ts, size_bytes = :sz WHERE id = :id"),
+                {"ts": _utcnow(), "sz": size_bytes, "id": project_id},
+            )
+        await session.commit()
+
+
+async def delete_project_rows(project_id: str) -> None:
+    factory = metadata_factory()
+    async with factory() as session:
+        await session.execute(
+            text("DELETE FROM project_members WHERE project_id = :id"), {"id": project_id}
+        )
+        await session.execute(
+            text("DELETE FROM backup_records WHERE project_id = :id"), {"id": project_id}
+        )
+        await session.execute(text("DELETE FROM projects WHERE id = :id"), {"id": project_id})
+        await session.commit()
+
+
+async def add_member(project_id: str, user_id: int, role: str) -> None:
+    factory = metadata_factory()
+    async with factory() as session:
+        await session.execute(
+            text(
+                "INSERT INTO project_members (project_id, user_id, role)"
+                " VALUES (:pid, :uid, :role)"
+                " ON CONFLICT(project_id, user_id) DO UPDATE SET role = :role"
+            ),
+            {"pid": project_id, "uid": user_id, "role": role},
+        )
+        await session.commit()
+
+
+async def get_member(project_id: str, user_id: int) -> dict | None:
+    factory = metadata_factory()
+    async with factory() as session:
+        row = (
+            await session.execute(
+                text(
+                    "SELECT * FROM project_members WHERE project_id = :pid AND user_id = :uid"
+                ),
+                {"pid": project_id, "uid": user_id},
+            )
+        ).mappings().first()
+        return dict(row) if row else None
+
+
+async def list_members(project_id: str) -> list[dict]:
+    factory = metadata_factory()
+    async with factory() as session:
+        rows = (
+            await session.execute(
+                text(
+                    "SELECT m.user_id, m.role, u.username FROM project_members m"
+                    " JOIN users u ON u.id = m.user_id WHERE m.project_id = :pid"
+                    " ORDER BY u.username"
+                ),
+                {"pid": project_id},
+            )
+        ).mappings().all()
+        return [dict(r) for r in rows]
+
+
+async def remove_member(project_id: str, user_id: int) -> bool:
+    factory = metadata_factory()
+    async with factory() as session:
+        result = await session.execute(
+            text(
+                "DELETE FROM project_members WHERE project_id = :pid AND user_id = :uid"
+                " AND role != 'owner'"
+            ),
+            {"pid": project_id, "uid": user_id},
+        )
+        await session.commit()
+        return (result.rowcount or 0) > 0
+
+
 # ── Passkeys (SERVER_PLAN.md Phase 1b) ──────────────────────────────────
 
 

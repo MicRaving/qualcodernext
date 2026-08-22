@@ -115,15 +115,24 @@ async def lifespan(_app: FastAPI):
     )
 
     server_mode = is_server_mode()
+    tasks: list[asyncio.Task] = []
     if server_mode:
         validate_server_config(load_server_config())
         from qualcoder_api.persistence import metadata_db
 
         await metadata_db.migrate_metadata(load_server_config().metadata_db)
-    tasks = [] if server_mode else [
-        asyncio.create_task(_sync_loop()),
-        asyncio.create_task(_presence_loop()),
-    ]
+
+        async def _idle_session_reaper() -> None:
+            while True:
+                await asyncio.sleep(60)
+                from qualcoder_api.services.session_manager import manager
+
+                await manager.release_idle()
+
+        tasks.append(asyncio.create_task(_idle_session_reaper()))
+    else:
+        tasks.append(asyncio.create_task(_sync_loop()))
+        tasks.append(asyncio.create_task(_presence_loop()))
     try:
         yield
     finally:
@@ -156,8 +165,10 @@ def create_app() -> FastAPI:
 
     if is_server_mode():
         from qualcoder_api.api.v1.auth import router as auth_router
+        from qualcoder_api.api.v1.server_projects import router as server_projects_router
 
         app.include_router(auth_router, prefix="/api/v1")
+        app.include_router(server_projects_router, prefix="/api/v1")
     return app
 
 
