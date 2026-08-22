@@ -8,11 +8,16 @@
 > `api/v1/server_projects.py`, runtime gate `gate_project_scoped` attached
 > to every project-scoped router — resolves AT REQUEST TIME so import
 > order can never freeze local behavior; local lifecycle endpoints return
-> 410 in server mode; idle-session reaper).
-> Remaining: Phase 1b' passkey UI polish is done via LoginScreen; next
-> units are **Phase 3** (sync hub) → **Phase 4** (backups/rclone) →
-> **Phase 5** (Docker packaging), each as its own change with its own
-> acceptance checklist.
+> 410 in server mode; idle-session reaper). · **Phase 5 ✓**:
+> `backend/Dockerfile` (multi-stage, non-root, ffmpeg+rclone),
+> `docker-compose.yml` (+ optional `tls`/`cloud` profiles),
+> `scripts/docker-entrypoint.sh`, `cli.py`
+> (migrate/bootstrap-admin/check-config/secret), `.env.example`,
+> `deploy/Caddyfile`, rclone template.
+> Remaining: **Phase 3** (sync hub — SyncTransport indirection + push/pull
+> endpoints) and **Phase 4 runtime** (backup_service/scheduler +
+> endpoints; rclone scripts already shipped). Each as its own change with
+> its acceptance checklist.
 
 Audience: an implementer model (e.g. MiMo-class). This document is written to
 be followed mechanically: each phase lists exact files to create/modify, exact
