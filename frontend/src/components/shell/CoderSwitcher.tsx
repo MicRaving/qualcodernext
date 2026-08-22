@@ -37,7 +37,7 @@ import { useCoderStore } from "@/stores/coder";
 import { usePrefsStore } from "@/stores/prefs";
 import { useProjectStore } from "@/stores/project";
 import { useToast } from "@/lib/toast";
-import { Button, HelpFlyout, IconButton, Menu, MenuItem, Modal } from "@/components/ui/orchestrator";
+import { Button, HelpFlyout, IconButton, Menu, MenuItem, Modal, Toggle } from "@/components/ui/orchestrator";
 import { ConflictResolver } from "@/components/collaboration/ConflictResolver";
 
 const FLYOUT_WIDTH = 260;
@@ -79,6 +79,7 @@ export function CoderSwitcher() {
   const createCoder = useCoderStore((s) => s.createCoder);
   const syncStatus = usePrefsStore((s) => s.syncStatus);
   const setSyncStatus = usePrefsStore((s) => s.setSyncStatus);
+  const setSyncEnabled = usePrefsStore((s) => s.setSyncEnabled);
   const runSyncNow = usePrefsStore((s) => s.runSyncNow);
   const presence = usePrefsStore((s) => s.presence);
   const collabMode = usePrefsStore((s) => s.collabMode);
@@ -116,6 +117,17 @@ export function CoderSwitcher() {
     }
     return map;
   }, [presence]);
+
+  /** Live peers (fresh heartbeat), newest first — rendered in the flyout so
+   *  the user can see who is working on what right now. */
+  const livePeers = useMemo(
+    () =>
+      [...liveByCoder.entries()]
+        .filter(([, p]) => isLive(p.ts))
+        .sort((a, b) => b[1].ts - a[1].ts)
+        .map(([coder, p]) => ({ coder, file_name: p.file_name })),
+    [liveByCoder],
+  );
 
   // Per-coder sync state from collaborator data (instance → coder name).
   const coderSyncState = useMemo(() => {
@@ -686,6 +698,50 @@ export function CoderSwitcher() {
                 {collabMode === "collaboration" ? t("collab.active") : t("collab.single")}
               </span>
             </div>
+            {collabMode !== "collaboration" && (
+              /* Manual background-sync switch (remembered as a per-project
+                 override). In collaboration mode sync is inherently on. */
+              <div className="mt-1 flex items-center justify-between gap-2">
+                <span className="min-w-0 truncate text-sm text-text-primary">
+                  {t("sync.toggle")}
+                </span>
+                <Toggle
+                  checked={syncEnabled}
+                  ariaLabel={t("sync.toggle")}
+                  onChange={() => {
+                    setSyncBusy(true);
+                    const next = !syncEnabled;
+                    void setSyncEnabled(next, { remember: true }).finally(() =>
+                      setSyncBusy(false),
+                    );
+                  }}
+                />
+              </div>
+            )}
+            {livePeers.length > 0 && (
+              /* Live peers (fresh heartbeats): who is working on what now. */
+              <div className="mt-1.5 space-y-1" data-testid="live-peers">
+                {livePeers.map((p) => (
+                  <div key={p.coder} className="flex min-w-0 items-center gap-1.5 text-xs">
+                    <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-success" aria-hidden />
+                    <span className="truncate font-medium text-text-primary">{p.coder}</span>
+                    {p.file_name && (
+                      <>
+                        <span className="shrink-0 text-text-secondary" aria-hidden>
+                          —
+                        </span>
+                        <span className="min-w-0 truncate text-text-secondary">
+                          {p.file_name}
+                        </span>
+                      </>
+                    )}
+                    <span className="shrink-0 text-[10px] text-success">
+                      {t("sync.presenceLive")}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
             <div className="mt-1.5 flex items-center gap-1.5">
               <button
                 type="button"

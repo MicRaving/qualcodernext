@@ -132,7 +132,7 @@ test("live coder presence: indicator + file shown in the coder flyout", async ({
     // Wait for the app's 10s presence poll, then open the coder flyout.
     await page.waitForTimeout(12_000);
     await page.getByRole("button", { name: /Current coder:/ }).click();
-    await expect(page.getByText("Live now")).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByText("Actively working")).toBeVisible({ timeout: 10_000 });
     await expect(page.getByText("berta", { exact: true })).toBeVisible();
     await expect(page.getByText("focus.txt", { exact: true })).toBeVisible();
   } finally {
