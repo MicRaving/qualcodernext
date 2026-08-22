@@ -1,0 +1,61 @@
+# QualCoder server stack (SERVER_PLAN.md §10.2).
+#
+#   cp .env.example .env      # fill in secrets
+#   docker compose up -d
+#
+# The optional `caddy` service terminates TLS, serves the built frontend
+# (mount ../frontend/dist at /srv/www) and proxies /api to the backend.
+# The optional `cloud-backup` profile runs the rclone mirror (Phase 4).
+
+services:
+  qualcoder:
+    build: .
+    image: qualcodernext-server
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      QC_SERVER_MODE: "true"
+      QC_DATA_DIR: /data/qualcoder
+    volumes:
+      - data:/data/qualcoder
+      - logs:/var/log/qualcoder
+    ports:
+      - "8765:8765"
+
+  caddy:
+    image: caddy:2
+    profiles: ["tls"]
+    restart: unless-stopped
+    depends_on:
+      - qualcoder
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - ../frontend/dist:/srv/www:ro
+      - caddy_data:/data
+      - caddy_config:/config
+
+  cloud-backup:
+    image: python:3.11-slim
+    profiles: ["cloud"]
+    restart: unless-stopped
+    depends_on:
+      - qualcoder
+    volumes:
+      - data:/data/qualcoder:ro
+      - ./scripts/cloud-backup.sh:/usr/local/bin/cloud-backup.sh:ro
+      - rclone_conf:/config/rclone
+    environment:
+      QC_BACKUP_RETENTION: ${QC_BACKUP_RETENTION:-daily=14,weekly=8,monthly=12}
+      RCLONE_REMOTE: ${QC_RCLONE_REMOTE:-qcnext-crypt:}
+    entrypoint: ["/bin/sh", "-c", "apt-get update && apt-get install -y rclone cron && cron -f & while true; do /usr/local/bin/cloud-backup.sh; sleep 21600; done"]
+
+volumes:
+  data:
+  logs:
+  caddy_data:
+  caddy_config:
+  rclone_conf:

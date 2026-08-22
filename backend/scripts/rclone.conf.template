@@ -1,0 +1,16 @@
+# rclone remotes for the cloud backup mirror (SERVER_PLAN.md §9.4).
+# Copy to the location QC_RCLONE_CONF points at and fill in secrets —
+# never bake credentials into the image.
+#
+# [nextcloud]
+# type = webdav
+# url = https://nextcloud.example.com/remote.php/dav/files/USER
+# vendor = nextcloud
+# user = USER
+# pass = <rclone obscure output>
+#
+# [qcnext-crypt]
+# type = crypt
+# remote = nextcloud:qualcoder-backups
+# password = <rclone obscure output>
+# password2 = <rclone obscure output>

@@ -1,0 +1,16 @@
+# Caddy reverse proxy: TLS + static frontend + /api -> backend.
+# Replace the site address with your domain; Caddy provisions certificates
+# automatically via ACME.
+
+qualcoder.example.com {
+	encode zstd gzip
+
+	# Built frontend (compose mounts ../frontend/dist at /srv/www).
+	root * /srv/www
+	try_files {path} /index.html
+
+	@api path /api/*
+	reverse_proxy @api qualcoder:8765
+
+	file_server
+}
