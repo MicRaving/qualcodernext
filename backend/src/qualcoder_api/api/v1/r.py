@@ -12,7 +12,7 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel
 
-from qualcoder_api.api.v1.deps import DbDep, ServiceDep
+from qualcoder_api.api.v1.deps import DbDep, OpenProjectDep
 from qualcoder_api.services import r_service
 
 router = APIRouter(prefix="/r", tags=["r"])
@@ -30,13 +30,11 @@ class RunRRequest(BaseModel):
 
 
 @router.post("/run", status_code=202, response_model=None)
-async def run_r(req: RunRRequest, svc: ServiceDep, db: DbDep) -> dict | JSONResponse:
+async def run_r(req: RunRRequest, svc: OpenProjectDep, db: DbDep) -> dict | JSONResponse:
     """Start an R job; returns its id for polling."""
     from qualcoder_api.services import audit
     from qualcoder_api.services.user_settings import get_codername
 
-    if svc.project_path == "":
-        raise HTTPException(status_code=409, detail="no project is open")
     if not req.script.strip():
         raise HTTPException(status_code=422, detail="script is empty")
     rscript = r_service.find_rscript()
@@ -69,16 +67,12 @@ async def cancel_job(job_id: str) -> dict:
 
 
 @router.get("/artifacts")
-async def artifacts(svc: ServiceDep) -> dict:
-    if svc.project_path == "":
-        raise HTTPException(status_code=409, detail="no project is open")
+async def artifacts(svc: OpenProjectDep) -> dict:
     return {"files": r_service.list_artifacts(svc.project_path)}
 
 
 @router.get("/artifacts/{name}")
-async def artifact(name: str, svc: ServiceDep) -> Response:
-    if svc.project_path == "":
-        raise HTTPException(status_code=409, detail="no project is open")
+async def artifact(name: str, svc: OpenProjectDep) -> Response:
     result = r_service.read_artifact(svc.project_path, name)
     if result is None:
         raise HTTPException(status_code=404, detail="artifact not found")

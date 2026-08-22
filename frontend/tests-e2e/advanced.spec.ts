@@ -182,20 +182,19 @@ test("PDF import and region coding", async ({ page }) => {
   const region = page.locator('div[title="PdfCode"]');
   await expect(region).toBeVisible({ timeout: 10_000 });
   await region.click();
-  await expect(page.getByText("Coding details")).toBeVisible({ timeout: 10_000 });
+  // Selecting a segment opens the details bubble (memo editor + actions).
+  const memoBox = page.getByRole("textbox", { name: "Memo for PdfCode" });
+  await expect(memoBox).toBeVisible({ timeout: 10_000 });
   await expect(page.getByText("PdfCode", { exact: true })).toBeVisible();
-  // The page label is visible; the coding date moved into the hover tooltip.
-  await expect(page.getByText("Page 1", { exact: true })).toBeVisible();
-  await expect(page.locator("li span[title^='Coded on']")).toBeVisible();
 
   // --------------------------------------------------------------- delete
-  // The details panel's Remove button deletes the coding (window.confirm).
+  // The bubble's Delete button removes the coding (window.confirm).
   // features.spec.ts only asserts the image coder's Delete button exists —
   // it never clicks it, so the actual deletion path is exercised here.
   page.on("dialog", (d) => void d.accept());
-  await page.getByRole("button", { name: "Remove this coding" }).click();
+  await page.getByRole("button", { name: "Delete", exact: true }).click();
   await expect(region).toHaveCount(0, { timeout: 10_000 });
-  await expect(page.getByText("Coding details")).toBeHidden({ timeout: 10_000 });
+  await expect(memoBox).toBeHidden({ timeout: 10_000 });
 
   // ----------------------------------------------------------- plain text
   // PDFs must offer a plain-text mode: the extracted text is shown and can
@@ -233,8 +232,10 @@ test("PDF import and region coding", async ({ page }) => {
   const tseg = page.locator('span[title="PdfTextCode"]');
   await expect(tseg).toBeVisible({ timeout: 10_000 });
   await tseg.click();
-  await expect(page.getByText("Coding details")).toBeVisible({ timeout: 10_000 });
-  await expect(page.locator("li").filter({ hasText: "PdfTextCode" })).toBeVisible();
+  // The details bubble shows the segment's memo editor for the new coding.
+  await expect(
+    page.getByRole("textbox", { name: "Memo for PdfTextCode" }),
+  ).toBeVisible({ timeout: 10_000 });
 
   // Turn the text pane back off — the rendered PDF is the only view again.
   await page.getByRole("button", { name: "Plain text" }).click();

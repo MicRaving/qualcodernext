@@ -14,7 +14,7 @@ import os
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
-from qualcoder_api.api.v1.deps import DbDep, ServiceDep
+from qualcoder_api.api.v1.deps import DbDep, OpenProjectDep
 from qualcoder_api.services import audit
 from qualcoder_api.services.user_settings import get_codername, resolve_owner
 
@@ -39,17 +39,16 @@ class ScrapeImportResponse(BaseModel):
 async def scrape_import(
     req: ScrapeImportRequest,
     db: DbDep,
-    svc: ServiceDep,
+    svc: OpenProjectDep,
 ) -> ScrapeImportResponse:
     """Import a web resource as a new source (blocking fetch runs off-loop)."""
     from qualcoder_api.services.import_service import ImportService
     from qualcoder_api.services.scrape_service import ScrapeError, scrape_url
 
-    if svc.project_path == "" or svc.session_factory is None:
-        raise HTTPException(status_code=409, detail="no project is open")
     if req.mode not in VALID_MODES:
         raise HTTPException(status_code=422, detail=f"mode must be one of {', '.join(VALID_MODES)}")
 
+    assert svc.session_factory is not None
     try:
         scraped = await asyncio.to_thread(scrape_url, req.url, req.mode)
     except ScrapeError as err:

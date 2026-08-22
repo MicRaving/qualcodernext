@@ -16,7 +16,7 @@ from typing import Annotated
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel
 
-from qualcoder_api.api.v1.deps import DbDep, ServiceDep
+from qualcoder_api.api.v1.deps import DbDep, OpenProjectDep
 from qualcoder_api.persistence import tables
 from qualcoder_api.services import audit, dictionary_service
 from qualcoder_api.services.user_settings import get_codername, resolve_owner
@@ -155,7 +155,7 @@ async def remove_entry(entry_id: int, db: DbDep) -> None:
 
 @router.post("/import", status_code=201)
 async def import_dictionary(
-    svc: ServiceDep,
+    svc: OpenProjectDep,
     db: DbDep,
     file: Annotated[UploadFile, File()],
     name: str | None = Form(None),
@@ -163,8 +163,6 @@ async def import_dictionary(
 ) -> dict:
     """Import a dictionary from a text/CSV upload (``code,term1,term2,...``
     per line; ``#`` comments and blank lines are ignored)."""
-    if svc.project_path == "":
-        raise HTTPException(status_code=409, detail="no project is open")
     tmp = svc.project_path + "/_dict_import_" + (file.filename or "dictionary.txt")
     with open(tmp, "wb") as out:  # noqa: ASYNC230 - small local temp write
         while chunk := await file.read(1 << 20):

@@ -455,6 +455,7 @@ export const en: Record<string, string> = {
   "tasks.autocoded": "Autocoded {count} passages",
   "tasks.autocodeFailed": "Autocode failed",
   "tasks.autocodeQueueHint": "Queued as background tasks — progress shows in the top bar.",
+  "tasks.startFailed": "Could not start the task",
 
   // accessibility (visual impairment / screen-reader modes)
   "a11y.section": "Accessibility",
@@ -638,6 +639,7 @@ export const en: Record<string, string> = {
   "coder.showMemos": "Show memos",
   "coder.hideMemos": "Hide memos",
   "coder.memos": "Memos",
+  "coder.memosToggle": "Memos",
   "coder.memoGutterEmpty": "No memos yet",
   "coder.memoGutterNoCodings": "No codings yet",
   "coder.memoCardPlaceholder": "Enter memo…",

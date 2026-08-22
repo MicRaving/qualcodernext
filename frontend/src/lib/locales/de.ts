@@ -463,6 +463,7 @@ export const de: Record<string, string> = {
   "tasks.autocoded": "{count} Stellen autocodiert",
   "tasks.autocodeFailed": "Autocodierung fehlgeschlagen",
   "tasks.autocodeQueueHint": "Als Hintergrundaufgaben eingereiht — der Fortschritt erscheint in der oberen Leiste.",
+  "tasks.startFailed": "Aufgabe konnte nicht gestartet werden",
 
   // accessibility (visual impairment / screen-reader modes)
   "a11y.section": "Barrierefreiheit",
@@ -669,6 +670,7 @@ export const de: Record<string, string> = {
   "coder.showMemos": "Notizen anzeigen",
   "coder.hideMemos": "Notizen ausblenden",
   "coder.memos": "Notizen",
+  "coder.memosToggle": "Notizen",
   "coder.memoGutterEmpty": "Noch keine Notizen",
   "coder.memoGutterNoCodings": "Noch keine Codierungen",
   "coder.memoCardPlaceholder": "Notiz eingeben…",

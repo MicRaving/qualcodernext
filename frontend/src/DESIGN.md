@@ -371,6 +371,10 @@ The memo gutter is a **separate reusable module** (`MemoGutter.tsx`) integrated
 into TextCoder, HtmlCoder, AvCoder, PdfCoder, and ImageCoder. It provides a
 Word-style sidebar for viewing and editing memo cards aligned to coded segments.
 
+The details bubble rendered when the gutter is hidden (`MemoGutterBubble`)
+carries `data-gutter` — every host's document-level click-away handler must
+keep excluding `[data-gutter]` so clicks inside the bubble never dismiss it.
+
 ### Layout & behavior
 
 - **Toggle**: Show/hide via a "Memos" button in each coder's header. Uses
@@ -400,6 +404,26 @@ MemoGutter.tsx
 ├── MemoGutterBubble — floating editor when gutter is hidden
 └── SegmentMemoEditor — shared card component
 ```
+
+### Shared coder hooks (`features/coding/shared/`)
+
+All coders are built on ONE set of shared modules — never re-implement these
+per coder:
+
+- `useSegmentActions({kind, rows, idOf, deleteRow, refresh, onError})` — the
+  memo/weight/important/delete quadruplet + undo stack. Deletes confirm AND
+  push onto the undo stack; every coder header renders "Unmark last" from it.
+- `events.ts` — `useCodingsChanged(handler)` and `useAssignCode(handler)`
+  subscriptions to the shell/sidebar broadcasts (latest-closure safe).
+- `useEscapeStack(layers)` — layered Escape dismissal; closers return whether
+  they consumed the key, ordered topmost-popover first.
+- `useSplitResize({axis, min, max, initial, containerSize})` — split-pane
+  drag with clamping (text-pane width in Pdf/Html, video height in Av).
+- `useGutterRows({rows, kind, idOf, codeById, fallbackName})` — codings →
+  gutter-row mapping.
+- `toolbarAnchor.ts` — `clampToolbarAnchor` + `useToolbarDismiss` for the
+  floating selection toolbar.
+- `WeightStepper` — the Minus/value/Plus weight control (0–100, step 10).
 
 ### Integration per coder
 

@@ -20,7 +20,7 @@ from pydantic import BaseModel
 from sqlalchemy import delete, insert, select
 from sqlalchemy import update as sa_update
 
-from qualcoder_api.api.v1.deps import DbDep, ServiceDep
+from qualcoder_api.api.v1.deps import DbDep, OpenProjectDep
 from qualcoder_api.core.timeutil import now as _now
 from qualcoder_api.persistence import tables
 from qualcoder_api.persistence.repo.base import _inserted_pk
@@ -254,7 +254,7 @@ def _r_stub(files: list[str]) -> str:
 
 
 @router.post("/prepare-report")
-async def prepare_report(req: PrepareReportRequest, svc: ServiceDep, db: DbDep) -> dict:
+async def prepare_report(req: PrepareReportRequest, svc: OpenProjectDep, db: DbDep) -> dict:
     """Export one report's tabular data as CSVs into ``r_exchange/in/`` of
     the open project and return a stub R script that reads them."""
     if req.report not in REPORTS:
@@ -262,8 +262,6 @@ async def prepare_report(req: PrepareReportRequest, svc: ServiceDep, db: DbDep) 
             status_code=422,
             detail=f"unknown report: {req.report} (expected one of {', '.join(REPORTS)})",
         )
-    if svc.project_path == "":
-        raise HTTPException(status_code=409, detail="no project is open")
     rows, cols = await _report_rows(db, req.report, req.fids, req.cids)
 
     in_dir = Path(svc.project_path) / "r_exchange" / "in"

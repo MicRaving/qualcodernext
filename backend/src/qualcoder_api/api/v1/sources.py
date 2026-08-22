@@ -11,7 +11,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select, text
 
-from qualcoder_api.api.v1.deps import DbDep, ServiceDep
+from qualcoder_api.api.v1.deps import DbDep, OpenProjectDep, ServiceDep
 from qualcoder_api.core.models import Source
 from qualcoder_api.persistence import tables
 from qualcoder_api.persistence.repositories import SourceRepository
@@ -427,18 +427,15 @@ async def pdf_text_locate(
 @router.post("/import", response_model=Source)
 async def import_source(
     db: DbDep,
-    svc: ServiceDep,
+    svc: OpenProjectDep,
     file: Annotated[UploadFile, File()],
     owner: str | None = Form(None),
 ) -> Source:
     """Upload a file; copies it into the project folder and registers it."""
     from qualcoder_api.services.import_service import ImportService
 
-    if svc.project_path == "":
-        raise HTTPException(status_code=409, detail="no project is open")
     session_factory = svc.session_factory
-    if session_factory is None:
-        raise HTTPException(status_code=409, detail="no project is open")
+    assert session_factory is not None
     tmp = svc.project_path + "/_upload_" + (file.filename or "upload")
 
     with open(tmp, "wb") as out:  # noqa: ASYNC230 - small local temp write
@@ -461,13 +458,12 @@ async def import_source(
 
 
 @router.post("/link", response_model=Source)
-async def link_source(req: LinkRequest, db: DbDep, svc: ServiceDep) -> Source:
+async def link_source(req: LinkRequest, db: DbDep, svc: OpenProjectDep) -> Source:
     """Register an external file by path (no copy)."""
     from qualcoder_api.services.import_service import ImportService
 
     session_factory = svc.session_factory
-    if session_factory is None:
-        raise HTTPException(status_code=409, detail="no project is open")
+    assert session_factory is not None
     service = ImportService(svc.project_path, session_factory)
     source = await service.import_file(req.path, owner=resolve_owner(req.owner), link=True)
     if source is None:

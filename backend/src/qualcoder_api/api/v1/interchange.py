@@ -6,18 +6,17 @@ from typing import Annotated
 
 from fastapi import APIRouter, File, Form, HTTPException, Response, UploadFile
 
-from qualcoder_api.api.v1.deps import DbDep, ServiceDep
+from qualcoder_api.api.v1.deps import DbDep, OpenProjectDep
 from qualcoder_api.interchange.refi import export_refi_qdp, import_refi_qdp
 
 router = APIRouter(prefix="/interchange", tags=["interchange"])
 
 
 @router.get("/export/refi")
-async def export_refi(svc: ServiceDep, db: DbDep) -> Response:
+async def export_refi(svc: OpenProjectDep, db: DbDep) -> Response:
     """Export the open project as a REFI-QDA .qdp XML document."""
     session_factory = svc.session_factory
-    if session_factory is None:
-        raise HTTPException(status_code=409, detail="no project is open")
+    assert session_factory is not None
     xml = await export_refi_qdp(session_factory, svc.project_name)
     return Response(
         content=xml,
@@ -28,15 +27,14 @@ async def export_refi(svc: ServiceDep, db: DbDep) -> Response:
 
 @router.post("/import/refi")
 async def import_refi(
-    svc: ServiceDep,
+    svc: OpenProjectDep,
     db: DbDep,
     file: Annotated[UploadFile, File()],
     codername: str | None = Form(None),
 ) -> dict:
     """Import a REFI-QDA .qdp XML document into the open project."""
     session_factory = svc.session_factory
-    if session_factory is None:
-        raise HTTPException(status_code=409, detail="no project is open")
+    assert session_factory is not None
     data = await file.read()
     try:
         from qualcoder_api.services import audit

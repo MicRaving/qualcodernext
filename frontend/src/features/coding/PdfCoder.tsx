@@ -28,20 +28,22 @@ import {
   Pencil,
   Rows3,
   Sparkles,
+  Undo2,
 } from "lucide-react";
 import {
-  ApiError,
   api,
   fetchSourceFile,
-  fetchWithTimeout,
-  initApiBase,
   type Annotation,
   type CodeTreeItem,
   type Coding,
   type ImageCoding,
   type Source,
 } from "@/lib/api";
-import { patchCodingWeight, useCodeIndex } from "@/features/coding/codingApi";
+import { patchCodingRowMeta, patchCodingWeight, useCodeIndex } from "@/features/coding/codingApi";
+import { useCodingsChanged, useAssignCode } from "@/features/coding/shared/events";
+import { useEscapeStack } from "@/features/coding/shared/useEscapeStack";
+import { useSplitResize } from "@/features/coding/shared/useSplitResize";
+import { useUndoStack } from "@/features/coding/shared/useUndoStack";
 import { CodePicker, type PickedCode } from "@/features/coding/CodePicker";
 import { AutocodeDialog } from "@/features/coding/AutocodeDialog";
 import { TextCoder } from "@/features/coding/TextCoder";
@@ -95,40 +97,9 @@ async function fetchPdfBytes(sourceId: number): Promise<ArrayBuffer> {
   return res.arrayBuffer();
 }
 
-/** PATCH a segment row's memo/important (text or image) with a local fetch,
- *  mirroring codingApi's pattern — no lib/api.ts additions needed. */
-async function patchCodingRow(
-  kind: "text" | "image",
-  id: number,
-  body: { memo?: string; important?: number },
-): Promise<unknown> {
-  const path = kind === "text" ? `/codings/text/${id}` : `/codings/image/${id}`;
-  const doFetch = async (): Promise<unknown> => {
-    const base = await initApiBase();
-    const res = await fetchWithTimeout(`${base}${path}`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    });
-    if (!res.ok) {
-      let detail: unknown;
-      try {
-        detail = (await res.json()).detail;
-      } catch {
-        /* non-JSON error body */
-      }
-      const suffix = typeof detail === "string" && detail ? `: ${detail}` : "";
-      throw new ApiError(res.status, `API error ${res.status} on ${path}${suffix}`, detail);
-    }
-    return (await res.json()) as unknown;
-  };
-  try {
-    return await doFetch();
-  } catch (err) {
-    if (err instanceof ApiError) throw err;
-    return doFetch();
-  }
-}
+/** PATCH a segment row's memo/important (text or image) — the shared
+ *  codingApi helper covers both kinds with the same retry semantics. */
+const patchCodingRow = patchCodingRowMeta;
 
 interface PageSize {
   width: number;
@@ -241,9 +212,6 @@ export function PdfCoder({ source }: { source: Source }) {
 
   const [pdfVisible, setPdfVisible] = useState(true);
   const [plainVisible, setPlainVisible] = useState(false);
-  const [textW, setTextW] = useState(420);
-  const [textDragging, setTextDragging] = useState(false);
-  const textResizeRef = useRef<{ startX: number; startW: number } | null>(null);
   /** Linked position sync: when both panes are visible, scrolling either
    *  one keeps the other at the corresponding location. The toolbar link
    *  button toggles this off/on. */
@@ -310,32 +278,16 @@ export function PdfCoder({ source }: { source: Source }) {
 
   /* ------------------------------------------------------- split resize */
 
-  function startTextResize(e: ReactMouseEvent<HTMLDivElement>) {
-    e.preventDefault();
-    textResizeRef.current = { startX: e.clientX, startW: textW };
-    setTextDragging(true);
-  }
-
-  useEffect(() => {
-    if (!textDragging) return;
-    const onMove = (e: MouseEvent) => {
-      const drag = textResizeRef.current;
-      if (!drag) return;
-      const containerW = containerRef.current?.clientWidth ?? 0;
-      const maxW = containerW > 0 ? Math.round(containerW * 0.7) : 0;
-      setTextW(Math.min(maxW, Math.max(220, Math.round(drag.startW + (e.clientX - drag.startX)))));
-    };
-    const onUp = () => {
-      textResizeRef.current = null;
-      setTextDragging(false);
-    };
-    window.addEventListener("mousemove", onMove);
-    window.addEventListener("mouseup", onUp);
-    return () => {
-      window.removeEventListener("mousemove", onMove);
-      window.removeEventListener("mouseup", onUp);
-    };
-  }, [textDragging]);
+  const resize = useSplitResize({
+    axis: "x",
+    min: 220,
+    max: Number.POSITIVE_INFINITY,
+    initial: 420,
+    containerSize: () => containerRef.current?.clientWidth,
+  });
+  const textW = resize.size;
+  const textDragging = resize.dragging;
+  const startTextResize = resize.onDown;
 
   const numPages = pdf?.numPages ?? 0;
   const scale = zoom === "fit" ? fittedScale : zoom;
@@ -740,6 +692,15 @@ export function PdfCoder({ source }: { source: Source }) {
     }
   }, []);
 
+  // Recoverable deletes: both kinds' removed rows land on one undo stack.
+  const undo = useUndoStack<Coding | ImageCoding>({
+    refresh: async () => {
+      await refreshCodings();
+      await refreshTextCodings();
+    },
+    onError: setErrMsg,
+  });
+
   /* ---- memo gutter (anchored to the rendered PDF pages) ---------------
      Both region (image) codings and text codings render as overlays carrying
      a `data-ctid` marker, so the gutter can measure their vertical position
@@ -815,9 +776,13 @@ export function PdfCoder({ source }: { source: Source }) {
         try {
           const kind: "text" | "image" = isImageGutterId(id) ? "image" : "text";
           if (kind === "image") {
+            const row = codings.find((c) => c.imid === id);
             await api.deleteImageCoding(id);
+            if (row) undo.push(row);
           } else {
+            const row = textCodings.find((c) => c.ctid === id);
             await api.deleteTextCoding(id);
+            if (row) undo.push(row);
           }
           clearSelection();
           if (kind === "image") await refreshCodings();
@@ -827,7 +792,7 @@ export function PdfCoder({ source }: { source: Source }) {
         }
       })();
     },
-    [isImageGutterId, refreshCodings, refreshTextCodings, t],
+    [isImageGutterId, refreshCodings, refreshTextCodings, t, undo, codings, textCodings],
   );
 
   /** Toggle the important flag of a gutter/bubble row (by id). */
@@ -975,15 +940,11 @@ export function PdfCoder({ source }: { source: Source }) {
 
   // History undo/redo: reload codings/annotations when the audit log reverts
   // a change (the shell only refreshes project metadata).
-  useEffect(() => {
-    const handle = () => {
-      void refreshCodings();
-      void refreshTextCodings();
-      void refreshCodes();
-    };
-    window.addEventListener("qc:codings-changed", handle);
-    return () => window.removeEventListener("qc:codings-changed", handle);
-  }, [refreshCodings, refreshTextCodings, refreshCodes]);
+  useCodingsChanged(() => {
+    void refreshCodings();
+    void refreshTextCodings();
+    void refreshCodes();
+  });
 
   function clampPage(p: number): number {
     return Math.min(Math.max(1, p), Math.max(1, numPages));
@@ -1205,20 +1166,14 @@ export function PdfCoder({ source }: { source: Source }) {
   }, [activeCodeId, codePendingRect, codePendingText, source.id, t, scale, textItems, textOverlays]);
 
   // Clicking a code in the left sidebar assigns it to the pending action.
-  useEffect(() => {
-    const onAssign = (e: Event) => {
-      const cid = (e as CustomEvent<{ cid: number }>).detail?.cid;
-      if (typeof cid !== "number") return;
-      setPickerOpen(false);
-      if (pendingActionRef.current?.kind === "text") {
-        codePendingText(cid);
-      } else {
-        codePendingRect(cid);
-      }
-    };
-    window.addEventListener("qc:assign-code", onAssign);
-    return () => window.removeEventListener("qc:assign-code", onAssign);
-  }, [codePendingRect, codePendingText]);
+  useAssignCode((cid) => {
+    setPickerOpen(false);
+    if (pendingActionRef.current?.kind === "text") {
+      codePendingText(cid);
+    } else {
+      codePendingRect(cid);
+    }
+  });
 
   // Catch releases that land outside the page element; finishDrag is
   // idempotent, so a fast release inside the element (handled by its own
@@ -1229,21 +1184,27 @@ export function PdfCoder({ source }: { source: Source }) {
     return () => window.removeEventListener("mouseup", finishDrag);
   }, [drag, finishDrag]);
 
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key !== "Escape") return;
-      if (pickerOpen) {
-        setPickerOpen(false);
-        return;
-      }
+  // Escape dismisses the picker first, then an in-flight drag/pending
+  // action, then the details bubble selection.
+  useEscapeStack([
+    () => {
+      if (!pickerOpen) return false;
+      setPickerOpen(false);
+      return true;
+    },
+    () => {
+      if (drag == null && pendingRect == null && pendingActionRef.current == null) return false;
       setDrag(null);
-      clearSelection();
       setPendingRect(null);
       pendingActionRef.current = null;
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [pickerOpen]);
+      return true;
+    },
+    () => {
+      if (selectedImid == null && selectedTextCtid == null) return false;
+      clearSelection();
+      return true;
+    },
+  ]);
 
   // Click-away clears the selection. Overlay mousedowns stop propagation,
   // so a click that SELECTS a segment never reaches this handler; the
@@ -1483,6 +1444,16 @@ export function PdfCoder({ source }: { source: Source }) {
               >
                 {t("coder.memosToggle")}
               </Button>
+              {undo.canUndo && (
+                <Button
+                  variant="toolbar"
+                  icon={<Undo2 size={12} aria-hidden />}
+                  onClick={undo.undoLast}
+                  title={t("coder.unmarkTitle")}
+                >
+                  {t("coder.unmarkLast")}
+                </Button>
+              )}
             </div>
           </>
         }

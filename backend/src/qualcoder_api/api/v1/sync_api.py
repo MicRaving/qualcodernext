@@ -12,7 +12,7 @@ from __future__ import annotations
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from qualcoder_api.api.v1.deps import ServiceDep
+from qualcoder_api.api.v1.deps import OpenProjectDep, ServiceDep
 from qualcoder_api.services import sync, sync_engine, user_settings
 
 router = APIRouter(prefix="/sync", tags=["sync"])
@@ -154,10 +154,8 @@ async def put_sync_override(req: SyncOverrideRequest) -> dict:
 
 
 @router.post("/now")
-async def sync_now(svc: ServiceDep) -> dict:
+async def sync_now(svc: OpenProjectDep) -> dict:
     """Run one export + import cycle immediately."""
-    if svc.project_path == "" or svc.session_factory is None:
-        raise HTTPException(status_code=409, detail="no project is open")
     return await sync_engine.run_sync_cycle(
         svc.session_factory, svc.project_path, user_settings.get_instance_id()
     )
@@ -173,10 +171,8 @@ async def list_conflicts(svc: ServiceDep) -> dict:
 
 
 @router.post("/conflicts/resolve")
-async def resolve_conflict_endpoint(req: ConflictResolutionRequest, svc: ServiceDep) -> dict:
+async def resolve_conflict_endpoint(req: ConflictResolutionRequest, svc: OpenProjectDep) -> dict:
     """Resolve a conflict by choosing local, remote, or a merged version."""
-    if svc.project_path == "" or svc.session_factory is None:
-        raise HTTPException(status_code=409, detail="no project is open")
     result = await sync_engine.resolve_conflict(
         svc.session_factory, svc.project_path,
         req.conflict_id, req.resolution, req.merged_row,
@@ -187,10 +183,8 @@ async def resolve_conflict_endpoint(req: ConflictResolutionRequest, svc: Service
 
 
 @router.post("/conflicts/resolve-all")
-async def resolve_all_conflicts_endpoint(req: ConflictResolveAllRequest, svc: ServiceDep) -> dict:
+async def resolve_all_conflicts_endpoint(req: ConflictResolveAllRequest, svc: OpenProjectDep) -> dict:
     """Resolve every pending conflict with one strategy ("local" or "remote")."""
-    if svc.project_path == "" or svc.session_factory is None:
-        raise HTTPException(status_code=409, detail="no project is open")
     result = await sync_engine.resolve_all_conflicts(
         svc.session_factory, svc.project_path, req.resolution,
     )

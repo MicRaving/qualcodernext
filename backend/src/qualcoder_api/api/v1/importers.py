@@ -8,7 +8,7 @@ from typing import Annotated, Any
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 
-from qualcoder_api.api.v1.deps import DbDep, ServiceDep
+from qualcoder_api.api.v1.deps import DbDep, OpenProjectDep, ServiceDep
 from qualcoder_api.api.v1.importers_preview import _preview_for_kind
 from qualcoder_api.interchange import importers
 
@@ -132,7 +132,7 @@ async def _save_upload(file: UploadFile, svc, prefix: str) -> str:
 
 @router.post("/auto")
 async def import_auto(
-    svc: ServiceDep,
+    svc: OpenProjectDep,
     db: DbDep,
     file: Annotated[UploadFile, File()],
     codername: str | None = Form(None),
@@ -149,8 +149,7 @@ async def import_auto(
     skips the content sniffing and routes the file to the named importer
     (used by the import preview manager's format override).
     """
-    if svc.project_path == "" or svc.session_factory is None:
-        raise HTTPException(status_code=409, detail="no project is open")
+    assert svc.session_factory is not None
     tmp = await _save_upload(file, svc, "import")
     try:
         try:
@@ -440,7 +439,7 @@ async def import_codebook(
 
 @router.post("/merge")
 async def import_merge(
-    svc: ServiceDep,
+    svc: OpenProjectDep,
     db: DbDep,
     file: Annotated[UploadFile, File()],
     codername: str | None = Form(None),
@@ -450,8 +449,6 @@ async def import_merge(
     The upload must be a zip archive containing a ``data.qda`` database
     (and optionally the media folders) — i.e. a zipped ``.qda`` project.
     """
-    if svc.project_path == "" or svc.session_factory is None:
-        raise HTTPException(status_code=409, detail="no project is open")
     tmp = await _save_upload(file, svc, "merge")
     try:
         return await _merge_archive(svc, tmp, codername)
@@ -461,15 +458,14 @@ async def import_merge(
 
 @router.post("/zotero")
 async def import_zotero(
-    svc: ServiceDep,
+    svc: OpenProjectDep,
     db: DbDep,
     codername: str | None = Form(None),
 ) -> dict:
     """Import references from Zotero 7+'s local read-only API (localhost:23119)."""
     from qualcoder_api.services import references
 
-    if svc.project_path == "" or svc.session_factory is None:
-        raise HTTPException(status_code=409, detail="no project is open")
+    assert svc.session_factory is not None
     try:
         result = await references.import_zotero(svc.session_factory)
     except ValueError as err:

@@ -83,6 +83,65 @@
 
 (This changelog was generated automatically based on the files changes.)
 
+### Refactoring, centralization & bug-fix pass (2026-08-21)
+
+Frontend — coder shared reality:
+
+- New shared module set `features/coding/shared/`: `events.ts`
+  (`useCodingsChanged` / `useAssignCode`), `useEscapeStack`, `useSplitResize`,
+  `useUndoStack`, `useSegmentActions`, `useGutterRows`, `toolbarAnchor`,
+  `WeightStepper`. All six coders (Text/Csv/Image/Html/Pdf/Av) migrated onto
+  them; the duplicated PATCH-row fetch clones in HtmlCoder/PdfCoder and the
+  hand-rolled undo stacks in Text/CsvCoder were deleted.
+- **Recoverable deletes everywhere**: every coder now confirms AND pushes
+  deleted codings onto an undo stack ("Unmark last" button in the header) —
+  previously Html/Pdf/Av/Image deletes were unrecoverable.
+- Layered Escape dismissal in all coders (popovers → drag/pending → details);
+  AvCoder transcript popovers are now reachable by Escape at all.
+- Graceful load degradation adopted; multi-pick coding races fixed
+  (sequential creates + single refresh); silent memo-PATCH failure in the
+  selection toolbar fixed (`res.ok` is now checked); image-coder media retry
+  budget resets on file change; stale playback position no longer used when
+  assigning codes from the sidebar.
+- `hiddenCodes` now honored on HTML webpage marks and CSV table
+  highlights/badges; CsvCoder forwards code-tree updates from its embedded
+  TextCoder; TextCoder gutter gained the missing important-toggle.
+- Details bubble fix: host click-away handlers no longer kill interactions
+  inside the bubble (`data-gutter` exclusion).
+- Missing `coder.memosToggle` locale key added (rendered raw before).
+
+Frontend — reports & API surface:
+
+- Four copied fetch clients (interrater/doc-compare/sentiment/publish)
+  replaced by the shared `localRequest`/`localRequestBlob` primitives;
+  duplicate CSV button removed; `reportKit` localized (Loading/Retry/CSV/
+  No data keys); `EmptyData` adopted.
+
+Frontend — stores & shell:
+
+- `closeProject` now resets ALL project-scoped state (per-view UI bags,
+  hidden codes, graph canvas data, right pane) — nothing leaks into the next
+  project; background-task dispatcher re-queues failed starts (bounded
+  retries) instead of leaving jobs "running" forever.
+
+Backend:
+
+- `api/v1/deps.py`: new `require_open_project` dependency replacing 27
+  hand-written 409 guards across 12 route files (polling endpoints keep
+  their deliberate `{ok:false}` contract).
+- `sync_engine.py` split into `sync_schema/state/sidecar/replay/conflicts/
+  status` behind a stable facade; late-bound health/sidecar hooks preserved.
+- Sync race fixes: conflict resolution serialized under `SYNC_LOCK`;
+  per-user `MAX(seq)+1` inserts retry inside a savepoint; natural-key replay
+  matches NULL columns with `IS NULL` (no more cross-coder segment latching);
+  transcript companion creation is atomic (no orphan companions on crash).
+- Silent exception swallowing in sync row reads replaced with debug logging.
+
+Known issues (pre-existing at commit 89c449e, left for the collaboration-
+redesign owner): e2e specs `app.spec.ts:146`, `features.spec.ts:260`,
+`sync.spec.ts:47/72/90` assert the pre-redesign sync flyout switch and
+recent-projects behavior and need re-spec'ing against the new UX.
+
 ### Platform & architecture
 
 - Complete rewrite of the upstream monolithic Python/PyQt6 codebase:

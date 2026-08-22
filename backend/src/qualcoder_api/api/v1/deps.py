@@ -28,3 +28,19 @@ async def get_db(svc: Annotated[ProjectService, Depends(get_service)]) -> AsyncI
 
 ServiceDep = Annotated[ProjectService, Depends(get_service)]
 DbDep = Annotated[AsyncSession, Depends(get_db)]
+
+
+async def require_open_project(svc: ServiceDep) -> ProjectService:
+    """Raise 409 when no project is open — for HARD routes (mutations and
+    user-triggered actions) that previously hand-rolled this guard with the
+    same literal string in dozens of places.
+
+    NOT for polling endpoints: those intentionally answer ``{"ok": false,
+    "reason": "no project open"}`` so continuous pollers can treat it as
+    "sync off" without error handling."""
+    if svc.session_factory is None or svc.project_path == "":
+        raise HTTPException(status_code=409, detail="no project is open")
+    return svc
+
+
+OpenProjectDep = Annotated[ProjectService, Depends(require_open_project)]

@@ -11,7 +11,7 @@ from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel
 from sqlalchemy import delete, select, text
 
-from qualcoder_api.api.v1.deps import DbDep, ServiceDep
+from qualcoder_api.api.v1.deps import DbDep, OpenProjectDep, ServiceDep
 from qualcoder_api.persistence import tables
 from qualcoder_api.persistence.repositories import ProjectRepository
 from qualcoder_api.services import audit
@@ -80,20 +80,16 @@ class PseudonymDelete(BaseModel):
 
 
 @router.get("/pseudonyms")
-async def list_pseudonyms(svc: ServiceDep) -> dict:
+async def list_pseudonyms(svc: OpenProjectDep) -> dict:
     from qualcoder_api.services import pseudonyms
 
-    if svc.project_path == "":
-        raise HTTPException(status_code=409, detail="no project is open")
     return {"pseudonyms": pseudonyms.load_pseudonyms(svc.project_path)}
 
 
 @router.post("/pseudonyms")
-async def add_pseudonym(req: PseudonymAdd, svc: ServiceDep, db: DbDep) -> dict:
+async def add_pseudonym(req: PseudonymAdd, svc: OpenProjectDep, db: DbDep) -> dict:
     from qualcoder_api.services import pseudonyms
 
-    if svc.project_path == "":
-        raise HTTPException(status_code=409, detail="no project is open")
     try:
         entry = pseudonyms.add_pseudonym(svc.project_path, req.original, req.pseudonym)
     except ValueError as err:
@@ -106,11 +102,9 @@ async def add_pseudonym(req: PseudonymAdd, svc: ServiceDep, db: DbDep) -> dict:
 
 
 @router.delete("/pseudonyms/{original}")
-async def delete_pseudonym(original: str, svc: ServiceDep, db: DbDep) -> dict:
+async def delete_pseudonym(original: str, svc: OpenProjectDep, db: DbDep) -> dict:
     from qualcoder_api.services import pseudonyms
 
-    if svc.project_path == "":
-        raise HTTPException(status_code=409, detail="no project is open")
     entry = next(
         (d for d in pseudonyms.load_pseudonyms(svc.project_path) if d["original"] == original),
         None,
@@ -340,7 +334,7 @@ async def bulk_rename_path(req: BulkRenameRequest, db: DbDep) -> dict:
 @router.post("/sources/{source_id}/replace")
 async def replace_source_file(
     source_id: int,
-    svc: ServiceDep,
+    svc: OpenProjectDep,
     db: DbDep,
     file: Annotated[UploadFile, File()],
     owner: str | None = Form(None),
@@ -349,8 +343,6 @@ async def replace_source_file(
     annotations and case links by first-match text."""
     from qualcoder_api.services.file_replacement import replace_text_file
 
-    if svc.project_path == "":
-        raise HTTPException(status_code=409, detail="no project is open")
     before_row = (
         await db.execute(select(tables.source).where(tables.source.c.id == source_id))
     ).first()
@@ -472,7 +464,7 @@ async def delete_filter(filterid: int, db: DbDep) -> None:
 @router.post("/references/{risid}/attach")
 async def attach_reference_file(
     risid: int,
-    svc: ServiceDep,
+    svc: OpenProjectDep,
     db: DbDep,
     file: Annotated[UploadFile, File()],
     owner: str | None = Form(None),
@@ -480,8 +472,7 @@ async def attach_reference_file(
     """Attach a PDF/EPUB (or any document) to a reference as a coded source."""
     from qualcoder_api.services.references import attach_file
 
-    if svc.project_path == "" or svc.session_factory is None:
-        raise HTTPException(status_code=409, detail="no project is open")
+    assert svc.session_factory is not None
     tmp = svc.project_path + "/_attach_" + (file.filename or "attach")
     with open(tmp, "wb") as out:  # noqa: ASYNC230 - small local temp write
         while chunk := await file.read(1 << 20):

@@ -12,7 +12,7 @@ import os
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from qualcoder_api.api.v1.deps import DbDep, ServiceDep
+from qualcoder_api.api.v1.deps import DbDep, OpenProjectDep, ServiceDep
 from qualcoder_api.persistence import tables
 from qualcoder_api.services.transcription import (
     TRANSCRIPTION_DEFAULTS,
@@ -72,15 +72,13 @@ async def save_settings(req: TranscribeSettingsRequest) -> dict:
 
 
 @router.post("", status_code=202)
-async def transcribe(req: TranscribeRequest, svc: ServiceDep, db: DbDep) -> dict:
+async def transcribe(req: TranscribeRequest, svc: OpenProjectDep, db: DbDep) -> dict:
     """Start a transcription job; returns its id for polling."""
     from sqlalchemy import select
 
     from qualcoder_api.services import audit
     from qualcoder_api.services.user_settings import get_codername, get_transcription_settings
 
-    if svc.project_path == "":
-        raise HTTPException(status_code=409, detail="no project is open")
     row = (
         await db.execute(select(tables.source).where(tables.source.c.id == req.source_id))
     ).first()

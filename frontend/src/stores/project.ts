@@ -20,6 +20,7 @@ import {
 import { blankScreenshot, captureAppScreenshot } from "@/features/bugreport/capture";
 import { DEFAULT_GITHUB_REPO } from "@/features/bugreport/github";
 import { useCoderStore } from "./coder";
+import { useGraphStore } from "./graph";
 import { useInspectorStore } from "./inspector";
 import { usePrefsStore } from "./prefs";
 import { useWorkspaceStore, type WorkspaceView } from "./workspace";
@@ -418,14 +419,33 @@ export const useProjectStore = create<ProjectLifecycleState>((set, get) => ({
       codeTree: [],
       error: null,
     });
-    useWorkspaceStore.setState({ view: { kind: "dashboard" } });
+    // Reset EVERY project-scoped store — stale selections/graph data/
+    // hidden-code filters must not leak into the next opened project.
+    useWorkspaceStore.setState({
+      view: { kind: "dashboard" },
+      rightPane: "inspector",
+      casesUi: { selectedId: null, query: "", tick: 0 },
+      qttUi: { selectedId: null, tick: 0 },
+      notesUi: {
+        tab: "journal",
+        query: "",
+        selectedId: null,
+        selectedKind: null,
+        newAnnotation: false,
+        tick: 0,
+      },
+      analyzeUi: { selectedId: "code-frequencies" },
+      filesUi: useWorkspaceStore.getState().filesUi, // sort prefs are session-level, keep
+    });
     useInspectorStore.setState({
       inspectorSelection: null,
       inspectorDetails: null,
       inspectorLoading: false,
       inspectorError: null,
     });
-    useCoderStore.setState({ activeCodeId: null });
+    useCoderStore.setState({ activeCodeId: null, hiddenCodes: [] });
+    // The graph store keeps no cross-project data beyond the loaded canvas.
+    useGraphStore.setState({ graphsData: null });
     usePrefsStore.setState({ syncAutoNotice: false, presence: [], collabMode: "single" });
   },
 

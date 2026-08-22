@@ -328,6 +328,7 @@ export function ProjectShell() {
   // a time (nothing may run in parallel with the current job). The task is
   // marked running IN THE STORE before the request fires so the effect never
   // re-starts the same job (and the poll loop picks it up).
+  const startFailuresRef = useRef(new Map<string, number>());
   useEffect(() => {
     if (tasksPaused) return;
     const store = useProjectStore.getState();
@@ -346,9 +347,29 @@ export function ProjectShell() {
           ? Promise.resolve({ ok: true })
           : api.autocodeJobControl(next.id, "start");
     start().catch(() => {
-      /* retried on the next state change */
+      // A failed start used to leave the job "running" forever (nothing
+      // re-triggers the dispatcher). Re-queue for another pass; after three
+      // failures give up and surface the error instead of hot-looping.
+      const fails = (startFailuresRef.current.get(next.id) ?? 0) + 1;
+      startFailuresRef.current.set(next.id, fails);
+      const s = useProjectStore.getState();
+      if (fails >= 3) {
+        const patch: Partial<TaskInfo> = { state: "error", message: t("tasks.startFailed") };
+        if (next.kind === "transcribe") s.updateTranscribeJob(next.id, patch);
+        else if (next.kind === "r") s.updateRJob(next.id, patch);
+        else s.updateAutocodeJob(next.id, patch);
+        startFailuresRef.current.delete(next.id);
+      } else {
+        const back: Partial<TaskInfo> =
+          next.kind === "r"
+            ? { state: "queued", progress: 0, message: "" }
+            : { state: "queued", progress: 0, message: "" };
+        if (next.kind === "transcribe") s.updateTranscribeJob(next.id, back);
+        else if (next.kind === "r") s.updateRJob(next.id, back);
+        else s.updateAutocodeJob(next.id, back);
+      }
     });
-  }, [tasks, tasksPaused]);
+  }, [tasks, tasksPaused, t]);
 
   // Pause/resume: pause halts the dispatcher and pauses the running
   // transcription job (autocode jobs finish their file, then wait).

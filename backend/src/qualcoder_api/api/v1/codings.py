@@ -7,7 +7,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
-from qualcoder_api.api.v1.deps import DbDep, ServiceDep
+from qualcoder_api.api.v1.deps import DbDep, OpenProjectDep
 from qualcoder_api.core.models import AVCoding, Coding, ImageCoding, MediaType
 from qualcoder_api.persistence import tables
 from qualcoder_api.persistence.repositories import CodingRepository
@@ -391,15 +391,13 @@ async def dictionary_autocode_endpoint(req: DictionaryAutocodeRequest, db: DbDep
 
 
 @router.post("/autocode/batch", status_code=202)
-async def autocode_batch_endpoint(req: AutocodeBatchRequest, svc: ServiceDep, db: DbDep) -> dict:
+async def autocode_batch_endpoint(req: AutocodeBatchRequest, svc: OpenProjectDep, db: DbDep) -> dict:
     """Queue one background autocode job per source file (prompt-based only).
     Jobs are created in the ``queued`` state and started one by one by the
     UI dispatcher via ``POST /codings/autocode/jobs/{id}/start``."""
     from qualcoder_api.services import audit
     from qualcoder_api.services.autocode_jobs import start_batch
 
-    if svc.project_path == "":
-        raise HTTPException(status_code=409, detail="no project is open")
     owner = resolve_owner(req.owner)
     if not req.source_ids:
         raise HTTPException(status_code=422, detail="no source files given")

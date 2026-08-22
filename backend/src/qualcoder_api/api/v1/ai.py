@@ -8,7 +8,7 @@ import re
 from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel
 
-from qualcoder_api.api.v1.deps import DbDep, ServiceDep
+from qualcoder_api.api.v1.deps import DbDep, OpenProjectDep, ServiceDep
 from qualcoder_api.services import user_settings
 from qualcoder_api.services.ai_prompts import is_custom_prompt_id
 from qualcoder_api.services.ai_service import AiService, AiUnavailable
@@ -829,22 +829,19 @@ async def ai_search(req: SearchRequest, svc: ServiceDep, session: DbDep) -> dict
 
 
 @router.get("/index")
-async def ai_index_status(svc: ServiceDep) -> dict:
+async def ai_index_status(svc: OpenProjectDep) -> dict:
     """Status of the persistent vector index (project-local sqlite)."""
     from qualcoder_api.services import ai_index
 
-    if svc.project_path == "":
-        raise HTTPException(status_code=409, detail="no project is open")
     return ai_index.index_status(svc.project_path)
 
 
 @router.post("/index")
-async def ai_index_build(req: IndexRequest, svc: ServiceDep) -> dict:
+async def ai_index_build(req: IndexRequest, svc: OpenProjectDep) -> dict:
     """Build (or rebuild) the persistent embedding index."""
     from qualcoder_api.services import ai_index
 
-    if svc.project_path == "" or svc.session_factory is None:
-        raise HTTPException(status_code=409, detail="no project is open")
+    assert svc.session_factory is not None
     ai = user_settings.get_ai_settings()
     try:
         return await ai_index.rebuild_index(svc.session_factory, svc.project_path, ai)
@@ -853,12 +850,10 @@ async def ai_index_build(req: IndexRequest, svc: ServiceDep) -> dict:
 
 
 @router.delete("/index", status_code=204)
-async def ai_index_delete(svc: ServiceDep) -> None:
+async def ai_index_delete(svc: OpenProjectDep) -> None:
     """Delete the persistent embedding index."""
     from qualcoder_api.services import ai_index
 
-    if svc.project_path == "":
-        raise HTTPException(status_code=409, detail="no project is open")
     ai_index.delete_index(svc.project_path)
 
 

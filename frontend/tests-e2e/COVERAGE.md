@@ -35,6 +35,12 @@ Top gaps worth filling next (quick to script, high value):
 5. **Sentiment / Stats / Summary-table** — W runs the lexicon scoring, the
    crosstab (chi-square) and the file×code grid; the other report modes
    (AI sentiment, group comparison, case scope) stay untested.
+6. **STALE SPECS (fail at HEAD 89c449e, pre-dating the refactor pass)** —
+   `app.spec.ts:146` and `features.spec.ts:260` depend on recent-projects
+   persistence across page loads; `sync.spec.ts:47/72/90` assert the removed
+   coder-flyout sync switch (`role="switch"` "Enable background sync"). The
+   flyout was redesigned to collab-mode activation + a Sync-now button —
+   these specs need re-writing against the new UX.
 
 ---
 
