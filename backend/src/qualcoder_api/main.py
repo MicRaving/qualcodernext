@@ -104,7 +104,20 @@ async def _presence_loop() -> None:
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
-    tasks = [
+    # Server mode (SERVER_PLAN.md Phase 0): no local-project singleton loops.
+    # The sync/presence loops manage the LOCAL app's open project and are
+    # meaningless on a multi-tenant server; server sessions get their own
+    # lifecycle in later phases.
+    from qualcoder_api.core.server_config import (
+        is_server_mode,
+        load_server_config,
+        validate_server_config,
+    )
+
+    server_mode = is_server_mode()
+    if server_mode:
+        validate_server_config(load_server_config())
+    tasks = [] if server_mode else [
         asyncio.create_task(_sync_loop()),
         asyncio.create_task(_presence_loop()),
     ]
@@ -115,7 +128,8 @@ async def lifespan(_app: FastAPI):
             task.cancel()
             with _contextlib.suppress(asyncio.CancelledError):
                 await task
-        await service.close_project()
+        if not server_mode:
+            await service.close_project()
 
 
 def create_app() -> FastAPI:

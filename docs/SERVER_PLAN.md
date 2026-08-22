@@ -1,5 +1,11 @@
 # QualCoder v4 — Server Deployment: Full Implementation Plan
 
+> **Implementation status:** Phase 0 (infrastructure scaffolding) is
+> **implemented** (`core/server_config.py`, lifespan gating in `main.py`,
+> `deps.CURRENT_SERVICE` ContextVar, `tests/test_server_config.py`).
+> Phases 1–5 are not started and must each land as their own change,
+> passing their acceptance checklist before the next begins.
+
 Audience: an implementer model (e.g. MiMo-class). This document is written to
 be followed mechanically: each phase lists exact files to create/modify, exact
 endpoint signatures, exact SQL, and an acceptance checklist. Do **not** write
