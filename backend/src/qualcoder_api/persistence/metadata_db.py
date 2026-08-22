@@ -7,7 +7,7 @@ long; foreign keys ON (memberships cascade).
 from __future__ import annotations
 
 import logging
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from sqlalchemy import text
@@ -234,3 +234,124 @@ async def prune_expired_tokens() -> int:
         )
         await session.commit()
         return result.rowcount or 0
+
+
+# ── Passkeys (SERVER_PLAN.md Phase 1b) ──────────────────────────────────
+
+
+async def add_passkey(
+    user_id: int,
+    credential_id: str,
+    public_key: str,
+    sign_count: int,
+    transports: str,
+    name: str,
+) -> None:
+    factory = metadata_factory()
+    async with factory() as session:
+        await session.execute(
+            text(
+                "INSERT INTO passkeys (user_id, credential_id, public_key, sign_count,"
+                " transports, name, created_at)"
+                " VALUES (:uid, :cid, :pk, :sc, :tr, :name, :ts)"
+            ),
+            {"uid": user_id, "cid": credential_id, "pk": public_key, "sc": sign_count,
+             "tr": transports, "name": name, "ts": _utcnow()},
+        )
+        await session.commit()
+
+
+async def list_passkeys(user_id: int) -> list[dict]:
+    factory = metadata_factory()
+    async with factory() as session:
+        rows = (
+            await session.execute(
+                text(
+                    "SELECT id, credential_id, name, created_at FROM passkeys"
+                    " WHERE user_id = :uid ORDER BY id"
+                ),
+                {"uid": user_id},
+            )
+        ).mappings().all()
+        return [dict(r) for r in rows]
+
+
+async def get_passkey_by_credential_id(credential_id: str) -> dict | None:
+    factory = metadata_factory()
+    async with factory() as session:
+        row = (
+            await session.execute(
+                text("SELECT * FROM passkeys WHERE credential_id = :cid"),
+                {"cid": credential_id},
+            )
+        ).mappings().first()
+        return dict(row) if row else None
+
+
+async def update_passkey_sign_count(passkey_id: int, sign_count: int) -> None:
+    factory = metadata_factory()
+    async with factory() as session:
+        await session.execute(
+            text("UPDATE passkeys SET sign_count = :sc WHERE id = :id"),
+            {"sc": sign_count, "id": passkey_id},
+        )
+        await session.commit()
+
+
+async def delete_passkey(passkey_id: int, user_id: int) -> bool:
+    """Delete an OWN passkey; True when a row was removed."""
+    factory = metadata_factory()
+    async with factory() as session:
+        result = await session.execute(
+            text("DELETE FROM passkeys WHERE id = :id AND user_id = :uid"),
+            {"id": passkey_id, "uid": user_id},
+        )
+        await session.commit()
+        return (result.rowcount or 0) > 0
+
+
+# ── WebAuthn challenges (DB-persisted so restarts keep in-flight flows) ─
+
+
+async def put_challenge(challenge: str, kind: str, user_id: int | None, ttl_secs: int) -> None:
+    expires = (
+        datetime.now(UTC) + timedelta(seconds=ttl_secs)
+    ).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3]
+    factory = metadata_factory()
+    async with factory() as session:
+        await session.execute(
+            text(
+                "INSERT INTO webauthn_challenges (challenge, user_id, kind, expires_at)"
+                " VALUES (:ch, :uid, :kind, :exp)"
+            ),
+            {"ch": challenge, "uid": user_id, "kind": kind, "exp": expires},
+        )
+        # opportunistic cleanup of dead challenges
+        await session.execute(
+            text("DELETE FROM webauthn_challenges WHERE expires_at < :now"),
+            {"now": _utcnow()},
+        )
+        await session.commit()
+
+
+async def take_challenge(challenge: str, kind: str) -> dict | None:
+    """Consume a challenge (single use): returns its row, or None when
+    unknown/expired/kind-mismatched. Deleted after read."""
+    factory = metadata_factory()
+    async with factory() as session:
+        row = (
+            await session.execute(
+                text(
+                    "SELECT * FROM webauthn_challenges"
+                    " WHERE challenge = :ch AND kind = :kind AND expires_at > :now"
+                ),
+                {"ch": challenge, "kind": kind, "now": _utcnow()},
+            )
+        ).mappings().first()
+        if not row:
+            return None
+        await session.execute(
+            text("DELETE FROM webauthn_challenges WHERE id = :id"), {"id": row["id"]}
+        )
+        await session.commit()
+        return dict(row)

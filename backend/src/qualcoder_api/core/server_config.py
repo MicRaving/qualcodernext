@@ -32,6 +32,8 @@ class ServerConfig:
     backup_retention: str
     rclone_conf: str
     rclone_remote: str
+    rp_id: str | None
+    rp_origin: str | None
 
     @property
     def projects_root(self) -> Path:
@@ -67,6 +69,7 @@ def _int_env(name: str, default: int) -> int:
 def load_server_config() -> ServerConfig:
     """Read every server env var once. Call at startup (server mode only)."""
     data_dir = Path(os.environ.get("QC_DATA_DIR", "./data")).resolve()
+    rp_id = os.environ.get("QC_RP_ID", "").strip() or None
     return ServerConfig(
         data_dir=data_dir,
         metadata_db=Path(
@@ -82,6 +85,8 @@ def load_server_config() -> ServerConfig:
         backup_retention=os.environ.get("QC_BACKUP_RETENTION", "daily=14,weekly=8,monthly=12"),
         rclone_conf=os.environ.get("QC_RCLONE_CONF", "/etc/rclone/rclone.conf"),
         rclone_remote=os.environ.get("QC_RCLONE_REMOTE", "qcnext-crypt:"),
+        rp_id=rp_id,
+        rp_origin=os.environ.get("QC_RP_ORIGIN", "").strip() or (f"https://{rp_id}" if rp_id else None),
     )
 
 

@@ -5,6 +5,7 @@ Phase 1b — password + opaque-token auth is the complete Phase 1 core.
 """
 from __future__ import annotations
 
+import logging
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Header, HTTPException
@@ -15,11 +16,13 @@ from qualcoder_api.api.v1.auth_deps import (
     parse_bearer_token,
     require_admin,
 )
+from qualcoder_api.core.server_config import load_server_config
 from qualcoder_api.persistence import metadata_db
 from qualcoder_api.services import password as password_svc
 from qualcoder_api.services import token_service
 
 router = APIRouter(prefix="/auth", tags=["server-auth"])
+logger = logging.getLogger(__name__)
 
 _USERNAME_RE = r"^[a-zA-Z0-9_.-]{3,32}$"
 
@@ -131,3 +134,103 @@ async def disable_user(user_id: int, user: Annotated[dict, Depends(require_admin
     await metadata_db.set_user_disabled(user_id, True)
     await token_service.revoke_all_for_user(user_id)
     return {"ok": True}
+
+
+# ── Passkeys (Phase 1b) ─────────────────────────────────────────────────
+
+
+class PasskeyCompleteRequest(BaseModel):
+    response: str = Field(description="PublicKeyCredential JSON from the browser")
+
+
+class PasskeyLoginBeginRequest(BaseModel):
+    username: str = ""
+
+
+class PasskeyLoginCompleteRequest(BaseModel):
+    username: str
+    response: str
+
+
+def _require_rp() -> None:
+    if not load_server_config().rp_id:
+        raise HTTPException(status_code=503, detail="passkeys not configured (QC_RP_ID missing)")
+
+
+@router.post("/passkey/register/begin")
+async def passkey_register_begin(user: Annotated[dict, Depends(get_current_user)]) -> dict:
+    _require_rp()
+    import json
+
+    from qualcoder_api.services import passkey_service
+
+    return json.loads(await passkey_service.begin_registration(user))
+
+
+@router.post("/passkey/register/complete")
+async def passkey_register_complete(
+    req: PasskeyCompleteRequest,
+    user: Annotated[dict, Depends(get_current_user)],
+) -> dict:
+    _require_rp()
+
+    from webauthn.helpers.exceptions import InvalidRegistrationResponse
+
+    from qualcoder_api.services import passkey_service
+
+    try:
+        result = await passkey_service.complete_registration(user, req.response)
+    except InvalidRegistrationResponse as err:
+        raise HTTPException(status_code=400, detail=str(err)) from err
+    return {"ok": True, **result}
+
+
+@router.get("/passkeys")
+async def list_passkeys(user: Annotated[dict, Depends(get_current_user)]) -> dict:
+    rows = await metadata_db.list_passkeys(user["id"])
+    return {
+        "passkeys": [
+            {"id": r["id"], "name": r["name"], "created_at": r["created_at"]} for r in rows
+        ]
+    }
+
+
+@router.delete("/passkeys/{passkey_id}")
+async def delete_passkey(
+    passkey_id: int, user: Annotated[dict, Depends(get_current_user)]
+) -> dict:
+    removed = await metadata_db.delete_passkey(passkey_id, user["id"])
+    if not removed:
+        raise HTTPException(status_code=404, detail="passkey not found")
+    return {"ok": True}
+
+
+@router.post("/passkey/login/begin")
+async def passkey_login_begin(req: PasskeyLoginBeginRequest) -> dict:
+    _require_rp()
+    import json
+
+    from qualcoder_api.services import passkey_service
+
+    options = await passkey_service.begin_login(req.username or None)
+    return {"options": json.loads(options)}
+
+
+@router.post("/passkey/login/complete")
+async def passkey_login_complete(req: PasskeyLoginCompleteRequest) -> dict:
+    _require_rp()
+    from webauthn.helpers.exceptions import (
+        InvalidAuthenticationResponse,
+        InvalidRegistrationResponse,
+    )
+
+    from qualcoder_api.services import passkey_service
+
+    try:
+        user = await passkey_service.complete_login(req.username, req.response)
+    except (InvalidAuthenticationResponse, InvalidRegistrationResponse) as err:
+        logger.warning("passkey assertion failed for %s: %s", req.username, err)
+        raise HTTPException(status_code=401, detail="passkey assertion failed") from err
+    if user["disabled"]:
+        raise HTTPException(status_code=401, detail="account disabled")
+    return await _issue(user)
