@@ -188,8 +188,10 @@ export async function request<T>(path: string, init?: RequestInit, timeoutMs = R
   const attempt = async (): Promise<T> => {
     const base = await resolveBase();
     resolvedBase = base;
+    // Server mode: bearer token + active project on every request.
+    const { authHeaders } = await import("@/lib/session");
     const res = await fetchWithTimeout(`${base}${path}`, {
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", ...authHeaders() },
       ...init,
     }, timeoutMs);
     return parse(res);
@@ -240,8 +242,11 @@ export async function localRequest<T>(
 ): Promise<T> {
   const doFetch = async (): Promise<T> => {
     const base = await initApiBase();
-    const headers =
-      init.body instanceof FormData ? undefined : { "Content-Type": "application/json" };
+    const { authHeaders } = await import("@/lib/session");
+    const headers = {
+      ...(init.body instanceof FormData ? {} : { "Content-Type": "application/json" }),
+      ...authHeaders(),
+    };
     const res = await fetchWithTimeout(`${base}${path}`, { headers, ...init }, timeoutMs);
     if (!res.ok) {
       let detail: unknown;
@@ -274,8 +279,11 @@ export async function localRequestBlob(
 ): Promise<Blob> {
   const doFetch = async (): Promise<Blob> => {
     const base = await initApiBase();
-    const headers =
-      init.body instanceof FormData ? undefined : { "Content-Type": "application/json" };
+    const { authHeaders } = await import("@/lib/session");
+    const headers = {
+      ...(init.body instanceof FormData ? {} : { "Content-Type": "application/json" }),
+      ...authHeaders(),
+    };
     const res = await fetchWithTimeout(`${base}${path}`, { headers, ...init }, timeoutMs);
     if (!res.ok) {
       let detail: unknown;

@@ -1003,6 +1003,48 @@ export const api = {
       `/help/search?q=${encodeURIComponent(q)}&regex=${regex}`,
     ),
 
+  // --- Server auth (SERVER_PLAN.md; endpoints exist in server mode) -----
+
+  authRegister: (body: {
+    username: string;
+    display_name?: string;
+    email?: string;
+    password: string;
+  }) => request<{ user: { id: number; username: string; role: string } }>("/auth/register", {
+    method: "POST",
+    body: JSON.stringify(body),
+  }),
+  authLogin: (body: { username: string; password: string }) =>
+    request<{ token: string; expires_at: string; user: { id: number; username: string; role: string } }>(
+      "/auth/login",
+      { method: "POST", body: JSON.stringify(body) },
+    ),
+  authLogout: () => request<{ ok: boolean }>("/auth/logout", { method: "POST" }),
+  authRefresh: () =>
+    request<{ token: string; expires_at: string }>("/auth/refresh", { method: "POST" }),
+  authMe: () =>
+    request<{ user: { id: number; username: string; display_name: string; role: string } }>(
+      "/auth/me",
+    ),
+  authPasskeyLoginBegin: (username: string) =>
+    request<{ options: Record<string, unknown> }>("/auth/passkey/login/begin", {
+      method: "POST",
+      body: JSON.stringify({ username }),
+    }),
+  authPasskeyLoginComplete: (body: { username: string; response: unknown }) =>
+    request<{ token: string; expires_at: string; user: { id: number; username: string } }>(
+      "/auth/passkey/login/complete",
+      { method: "POST", body: JSON.stringify(body) },
+    ),
+  authPasskeyRegisterBegin: () => request<Record<string, unknown>>("/auth/passkey/register/begin", {
+    method: "POST",
+  }),
+  authPasskeyRegisterComplete: (response: unknown) =>
+    request<{ ok: boolean }>("/auth/passkey/register/complete", {
+      method: "POST",
+      body: JSON.stringify({ response }),
+    }),
+
   // --- App settings -----------------------------------------------------
 
   appSettings: async () => {

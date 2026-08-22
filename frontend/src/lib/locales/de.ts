@@ -8,6 +8,15 @@ export const de: Record<string, string> = {
   "app.name": "QCnext",
   "app.version": "0.1.0",
   "app.versionLabel": "App-Version",
+  "app.title": "QCnext",
+  "auth.signInPrompt": "Bei deinem Server-Konto anmelden",
+  "auth.username": "Benutzername",
+  "auth.password": "Passwort",
+  "auth.signIn": "Anmelden",
+  "auth.passkeySignIn": "Mit Passkey anmelden",
+  "auth.badCredentials": "Ungültiger Benutzername oder Passwort",
+  "auth.passkeyCancelled": "Passkey-Anmeldung abgebrochen",
+  "auth.loginError": "Anmeldung fehlgeschlagen",
 
   // backend status pill
   "backend.ok": "Backend {status}",

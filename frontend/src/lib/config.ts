@@ -25,3 +25,11 @@ export const AI_REFRESH_MS = 60_000;
 
 /** Coder sync-status polling interval (ms). */
 export const SYNC_POLL_MS = 30_000;
+
+/** Server mode (SERVER_PLAN.md): when truthy, the app talks to a remote
+ *  qualcoder server — bearer auth + X-Project-Id headers are injected into
+ *  every request and the boot gate shows the login screen. */
+export const SERVER_MODE = ["1", "true", "yes", "on"].includes(
+  String(import.meta.env.VITE_SERVER_MODE ?? "").toLowerCase(),
+);
+

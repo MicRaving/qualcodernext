@@ -7,6 +7,15 @@ export const en: Record<string, string> = {
   "app.name": "QCnext",
   "app.version": "0.1.0",
   "app.versionLabel": "App version",
+  "app.title": "QCnext",
+  "auth.signInPrompt": "Sign in to your server account",
+  "auth.username": "Username",
+  "auth.password": "Password",
+  "auth.signIn": "Sign in",
+  "auth.passkeySignIn": "Sign in with passkey",
+  "auth.badCredentials": "Invalid username or password",
+  "auth.passkeyCancelled": "Passkey sign-in was cancelled",
+  "auth.loginError": "Could not sign in",
 
   // backend status pill
   "backend.ok": "Backend {status}",

@@ -1,7 +1,10 @@
 import { useEffect, useState } from "react";
 import { ProjectShell } from "@/components/shell/ProjectShell";
 import { LoadingState } from "@/components/ui/orchestrator";
+import { LoginScreen } from "@/features/auth/LoginScreen";
 import { api, initApiBase } from "@/lib/api";
+import { SERVER_MODE } from "@/lib/config";
+import { getToken } from "@/lib/session";
 import { I18nProvider } from "@/lib/i18n";
 import { ToastProvider } from "@/lib/toast";
 import { useProjectStore } from "@/stores/project";
@@ -46,6 +49,8 @@ function scheduleUpdates() {
 
 function App() {
   const [baseReady, setBaseReady] = useState(false);
+  // Re-render after a server-mode login stores a token.
+  const [, setAuthTick] = useState(0);
 
   useEffect(() => {
     // No default browser context menu anywhere — only the app's custom ones.
@@ -139,9 +144,14 @@ function App() {
   return (
     <I18nProvider>
       <ToastProvider>
-        <div className="flex h-full flex-col">
-          <ProjectShell />
-        </div>
+        {SERVER_MODE && !getToken() ? (
+          // Server mode auth gate (SERVER_PLAN.md §6.7): no token, no app.
+          <LoginScreen onAuthed={() => setAuthTick((n) => n + 1)} />
+        ) : (
+          <div className="flex h-full flex-col">
+            <ProjectShell />
+          </div>
+        )}
       </ToastProvider>
     </I18nProvider>
   );
