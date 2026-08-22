@@ -1,8 +1,9 @@
 /**
  * CoderSwitcher — shows the current coder; the dropdown switches coders or
  * adds a new one with an inline name input. The flyout also hosts the
- * collaboration-sync switch: toggle the background sync cycle, see last-sync
- * time / pending changes / errors and run an immediate sync.
+ * collaboration block: a background-sync switch, last-sync time / pending
+ * changes / errors, an immediate "Sync now", live peer presence and the
+ * collaboration-mode activation.
  *
  * Indicator model:
  * - The RIBBON button carries a single overall sync dot (off / pending /
@@ -10,7 +11,7 @@
  * - The FLYOUT shows a per-coder activity dot on every coder row, combining
  *   live presence (who is actively working right now) with the collaborator
  *   sync state, plus a "Live now" section listing who is working and on which
- *   file.
+ *   file. Presence is polled while the flyout is open so the dots stay fresh.
  */
 import { errorMessage } from "@/lib/utils";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -165,7 +166,7 @@ export function CoderSwitcher() {
     }
   }
 
-  // Overall sync dot in the ribbon (single, not per-coder).
+  /** Overall sync dot in the ribbon (single, not per-coder). */
   const overallState = syncStatus?.state;
   const overallDot = !syncEnabled
     ? "bg-border"
@@ -219,8 +220,15 @@ export function CoderSwitcher() {
       .coderVisibility()
       .then((res) => setVisibility(res.visibility))
       .catch(() => setVisibility({}));
-    // Refresh presence immediately so the "Live now" section is fresh.
+    // Refresh presence immediately so the "Live now" section is fresh, then
+    // keep polling while the flyout stays open — otherwise every peer's dot
+    // flips to offline after the 60s liveness window despite active
+    // heartbeats (the backend beats every 15s).
     void usePrefsStore.getState().refreshPresence();
+    const presenceTimer = window.setInterval(
+      () => void usePrefsStore.getState().refreshPresence(),
+      SYNC_POLL_MS,
+    );
     const onDown = (e: MouseEvent) => {
       const target = e.target instanceof Node ? e.target : null;
       if (target && !rootRef.current?.contains(target)) {
@@ -243,6 +251,7 @@ export function CoderSwitcher() {
     document.addEventListener("mousedown", onDown);
     window.addEventListener("keydown", onKey);
     return () => {
+      window.clearInterval(presenceTimer);
       document.removeEventListener("mousedown", onDown);
       window.removeEventListener("keydown", onKey);
     };

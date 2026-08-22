@@ -3,8 +3,15 @@
 > **Implementation status:** Phase 0 (infrastructure scaffolding) is
 > **implemented** (`core/server_config.py`, lifespan gating in `main.py`,
 > `deps.CURRENT_SERVICE` ContextVar, `tests/test_server_config.py`).
-> Phases 1–5 are not started and must each land as their own change,
-> passing their acceptance checklist before the next begins.
+> **Phase 1 core is implemented**: metadata DB + migrations
+> (`persistence/metadata_schema.py`, `metadata_db.py`), password hashing
+> (`services/password.py`, argon2id), opaque tokens
+> (`services/token_service.py`), auth API (register/login/logout/refresh/
+> me, admin user-disable; `api/v1/auth.py` + `auth_deps.py`, mounted only
+> in server mode) — `tests/test_auth_api.py`.
+> **Phase 1b remains:** passkey endpoints (WebAuthn; lib installed,
+> service layer pending). Phases 2–5 are not started and must each land as
+> their own change, passing their acceptance checklist before the next.
 
 Audience: an implementer model (e.g. MiMo-class). This document is written to
 be followed mechanically: each phase lists exact files to create/modify, exact

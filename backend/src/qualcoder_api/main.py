@@ -117,6 +117,9 @@ async def lifespan(_app: FastAPI):
     server_mode = is_server_mode()
     if server_mode:
         validate_server_config(load_server_config())
+        from qualcoder_api.persistence import metadata_db
+
+        await metadata_db.migrate_metadata(load_server_config().metadata_db)
     tasks = [] if server_mode else [
         asyncio.create_task(_sync_loop()),
         asyncio.create_task(_presence_loop()),
@@ -130,6 +133,8 @@ async def lifespan(_app: FastAPI):
                 await task
         if not server_mode:
             await service.close_project()
+        else:
+            await metadata_db.dispose_metadata_engine()
 
 
 def create_app() -> FastAPI:
@@ -147,6 +152,12 @@ def create_app() -> FastAPI:
     )
     app.add_exception_handler(Exception, _unhandled_exception_handler)
     app.include_router(v1_router, prefix="/api/v1")
+    from qualcoder_api.core.server_config import is_server_mode
+
+    if is_server_mode():
+        from qualcoder_api.api.v1.auth import router as auth_router
+
+        app.include_router(auth_router, prefix="/api/v1")
     return app
 
 
