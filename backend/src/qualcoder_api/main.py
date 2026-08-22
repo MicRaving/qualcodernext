@@ -139,7 +139,7 @@ async def lifespan(_app: FastAPI):
                 try:
                     await backup_service.run_all_scheduled()
                     await backup_service.apply_retention()
-                except Exception:  # noqa: BLE001 — never kill the sweep loop
+                except Exception:
                     logger.exception("backup sweep failed")
 
         tasks.append(asyncio.create_task(_idle_session_reaper()))
