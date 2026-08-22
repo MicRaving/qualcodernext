@@ -290,12 +290,14 @@ test("sidebar code click codes the selected text", async ({ page }) => {
   // immediately (no CodePicker modal).
   await page.getByRole("button", { name: "ClickCode", exact: true }).click();
 
-  // The coded segment is clickable and shows the code in the details bar.
+  // The coded segment is clickable and opens the details bubble with the
+  // code's memo editor (post-redesign: bottom details bar is gone).
   const segment = page.locator('span[title="ClickCode"]');
   await expect(segment).toBeVisible({ timeout: 10_000 });
   await segment.click();
-  await expect(page.getByText("Coding details")).toBeVisible({ timeout: 10_000 });
-  await expect(page.locator("li").filter({ hasText: "ClickCode" })).toBeVisible();
+  await expect(
+    page.getByRole("textbox", { name: "Memo for ClickCode" }),
+  ).toBeVisible({ timeout: 10_000 });
 });
 
 // ---------------------------------------------------------------------------

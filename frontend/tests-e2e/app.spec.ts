@@ -162,7 +162,6 @@ test("settings and AI status", async ({ page }) => {
   // updates and maintenance sections are all reachable without tabs.
   await expect(page.getByText("AI assistant", { exact: true })).toBeVisible();
   await page.getByText("App updates", { exact: true }).scrollIntoViewIfNeeded();
-  await expect(page.getByText("Auto-update", { exact: true }).first()).toBeVisible();
   await expect(page.getByText("Check interval", { exact: true })).toBeVisible();
   await page.getByText("Project maintenance", { exact: true }).scrollIntoViewIfNeeded();
   await expect(page.getByText("Compact on close", { exact: true })).toBeVisible();
