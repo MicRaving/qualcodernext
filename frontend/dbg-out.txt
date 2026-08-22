@@ -1,0 +1,27 @@
+(node:7952) [DEP0190] DeprecationWarning: Passing args to a child process with shell option true can lead to security vulnerabilities, as the arguments are not escaped, only concatenated.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+[e2e setup] vite prewarm done in 790 ms
+[e2e setup] backend pid=4116, frontend pid=18296
+
+Running 1 test using 1 worker
+
+[1/1] tests-e2e\features.spec.ts:263:1 ΓÇ║ sidebar code click codes the selected text
+  1) tests-e2e\features.spec.ts:263:1 ΓÇ║ sidebar code click codes the selected text ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+
+    Error: ENOENT: no such file or directory, open 'C:\Users\marvi\.qualcoder\settings.json'
+
+      158 |       // DEBUG: dump the settings file the backend just read from.
+      159 |       const sf = path.join(os.homedir(), ".qualcoder", "settings.json");
+    > 160 |       console.log(`[dbg attempt ${attempt}] settings.json =`, fs.readFileSync(sf, "utf-8"));
+          |                                                                  ^
+      161 |       /* reload and retry once more */
+      162 |     }
+      163 |   }
+        at ensureProjectOpen (D:\Downloads\qualcoder-rework\frontend\tests-e2e\features.spec.ts:160:66)
+        at D:\Downloads\qualcoder-rework\frontend\tests-e2e\features.spec.ts:264:3
+
+    Error Context: test-results\features-sidebar-code-click-codes-the-selected-text\error-context.md
+
+
+  1 failed
+    tests-e2e\features.spec.ts:263:1 ΓÇ║ sidebar code click codes the selected text ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
