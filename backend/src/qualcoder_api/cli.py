@@ -92,6 +92,12 @@ def main(argv: list[str] | None = None) -> int:
     boot = sub.add_parser("bootstrap-admin", help="create the first admin account")
     boot.add_argument("--username", default=None)
     boot.add_argument("--password", default=None)
+    bk = sub.add_parser("backup", help="snapshot a project now")
+    bk.add_argument("--project-id", required=True)
+    rs = sub.add_parser("restore", help="restore a project from a backup")
+    rs.add_argument("--project-id", required=True)
+    rs.add_argument("--backup-id", type=int, required=True)
+    sub.add_parser("apply-retention", help="prune backups per QC_BACKUP_RETENTION")
     sub.add_parser("check-config", help="print resolved server configuration")
     sub.add_parser("secret", help="print a fresh QC_SECRET_KEY candidate")
 
@@ -106,10 +112,40 @@ def main(argv: list[str] | None = None) -> int:
         return asyncio.run(_cmd_migrate())
     if args.command == "bootstrap-admin":
         return asyncio.run(_cmd_bootstrap_admin(args.username, args.password))
+    if args.command == "backup":
+        return asyncio.run(_cmd_backup(args.project_id))
+    if args.command == "restore":
+        return asyncio.run(_cmd_restore(args.project_id, args.backup_id))
+    if args.command == "apply-retention":
+        return asyncio.run(_cmd_apply_retention())
     if args.command == "check-config":
         return _cmd_check_config()
     parser.error(f"unknown command {args.command!r}")
     return 2
+
+
+async def _cmd_backup(project_id: str) -> int:
+    from qualcoder_api.services import backup_service
+
+    record = await backup_service.create_backup(project_id, kind="manual")
+    print(f"backup {record['id']} written: {record['local_path']}")
+    return 0
+
+
+async def _cmd_restore(project_id: str, backup_id: int) -> int:
+    from qualcoder_api.services import backup_service
+
+    result = await backup_service.restore_backup(project_id, backup_id)
+    print(f"restored {project_id} from backup {result['restored_from']}")
+    return 0
+
+
+async def _cmd_apply_retention() -> int:
+    from qualcoder_api.services import backup_service
+
+    deleted = await backup_service.apply_retention()
+    print(f"retention deleted {deleted} snapshot(s)")
+    return 0
 
 
 if __name__ == "__main__":

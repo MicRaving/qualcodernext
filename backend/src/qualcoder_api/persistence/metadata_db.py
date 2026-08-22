@@ -393,6 +393,98 @@ async def remove_member(project_id: str, user_id: int) -> bool:
         return (result.rowcount or 0) > 0
 
 
+# ── Backup records + project sweep helpers (SERVER_PLAN.md Phase 4) ────
+
+
+async def add_backup_record(
+    project_id: str, kind: str, local_path: str, size_bytes: int, checksum: str
+) -> int:
+    factory = metadata_factory()
+    async with factory() as session:
+        result = await session.execute(
+            text(
+                "INSERT INTO backup_records (project_id, kind, local_path, size_bytes,"
+                " checksum, cloud_status, created_at)"
+                " VALUES (:pid, :kind, :path, :size, :sum, 'pending', :ts)"
+            ),
+            {
+                "pid": project_id,
+                "kind": kind,
+                "path": local_path,
+                "size": size_bytes,
+                "sum": checksum,
+                "ts": _utcnow(),
+            },
+        )
+        await session.commit()
+        return int(result.lastrowid)
+
+
+async def get_backup_record(project_id: str, backup_id: int) -> dict | None:
+    factory = metadata_factory()
+    async with factory() as session:
+        row = (
+            await session.execute(
+                text(
+                    "SELECT * FROM backup_records WHERE id = :id AND project_id = :pid"
+                ),
+                {"id": backup_id, "pid": project_id},
+            )
+        ).mappings().first()
+        return dict(row) if row else None
+
+
+async def list_backup_records(project_id: str) -> list[dict]:
+    factory = metadata_factory()
+    async with factory() as session:
+        rows = (
+            await session.execute(
+                text(
+                    "SELECT id, kind, local_path, size_bytes, checksum, cloud_status,"
+                    " created_at FROM backup_records WHERE project_id = :pid"
+                    " ORDER BY id DESC"
+                ),
+                {"pid": project_id},
+            )
+        ).mappings().all()
+        return [dict(r) for r in rows]
+
+
+async def delete_backup_record(backup_id: int) -> None:
+    factory = metadata_factory()
+    async with factory() as session:
+        await session.execute(
+            text("DELETE FROM backup_records WHERE id = :id"), {"id": backup_id}
+        )
+        await session.commit()
+
+
+async def list_active_project_ids() -> list[str]:
+    factory = metadata_factory()
+    async with factory() as session:
+        rows = (
+            await session.execute(
+                text("SELECT id FROM projects WHERE status = 'active'")
+            )
+        ).all()
+        return [r[0] for r in rows]
+
+
+async def latest_backup_created(project_id: str) -> str | None:
+    factory = metadata_factory()
+    async with factory() as session:
+        row = (
+            await session.execute(
+                text(
+                    "SELECT MAX(created_at) AS latest FROM backup_records"
+                    " WHERE project_id = :pid"
+                ),
+                {"pid": project_id},
+            )
+        ).first()
+        return row[0] if row else None
+
+
 # ── Passkeys (SERVER_PLAN.md Phase 1b) ──────────────────────────────────
 
 

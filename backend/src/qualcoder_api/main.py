@@ -129,7 +129,21 @@ async def lifespan(_app: FastAPI):
 
                 await manager.release_idle()
 
+        async def _backup_sweep() -> None:
+            # Hourly: snapshot projects lacking a fresh (<24h) backup, then
+            # prune per QC_BACKUP_RETENTION.
+            while True:
+                await asyncio.sleep(3600)
+                from qualcoder_api.services import backup_service
+
+                try:
+                    await backup_service.run_all_scheduled()
+                    await backup_service.apply_retention()
+                except Exception:  # noqa: BLE001 — never kill the sweep loop
+                    logger.exception("backup sweep failed")
+
         tasks.append(asyncio.create_task(_idle_session_reaper()))
+        tasks.append(asyncio.create_task(_backup_sweep()))
     else:
         tasks.append(asyncio.create_task(_sync_loop()))
         tasks.append(asyncio.create_task(_presence_loop()))
@@ -165,10 +179,12 @@ def create_app() -> FastAPI:
 
     if is_server_mode():
         from qualcoder_api.api.v1.auth import router as auth_router
+        from qualcoder_api.api.v1.server_backups import router as server_backups_router
         from qualcoder_api.api.v1.server_projects import router as server_projects_router
 
         app.include_router(auth_router, prefix="/api/v1")
         app.include_router(server_projects_router, prefix="/api/v1")
+        app.include_router(server_backups_router, prefix="/api/v1")
     return app
 
 
