@@ -178,13 +178,23 @@ def create_app() -> FastAPI:
     from qualcoder_api.core.server_config import is_server_mode
 
     if is_server_mode():
+        from fastapi import Depends
+
         from qualcoder_api.api.v1.auth import router as auth_router
+        from qualcoder_api.api.v1.auth_deps import gate_project_scoped
         from qualcoder_api.api.v1.server_backups import router as server_backups_router
         from qualcoder_api.api.v1.server_projects import router as server_projects_router
+        from qualcoder_api.api.v1.server_sync import router as server_sync_router
 
         app.include_router(auth_router, prefix="/api/v1")
         app.include_router(server_projects_router, prefix="/api/v1")
         app.include_router(server_backups_router, prefix="/api/v1")
+        # Sync hub: project-scoped (X-Project-Id gate; viewers read-only).
+        app.include_router(
+            server_sync_router,
+            prefix="/api/v1",
+            dependencies=[Depends(gate_project_scoped)],
+        )
     return app
 
 
