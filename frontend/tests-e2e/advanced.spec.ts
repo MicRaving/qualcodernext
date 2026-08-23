@@ -22,14 +22,19 @@ const PDF_PATH = path.join(E2E_ROOT, "e2e.pdf");
 const MISSING_QDA = path.join(E2E_ROOT, "does-not-exist.qda");
 
 /** Backend venv python — the only place PyMuPDF (fitz) is guaranteed to be. */
-const BACKEND_PYTHON = path.resolve(
-  process.cwd(),
-  "..",
-  "backend",
-  ".venv",
-  "Scripts",
-  "python.exe",
-);
+const BACKEND_PYTHON = (() => {
+  // CI installs backend deps into the runner's python (no venv) - fall
+  // back to PATH python when the local venv interpreter is missing.
+  const venvPython = path.resolve(
+    process.cwd(),
+    "..",
+    "backend",
+    ".venv",
+    "Scripts",
+    "python.exe",
+  );
+  return fs.existsSync(venvPython) ? venvPython : "python";
+})();
 
 /**
  * Generate the PDF fixture programmatically with the backend venv's PyMuPDF.

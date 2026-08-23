@@ -233,7 +233,9 @@ test("image coding: draw a region and code it", async ({ page }) => {
   const region = page.locator('div[title="ImgCode"]');
   await expect(region).toBeVisible({ timeout: 10_000 });
   await region.click();
-  await expect(page.getByText("ImgCode", { exact: true })).toBeVisible({
+  // The code name appears in the details bubble AND the sidebar tree —
+  // .first() avoids the strict-mode double match.
+  await expect(page.getByText("ImgCode", { exact: true }).first()).toBeVisible({
     timeout: 10_000,
   });
   await expect(page.getByRole("button", { name: "Delete" })).toBeVisible();

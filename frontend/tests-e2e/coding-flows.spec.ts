@@ -27,6 +27,18 @@ test.beforeAll(() => {
  * "QualCoder" — so a project can only be opened once per backend session.
  * Restore the marker directly (same quirk as features.spec.ts).
  */
+const BACKEND_PYTHON = (() => {
+  const venvPython = path.resolve(
+    process.cwd(),
+    "..",
+    "backend",
+    ".venv",
+    "Scripts",
+    "python.exe",
+  );
+  return fs.existsSync(venvPython) ? venvPython : "python";
+})();
+
 async function repairProjectMeta(): Promise<void> {
   try {
     const { DatabaseSync } = await import("node:sqlite");
@@ -124,7 +136,7 @@ doc.save(r"${pdfPath}")
 `;
   const scriptPath = path.join(E2E_ROOT, `make_pdf_${Date.now() % 100000}.py`);
   fs.writeFileSync(scriptPath, script, "utf-8");
-  execSync(`"D:\\Downloads\\qualcoder-rework\\backend\\.venv\\Scripts\\python.exe" "${scriptPath}"`);
+  execSync(`"${BACKEND_PYTHON}" "${scriptPath}"`);
 
   await page.getByRole("button", { name: "Coding", exact: true }).click();
   await page.setInputFiles("input[type=file]", [pdfPath]);

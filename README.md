@@ -2,7 +2,7 @@
 
 This is a rework of [QualCoder](https://github.com/ccbogel/QualCoder), an awesome open-source qualitative data analysis (QDA) tool. The central focus of the software is to load text and multimedia files for qualitative coding. It can transcribe audio/video files, organize codes and files, generate reports like coding graphs and coder comparisons, and integrates LLMs to explore the data, support coding, and analyze the results.
 
-> \[!NOTE]
+> [!NOTE]
 > This software is currently in beta. While I consider it mostly feature-complete and use it as may daily driver, you may encounter bugs or visual quirks, etc. Please report any issues and suggestions for improvements!
 
 !\[Active Project Dashboard](docs/screenshots/dashboard.jpg)
@@ -18,7 +18,7 @@ QCnext uses a single-window **Workspace Layout** organized into
 
 
 
-This rework is based on the QualCoder 4.0 beta source code (10.08.2026) with the following major goals (full [changelog](Changelog.md)):
+This rework is loosely based on the QualCoder 4.0 beta source code (\~2% copied, \~12% adapted) with the following major goals (full [changelog](Changelog.md)):
 
 * **Simplified UI**: The rework tries to simplify and reorganize the UI as much as possible while retaining full functionality.
 * **Simultaneous collaboration**: Simultaneous collaboration is now possible by saving the project in a shared folder and enabling collaboration in the coder flyout.
@@ -72,15 +72,17 @@ QualCoder is distributed under the [GNU LGPL-3.0](LICENSE.txt), QCnext follows t
 
 ## Authors
 
-QCnext is a rework by Marvin Fendt ([Ludwig Maximilians University Munich](https://www.lmu.de/psy/de/personen/kontaktseite/marvin-fendt-b5fc2511.html)). It is based on the QualCoder 4.0 beta code by [**Dr. Colin Curtain**](https://www.utas.edu.au/profiles/staff/umore/colin-curtain), [**Dr. rer. soc. Kai Dröge,**](https://www.hslu.ch/de-ch/hochschule-luzern/ueber-uns/personensuche/profile/?pid=823), [**Dr. Justin Missaghieh--Poncet**](https://www.univ-pau.fr/fr/index.html), and [**Dr. Lorenzo Salomón**](https://www.uas.edu.mx/).
+QCnext is a rework by Marvin Fendt ([Ludwig Maximilians University Munich](https://www.lmu.de/psy/de/personen/kontaktseite/marvin-fendt-b5fc2511.html)). It is based on the QualCoder 4.0 beta source code by [**Dr. Colin Curtain**](https://www.utas.edu.au/profiles/staff/umore/colin-curtain), [**Dr. rer. soc. Kai Dröge,**](https://www.hslu.ch/de-ch/hochschule-luzern/ueber-uns/personensuche/profile/?pid=823), [**Dr. Justin Missaghieh--Poncet**](https://www.univ-pau.fr/fr/index.html), and [**Dr. Lorenzo Salomón**](https://www.uas.edu.mx/).
 
 ## Future
 
-This is a non-exhaustive list of planned features:
+This is a non-exhaustive, unsorted list of planned features:
+
 * Expand the rudimentary Creative Coding and Crafter
-* Working web app and server (after UI and bug-fixing)
-* Further improvements for collaboration, AI (particularly MCP), and server
+* Working web app and server
+* Make confirming code deletion an in-app dialog instead of system.
+* Further improvements for collaboration and AI (particularly MCP)
 * Further refine the UI
 * Support other languages than EN/DE
 * Bug-fixing - You tell me!
-* For the coders, the files need to be shortened and modules centralized.
+
