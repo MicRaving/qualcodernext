@@ -3,7 +3,7 @@
 This is a rework of [QualCoder](https://github.com/ccbogel/QualCoder), an awesome open-source qualitative data analysis (QDA) tool. The central focus of the software is to load text and multimedia files for qualitative coding. It can transcribe audio/video files, organize codes and files, generate reports like coding graphs and coder comparisons, and integrates LLMs to explore the data, support coding, and analyze the results.
 
 > [!NOTE]
-> This software is currently in beta. While I consider it mostly feature-complete and use it as may daily driver, you may encounter bugs or visual quirks, etc. Please report any issues and suggestions for improvements!
+> This software is currently in beta. While I consider it mostly feature-complete and use it as my daily driver, you may encounter bugs or visual quirks, etc. Please report any issues and suggestions for improvements!
 
 !\[Active Project Dashboard](docs/screenshots/dashboard.jpg)
 
