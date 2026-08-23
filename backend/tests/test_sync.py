@@ -753,23 +753,156 @@ async def test_auto_enable_decision_honors_override(rater_a, tmp_path, monkeypat
     monkeypatch.setattr(user_settings, "SETTINGS_FILE", tmp_path / "settings.json")
     (Path(rater_a.project_path) / ".qcnext-shared").write_text("", encoding="utf-8")
     # "auto" (default) follows the detection.
-    assert sync.auto_enable_decision(rater_a.project_path) == {
-        "sync_auto_enabled": True,
-        "reason": "shared-folder marker",
-    }
+    res = sync.auto_enable_decision(rater_a.project_path)
+    assert res["sync_auto_enabled"] is False  # never auto-enable
+    assert "shared-folder marker" in res["reason"]
     # "off" wins over a detected shared folder.
     user_settings.set_sync_override(rater_a.project_path, "off")
     assert sync.auto_enable_decision(rater_a.project_path) == {
         "sync_auto_enabled": False,
         "reason": "per-project override",
     }
-    # "on" forces sync on even for a plain folder.
+    # "on" override: still never AUTO-enabled (manual toggle only).
     (Path(rater_a.project_path) / ".qcnext-shared").unlink()
     user_settings.set_sync_override(rater_a.project_path, "on")
     assert sync.auto_enable_decision(rater_a.project_path) == {
-        "sync_auto_enabled": True,
+        "sync_auto_enabled": False,
         "reason": "per-project override",
     }
+
+
+async def test_auto_enable_decision_marker_reports_manual_requirement(rater_a):
+    from qualcoder_api.services import project_marker
+
+    project_marker.write_marker(rater_a.project_path, uuid="testuuid")
+    try:
+        res = sync.auto_enable_decision(rater_a.project_path)
+        assert res["sync_auto_enabled"] is False
+        assert "manually" in res["reason"] or "manual" in res["reason"]
+    finally:
+        (Path(rater_a.project_path) / ".qcnext-project").unlink(missing_ok=True)
+
+
+# ── first-sync baseline for new collaborators ───────────────────────────
+
+
+def _sidecar_entry(seq: int, entity: str = "code_name", pk: int = 1) -> dict:
+    return {
+        "seq": seq,
+        "instance": "berta",
+        "coder": "berta",
+        "entity": entity,
+        "action": "insert",
+        "pk_name": "cid" if entity == "code_name" else "id",
+        "pk_value": pk,
+        "rev": seq,
+        "mtime": "2026-01-01T00:00:00.000",
+        "row": {"name": f"N{seq}", "owner": "berta", "date": "2026-01-01",
+                "memo": "", "color": None, "catid": None, "supercid": None,
+                "memo_type": "", "position": seq},
+    }
+
+
+async def test_baseline_first_sync_skips_backlog_for_new_collaborator(
+    rater_a, tmp_path
+):
+    """A fresh instance enabling sync on an established shared project must
+    NOT replay the entire existing sidecar backlog: baseline adopts current
+    state as already-seen; only entries appended AFTER the baseline flow."""
+    from qualcoder_api.persistence.repo.code_repo import CodeRepository
+    from qualcoder_api.services import sync_engine
+    from qualcoder_api.services.sync_state import (
+        load_state,
+        save_state,
+        _imported_seq,
+    )
+
+    changes = Path(rater_a.project_path) / sync.SYNC_DIR_NAME
+    berta = changes / "berta"
+    berta.mkdir(parents=True)
+
+    async with rater_a.session_factory() as session:
+        repo = CodeRepository(session)
+        await repo.add_code(name="Old1", owner="berta")
+        await repo.add_code(name="Old2", owner="berta")
+
+        # Simulate berta's sidecar history: two exported entries.
+        lines = "\n".join(
+            json.dumps(
+                {
+                    "seq": n,
+                    "instance": "berta",
+                    "coder": "berta",
+                    "entity": "code_name",
+                    "action": "insert",
+                    "pk_name": "cid",
+                    "pk_value": n,
+                    "rev": n,
+                    "mtime": "2026-01-0%dT00:00:00.000" % n,
+                    "row": {"name": f"Backlog{n}", "catid": None, "supercid": None,
+                            "memo": "", "color": None, "owner": "berta",
+                            "date": "2026-01-01", "memo_type": "", "position": n},
+                },
+                ensure_ascii=False,
+            )
+            for n in (1, 2)
+        ) + "\n"
+        sidecar = berta / "changes.jsonl"
+        sidecar.write_text(lines, encoding="utf-8")
+
+        instance_id = "newcomer"
+        assert await sync_engine.baseline_first_sync(
+            session, rater_a.project_path, instance_id
+        ) is True
+
+        state = load_state(rater_a.project_path)
+        assert _imported_seq(state, "berta") == 2
+        assert state["exports"][instance_id] >= 0
+
+        # A later entry DOES flow past the baseline.
+        (sidecar).write_text(lines + json.dumps(_sidecar_entry(3)) + "\n", encoding="utf-8")
+        report = await __import__("qualcoder_api.services.sync_replay", fromlist=["import_pending"]).import_pending(
+            session, rater_a.project_path, instance_id
+        )
+        assert report.get("berta", {}).get("applied", 0) == 1
+
+        # Re-baseline is refused once state exists.
+        assert await sync_engine.baseline_first_sync(
+            session, rater_a.project_path, instance_id
+        ) is False
+
+
+async def test_baseline_manual_enable_offline_backup_no_replay(rater_a):
+    """Manual enable on an offline backup: backlog skipped, live data intact."""
+    from qualcoder_api.persistence.repo.code_repo import CodeRepository
+    from qualcoder_api.services import sync_engine
+
+    async with rater_a.session_factory() as session:
+        repo = CodeRepository(session)
+        await repo.add_code(name="Keep1", owner="anna")
+        await repo.add_code(name="Keep2", owner="anna")
+
+    changes = Path(rater_a.project_path) / sync.SYNC_DIR_NAME
+    stale = changes / "oldmachine"
+    stale.mkdir(parents=True)
+    stale_lines = "\n".join(json.dumps(e) for e in [
+        _sidecar_entry(1), _sidecar_entry(2),
+    ]) + "\n"
+    (stale / "changes.jsonl").write_text(stale_lines, encoding="utf-8")
+
+    async with rater_a.session_factory() as session:
+        assert await sync_engine.baseline_first_sync(
+            session, rater_a.project_path, "anna-instance"
+        ) is True
+        report = await __import__(
+            "qualcoder_api.services.sync_replay", fromlist=["import_pending"]
+        ).import_pending(session, rater_a.project_path, "anna-instance")
+        assert report.get("oldmachine", {}).get("applied", 0) == 0
+
+        repo = CodeRepository(session)
+        codes = await repo.list_codes()
+        names = {c.name for c in codes}
+        assert {"Keep1", "Keep2"} <= names
 
 
 async def test_sync_auto_detect_endpoint(project_client):
@@ -796,19 +929,21 @@ async def test_sync_override_endpoint(project_client):
 
 
 async def test_open_result_reports_sync_auto_enable(project_client):
-    """The open result carries the shared-folder decision; the per-project
-    override wins over the detection."""
+    """The open result carries the shared-folder decision — but collaboration
+    is NEVER auto-enabled: shared detection surfaces as an informational
+    reason only ('manual enable required (...)')."""
     client, target = project_client
     await client.post("/api/v1/projects/close")
     res = await client.post("/api/v1/projects/open", json={"project_path": str(target)})
     body = res.json()
     assert body["ok"] is True
     assert body["sync_auto_enabled"] is False
-    assert body["sync_auto_reason"] == "not a shared folder"
+    assert body["sync_auto_reason"] == "manual enable required (not a shared folder)"
     await client.post("/api/v1/projects/close")
     (target / ".qcnext-shared").write_text("", encoding="utf-8")
     res = await client.post("/api/v1/projects/open", json={"project_path": str(target)})
-    assert res.json()["sync_auto_enabled"] is True
+    assert res.json()["sync_auto_enabled"] is False  # never auto-enable
+    assert "manual enable required" in res.json()["sync_auto_reason"]
     await client.post("/api/v1/projects/close")
     await client.put(
         "/api/v1/sync/override", json={"project_path": str(target), "mode": "off"}

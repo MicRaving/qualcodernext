@@ -16,6 +16,9 @@ here and are monkey-patched by ``sync.py`` at import time.
 from __future__ import annotations
 
 import logging
+from pathlib import Path
+
+from sqlalchemy import text
 
 from qualcoder_api.services.sync_conflicts import (  # noqa: F401
     _resolve_conflict_locked,
@@ -120,6 +123,60 @@ def _note_error(err: Exception) -> None:
 
 
 # ── Cycle ────────────────────────────────────────────────────────────
+
+
+async def baseline_first_sync(session, project_path: str, instance_id: str) -> bool:
+    """First-sync bootstrap for NEW collaborators (user directive after the
+    offline-backup freeze: a fresh instance must never replay the entire
+    existing sidecar backlog on enable).
+
+    When this instance has NO prior sync state, adopt the shared project's
+    current state as already-seen:
+
+    - ``imports[remote] = max seq`` of every OTHER sidecar  → their history
+      is skipped; only future entries flow.
+    - ``exports[instance] = MAX(id) FROM sync_log`` → pre-existing rows are
+      not re-pushed.
+
+    Returns True when a baseline was written. An instance that already has
+    state (enable→disable→re-enable, or legacy) is left untouched so no
+    legitimate pending entries are skipped mid-stream.
+    """
+    from qualcoder_api.core.timeutil import now
+
+    state = load_state(project_path)
+    baselines = state.setdefault("baselines", {})
+    if baselines.get(instance_id) is not None:
+        return False
+    if state.get("exports", {}).get(instance_id) is not None:
+        return False
+
+    changes_root = Path(project_path) / SYNC_DIR_NAME
+    if changes_root.is_dir():
+        for sidecar_dir in changes_root.iterdir():
+            if not sidecar_dir.is_dir() or sidecar_dir.name == instance_id:
+                continue
+            sidecar = sidecar_dir / "changes.jsonl"
+            if not sidecar.exists():
+                continue
+            max_seq = 0
+            for e in _parse_sidecar(sidecar):
+                try:
+                    max_seq = max(max_seq, int(e.get("seq", 0)))
+                except (TypeError, ValueError):
+                    continue
+            state.setdefault("imports", {})[sidecar_dir.name] = max_seq
+
+    row = (
+        await session.execute(text("SELECT COALESCE(MAX(id), 0) FROM sync_log"))
+    ).first()
+    state.setdefault("exports", {})[instance_id] = int(row[0]) if row else 0
+    baselines[instance_id] = now()
+    save_state(project_path, state)
+    logger.info(
+        "first-sync baseline written for %s on %s", instance_id, project_path
+    )
+    return True
 
 
 async def run_sync_cycle(session_factory, project_path: str, instance_id: str) -> dict:

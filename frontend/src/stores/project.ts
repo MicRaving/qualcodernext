@@ -389,12 +389,11 @@ export const useProjectStore = create<ProjectLifecycleState>((set, get) => ({
         busy: false,
       });
       void useCoderStore.getState().loadCoders();
+      // Collaboration is NEVER enabled automatically (offline-backup freeze
+      // incident): shared-folder detection surfaces as an informational
+      // notice only — enabling is a manual toggle in the coder flyout.
       if (res.sync_auto_enabled) {
-        // Shared folder: enable the collaboration sync cycle and let the
-        // shell show the transient notice. The override is NOT written —
-        // the decision stays "auto" so the next open re-detects.
         usePrefsStore.setState({ syncAutoNotice: true });
-        void usePrefsStore.getState().setSyncEnabled(true, { remember: false });
       }
       void usePrefsStore.getState().loadProjectMode();
       return true;

@@ -1881,7 +1881,7 @@ export const en: Record<string, string> = {
   "sync.lastSyncShort": "{when} ago",
   "sync.never": "Never",
   "sync.error": "Sync error",
-  "sync.autoEnabled": "Collaboration sync enabled — this project is in a shared folder",
+  "sync.autoEnabled": "Shared folder detected — enable collaboration in the coder menu",
   "sync.conflicts": "{n} conflict(s)",
   "sync.conflictsResolve": "Resolve {n}",
   "sync.conflictResolver": "Resolve Sync Conflicts",

@@ -58,6 +58,14 @@ async def put_sync_settings(req: SyncSettingsRequest, svc: ServiceDep) -> dict:
     if req.enabled and svc.project_path and svc.session_factory:
         import asyncio
 
+        # First-sync baseline for NEW collaborators: a fresh instance must
+        # adopt the shared project's current state as already-seen instead
+        # of replaying the entire sidecar backlog (offline-backup freeze).
+        _, factory = svc._ensure_engine()
+        async with factory() as session:
+            await sync_engine.baseline_first_sync(
+                session, svc.project_path, user_settings.get_instance_id()
+            )
         asyncio.get_running_loop().create_task(
             sync_engine.run_sync_cycle(
                 svc.session_factory, svc.project_path,

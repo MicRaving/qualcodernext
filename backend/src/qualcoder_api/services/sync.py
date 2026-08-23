@@ -224,24 +224,32 @@ def detect_shared(project_path: str, user: str | None = None, instance_id: str |
 
 
 def auto_enable_decision(project_path: str, user: str | None = None) -> dict:
-    """Override-aware auto-enable decision for the project-open flow."""
-    from qualcoder_api.services.project_marker import marker_exists
+    """Auto-enable decision for the project-open flow.
 
-    # A collaboration marker means the project is already running in sandbox
-    # mode — sync must be on for the sidecars to stay converged.
-    if marker_exists(project_path):
-        return {"sync_auto_enabled": True, "reason": "collaboration active"}
+    Collaboration is NEVER enabled automatically (user directive after the
+    offline-backup freeze incident): it is a deliberate action via the
+    coder-menu toggle. Shared-folder detection remains available as an
+    informational hint in ``reason``."""
+    from qualcoder_api.services.project_marker import marker_exists
     from qualcoder_api.services.user_settings import get_sync_override
 
+    if marker_exists(project_path):
+        return {
+            "sync_auto_enabled": False,
+            "reason": "collaboration active — enable sync manually",
+        }
     mode = get_sync_override(project_path)
     if mode == "on":
-        return {"sync_auto_enabled": True, "reason": "per-project override"}
+        return {"sync_auto_enabled": False, "reason": "per-project override"}
     if mode == "off":
         return {"sync_auto_enabled": False, "reason": "per-project override"}
     from qualcoder_api.services.user_settings import get_instance_id
 
     detected = detect_shared(project_path, user, instance_id=get_instance_id())
-    return {"sync_auto_enabled": detected["shared"], "reason": detected["reason"]}
+    return {
+        "sync_auto_enabled": False,
+        "reason": f"manual enable required ({detected['reason']})",
+    }
 
 
 async def project_has_multiple_coders(session) -> bool:

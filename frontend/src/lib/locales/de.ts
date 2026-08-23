@@ -1767,7 +1767,7 @@ export const de: Record<string, string> = {
   "sync.lastSyncShort": "vor {when}",
   "sync.never": "Nie",
   "sync.error": "Sync-Fehler",
-  "sync.autoEnabled": "Kollaborations-Sync aktiviert — dieses Projekt liegt in einem freigegebenen Ordner",
+  "sync.autoEnabled": "Freigegebener Ordner erkannt — Kollaboration im Codierer-Menü aktivieren",
   "sync.conflicts": "{n} Konflikt(e)",
   "sync.conflictsResolve": "{n} lösen",
   "sync.conflictResolver": "Sync-Konflikte lösen",
