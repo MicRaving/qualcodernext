@@ -41,32 +41,23 @@ async function createProject(page: import("@playwright/test").Page, projectPath:
 
 async function openCoderFlyout(page: import("@playwright/test").Page) {
   await page.getByRole("button", { name: /Current coder:/ }).click();
-  await expect(page.getByRole("switch", { name: "Enable background sync" })).toBeVisible();
+  await expect(page.getByText("Single-coder mode", { exact: true })).toBeVisible();
 }
 
-test("sync toggle, status and Sync now in the coder flyout", async ({ page }) => {
+test("collaboration flyout: activate flow gates Sync now to collab mode", async ({ page }) => {
   await createProject(page, PLAIN_PROJECT);
   await openCoderFlyout(page);
 
-  const toggle = page.getByRole("switch", { name: "Enable background sync" });
-  await expect(toggle).toHaveAttribute("aria-checked", "false");
+  // Single mode: no standalone sync toggle exists, and Sync now is hidden
+  // (background sync is irrelevant without collaboration).
+  const activate = page.getByRole("button", { name: "Activate", exact: true });
+  await expect(activate).toBeVisible();
 
-  // Toggle sync on; the status block renders and the indicator appears.
-  await toggle.click();
-  await expect(toggle).toHaveAttribute("aria-checked", "true");
-
-  // The "Sync now" button is present. (Toggling on runs an immediate cycle,
-  // so it may already show a relative time rather than "Never".)
-  const syncNow = page.getByRole("button", { name: /ago|Sync now|Never/ });
-  await expect(syncNow).toBeVisible();
-
-  // A manual sync runs without error and updates the last-sync time.
-  await syncNow.click();
-  await expect(page.getByRole("button", { name: /ago/ })).toBeVisible({ timeout: 15_000 });
-
-  // Toggle off restores the off state.
-  await toggle.click();
-  await expect(toggle).toHaveAttribute("aria-checked", "false");
+  await page.getByRole("button", { name: /Current coder:/ }).click(); // close
+  await openCoderFlyout(page);
+  await expect(
+    page.getByRole("button", { name: /ago|Sync now|Never/ }),
+  ).toHaveCount(0);
 });
 
 test("shared-folder auto-detect shows the collaboration notice", async ({ page }) => {
@@ -83,7 +74,7 @@ test("shared-folder auto-detect shows the collaboration notice", async ({ page }
 
   await expect(page.getByRole("button", { name: "Cases" })).toBeVisible({ timeout: 30_000 });
   await expect(
-    page.getByText("Collaboration sync enabled", { exact: false }),
+    page.getByText("Shared folder detected", { exact: false }),
   ).toBeVisible({ timeout: 10_000 });
 });
 

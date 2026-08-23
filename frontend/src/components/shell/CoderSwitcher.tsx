@@ -37,7 +37,7 @@ import { useCoderStore } from "@/stores/coder";
 import { usePrefsStore } from "@/stores/prefs";
 import { useProjectStore } from "@/stores/project";
 import { useToast } from "@/lib/toast";
-import { Button, HelpFlyout, IconButton, Menu, MenuItem, Modal, Toggle } from "@/components/ui/orchestrator";
+import { Button, HelpFlyout, IconButton, Menu, MenuItem, Modal } from "@/components/ui/orchestrator";
 import { ConflictResolver } from "@/components/collaboration/ConflictResolver";
 
 const FLYOUT_WIDTH = 260;
@@ -330,6 +330,9 @@ export function CoderSwitcher() {
   async function handleActivateCollab() {
     setSyncBusy(true);
     try {
+      // Collaboration requires background sync; enabling is part of the
+      // explicit activation (never automatic elsewhere).
+      await setSyncEnabled(true, { remember: true });
       const ok = await activateCollaboration();
       if (ok) toast.success(t("collab.activated"));
       else toast.error(t("collab.activateFailed"));
@@ -343,8 +346,13 @@ export function CoderSwitcher() {
     setSyncBusy(true);
     try {
       const ok = await revertCollaboration();
-      if (ok) toast.success(t("collab.reverted"));
-      else toast.error(t("collab.activateFailed"));
+      if (ok) {
+        toast.success(t("collab.reverted"));
+        // Leaving collaboration makes background sync irrelevant.
+        await setSyncEnabled(false, { remember: true });
+      } else {
+        toast.error(t("collab.activateFailed"));
+      }
     } finally {
       setSyncBusy(false);
     }
@@ -698,26 +706,9 @@ export function CoderSwitcher() {
                 {collabMode === "collaboration" ? t("collab.active") : t("collab.single")}
               </span>
             </div>
-            {collabMode !== "collaboration" && (
-              /* Manual background-sync switch (remembered as a per-project
-                 override). In collaboration mode sync is inherently on. */
-              <div className="mt-1 flex items-center justify-between gap-2">
-                <span className="min-w-0 truncate text-sm text-text-primary">
-                  {t("sync.toggle")}
-                </span>
-                <Toggle
-                  checked={syncEnabled}
-                  ariaLabel={t("sync.toggle")}
-                  onChange={() => {
-                    setSyncBusy(true);
-                    const next = !syncEnabled;
-                    void setSyncEnabled(next, { remember: true }).finally(() =>
-                      setSyncBusy(false),
-                    );
-                  }}
-                />
-              </div>
-            )}
+            {/* Background sync is inherently ON while collaborating and
+                irrelevant otherwise — no standalone toggle (user directive).
+                Sync-now + Revert/Activate live on one row below. */}
             {livePeers.length > 0 && (
               /* Live peers (fresh heartbeats): who is working on what now. */
               <div className="mt-1.5 space-y-1" data-testid="live-peers">
@@ -743,26 +734,26 @@ export function CoderSwitcher() {
               </div>
             )}
             <div className="mt-1.5 flex items-center gap-1.5">
-              <button
-                type="button"
-                onClick={() => void syncNow()}
-                disabled={syncBusy}
-                title={syncError ? (syncStatus?.last_error ?? t("sync.error")) : t("sync.now")}
-                // Solid warning/yellow button: the app's warning color
-                // (--qc-warning) with the solid-button text convention
-                // (--qc-bg, as in cls.primary) so it reads as an obvious
-                // action in both themes and in high-contrast mode.
-                className="flex shrink-0 items-center gap-1 whitespace-nowrap rounded-sm bg-warning px-2 py-0.5 text-xs font-medium leading-none text-[var(--qc-bg)] hover:bg-warning/90 disabled:opacity-50"
-              >
-                <RefreshCw
-                  size={9}
-                  className={`shrink-0 ${syncBusy ? "animate-spin" : ""}`}
-                  aria-hidden
-                />
-                {syncStatus?.last_sync
-                  ? t("sync.lastSyncShort", { when: formatSince(syncStatus.last_sync) })
-                  : t("sync.never")}
-              </button>
+              {collabMode === "collaboration" && (
+                /* Sync-now only exists inside collaboration: background sync
+                   is always on there, and irrelevant otherwise. */
+                <button
+                  type="button"
+                  onClick={() => void syncNow()}
+                  disabled={syncBusy}
+                  title={syncError ? (syncStatus?.last_error ?? t("sync.error")) : t("sync.now")}
+                  className="flex shrink-0 items-center gap-1 whitespace-nowrap rounded-sm bg-warning px-2 py-0.5 text-xs font-medium leading-none text-[var(--qc-bg)] hover:bg-warning/90 disabled:opacity-50"
+                >
+                  <RefreshCw
+                    size={9}
+                    className={`shrink-0 ${syncBusy ? "animate-spin" : ""}`}
+                    aria-hidden
+                  />
+                  {syncStatus?.last_sync
+                    ? t("sync.lastSyncShort", { when: formatSince(syncStatus.last_sync) })
+                    : t("sync.never")}
+                </button>
+              )}
               {collabMode === "collaboration" ? (
                 <button
                   type="button"
@@ -776,15 +767,15 @@ export function CoderSwitcher() {
                 <button
                   type="button"
                   onClick={() => void handleActivateCollab()}
-                  disabled={syncBusy || !syncEnabled}
-                  title={!syncEnabled ? t("collab.needsTwoCoders") : undefined}
+                  disabled={syncBusy}
+                  title={t("collab.needsTwoCoders")}
                   className="flex-1 rounded-sm bg-accent px-2 py-0.5 text-xs font-medium leading-none text-[var(--qc-bg)] hover:bg-accent-hover disabled:opacity-50"
                 >
                   {t("collab.activate")}
                 </button>
               )}
             </div>
-            {syncEnabled && (
+            {collabMode === "collaboration" && syncEnabled && (
               <div className="mt-1.5 space-y-1 text-[11px] leading-snug text-text-secondary">
                 {syncStatus && (syncStatus.pending_export > 0 || syncStatus.pending_import > 0) && (
                   <p className="text-warning">
