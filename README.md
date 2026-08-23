@@ -5,7 +5,7 @@ This is a rework of [QualCoder](https://github.com/ccbogel/QualCoder), an awesom
 > [!NOTE]
 > This software is currently in beta. While I consider it mostly feature-complete and use it as my daily driver, you may encounter bugs or visual quirks, etc. Please report any issues and suggestions for improvements!
 
-[Active Project Dashboard](docs/screenshots/dashboard.jpg)
+![Active Project Dashboard](docs/screenshots/dashboard.jpg)
 
 
 
