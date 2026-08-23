@@ -78,9 +78,23 @@ test("shared-folder auto-detect does NOT auto-enable collaboration", async ({ pa
 });
 
 test("live coder presence: indicator + file shown in the coder flyout", async ({ page }) => {
-  // Unique per-run name (full ms timestamp) — create_project never collides.
+  // Create via API so we get back the EXACT path (create appends _1 on
+  // collision), then open from the recents list — avoids the Open-dialog
+  // button race seen on CI.
   const liveProject = path.join(E2E_ROOT, `Live_${Date.now()}.qda`);
-  await createProject(page, liveProject);
+  const createdRes = await page.request.post(`${BACKEND}/api/v1/projects`, {
+    data: { project_path: liveProject, codername: "default" },
+  });
+  const created = (await createdRes.json()) as { ok: boolean; project_path: string };
+  expect(created.ok).toBeTruthy();
+  const actual = created.project_path;
+
+  await page.goto("/");
+  const recent = page.getByRole("button", { name: actual, exact: true });
+  await expect(recent).toBeVisible({ timeout: 15_000 });
+  await recent.click();
+  await expect(page.getByRole("button", { name: "Cases" })).toBeVisible({ timeout: 30_000 });
+
   // Simulate another live instance: spawn a real (long-lived) process and
   // write its presence file into the project folder. The app's presence poll
   // picks it up and shows it as "live".
