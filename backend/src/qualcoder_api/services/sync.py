@@ -13,6 +13,7 @@ works correctly in tests that set them directly on the module.
 from __future__ import annotations
 
 import contextlib
+import json
 import logging
 import os
 import time
@@ -30,6 +31,7 @@ from qualcoder_api.persistence.audit_capture import (  # noqa: F401
     suspended,
     table_row,
 )
+from qualcoder_api.services.presence_service import PRESENCE_TTL_SECS
 from qualcoder_api.services.sync_engine import (  # noqa: F401
     SYNC_DIR_NAME,
     SYNC_ENTITIES,
@@ -130,6 +132,36 @@ CLOUD_SYNC_MARKERS = (
 SYNCTHING_MARKER_DEPTH = 5
 
 
+def _has_live_collaboration(root: Path) -> bool:
+    """True when another coder is (or was very recently) active here.
+
+    Evidence, either of:
+    - the collaboration marker file exists (``.qcnext-project`` — explicit
+      multi-coder setup), or
+    - a presence heartbeat within PRESENCE_TTL_SECS from an instance whose
+      pid is not ours (a genuinely live peer on this machine).
+    """
+    try:
+        if (root / ".qcnext-project").exists():
+            return True
+        presence_root = root / "presence"
+        if not presence_root.is_dir():
+            return False
+        now = time.time()
+        for f in presence_root.glob("*.json"):
+            try:
+                entry = json.loads(f.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                continue
+            if int(entry.get("pid", 0)) == os.getpid():
+                continue
+            if abs(now - float(entry.get("ts", 0))) <= PRESENCE_TTL_SECS:
+                return True
+    except OSError:
+        return False
+    return False
+
+
 def detect_shared(project_path: str, user: str | None = None, instance_id: str | None = None) -> dict:
     """Detect whether a project lives in a shared/synced folder.
 
@@ -155,6 +187,7 @@ def detect_shared(project_path: str, user: str | None = None, instance_id: str |
             return {"shared": True, "reason": "shared-folder marker"}
     changes_root = root / SYNC_DIR_NAME
     if changes_root.is_dir():
+        saw_other_sidecar = False
         for sidecar_dir in changes_root.iterdir():
             if not sidecar_dir.is_dir():
                 continue
@@ -164,7 +197,17 @@ def detect_shared(project_path: str, user: str | None = None, instance_id: str |
                     continue
                 if user and sidecar_dir.name == user:
                     continue
-                return {"shared": True, "reason": "change sidecars from other instances"}
+                saw_other_sidecar = True
+        if saw_other_sidecar and not _has_live_collaboration(root):
+            # Stale sidecars without any live peer (e.g. an offline backup
+            # copied out of a shared folder) must NOT auto-enable collab:
+            # replaying a huge stale backlog on open freezes/empties the app.
+            return {
+                "shared": False,
+                "reason": "offline backup (stale change sidecars, no live collaborator)",
+            }
+        if saw_other_sidecar:
+            return {"shared": True, "reason": "change sidecars from other instances"}
     lower = project_path.lower()
     for marker in CLOUD_SYNC_MARKERS:
         if marker in lower:

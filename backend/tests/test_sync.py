@@ -641,12 +641,45 @@ async def test_sync_endpoints(project_client):
 
 async def test_detect_shared_changes_dir_with_foreign_sidecars(rater_a):
     """A changes/ folder holding ANOTHER rater's sidecar marks the project
-    as shared (the current user's own sidecar does not)."""
+    as shared — but ONLY when that other instance is live (fresh heartbeat
+    or explicit collab marker). A bare pile of stale sidecars is an offline
+    backup: auto-enabling collaboration on it would replay a huge stale
+    backlog on open and freeze/empty the app."""
+    import json
+    import os
+    import time
+
     changes = Path(rater_a.project_path) / sync.SYNC_DIR_NAME
     (changes / "berta").mkdir(parents=True)
     (changes / "berta" / "changes.jsonl").write_text("", encoding="utf-8")
+
+    # No marker, no presence → offline backup, NOT shared.
+    result = sync.detect_shared(rater_a.project_path, user="anna")
+    assert result == {
+        "shared": False,
+        "reason": "offline backup (stale change sidecars, no live collaborator)",
+    }
+
+    # Explicit collaboration marker → shared.
+    (Path(rater_a.project_path) / ".qcnext-project").write_text("{}", encoding="utf-8")
+    assert sync.detect_shared(rater_a.project_path, user="anna") == {
+        "shared": True,
+        "reason": "change sidecars from other instances",
+    }
+    (Path(rater_a.project_path) / ".qcnext-project").unlink()
+
+    # Fresh live peer heartbeat → shared.
+    presence = Path(rater_a.project_path) / "presence"
+    presence.mkdir(parents=True)
+    peer_pid = os.getpid() + 424242  # not this process, but "remote" entries
+    (presence / f"{peer_pid}.json").write_text(
+        json.dumps({"coder": "berta", "pid": 99999901, "host": "other-host",
+                    "ts": time.time(), "file_id": None, "file_name": ""}),
+        encoding="utf-8",
+    )
     result = sync.detect_shared(rater_a.project_path, user="anna")
     assert result == {"shared": True, "reason": "change sidecars from other instances"}
+
     # The rater's own sidecar alone is not evidence of sharing.
     (changes / "anna").mkdir(parents=True)
     (changes / "anna" / "changes.jsonl").write_text("", encoding="utf-8")
