@@ -78,31 +78,15 @@ test("shared-folder auto-detect does NOT auto-enable collaboration", async ({ pa
 });
 
 test("live coder presence: indicator + file shown in the coder flyout", async ({ page }) => {
+  // Unique per-run name (full ms timestamp) — create_project never collides.
   const liveProject = path.join(E2E_ROOT, `Live_${Date.now()}.qda`);
-
-  // Create the project via the API so we get back the EXACT created path
-  // (create_project appends _1 when the base already exists) and the backend
-  // has it open. Then open it in the UI.
-  const createdRes = await page.request.post(`${BACKEND}/api/v1/projects`, {
-    data: { project_path: liveProject, codername: "default" },
-  });
-  const created = (await createdRes.json()) as { ok: boolean; project_path: string };
-  expect(created.ok).toBeTruthy();
-  const actual = created.project_path;
-
-  await page.goto("/");
-  await page.getByRole("button", { name: "Open project" }).click();
-  const openDialog = page.getByRole("dialog", { name: "Open project" });
-  await openDialog.locator("#open-path").fill(actual);
-  await openDialog.getByRole("button", { name: "Open project" }).click();
-  await expect(page.getByRole("button", { name: "Cases" })).toBeVisible({ timeout: 30_000 });
-
+  await createProject(page, liveProject);
   // Simulate another live instance: spawn a real (long-lived) process and
   // write its presence file into the project folder. The app's presence poll
   // picks it up and shows it as "live".
   const sleeper = spawn(process.execPath, ["-e", "setTimeout(()=>{}, 60000)"]);
   const pid = sleeper.pid as number;
-  const presenceDir = path.join(actual, "presence");
+  const presenceDir = path.join(liveProject, "presence");
   fs.mkdirSync(presenceDir, { recursive: true });
   const now = Date.now() / 1000;
   try {
