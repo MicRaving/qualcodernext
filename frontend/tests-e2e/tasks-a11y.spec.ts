@@ -162,7 +162,11 @@ test("files-view batch autocode queues background tasks with queue controls", as
   await expect(page.getByText("Queue paused — tasks start when resumed.")).toBeHidden();
 
   // Both jobs complete (AI is off → literal match fallback, fast).
-  await expect(flyout.getByText("✓")).toHaveCount(2, { timeout: 120_000 });
+  // Other specs share this backend and may keep extra finished ✓s in the
+  // queue, so assert a minimum instead of an exact count.
+  await expect
+    .poll(async () => await flyout.getByText("✓").count(), { timeout: 120_000 })
+    .toBeGreaterThanOrEqual(2);
 
   // Per-task trashcan removes one entry.
   await flyout.getByRole("button", { name: /Remove task for b_/ }).click();
