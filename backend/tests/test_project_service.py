@@ -141,8 +141,8 @@ async def test_lock_prevents_concurrent_open(project_dir: Path, app_version: str
     assert result.ok is True, result.error
 
     registry = (project_dir / LOCK_FILE_NAME).read_text(encoding="utf-8")
-    assert "marvi" in registry
-    assert registry.count("marvi") >= 2
+    # Both entries carry the codername ("default"), not the OS username.
+    assert registry.count("default") >= 2
 
     await first.close_project()
     # lock released -> open works again
