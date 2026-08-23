@@ -333,7 +333,10 @@ test("history view lists project changes and filters", async ({ page }) => {
 // ---------------------------------------------------------------------------
 
 test("autocode + SQL report", async ({ page }) => {
-  page.on("pageerror", (e) => console.log(`[PAGEERR] ${e.message.slice(0, 400)}`));
+  page.on("pageerror", (e) =>
+    // eslint-disable-next-line no-console
+    console.log(`[PAGEERR] ${e.message.slice(0, 400)}`),
+  );
   await ensureProjectOpen(page);
 
   await page.getByRole("button", { name: "Coding", exact: true }).click();

@@ -22,6 +22,8 @@ export default tseslint.config(
       "playwright-report/",
       "test-results/",
       "*.tsbuildinfo",
+      // Standalone Node screenshot utility (uses raw browser/console globals).
+      "shots.mjs",
     ],
   },
   js.configs.recommended,

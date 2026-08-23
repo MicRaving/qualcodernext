@@ -17,7 +17,6 @@ const BACKEND = "http://localhost:8765";
 // appends a _1 suffix — the presence test needs the exact path. Cleanup is
 // best-effort: a locked dir (leftover backend handle) must not fail the run.
 test.beforeAll(() => {
-  const stamp = Date.now();
   try {
     fs.rmSync(E2E_ROOT, { recursive: true, force: true });
   } catch {
@@ -44,13 +43,14 @@ async function openCoderFlyout(page: import("@playwright/test").Page) {
   await expect(page.getByText("Single-coder mode", { exact: true })).toBeVisible();
 }
 
-test("collaboration flyout: activate flow gates Sync now to collab mode", async ({ page }) => {
+test("collaboration flyout: activate gates Sync now to collab mode", async ({ page }) => {
   await createProject(page, PLAIN_PROJECT);
   await openCoderFlyout(page);
 
   // Single mode: no standalone sync toggle exists, and Sync now is hidden
-  // (background sync is irrelevant without collaboration).
-  const activate = page.getByRole("button", { name: "Activate", exact: true });
+  // (background sync is irrelevant without collaboration). Activation is
+  // labelled 'Enable collaboration'.
+  const activate = page.getByRole("button", { name: "Enable collaboration", exact: true });
   await expect(activate).toBeVisible();
 
   await page.getByRole("button", { name: /Current coder:/ }).click(); // close
@@ -60,9 +60,10 @@ test("collaboration flyout: activate flow gates Sync now to collab mode", async 
   ).toHaveCount(0);
 });
 
-test("shared-folder auto-detect shows the collaboration notice", async ({ page }) => {
-  // The project lives under a "OneDrive" path, which the backend flags as a
-  // cloud-sync folder; opening it auto-enables sync and shows the notice.
+test("shared-folder auto-detect does NOT auto-enable collaboration", async ({ page }) => {
+  // The project lives under a "OneDrive" path (cloud-sync folder). Policy:
+  // collaboration is never enabled automatically — the mode pill must stay
+  // 'Single-coder mode' and no sync UI appears.
   await createProject(page, CLOUD_PROJECT);
   await page.request.post(`${BACKEND}/api/v1/projects/close`);
 
@@ -73,9 +74,7 @@ test("shared-folder auto-detect shows the collaboration notice", async ({ page }
   await openDialog.getByRole("button", { name: "Open project" }).click();
 
   await expect(page.getByRole("button", { name: "Cases" })).toBeVisible({ timeout: 30_000 });
-  await expect(
-    page.getByText("Shared folder detected", { exact: false }),
-  ).toBeVisible({ timeout: 10_000 });
+  await expect(page.getByText("Collaboration active")).toHaveCount(0);
 });
 
 test("live coder presence: indicator + file shown in the coder flyout", async ({ page }) => {
