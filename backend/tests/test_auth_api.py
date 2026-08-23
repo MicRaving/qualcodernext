@@ -12,7 +12,7 @@ from httpx import ASGITransport, AsyncClient
 from qualcoder_api.persistence import metadata_db
 
 
-@pytest.fixture()
+@pytest.fixture
 async def meta_db(tmp_path):
     """A fresh metadata DB per test."""
     await metadata_db.migrate_metadata(tmp_path / "meta.db")
@@ -21,7 +21,7 @@ async def meta_db(tmp_path):
     await metadata_db.dispose_metadata_engine()
 
 
-@pytest.fixture()
+@pytest.fixture
 async def client(meta_db):
     from qualcoder_api.api.v1.auth import router as auth_router
 

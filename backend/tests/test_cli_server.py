@@ -2,12 +2,11 @@
 from __future__ import annotations
 
 import asyncio
-import os
 
 import pytest
 
 
-@pytest.fixture()
+@pytest.fixture
 def server_env(tmp_path, monkeypatch):
     monkeypatch.setenv("QC_SERVER_MODE", "true")
     monkeypatch.setenv("QC_SECRET_KEY", "s")

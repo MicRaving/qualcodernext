@@ -17,20 +17,20 @@ RP_ID = "qualcoder.test"
 ORIGIN = "https://qualcoder.test"
 
 
-@pytest.fixture()
+@pytest.fixture
 def rp_env(monkeypatch):
     monkeypatch.setenv("QC_RP_ID", RP_ID)
     monkeypatch.setenv("QC_RP_ORIGIN", ORIGIN)
 
 
-@pytest.fixture()
+@pytest.fixture
 async def meta_db(tmp_path):
     await metadata_db.migrate_metadata(tmp_path / "meta.db")
     yield tmp_path / "meta.db"
     await metadata_db.dispose_metadata_engine()
 
 
-@pytest.fixture()
+@pytest.fixture
 async def client(meta_db, rp_env):
     from qualcoder_api.api.v1.auth import router as auth_router
 

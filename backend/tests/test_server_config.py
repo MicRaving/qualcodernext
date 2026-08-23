@@ -5,8 +5,6 @@ behavior (the full suite runs in exactly that mode).
 """
 from __future__ import annotations
 
-from pathlib import Path
-
 import pytest
 
 from qualcoder_api.core.server_config import (
@@ -89,8 +87,8 @@ def test_project_dir_validates_uuid_hex(monkeypatch, tmp_path):
 
 def test_local_mode_lifespan_unchanged():
     """Invariant #1: server mode OFF keeps the singleton service wiring."""
-    from qualcoder_api.api.v1.deps import CURRENT_SERVICE, get_service
     import qualcoder_api.main as main_mod
+    from qualcoder_api.api.v1.deps import CURRENT_SERVICE, get_service
 
     assert CURRENT_SERVICE.get() is None
     assert get_service() is main_mod.service

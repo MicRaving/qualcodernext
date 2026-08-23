@@ -16,7 +16,7 @@ from httpx import ASGITransport, AsyncClient
 from qualcoder_api.persistence import metadata_db
 
 
-@pytest.fixture()
+@pytest.fixture
 def server_env(tmp_path, monkeypatch):
     monkeypatch.setenv("QC_SERVER_MODE", "true")
     monkeypatch.setenv("QC_SECRET_KEY", "s")
@@ -27,9 +27,8 @@ def server_env(tmp_path, monkeypatch):
     asyncio.run(metadata_db.dispose_metadata_engine())
 
 
-@pytest.fixture()
+@pytest.fixture
 async def client(server_env):
-    from httpx import ASGITransport, AsyncClient
 
     from qualcoder_api.api.v1.auth import router as auth_router
     from qualcoder_api.api.v1.server_backups import router as backups_router

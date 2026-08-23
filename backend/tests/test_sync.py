@@ -26,8 +26,7 @@ from qualcoder_api.persistence.repositories import (
     JournalRepository,
     SourceRepository,
 )
-from qualcoder_api.services import sync
-from qualcoder_api.services import sync_engine
+from qualcoder_api.services import sync, sync_engine
 from qualcoder_api.services.project_service import ProjectService
 
 
@@ -409,7 +408,7 @@ async def test_export_appends_and_survives_truncated_tail(rater_a):
     assert sidecar.read_text(encoding="utf-8").count("\n") == first_len + 1
 
     # Simulate a torn tail (crash mid-append), then export again.
-    with open(sidecar, "a", encoding="utf-8") as f:
+    with open(sidecar, "a", encoding="utf-8") as f:  # noqa: ASYNC230 - test fixture
         f.write('{"partial')
     async with rater_a.session_factory() as session:
         await CodeRepository(session).add_code(name="third", owner="anna")
@@ -812,9 +811,8 @@ async def test_baseline_first_sync_skips_backlog_for_new_collaborator(
     from qualcoder_api.persistence.repo.code_repo import CodeRepository
     from qualcoder_api.services import sync_engine
     from qualcoder_api.services.sync_state import (
-        load_state,
-        save_state,
         _imported_seq,
+        load_state,
     )
 
     changes = Path(rater_a.project_path) / sync.SYNC_DIR_NAME

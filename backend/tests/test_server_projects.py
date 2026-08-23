@@ -13,7 +13,7 @@ from pathlib import Path
 import pytest
 
 
-@pytest.fixture()
+@pytest.fixture
 def server_env(monkeypatch, tmp_path):
     monkeypatch.setenv("QC_SERVER_MODE", "true")
     monkeypatch.setenv("QC_SECRET_KEY", "test-secret")
@@ -22,13 +22,13 @@ def server_env(monkeypatch, tmp_path):
     return tmp_path
 
 
-@pytest.fixture()
+@pytest.fixture
 async def client(server_env):
     from httpx import ASGITransport, AsyncClient
 
+    import qualcoder_api.services.session_manager as sm
     from qualcoder_api.main import create_app
     from qualcoder_api.persistence import metadata_db
-    import qualcoder_api.services.session_manager as sm
 
     # reset module-level state between tests
     await metadata_db.dispose_metadata_engine()
@@ -59,7 +59,7 @@ async def _register_and_login(client, username: str, *, admin: bool = False) -> 
     return {"Authorization": f"Bearer {token}"}
 
 
-@pytest.fixture()
+@pytest.fixture
 async def admin_headers(client):
     return await _register_and_login(client, "admin", admin=True)
 

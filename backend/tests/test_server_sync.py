@@ -9,17 +9,13 @@ HTTP hub against ONE canonical DB. Verifies:
 """
 from __future__ import annotations
 
-import asyncio
-import json
-
 import pytest
-from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 
 from qualcoder_api.persistence import metadata_db
 
 
-@pytest.fixture()
+@pytest.fixture
 def server_env(tmp_path, monkeypatch):
     monkeypatch.setenv("QC_SERVER_MODE", "true")
     monkeypatch.setenv("QC_SECRET_KEY", "s")
@@ -31,9 +27,8 @@ def server_env(tmp_path, monkeypatch):
     sm.manager.sessions.clear()
 
 
-@pytest.fixture()
+@pytest.fixture
 async def client(server_env):
-    from httpx import ASGITransport, AsyncClient
 
     from qualcoder_api.main import create_app
 

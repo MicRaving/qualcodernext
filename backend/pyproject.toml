@@ -69,6 +69,9 @@ ignore = [
     "ASYNC240",
 ]
 
+[tool.ruff.lint.per-file-ignores]
+"tests/**/*.py" = ["F841", "PT011", "PT012", "PT018", "SIM222", "UP031"]
+
 [tool.mypy]
 python_version = "3.11"
 ignore_missing_imports = true

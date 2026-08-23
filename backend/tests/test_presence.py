@@ -28,6 +28,7 @@ async def project(tmp_path):
 async def project_client(tmp_path, monkeypatch):
     """API client with a fresh open project (endpoint test)."""
     from httpx import ASGITransport, AsyncClient
+
     from qualcoder_api.main import app
     from qualcoder_api.services import user_settings
 
