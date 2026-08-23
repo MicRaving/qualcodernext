@@ -298,7 +298,12 @@ export function CoderSwitcher() {
   async function syncNow() {
     setSyncBusy(true);
     try {
-      await runSyncNow();
+      const ok = await runSyncNow();
+      if (ok) {
+        // Pulled entries land in the DB but not in open views — refresh so
+        // the user sees pulled codes/sources without a second click.
+        await useProjectStore.getState().refreshProject();
+      }
     } finally {
       setSyncBusy(false);
     }
@@ -649,7 +654,11 @@ export function CoderSwitcher() {
           <div className="my-1 h-px bg-border" aria-hidden />
           <div className="flex items-center justify-between px-2 py-1.5">
             <span className="flex min-w-0 items-center gap-1 text-sm text-text-primary">
-              <span className="truncate">{t("coder.refreshProject")}</span>
+              <span className="truncate">
+                {collabMode === "collaboration"
+                  ? t("coder.consolidateRefresh")
+                  : t("coder.refreshProject")}
+              </span>
               <IconButton
                 label={t("coder.refreshProjectHint")}
                 title={t("coder.refreshProjectHint")}
