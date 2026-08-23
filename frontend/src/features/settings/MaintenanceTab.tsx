@@ -8,6 +8,8 @@ import { api } from "@/lib/api";
 import { errorDetail } from "@/features/ai/format";
 import { useI18n } from "@/lib/i18n";
 import { ErrorBanner, Toggle } from "@/components/ui/orchestrator";
+import { BackupsSection } from "@/features/settings/BackupsSection";
+import { isServerMode } from "@/lib/session";
 
 export function MaintenanceTab() {
   const { t } = useI18n();
@@ -50,6 +52,8 @@ export function MaintenanceTab() {
           hint={t("settings.compactOnCloseHint")}
         />
       </div>
+
+      {isServerMode() && <BackupsSection />}
     </div>
   );
 }

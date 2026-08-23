@@ -1039,6 +1039,30 @@ export const api = {
   authPasskeyRegisterBegin: () => request<Record<string, unknown>>("/auth/passkey/register/begin", {
     method: "POST",
   }),
+
+  // --- Server backups (SERVER_PLAN.md §9.3; server mode only) ----------
+
+  serverListBackups: (projectId: string) =>
+    request<{
+      backups: Array<{
+        id: number;
+        kind: string;
+        size_bytes: number;
+        checksum: string;
+        cloud_status: string;
+        created_at: string;
+      }>;
+    }>(`/server/projects/${projectId}/backups`),
+  serverCreateBackup: (projectId: string) =>
+    request<{ backup: { id: number; size_bytes: number; created_at: string } }>(
+      `/server/projects/${projectId}/backups`,
+      { method: "POST" },
+    ),
+  serverRestoreBackup: (projectId: string, backupId: number) =>
+    request<{ ok: boolean }>(`/server/projects/${projectId}/backups/${backupId}/restore`, {
+      method: "POST",
+    }),
+
   authPasskeyRegisterComplete: (response: unknown) =>
     request<{ ok: boolean }>("/auth/passkey/register/complete", {
       method: "POST",
