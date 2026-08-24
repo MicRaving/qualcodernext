@@ -50,6 +50,10 @@ on:
 # CHANGELOG.md when one exists (everything from that heading up to the next
 # `## ` heading); auto-generated commit notes are appended regardless.
 
+permissions:
+  # Pushing the version-bump commit + tag, and creating the GitHub release.
+  contents: write
+
 jobs:
   tag:
     name: Cut release tag
