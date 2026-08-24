@@ -139,11 +139,11 @@ test("live coder presence: indicator + file shown in the coder flyout", async ({
       "utf-8",
     );
 
-    // Wait past the app's 10s presence poll, then open the coder flyout.
+    // Open the coder flyout immediately — its open effect refreshes
+    // presence, so the fabricated peer appears without any fixed wait.
     // CI runners are slow; retry in case the first open races rendering.
     let shown = false;
     for (let attempt = 0; attempt < 3 && !shown; attempt++) {
-      await page.waitForTimeout(11_000);
       await page.getByRole("button", { name: /Current coder:/ }).click();
       try {
         await expect(page.getByText("Actively working")).toBeVisible({ timeout: 8_000 });
