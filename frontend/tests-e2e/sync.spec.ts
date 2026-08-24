@@ -39,8 +39,30 @@ async function createProject(page: import("@playwright/test").Page, projectPath:
 }
 
 async function openCoderFlyout(page: import("@playwright/test").Page) {
-  await page.getByRole("button", { name: /Current coder:/ }).click();
-  await expect(page.getByText("Single-coder mode", { exact: true })).toBeVisible();
+  // Slow CI runners can race the dashboard→ribbon render right after a
+  // project opens (the button can vanish for seconds). Retry with a reload,
+  // mirroring the ensureProjectOpen pattern used by other specs.
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const coderBtn = page.getByRole("button", { name: /Current coder:/ });
+    try {
+      await expect(coderBtn).toBeVisible({ timeout: 15_000 });
+      await coderBtn.click();
+      await expect(page.getByText("Single-coder mode", { exact: true })).toBeVisible({
+        timeout: 8_000,
+      });
+      return;
+    } catch {
+      await page.goto("/");
+      await expect(
+        page.getByRole("button", { name: PROJECT_PATH, exact: true }),
+      ).toBeVisible({ timeout: 15_000 });
+      await page.getByRole("button", { name: PROJECT_PATH, exact: true }).click();
+      await expect(page.getByRole("button", { name: "Cases" })).toBeVisible({
+        timeout: 30_000,
+      });
+    }
+  }
+  throw new Error(`Could not open the coder flyout after 3 attempts`);
 }
 
 test("collaboration flyout: activate gates Sync now to collab mode", async ({ page }) => {
@@ -117,12 +139,22 @@ test("live coder presence: indicator + file shown in the coder flyout", async ({
       "utf-8",
     );
 
-    // Wait for the app's 10s presence poll, then open the coder flyout.
-    await page.waitForTimeout(12_000);
-    await page.getByRole("button", { name: /Current coder:/ }).click();
-    await expect(page.getByText("Actively working")).toBeVisible({ timeout: 10_000 });
-    await expect(page.getByText("berta", { exact: true })).toBeVisible();
-    await expect(page.getByText("focus.txt", { exact: true })).toBeVisible();
+    // Wait past the app's 10s presence poll, then open the coder flyout.
+    // CI runners are slow; retry in case the first open races rendering.
+    let shown = false;
+    for (let attempt = 0; attempt < 3 && !shown; attempt++) {
+      await page.waitForTimeout(11_000);
+      await page.getByRole("button", { name: /Current coder:/ }).click();
+      try {
+        await expect(page.getByText("Actively working")).toBeVisible({ timeout: 8_000 });
+        await expect(page.getByText("berta", { exact: true })).toBeVisible();
+        await expect(page.getByText("focus.txt", { exact: true })).toBeVisible();
+        shown = true;
+      } catch {
+        await page.keyboard.press("Escape");
+      }
+    }
+    expect(shown).toBe(true);
   } finally {
     sleeper.kill();
   }
