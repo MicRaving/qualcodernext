@@ -98,6 +98,9 @@ jobs:
 
   build:
     name: Build ${{ matrix.target }}
+    # Only tag-context runs build+publish; workflow_dispatch runs are handled
+    # entirely by the `tag` job above.
+    if: startsWith(github.ref, 'refs/tags/')
     runs-on: ${{ matrix.os }}
     defaults:
       run:
