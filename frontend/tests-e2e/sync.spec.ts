@@ -54,9 +54,9 @@ async function openCoderFlyout(page: import("@playwright/test").Page) {
     } catch {
       await page.goto("/");
       await expect(
-        page.getByRole("button", { name: PROJECT_PATH, exact: true }),
+        page.getByRole("button", { name: PLAIN_PROJECT, exact: true }),
       ).toBeVisible({ timeout: 15_000 });
-      await page.getByRole("button", { name: PROJECT_PATH, exact: true }).click();
+      await page.getByRole("button", { name: PLAIN_PROJECT, exact: true }).click();
       await expect(page.getByRole("button", { name: "Cases" })).toBeVisible({
         timeout: 30_000,
       });
