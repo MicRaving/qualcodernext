@@ -154,7 +154,15 @@ test("promote/demote moves codes in the hierarchy via the context menu", async (
   await treeReloadedAgain;
   await expect(menu).toBeHidden({ timeout: 10_000 });
   menu = await openCodeMenu(page, "Beta");
-  await expect(menu.getByRole("menuitem", { name: "Detach from parent code" })).toHaveCount(0);
+  // Slow runners: give the post-promote tree refresh time to propagate
+  // into the rebuilt context menu before asserting.
+  await expect
+    .poll(
+      async () =>
+        await menu.getByRole("menuitem", { name: "Detach from parent code" }).count(),
+      { timeout: 15_000 },
+    )
+    .toBe(0);
   await page.keyboard.press("Escape");
 });
 
