@@ -53,6 +53,8 @@ on:
 permissions:
   # Pushing the version-bump commit + tag, and creating the GitHub release.
   contents: write
+  # Triggering the build via the workflow-dispatch API after cutting the tag.
+  actions: write
 
 jobs:
   tag:
