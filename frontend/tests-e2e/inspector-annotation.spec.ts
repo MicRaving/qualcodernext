@@ -10,6 +10,9 @@ const TXT_A = path.join(E2E_ROOT, "aaa.txt");
 
 test.beforeAll(() => {
   fs.mkdirSync(E2E_ROOT, { recursive: true });
+  // Warm CI runners can keep %TEMP% between runs — a leftover project with
+  // the same Date.now()%100000 name would make create_project append _1.
+  fs.rmSync(PROJECT_PATH, { recursive: true, force: true });
   fs.writeFileSync(TXT_A, "File A content words.\n", "utf-8");
 });
 

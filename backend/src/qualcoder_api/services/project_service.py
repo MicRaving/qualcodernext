@@ -5,6 +5,7 @@ Pure backend: no Qt, no UI. The FastAPI layer wraps these methods.
 
 from __future__ import annotations
 
+import asyncio
 import getpass
 import logging
 import os
@@ -56,6 +57,12 @@ class ProjectService:
         self.project_path: str = ""
         self.project_name: str = ""
         self.lock_file_path: str = ""
+        #: Serializes the project lifecycle (create/open/close). These are
+        #: long multi-await operations on SHARED state (``self.project_path``,
+        #: the engine, the lock file); an interleaved close used to reset
+        #: ``project_path`` mid-create, which then appended "" to the recent
+        #-projects list and left the backend reporting "no project open".
+        self._lifecycle_lock = asyncio.Lock()
         #: Live presence: the source currently being worked on in THIS
         #: instance (reported by the frontend, broadcast via the presence
         #: heartbeat to other instances).
@@ -121,40 +128,42 @@ class ProjectService:
         codername: str = "default",
     ) -> bool:
         """Create the project directory structure, schema and initial row."""
-        if not project_path.endswith(".qda"):
-            project_path += ".qda"
+        async with self._lifecycle_lock:
+            if not project_path.endswith(".qda"):
+                project_path += ".qda"
 
-        counter = 0
-        extension = ""
-        while os.path.exists(project_path + extension):
-            counter += 1
-            extension = f"_{counter}"
+            counter = 0
+            extension = ""
+            while os.path.exists(project_path + extension):
+                counter += 1
+                extension = f"_{counter}"
 
-        self.project_path = project_path + extension
-        root = Path(self.project_path)
-        try:
-            for sub in ("images", "audio", "video", "documents", BACKUP_FOLDER):
-                (root / sub).mkdir(parents=True)
-        except OSError as err:
-            logger.critical("Project creation error: %s", err)
-            return False
+            final_path = project_path + extension
+            self.project_path = final_path
+            root = Path(final_path)
+            try:
+                for sub in ("images", "audio", "video", "documents", BACKUP_FOLDER):
+                    (root / sub).mkdir(parents=True)
+            except OSError as err:
+                logger.critical("Project creation error: %s", err)
+                return False
 
-        self.project_name = root.name
-        db_path = root / "data.qda"
-        conn = await aiosqlite.connect(db_path)
-        try:
-            await create_new_project_schema(
-                conn, app_version=app_version, codername=codername
-            )
-        finally:
-            await conn.close()
+            self.project_name = root.name
+            db_path = root / "data.qda"
+            conn = await aiosqlite.connect(db_path)
+            try:
+                await create_new_project_schema(
+                    conn, app_version=app_version, codername=codername
+                )
+            finally:
+                await conn.close()
 
-        await self._dispose_engine_if_any()
-        await self._open_engine()
-        from qualcoder_api.services import user_settings
+            await self._dispose_engine_if_any()
+            await self._open_engine()
+            from qualcoder_api.services import user_settings
 
-        user_settings.append_recent_project(self.project_path)
-        return True
+            user_settings.append_recent_project(final_path)
+            return True
 
     # ------------------------------------------------------------------
     # Open project
@@ -169,6 +178,23 @@ class ProjectService:
         backup_on_open: bool = False,
     ) -> OpenResult:
         """Open an existing project: lock, validate, migrate, finalize."""
+        async with self._lifecycle_lock:
+            return await self._open_project_locked(
+                proj_path,
+                app_version=app_version,
+                codername=codername,
+                backup_on_open=backup_on_open,
+            )
+
+    async def _open_project_locked(
+        self,
+        proj_path: str,
+        *,
+        app_version: str = "QualCoder 4.0",
+        codername: str = "default",
+        backup_on_open: bool = False,
+    ) -> OpenResult:
+        """Open body — caller holds ``_lifecycle_lock``."""
         # Parse recent-projects format: "date|path"
         actual_path = proj_path.split("|")[-1]
         if not (len(actual_path) > 3 and actual_path[-4:] == ".qda"):
@@ -195,10 +221,10 @@ class ProjectService:
             await self._open_engine()
             header = await self._get_header()
             if header is None or "QualCoder" not in (header.about or ""):
-                await self.close_project()
+                await self._close_project_locked()
                 return OpenResult(ok=False, error="not a QualCoder database")
         except Exception as err:
-            await self.close_project()
+            await self._close_project_locked()
             logger.debug("Not a QualCoder database: %s", err)
             return OpenResult(ok=False, error=str(err))
 
@@ -271,6 +297,16 @@ class ProjectService:
 
     async def close_project(self) -> None:
         """Close the project: dispose engine, flush the WAL, remove lock file.
+
+        Serialized against create/open via ``_lifecycle_lock`` — a close that
+        lands mid-open/mid-create used to reset ``project_path`` under the
+        other operation's feet.
+        """
+        async with self._lifecycle_lock:
+            await self._close_project_locked()
+
+    async def _close_project_locked(self) -> None:
+        """Close body — caller holds ``_lifecycle_lock``.
 
         The WAL checkpoint runs best-effort after the engine is disposed (no
         other connection exists then, so the flush is clean): the ``data.qda``

@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import threading
 import uuid
 from pathlib import Path
 
@@ -20,6 +21,11 @@ logger = logging.getLogger(__name__)
 
 QUALCODER_HOME = Path(os.path.expanduser("~")) / ".qualcoder"
 SETTINGS_FILE = QUALCODER_HOME / "settings.json"
+
+#: Serializes settings-file access. Requests hit these helpers concurrently
+#: (project create/open bursts), and a read during a non-atomic write used to
+#: yield truncated JSON → DEFAULTS → the next save wiped the real settings.
+_SETTINGS_LOCK = threading.Lock()
 
 #: The default wrapping prompt for AI chat: appended to the mode persona as a
 #: system-level directive. Users can override it via the template creator (an
@@ -260,15 +266,16 @@ def load_settings() -> dict:
     """Load user settings, merging defaults for missing keys."""
     settings = dict(DEFAULT_SETTINGS)
     try:
-        if SETTINGS_FILE.exists():
-            data = json.loads(SETTINGS_FILE.read_text(encoding="utf-8"))
-            if isinstance(data, dict):
-                # The Reddit API credentials were removed with the Reddit
-                # scraper purge — drop legacy stored keys so they never
-                # resurface or get persisted again.
-                data.pop("reddit_client_id", None)
-                data.pop("reddit_client_secret", None)
-                settings.update(data)
+        with _SETTINGS_LOCK:
+            if SETTINGS_FILE.exists():
+                data = json.loads(SETTINGS_FILE.read_text(encoding="utf-8"))
+                if isinstance(data, dict):
+                    # The Reddit API credentials were removed with the Reddit
+                    # scraper purge — drop legacy stored keys so they never
+                    # resurface or get persisted again.
+                    data.pop("reddit_client_id", None)
+                    data.pop("reddit_client_secret", None)
+                    settings.update(data)
     except (OSError, json.JSONDecodeError) as err:
         logger.warning("Failed to load user settings: %s", err)
     return settings
@@ -276,10 +283,18 @@ def load_settings() -> dict:
 
 def save_settings(settings: dict) -> None:
     try:
-        QUALCODER_HOME.mkdir(parents=True, exist_ok=True)
-        SETTINGS_FILE.write_text(
-            json.dumps(settings, indent=2, ensure_ascii=False), encoding="utf-8"
-        )
+        with _SETTINGS_LOCK:
+            QUALCODER_HOME.mkdir(parents=True, exist_ok=True)
+            # Atomic replace: a concurrent reader (FastAPI serves requests
+            # concurrently) must never observe a half-written file — reading
+            # truncated JSON used to fall back to DEFAULTS and the next save
+            # then WIPED every stored key (recent projects vanished mid-run
+            # on slow CI disks).
+            tmp = SETTINGS_FILE.with_suffix(".json.tmp")
+            tmp.write_text(
+                json.dumps(settings, indent=2, ensure_ascii=False), encoding="utf-8"
+            )
+            os.replace(tmp, SETTINGS_FILE)
     except OSError as err:
         logger.warning("Failed to save user settings: %s", err)
 
