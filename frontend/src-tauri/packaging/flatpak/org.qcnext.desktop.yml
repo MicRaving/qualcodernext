@@ -1,0 +1,59 @@
+# Flatpak wrapper for QCnext (Tauri 2).
+#
+# The stock Tauri CLI cannot emit .flatpak bundles, so the release pipeline
+# builds the regular .deb first (see release.yml / scripts/build-flatpak.sh)
+# and THIS manifest repackages it into a self-contained single-file .flatpak.
+#
+# Runtime: org.gnome.Platform ships WebKitGTK 4.1, which the Tauri WebView
+# needs (the freedesktop runtime would require an extra WebKit2Gtk extension).
+#
+# Note: because the app ships prebuilt binaries instead of building from
+# source inside the sandbox, this manifest is suitable for direct
+# distribution (GitHub releases, `flatpak install ./file.flatpak`) but NOT
+# for a Flathub submission — Flathub requires building everything from
+# declared sources.
+#
+# Regenerate the bundle:
+#   flatpak-builder --force-clean --user --repo=repo builddir org.qcnext.desktop.yml
+#   flatpak build-bundle --user repo QCnext.flatpak org.qcnext.desktop
+
+app-id: org.qcnext.desktop
+runtime: org.gnome.Platform
+runtime-version: "48"
+sdk: org.gnome.Sdk
+command: qcnext
+separate-locales: false
+finish-args:
+  - --share=ipc
+  - --socket=fallback-x11
+  - --socket=wayland
+  - --device=dri
+  # AI providers, URL scraping and the updater fetch over HTTPS.
+  - --share=network
+  # Projects live anywhere under the user's home.
+  - --filesystem=home
+  - --talk-name=org.freedesktop.Notifications
+  # WebKitGPU compositing crashes inside some sandboxes; the flag is the
+  # standard workaround for Tauri/WebKitGTK flatpaks.
+  - --env=WEBKIT_DISABLE_COMPOSITING_MODE=1
+modules:
+  - name: qcnext
+    buildsystem: simple
+    build-commands:
+      # Extract ONLY the data archive from the deb (skip control files).
+      - ar x qcnext.deb data.tar.xz
+      - tar -xf data.tar.xz
+      - rm -f data.tar.xz
+      # The deb lays out under ./usr — flatten into the /app prefix. Paths
+      # stay valid because the Tauri binary resolves its resources relative
+      # to itself (/app/bin -> /app/lib/qcnext).
+      - cp -a usr/. /app/
+      - rm -rf usr
+      - chmod +x /app/bin/*
+      # Flatpak convention: the desktop entry id must match the app id.
+      # (Tauri names the entry after the product; keep its Icon= value.)
+      - mv /app/share/applications/*.desktop /app/share/applications/org.qcnext.desktop
+      - desktop-file-edit --set-key=Exec --set-value=qcnext /app/share/applications/org.qcnext.desktop
+    sources:
+      - type: file
+        path: qcnext.deb

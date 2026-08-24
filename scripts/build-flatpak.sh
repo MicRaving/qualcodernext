@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Build QCnext on Linux — self-contained, no prior setup needed.
-# Produces a .deb (the stock Tauri CLI cannot bundle .flatpak directly).
+# Produces a single-file .flatpak (deb built by Tauri, then wrapped with the
+# checked-in flatpak-builder manifest).
 # Usage: ./build-flatpak.sh [path/to/repo]
 set -euo pipefail
 REPO="${1:-$(pwd)}"
@@ -42,17 +43,31 @@ echo "== 5/6 copy backend into Tauri resources =="
 mkdir -p frontend/src-tauri/resources/backend
 cp -r backend/dist/qualcoder-backend/* frontend/src-tauri/resources/backend/
 
-echo "== 6/6 tauri build (deb bundle — see note) =="
+echo "== 6/6 tauri build + flatpak wrap =="
 cd frontend/src-tauri
-# NOTE: the stock Tauri v2 CLI cannot emit .flatpak bundles (--bundles on
-# Linux only accepts deb, rpm, appimage). Build the .deb here; wrapping it
-# into a .flatpak requires a flatpak-builder manifest (see tauri docs:
-# https://v2.tauri.app/distribute/flatpak/).
+# The stock Tauri CLI cannot emit .flatpak bundles (--bundles on Linux only
+# accepts deb, rpm, appimage): build the .deb, then repackage it into a
+# single-file .flatpak with the checked-in flatpak-builder manifest.
 npx --yes @tauri-apps/cli@2 build --bundles deb
 
-BUNDLE=$(find target/release/bundle/deb -name "*.deb" 2>/dev/null | head -1)
+DEB=$(find target/release/bundle/deb -name "*.deb" 2>/dev/null | head -1)
+STAGE=target/release/bundle/flatpak-stage
+mkdir -p "$STAGE"
+cp "$DEB" "$STAGE/qcnext.deb"
+cp packaging/flatpak/org.qcnext.desktop.yml "$STAGE/"
+
+flatpak remote-add --if-not-exists --user flathub https://flathub.org/repo/flathub.flatpakrepo || true
+flatpak install --assumeyes --user --noninteractive flathub org.gnome.Sdk//48 org.gnome.Platform//48
+
+(
+  cd "$STAGE"
+  flatpak-builder --force-clean --user --repo=repo builddir org.qcnext.desktop.yml
+  flatpak build-bundle --user repo ../flatpak/QCnext.local.flatpak org.qcnext.desktop
+)
+
+BUNDLE=$(find target/release/bundle/flatpak -name "*.flatpak" 2>/dev/null | head -1)
 echo ""
 echo "== DONE =="
-echo "Deb package: $BUNDLE"
-echo "Install:     sudo apt install $BUNDLE"
-echo "A .flatpak wrapper must be built from a flatpak-builder manifest."
+echo "Flatpak bundle: $BUNDLE"
+echo "Install:        flatpak install --user $BUNDLE"
+echo "Run:            flatpak run org.qcnext.desktop"
