@@ -95,6 +95,7 @@ jobs:
       - name: Commit the version bump and push the tag
         env:
           VERSION: ${{ steps.version.outputs.version }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -109,7 +110,7 @@ jobs:
           # so start the build explicitly via a workflow_dispatch on the tag
           # ref — API-created dispatches DO run (documented exception).
           curl --fail-with-body --silent --show-error -X POST \
-            -H "Authorization: Bearer $GITHUB_TOKEN" \
+            -H "Authorization: Bearer $GH_TOKEN" \
             -H "Accept: application/vnd.github+json" \
             "https://api.github.com/repos/${{ github.repository }}/actions/workflows/release.yml/dispatches" \
             -d "{\"ref\":\"v$VERSION\"}"
