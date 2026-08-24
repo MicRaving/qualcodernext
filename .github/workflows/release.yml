@@ -276,7 +276,9 @@ jobs:
           Move-Item "$dir/$($base.Name).sig" "$dir/$renamed.sig"
 
       - name: Build the update-manifest fragment
-        if: env.UNSIGNED_BUILD != 'true'
+        # Linux ships as a .flatpak without Tauri-updater artifacts, so there
+        # is deliberately no fragment for it.
+        if: env.UNSIGNED_BUILD != 'true' && matrix.target != 'linux-x86_64'
         shell: pwsh
         working-directory: frontend/src-tauri/target/release/bundle
         run: |
@@ -285,7 +287,6 @@ jobs:
             "windows-x86_64" { $dir = "nsis";  $glob = "*setup.exe" }
             "darwin-x86_64"  { $dir = "macos"; $glob = "QCnext_darwin_x86_64.app.tar.gz" }
             "darwin-aarch64" { $dir = "macos"; $glob = "QCnext_darwin_aarch64.app.tar.gz" }
-            default          { throw "No updater bundle mapping for ${{ matrix.target }}" }
           }
           $file = Get-ChildItem $dir -Filter $glob | Select-Object -First 1
           if (-not $file) { throw "No updater bundle matched $glob in $dir" }
@@ -299,7 +300,7 @@ jobs:
           $fragment | ConvertTo-Json | Set-Content "$env:RUNNER_TEMP/fragment-${{ matrix.target }}.json"
 
       - name: Upload manifest fragment
-        if: env.UNSIGNED_BUILD != 'true'
+        if: env.UNSIGNED_BUILD != 'true' && matrix.target != 'linux-x86_64'
         uses: actions/upload-artifact@v4
         with:
           name: fragment-${{ matrix.target }}
