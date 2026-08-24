@@ -120,30 +120,44 @@ test("live coder presence: indicator + file shown in the coder flyout", async ({
   // Simulate another live instance: spawn a real (long-lived) process and
   // write its presence file into the project folder. The app's presence poll
   // picks it up and shows it as "live".
-  const sleeper = spawn(process.execPath, ["-e", "setTimeout(()=>{}, 60000)"]);
+  const sleeper = spawn(process.execPath, ["-e", "setTimeout(()=>{}, 300000)"]);
   const pid = sleeper.pid as number;
   const presenceDir = path.join(liveProject, "presence");
   fs.mkdirSync(presenceDir, { recursive: true });
-  const now = Date.now() / 1000;
-  try {
+  // Fresh heartbeat: rewrite the peer file on demand. The frontend counts a
+  // heartbeat as live for only 60s after its ts — a single write made before
+  // the loop goes stale while slow CI attempts grind through the retries.
+  const writePresence = () =>
     fs.writeFileSync(
       path.join(presenceDir, `${pid}.json`),
       JSON.stringify({
         coder: "berta",
         os_user: "marvi",
         pid,
-        ts: now,
+        ts: Date.now() / 1000,
         file_id: 7,
         file_name: "focus.txt",
       }),
       "utf-8",
     );
+  try {
+    writePresence();
+
+    // Precondition at the API level: the backend must report the fabricated
+    // peer BEFORE the UI assertions run — a failure here means the backend
+    // dropped the entry (filtering/paths), not a frontend timing race.
+    await expect.poll(async () => {
+      const res = await page.request.get(`${BACKEND}/api/v1/sync/presence`);
+      const body = (await res.json()) as { ok: boolean; presence?: { coder: string }[] };
+      return body.ok && (body.presence ?? []).some((e) => e.coder === "berta");
+    }, { timeout: 15_000 }).toBe(true);
 
     // Open the coder flyout immediately — its open effect refreshes
     // presence, so the fabricated peer appears without any fixed wait.
     // CI runners are slow; retry in case the first open races rendering.
     let shown = false;
     for (let attempt = 0; attempt < 5 && !shown; attempt++) {
+      writePresence();
       const coderBtn = page.getByRole("button", { name: /Current coder:/ });
       try {
         await coderBtn.click({ timeout: 15_000 });

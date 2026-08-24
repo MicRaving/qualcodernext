@@ -122,47 +122,58 @@ test("promote/demote moves codes in the hierarchy via the context menu", async (
   // Demote Beta → it becomes a sub-code of the previous sibling (Alpha).
   // demoteItem refreshes the tree AFTER the demote response lands, so wait
   // for both the POST and the follow-up code-tree reload before inspecting
-  // the sidebar again.
+  // the sidebar again. The POST status IS asserted: waitForResponse resolves
+  // on any matching response, including a 4xx rejection.
   let menu = await openCodeMenu(page, "Beta");
   const demoted = page.waitForResponse(
     (r) => r.request().method() === "POST" && /\/codes\/\d+\/demote$/.test(new URL(r.url()).pathname),
   );
-  const treeReloaded = page.waitForResponse(
+  await menu.getByRole("menuitem", { name: "Demote" }).click();
+  expect((await demoted).status()).toBe(200);
+  // Register the reload waiter only AFTER the demote landed — an earlier
+  // in-flight GET /codes (slow CI) would otherwise satisfy this wait and
+  // race the assertions below against the pre-demote tree.
+  await page.waitForResponse(
     (r) => r.request().method() === "GET" && new URL(r.url()).pathname === "/api/v1/codes",
   );
-  await menu.getByRole("menuitem", { name: "Demote" }).click();
-  await demoted;
-  await treeReloaded;
   await expect(menu).toBeHidden({ timeout: 10_000 });
 
-  // A sub-code's context menu offers "Detach from parent code".
-  menu = await openCodeMenu(page, "Beta");
-  await expect(menu.getByRole("menuitem", { name: "Detach from parent code" })).toBeVisible();
+  // A sub-code's context menu offers "Detach from parent code". An OPEN menu
+  // keeps the items it was built with, so if it opened from the stale
+  // pre-demote tree it never gains the entry — poll by REOPENING until the
+  // refreshed tree shows it (same pattern as the promote step below).
+  await expect.poll(
+    async () => {
+      await page.keyboard.press("Escape");
+      const m = await openCodeMenu(page, "Beta");
+      return m.getByRole("menuitem", { name: "Detach from parent code" }).count();
+    },
+    { timeout: 20_000 },
+  ).toBe(1);
   await page.keyboard.press("Escape");
-  await expect(menu).toBeHidden();
 
   // Promote Beta → back to the top level, the detach entry disappears.
   menu = await openCodeMenu(page, "Beta");
   const promoted = page.waitForResponse(
     (r) => r.request().method() === "POST" && /\/codes\/\d+\/promote$/.test(new URL(r.url()).pathname),
   );
-  const treeReloadedAgain = page.waitForResponse(
+  await menu.getByRole("menuitem", { name: "Promote" }).click();
+  expect((await promoted).status()).toBe(200);
+  await page.waitForResponse(
     (r) => r.request().method() === "GET" && new URL(r.url()).pathname === "/api/v1/codes",
   );
-  await menu.getByRole("menuitem", { name: "Promote" }).click();
-  await promoted;
-  await treeReloadedAgain;
   await expect(menu).toBeHidden({ timeout: 10_000 });
-  menu = await openCodeMenu(page, "Beta");
-  // Slow runners: give the post-promote tree refresh time to propagate
-  // into the rebuilt context menu before asserting.
-  await expect
-    .poll(
-      async () =>
-        await menu.getByRole("menuitem", { name: "Detach from parent code" }).count(),
-      { timeout: 15_000 },
-    )
-    .toBe(0);
+  // Slow runners: the post-promote tree refresh may still be propagating,
+  // and an open menu keeps stale items — poll by REOPENING until the detach
+  // entry is gone from the rebuilt menu.
+  await expect.poll(
+    async () => {
+      await page.keyboard.press("Escape");
+      const m = await openCodeMenu(page, "Beta");
+      return m.getByRole("menuitem", { name: "Detach from parent code" }).count();
+    },
+    { timeout: 20_000 },
+  ).toBe(0);
   await page.keyboard.press("Escape");
 });
 
