@@ -240,10 +240,10 @@ jobs:
           flatpak install --assumeyes --user --noninteractive flathub org.gnome.Sdk//48 org.gnome.Platform//48
 
           Push-Location $stage
-          flatpak builder --force-clean --user --repo=repo builddir org.qcnext.desktop.yml
+          flatpak-builder --force-clean --user --repo=repo builddir org.qcnext.desktop.yml
           $version = ("$env:GITHUB_REF_NAME") -replace '^v', ''
           New-Item -ItemType Directory -Force "../flatpak" | Out-Null
-          flatpak build-bundle --user repo "../flatpak/QCnext_$version.flatpak" org.qcnext.desktop
+          flatpak build-bundle repo "../flatpak/QCnext_$version.flatpak" org.qcnext.desktop
           Pop-Location
           Get-ChildItem "target/release/bundle/flatpak"
 

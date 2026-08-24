@@ -62,7 +62,7 @@ flatpak install --assumeyes --user --noninteractive flathub org.gnome.Sdk//48 or
 (
   cd "$STAGE"
   flatpak-builder --force-clean --user --repo=repo builddir org.qcnext.desktop.yml
-  flatpak build-bundle --user repo ../flatpak/QCnext.local.flatpak org.qcnext.desktop
+  flatpak build-bundle repo ../flatpak/QCnext.local.flatpak org.qcnext.desktop
 )
 
 BUNDLE=$(find target/release/bundle/flatpak -name "*.flatpak" 2>/dev/null | head -1)
