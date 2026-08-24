@@ -154,12 +154,20 @@ async function ensureProjectOpen(page: Page) {
       await recent.click();
       await expect(closeBtn).toBeEnabled({ timeout: 30_000 });
       return;
-    } catch {
-      /* reload and retry once more */
+      } catch {
+        /* reload and retry once more */
+      }
     }
+    // Recents-ring fallback: the project exists but was pushed out of the
+    // 10-slot list - open it directly by path through the Open dialog.
+    await page.goto("/");
+    fs.rmSync(path.join(PROJECT_PATH, "project_in_use.lock"), { force: true });
+    await page.getByRole("button", { name: "Open project" }).click();
+    const openDialog = page.getByRole("dialog", { name: "Open project" });
+    await openDialog.locator("#open-path").fill(PROJECT_PATH);
+    await openDialog.getByRole("button", { name: "Open project" }).click();
+    await expect(closeBtn).toBeEnabled({ timeout: 30_000 });
   }
-  throw new Error(`Could not open ${PROJECT_PATH} after 3 attempts`);
-}
 
 // ---------------------------------------------------------------------------
 
@@ -335,7 +343,7 @@ test("history view lists project changes and filters", async ({ page }) => {
 test("autocode + SQL report", async ({ page }) => {
   page.on("pageerror", (e) =>
     // eslint-disable-next-line no-console
-    console.log(`[PAGEERR] ${e.message.slice(0, 400)}`),
+    console.log(`[PAGEERR] ${e.stack?.slice(0, 1200) ?? e.message}`),
   );
   await ensureProjectOpen(page);
 
