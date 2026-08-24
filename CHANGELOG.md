@@ -1,3 +1,8 @@
+<!-- Release notes: the Release workflow publishes the `## vX.Y.Z` section of
+     this file (from that heading to the next `## ` heading) as the GitHub
+     release body for tag vX.Y.Z, appending auto-generated commit notes.
+     Add a section like "## 0.3.0 (2026-09-01)" at the TOP of the file. -->
+
 ## Summary
 ### Major changes
 
