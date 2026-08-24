@@ -186,10 +186,19 @@ jobs:
           path: ${{ runner.temp }}/fragment-${{ matrix.target }}.json
 
       - name: Publish the GitHub release
+        if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
           files: ${{ matrix.release_files }}
           generate_release_notes: true
+
+      - name: Upload build artifacts (workflow_dispatch runs)
+        if: "!startsWith(github.ref, 'refs/tags/')"
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.target }}
+          path: ${{ matrix.release_files }}
+          if-no-files-found: warn
 
   manifest:
     name: Assemble qcnext-latest.json
@@ -231,7 +240,7 @@ jobs:
           $manifest | ConvertTo-Json -Depth 6 | Set-Content "qcnext-latest.json" -Encoding utf8
 
       - name: Upload the update manifest
-        if: hashFiles('qcnext-latest.json') != ''
+        if: hashFiles('qcnext-latest.json') != '' && startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
           files: qcnext-latest.json
