@@ -1,6 +1,6 @@
 name: Release
 
-# Builds the release for Windows, Linux (flatpak only) and macOS (Tauri cannot
+# Builds the release for Windows and macOS (Tauri cannot
 # cross-compile — every platform builds on its own runner), signs the updater
 # artifacts with the repo's TAURI_SIGNING_PRIVATE_KEY secret, publishes the
 # installers to a GitHub release and assembles the static update manifest the
@@ -15,6 +15,13 @@ name: Release
 # signing step — the "A public key has been found, but no private key" error.
 #
 # Only the NSIS setup .exe is uploaded for Windows (NOT the MSI).
+#
+# Linux is NOT built here: the stock Tauri v2 CLI cannot emit flatpak bundles
+# (`--bundles` only accepts deb/rpm/appimage on Linux, and deb/rpm/appimage are
+# explicitly not wanted). Linux ships via scripts/build-flatpak.sh instead.
+#
+# macOS x86_64 uses the macos-15-intel label — the macos-13 image was retired
+# by GitHub on 2025-12-04 and jobs pinned to it queue forever.
 #
 # Note: macOS builds are unsigned (no Apple code-signing secrets); Gatekeeper
 # will warn on first launch until a certificate + notarization are configured.
@@ -42,19 +49,16 @@ jobs:
               frontend/src-tauri/target/release/qcnext.exe
               frontend/src-tauri/target/release/bundle/nsis/*setup.exe
               frontend/src-tauri/target/release/bundle/nsis/*setup.exe.sig
-          - os: ubuntu-22.04
-            target: linux-x86_64
-            bundles: flatpak
-            release_files: |
-              frontend/src-tauri/target/release/bundle/flatpak/*
-          - os: macos-13
+          - os: macos-15-intel
             target: darwin-x86_64
+            bundles: app,dmg
             release_files: |
               frontend/src-tauri/target/release/bundle/macos/*.tar.gz
               frontend/src-tauri/target/release/bundle/macos/*.dmg
               frontend/src-tauri/target/release/bundle/macos/*.sig
           - os: macos-latest
             target: darwin-aarch64
+            bundles: app,dmg
             release_files: |
               frontend/src-tauri/target/release/bundle/macos/*.tar.gz
               frontend/src-tauri/target/release/bundle/macos/*.dmg
@@ -72,12 +76,11 @@ jobs:
           cache-dependency-path: frontend/package-lock.json
       - uses: dtolnay/rust-toolchain@stable
 
-      - name: Linux system dependencies (webkit2gtk, tray, svg, flatpak)
+      - name: Linux system dependencies (webkit2gtk, tray, svg)
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev patchelf flatpak flatpak-builder
-          flatpak remote-add --if-not-exists --user flathub https://flathub.org/repo/flathub.flatpakrepo
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev patchelf
 
       - name: Backend deps (incl. PyInstaller for the onedir)
         working-directory: backend
@@ -91,9 +94,13 @@ jobs:
       - name: Restore the signing key (or degrade to unsigned builds)
         shell: pwsh
         run: |
+          # Tauri reads the private key from TAURI_SIGNING_PRIVATE_KEY
+          # ("path or content"); a *_PATH variable is ignored. Use forward
+          # slashes so the path also resolves on macOS/Linux runners.
+          $keyPath = "$env:RUNNER_TEMP/updater.key"
           if ("${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}") {
-            Set-Content -Path "$env:RUNNER_TEMP\updater.key" -Value "${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}" -NoNewline
-            "TAURI_SIGNING_PRIVATE_KEY_PATH=$env:RUNNER_TEMP\updater.key" | Out-File -FilePath $env:GITHUB_ENV -Append
+            Set-Content -Path $keyPath -Value "${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}" -NoNewline
+            "TAURI_SIGNING_PRIVATE_KEY=$keyPath" | Out-File -FilePath $env:GITHUB_ENV -Append
             "TAURI_SIGNING_PRIVATE_KEY_PASSWORD=" | Out-File -FilePath $env:GITHUB_ENV -Append
             Write-Host "Signing key restored - updater artifacts will be created."
           } else {
@@ -119,32 +126,46 @@ jobs:
           New-Item -ItemType Directory -Path $target -Force | Out-Null
           Copy-Item "../backend/dist/qualcoder-backend/*" $target -Recurse -Force
 
-      - name: Build the Tauri app (signed or unsigned, flatpak on Linux)
+      - name: Build the Tauri app (signed or unsigned)
         working-directory: frontend/src-tauri
         run: npx --yes @tauri-apps/cli@2 build --bundles ${{ matrix.bundles }}
 
       - name: Rename macOS updater bundles (unique asset names per arch)
         if: runner.os == 'macOS'
         shell: pwsh
-        working-directory: frontend/src-tauri/target/release/bundle/macos
         run: |
+          $dir = "src-tauri/target/release/bundle/macos"
+          if (-not (Test-Path $dir)) {
+            if ("$env:UNSIGNED_BUILD" -eq "true") {
+              Write-Host "Unsigned build produced no updater bundles - nothing to rename."
+              exit 0
+            }
+            throw "Missing bundle directory: $dir"
+          }
           $suffix = "${{ matrix.target }}".Replace("darwin-", "")
-          $base = Get-ChildItem -Filter "*.app.tar.gz" | Select-Object -First 1
-          if (-not $base) { throw "No .app.tar.gz updater bundle found" }
+          $base = Get-ChildItem $dir -Filter "*.app.tar.gz" | Select-Object -First 1
+          if (-not $base) {
+            if ("$env:UNSIGNED_BUILD" -eq "true") {
+              Write-Host "Unsigned build produced no .app.tar.gz - nothing to rename."
+              exit 0
+            }
+            throw "No .app.tar.gz updater bundle found in $dir"
+          }
           $renamed = "QCnext_darwin_$suffix.app.tar.gz"
-          Move-Item $base.Name $renamed
-          Move-Item "$($base.Name).sig" "$renamed.sig"
+          Move-Item "$dir/$($base.Name)" "$dir/$renamed"
+          Move-Item "$dir/$($base.Name).sig" "$dir/$renamed.sig"
 
       - name: Build the update-manifest fragment
         if: env.UNSIGNED_BUILD != 'true'
         shell: pwsh
         working-directory: frontend/src-tauri/target/release/bundle
         run: |
+          if (-not (Test-Path ".")) { throw "Missing bundle directory: $PWD" }
           switch ("${{ matrix.target }}") {
-            "windows-x86_64" { $dir = "nsis";   $glob = "*setup.exe" }
-            "linux-x86_64"   { $dir = "flatpak"; $glob = "*.flatpak" }
-            "darwin-x86_64"  { $dir = "macos";  $glob = "QCnext_darwin_x86_64.app.tar.gz" }
-            "darwin-aarch64" { $dir = "macos";  $glob = "QCnext_darwin_aarch64.app.tar.gz" }
+            "windows-x86_64" { $dir = "nsis";  $glob = "*setup.exe" }
+            "darwin-x86_64"  { $dir = "macos"; $glob = "QCnext_darwin_x86_64.app.tar.gz" }
+            "darwin-aarch64" { $dir = "macos"; $glob = "QCnext_darwin_aarch64.app.tar.gz" }
+            default          { throw "No updater bundle mapping for ${{ matrix.target }}" }
           }
           $file = Get-ChildItem $dir -Filter $glob | Select-Object -First 1
           if (-not $file) { throw "No updater bundle matched $glob in $dir" }
@@ -173,7 +194,7 @@ jobs:
   manifest:
     name: Assemble qcnext-latest.json
     needs: build
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 

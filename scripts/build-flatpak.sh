@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Build QCnext flatpak on Linux — self-contained, no prior setup needed.
+# Build QCnext on Linux — self-contained, no prior setup needed.
+# Produces a .deb (the stock Tauri CLI cannot bundle .flatpak directly).
 # Usage: ./build-flatpak.sh [path/to/repo]
 set -euo pipefail
 REPO="${1:-$(pwd)}"
@@ -15,7 +16,6 @@ sudo apt-get install -y \
   libgomp1
 
 flatpak remote-add --if-not-exists --user flathub https://flathub.org/repo/flathub.flatpakrepo || true
-flatpak install --assumeyes --user flathub org.freedesktop.Sdk//24.08 org.freedesktop.Platform//24.08 2>/dev/null || true
 
 echo "== 2/6 Rust toolchain =="
 if ! command -v cargo &>/dev/null; then
@@ -42,13 +42,17 @@ echo "== 5/6 copy backend into Tauri resources =="
 mkdir -p frontend/src-tauri/resources/backend
 cp -r backend/dist/qualcoder-backend/* frontend/src-tauri/resources/backend/
 
-echo "== 6/6 tauri build (flatpak bundle) =="
+echo "== 6/6 tauri build (deb bundle — see note) =="
 cd frontend/src-tauri
-npx --yes @tauri-apps/cli@2 build --bundles flatpak
+# NOTE: the stock Tauri v2 CLI cannot emit .flatpak bundles (--bundles on
+# Linux only accepts deb, rpm, appimage). Build the .deb here; wrapping it
+# into a .flatpak requires a flatpak-builder manifest (see tauri docs:
+# https://v2.tauri.app/distribute/flatpak/).
+npx --yes @tauri-apps/cli@2 build --bundles deb
 
-BUNDLE=$(find target/release/bundle/flatpak -name "*.flatpak" 2>/dev/null | head -1)
+BUNDLE=$(find target/release/bundle/deb -name "*.deb" 2>/dev/null | head -1)
 echo ""
 echo "== DONE =="
-echo "Flatpak bundle: $BUNDLE"
-echo "Install:        flatpak install --user $BUNDLE"
-echo "Run:            flatpak run org.qcnext.desktop"
+echo "Deb package: $BUNDLE"
+echo "Install:     sudo apt install $BUNDLE"
+echo "A .flatpak wrapper must be built from a flatpak-builder manifest."
