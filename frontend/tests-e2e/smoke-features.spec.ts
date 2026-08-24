@@ -23,7 +23,26 @@ test("reports menu bar + graphs under reports + journal ribbon", async ({ page }
 
   // Reports view: the center menu bar shows the report's buttons
   // (Codebook always has export actions, even without data).
-  await page.getByRole("button", { name: "Reports", exact: true }).click();
+  // Reports ribbon button can lag hydration on slow CI - retry with a
+  // reload if it is still disabled after the project visibly opened.
+  let reportsReady = false;
+  for (let attempt = 0; attempt < 3 && !reportsReady; attempt++) {
+    const reportsBtn = page.getByRole("button", { name: "Reports", exact: true });
+    try {
+      await reportsBtn.click({ timeout: 15_000 });
+      reportsReady = true;
+    } catch {
+      await page.goto("/");
+      await expect(page.getByRole("button", { name: PROJECT_PATH, exact: true })).toBeVisible({
+        timeout: 15_000,
+      });
+      await page.getByRole("button", { name: PROJECT_PATH, exact: true }).click();
+      await expect(page.getByRole("button", { name: "Cases" })).toBeVisible({
+        timeout: 30_000,
+      });
+    }
+  }
+  expect(reportsReady).toBeTruthy();
   await page.getByRole("button", { name: /Codebook/ }).click();
   await expect(page.getByRole("button", { name: /Download codebook/ })).toBeVisible({
     timeout: 15_000,

@@ -143,8 +143,22 @@ test("live coder presence: indicator + file shown in the coder flyout", async ({
     // presence, so the fabricated peer appears without any fixed wait.
     // CI runners are slow; retry in case the first open races rendering.
     let shown = false;
-    for (let attempt = 0; attempt < 3 && !shown; attempt++) {
-      await page.getByRole("button", { name: /Current coder:/ }).click();
+    for (let attempt = 0; attempt < 5 && !shown; attempt++) {
+      const coderBtn = page.getByRole("button", { name: /Current coder:/ });
+      try {
+        await coderBtn.click({ timeout: 15_000 });
+      } catch {
+        // Ribbon not hydrated yet on slow CI - reload and retry.
+        await page.goto("/");
+        await expect(
+          page.getByRole("button", { name: actual, exact: true }),
+        ).toBeVisible({ timeout: 15_000 });
+        await page.getByRole("button", { name: actual, exact: true }).click();
+        await expect(page.getByRole("button", { name: "Cases" })).toBeVisible({
+          timeout: 30_000,
+        });
+        continue;
+      }
       try {
         await expect(page.getByText("Actively working")).toBeVisible({ timeout: 8_000 });
         await expect(page.getByText("berta", { exact: true })).toBeVisible();

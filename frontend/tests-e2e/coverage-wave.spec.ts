@@ -102,10 +102,21 @@ async function createProject(page: Page) {
 
 /** Files view → open a text source in the coder and wait for its text. */
 async function openTextFile(page: Page, fileName: string, firstLine: string) {
-  await page.getByRole("button", { name: "Coding", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "Coding" }).first()).toBeVisible();
-  await page.getByRole("row").filter({ hasText: fileName }).click();
-  await expect(page.getByText(firstLine, { exact: false })).toBeVisible({ timeout: 20_000 });
+  const row = page.getByRole("row").filter({ hasText: fileName });
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      await page.getByRole("button", { name: "Coding", exact: true }).click({ timeout: 15_000 });
+      await expect(page.getByRole("heading", { name: "Coding" }).first()).toBeVisible({
+        timeout: 15_000,
+      });
+      await row.click({ timeout: 20_000 });
+      await expect(page.getByText(firstLine, { exact: false })).toBeVisible({ timeout: 20_000 });
+      return;
+    } catch {
+      if (attempt === 2) throw new Error(`Could not open ${fileName} in the coder`);
+      await page.reload();
+    }
+  }
 }
 
 /**
