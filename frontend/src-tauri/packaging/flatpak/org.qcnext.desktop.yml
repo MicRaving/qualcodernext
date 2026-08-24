@@ -40,10 +40,12 @@ modules:
   - name: qcnext
     buildsystem: simple
     build-commands:
-      # Extract ONLY the data archive from the deb (skip control files).
-      - ar x qcnext.deb data.tar.xz
-      - tar -xf data.tar.xz
-      - rm -f data.tar.xz
+      # Extract ALL deb members — the data archive's compression has changed
+      # across tauri-bundler versions (xz → zstd), so don't hardcode names.
+      - ar x qcnext.deb
+      - rm -f debian-binary control.tar.*
+      # tar auto-detects the compression from the file's magic bytes.
+      - tar -xf data.tar.*
       # The deb lays out under ./usr — flatten into the /app prefix. Paths
       # stay valid because the Tauri binary resolves its resources relative
       # to itself (/app/bin -> /app/lib/qcnext).
