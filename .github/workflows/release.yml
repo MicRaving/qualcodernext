@@ -89,12 +89,17 @@ jobs:
             exit 1
           fi
 
-      - name: Patch tauri.conf.json when the input version differs
+      - name: Patch the version files when the input version differs
         if: steps.version.outputs.version != steps.version.outputs.conf_version
         run: |
+          # tauri.conf.json drives the installer/updater metadata; package.json
+          # is injected into the UI at build time (vite define.__APP_VERSION__).
           jq --arg v "${{ steps.version.outputs.version }}" '.version = $v' \
             frontend/src-tauri/tauri.conf.json > tmp.conf.json
           mv tmp.conf.json frontend/src-tauri/tauri.conf.json
+          jq --arg v "${{ steps.version.outputs.version }}" '.version = $v' \
+            frontend/package.json > tmp.pkg.json
+          mv tmp.pkg.json frontend/package.json
 
       - name: Commit the version bump and push the tag
         env:
@@ -103,8 +108,8 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          if ! git diff --quiet frontend/src-tauri/tauri.conf.json; then
-            git add frontend/src-tauri/tauri.conf.json
+          if ! git diff --quiet frontend/src-tauri/tauri.conf.json frontend/package.json; then
+            git add frontend/src-tauri/tauri.conf.json frontend/package.json
             git commit -m "chore(release): v$VERSION"
             git push origin "HEAD:${{ github.ref_name }}"
           fi
