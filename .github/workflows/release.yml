@@ -142,14 +142,14 @@ jobs:
             bundles: app,dmg
             release_files: |
               frontend/src-tauri/target/release/bundle/macos/*.tar.gz
-              frontend/src-tauri/target/release/bundle/macos/*.dmg
+              frontend/src-tauri/target/release/bundle/dmg/*.dmg
               frontend/src-tauri/target/release/bundle/macos/*.sig
           - os: macos-latest
             target: darwin-aarch64
             bundles: app,dmg
             release_files: |
               frontend/src-tauri/target/release/bundle/macos/*.tar.gz
-              frontend/src-tauri/target/release/bundle/macos/*.dmg
+              frontend/src-tauri/target/release/bundle/dmg/*.dmg
               frontend/src-tauri/target/release/bundle/macos/*.sig
           - os: ubuntu-22.04
             target: linux-x86_64

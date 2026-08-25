@@ -3,6 +3,20 @@
      release body for tag vX.Y.Z, appending auto-generated commit notes.
      Add a section like "## 0.3.0 (2026-09-01)" at the TOP of the file. -->
 
+## 0.1.1 (2026-08-25)
+
+First tagged release of the reworked pipeline. Ships Windows (NSIS setup),
+macOS (dmg + updater archives, Intel and Apple Silicon) and Linux (flatpak).
+
+- CI: fully automated release flow — Run workflow cuts the tag, builds all
+  platforms, signs updater artifacts (when TAURI_SIGNING_PRIVATE_KEY is set)
+  and publishes this changelog section as the release body.
+- Backend: fixed two concurrency races — project create/open/close are now
+  serialized (a concurrent close could corrupt recent-projects with an empty
+  path), and settings.json writes are locked + atomic (recent projects could
+  vanish mid-session).
+- E2E suite made deterministic on slow CI runners; full suite green.
+
 ## Summary
 ### Major changes
 
