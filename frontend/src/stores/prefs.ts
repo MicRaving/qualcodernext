@@ -209,14 +209,25 @@ export const usePrefsStore = create<PrefsState>((set) => ({
     }
   },
   activateCollaboration: async () => {
+    let ok = false;
     try {
       const res = await api.activateCollaboration();
-      if (!res.ok) return false;
-      set({ collabMode: "collaboration" });
-      return true;
+      ok = res.ok === true;
     } catch {
-      return false;
+      /* 409s (already active / second coder required) land here — resolved
+         below against the backend's actual mode. */
     }
+    // Always trust the backend's real mode afterwards: it disambiguates the
+    // concurrent-activation 409 ("already active" = success for us) from
+    // genuine refusals, and keeps the UI from going stale either way.
+    try {
+      const mode = await api.projectMode();
+      set({ collabMode: mode.mode });
+      if (!ok && mode.mode === "collaboration") ok = true;
+    } catch {
+      /* keep the last known mode */
+    }
+    return ok;
   },
   revertCollaboration: async () => {
     try {

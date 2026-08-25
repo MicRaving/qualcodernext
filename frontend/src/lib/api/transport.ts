@@ -21,6 +21,8 @@ const DEV_FALLBACK = DEV_API_BASE;
 function resolveBase(): Promise<string> {
   if (!basePromise) {
     basePromise = (async () => {
+      const override = localStorageOverride();
+      if (override) return override;
       if (typeof window !== "undefined" && "__TAURI_INTERNALS__" in window) {
         try {
           const core = await import("@tauri-apps/api/core");
@@ -46,6 +48,20 @@ function resolveBase(): Promise<string> {
     })();
   }
   return basePromise;
+}
+
+/** Dev/testing affordance: per-browser-context backend override. In the
+ *  plain-browser shell (no Tauri), `localStorage["qc-dev-api-base"]` wins
+ *  over VITE_API_BASE — this is how two local instances against two
+ *  backends share one dev server (collaboration live tests). */
+function localStorageOverride(): string | null {
+  try {
+    if (typeof window === "undefined") return null;
+    const v = window.localStorage.getItem("qc-dev-api-base");
+    return v && /^https?:\/\//.test(v) ? v : null;
+  } catch {
+    return null;
+  }
 }
 
 /** Kick off base-URL resolution at startup (sync callers then see the port). */

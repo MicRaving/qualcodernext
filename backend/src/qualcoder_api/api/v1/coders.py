@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy import text
@@ -123,6 +125,29 @@ def _all_coders(svc, counts: dict[str, int]) -> list[str]:
     return names
 
 
+async def _ensure_project_coder(svc, name: str) -> None:
+    """Register a coder in the open project's ``coder_names`` registry.
+
+    Coders live per-machine in settings; the PROJECT keeps its own set in
+    ``coder_names`` (delete/rename maintain it). Creation must register too —
+    the collaboration gate counts exactly this table ("a second coder is
+    required"), and with only settings-side coders that gate could never
+    pass on a fresh project.
+    """
+    if svc.engine is None:
+        return
+    try:
+        _, factory = svc._ensure_engine()
+        async with factory() as session:
+            await session.execute(
+                text("INSERT OR IGNORE INTO coder_names(name, visibility) VALUES(:n, 1)"),
+                {"n": name},
+            )
+            await session.commit()
+    except Exception as err:  # pragma: no cover - pre-registry projects
+        logging.getLogger(__name__).warning("coder_names registration failed: %s", err)
+
+
 async def _segment_counts(svc) -> dict[str, int]:
     """Coding-segment counts per owner (text + image + AV codings).
 
@@ -167,6 +192,7 @@ async def create_coder(req: CoderRequest, svc: ServiceDep) -> CodersResponse:
     if name in names:
         raise HTTPException(status_code=409, detail=f'coder "{name}" already exists')
     set_coders([*names, name])
+    await _ensure_project_coder(svc, name)
     await _record_audit(svc, action="coder.create", detail={"name": name})
     return _response(get_codername(), get_coders(), {})
 
@@ -179,6 +205,9 @@ async def switch_coder(req: CurrentCoderRequest, svc: ServiceDep) -> CodersRespo
     if name not in _all_coders(svc, counts):
         raise HTTPException(status_code=404, detail=f'coder "{name}" does not exist')
     set_codername(name)
+    # Switching to a coder that exists only in settings (e.g. created on
+    # another machine before this project was opened) registers it here.
+    await _ensure_project_coder(svc, name)
     return _response(name, _all_coders(svc, counts), await _segment_counts(svc))
 
 

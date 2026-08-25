@@ -531,10 +531,18 @@ async def export_pending(session: AsyncSession, project_path: str, instance_id: 
     coder = current_user()
     sidecar = _sidecar_path(project_path, instance_id)
     sidecar.parent.mkdir(parents=True, exist_ok=True)
+
+    # Sidecar seqs are GLOBAL across the whole shared folder (the activation
+    # snapshot numbers from the same space). Numbering incremental entries by
+    # sync_log.id instead restarted at 1, which fell at-or-below the seq
+    # watermarks of peers that had replayed the snapshot — every subsequent
+    # change was then silently dropped on import. Continue the global
+    # sequence instead.
+    base_seq = _max_sidecar_seq(project_path)
     lines = "\n".join(
         json.dumps(
             {
-                "seq": r[3],
+                "seq": base_seq + i,
                 "instance": instance_id,
                 "coder": coder,
                 "entity": r[4],
@@ -547,7 +555,7 @@ async def export_pending(session: AsyncSession, project_path: str, instance_id: 
             },
             ensure_ascii=False,
         )
-        for r in rows
+        for i, r in enumerate(rows, start=1)
     ) + "\n"
     try:
         await asyncio.to_thread(_facade()._append_sidecar, sidecar, lines)

@@ -174,6 +174,13 @@ async def create_new_project_schema(
     for sql in _INDEX_SQL:
         await cur.execute(sql)
     await cur.execute(_CODER_NAMES_SQL)
+    # Seed the registry with the creating coder — the collaboration gate
+    # counts this table, and an empty row set would make even the first
+    # coder invisible to it.
+    await cur.execute(
+        "INSERT INTO coder_names(name, visibility) VALUES(:n, 1)",
+        {"n": codername},
+    )
     for view_name in tables.VISIBILITY_VIEWS:
         await cur.execute(_visibility_view_sql(view_name))
 

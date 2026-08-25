@@ -321,8 +321,15 @@ export function CoderSwitcher() {
     await switchCoder(name);
     setAdding(false);
     setNewName("");
-    // Adding a second coder with sync on starts collaboration mode.
-    if (syncEnabled && collabMode !== "collaboration") {
+    // Adding a second coder with sync on starts collaboration mode. The
+    // sync switch may still be propagating from an earlier refused
+    // activation attempt — enable it here rather than trusting the flag,
+    // otherwise activation is silently skipped.
+    let canActivate = syncEnabled;
+    if (!canActivate && collabMode !== "collaboration") {
+      canActivate = await setSyncEnabled(true, { remember: true });
+    }
+    if (canActivate && collabMode !== "collaboration") {
       const activated = await activateCollaboration();
       if (activated) {
         toast.success(t("collab.activated"));

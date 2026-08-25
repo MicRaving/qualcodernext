@@ -31,9 +31,20 @@ async def _revert_coder(session: AsyncSession, row: dict, *, undo: bool, **kwarg
         if undo:
             if name in names:
                 set_coders([n for n in names if n != name])
+            # Creation also registered the coder in this project's
+            # coder_names registry — undo removes that row again.
+            await session.execute(
+                text("DELETE FROM coder_names WHERE name = :n"), {"n": name}
+            )
             return f"removed coder {name!r} from the coder list"
         if name not in names:
             set_coders([*names, name])
+        await session.execute(
+            text(
+                "INSERT OR IGNORE INTO coder_names (name, visibility) VALUES (:n, 1)"
+            ),
+            {"n": name},
+        )
         return f"re-added coder {name!r} to the coder list"
     if action == "coder.delete":
         name = detail.get("name")

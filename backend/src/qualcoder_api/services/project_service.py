@@ -213,6 +213,18 @@ class ProjectService:
         self.project_path = actual_path
         self.project_name = root.name
         self._resolve_mode(actual_path)
+        if not self.collab:
+            # A marker written moments ago by another instance can be
+            # briefly invisible to THIS process on Windows (AV/indexing).
+            # Misclassifying collaboration as single makes the second rater
+            # edit the cold archive directly — re-check before concluding.
+            from qualcoder_api.services import project_marker as _pm
+
+            for _ in range(4):
+                if _pm.marker_exists(actual_path):
+                    self._resolve_mode(actual_path)
+                    break
+                await asyncio.sleep(0.25)
 
         try:
             await self._dispose_engine_if_any()
