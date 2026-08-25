@@ -316,7 +316,7 @@ jobs:
           $body = ""
           if (Test-Path "../../CHANGELOG.md") {
             $lines = Get-Content "../../CHANGELOG.md"
-            $pattern = '^##\s+v?' + [regex]::Escape($version) + '(\\s|\\(|$)'
+            $pattern = '^##\s+v?' + [regex]::Escape($version) + '(\s|\(|$)'
             $start = -1
             for ($i = 0; $i -lt $lines.Count; $i++) {
               if ($lines[$i] -match $pattern) { $start = $i; break }
