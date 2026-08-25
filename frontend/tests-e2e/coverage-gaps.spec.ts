@@ -288,7 +288,9 @@ test("send-to-QTT from the text coder selection toolbar", async ({ page }) => {
   // The worksheet now holds the segment item: the UI renders the quote (the
   // paragraph line-clamps, so match the prefix) and the source chip…
   await page.getByRole("button", { name: "Crafter", exact: true }).click();
-  await page.getByRole("button", { name: "Evidence" }).click();
+  // Kind label disambiguates from the row's hover-visible rename button
+  // (role-name matching is substring by default).
+  await page.getByRole("button", { name: "Evidence Qualitative" }).click();
   await expect(page.getByRole("button", { name: "gaps_b.txt", exact: true })).toBeVisible({
     timeout: 15_000,
   });
