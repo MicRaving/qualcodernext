@@ -2,10 +2,10 @@
 
 This is a rework of [QualCoder](https://github.com/ccbogel/QualCoder), an awesome open-source qualitative data analysis (QDA) tool. The central focus of the software is to load text and multimedia files for qualitative coding. It can transcribe audio/video files, organize codes and files, generate reports like coding graphs and coder comparisons, and integrates LLMs to explore the data, support coding, and analyze the results.
 
-> [!NOTE]
+> \[!NOTE]
 > This software is currently in beta. While I consider it mostly feature-complete and use it as my daily driver, you may encounter bugs or visual quirks, etc. Please report any issues and suggestions for improvements!
 
-![Active Project Dashboard](docs/screenshots/dashboard.jpg)
+!\[Active Project Dashboard](docs/screenshots/dashboard.jpg)
 
 
 
@@ -32,9 +32,9 @@ This rework is loosely based on the QualCoder 4.0 beta source code (\~2% copied,
 
 All releases are available on: [https://github.com/MicRaving/qualcodernext/releases](https://github.com/MicRaving/qualcodernext/releases)
 
-* Windows: Download the portable version and unpack it or install the installer from
-* Linux: Install the flatpack (untested)
-* MacOS: Install the .dmg (untested)
+* Windows: Download the portable version or use the installer.
+* Linux: Install the flatpack (untested).
+* MacOS: Not possible right now, since i don't own a Mac.
 * Compilation: Clone the repo and run `release.ps1 -Compile` (Windows) to build the portable folder and installer. Scripts for Linux and MacOS will follow soon.
 
 ## Documentation
@@ -80,7 +80,6 @@ This is a non-exhaustive, unsorted list of planned features:
 
 * Expand the rudimentary Creative Coding and Crafter
 * Working web app and server
-* Make confirming code deletion an in-app dialog instead of system.
 * Further improvements for collaboration and AI (particularly MCP)
 * Further refine the UI
 * Support other languages than EN/DE
