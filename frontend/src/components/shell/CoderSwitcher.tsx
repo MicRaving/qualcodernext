@@ -104,6 +104,9 @@ export function CoderSwitcher() {
   const inputRef = useRef<HTMLInputElement | null>(null);
 
   const syncEnabled = syncStatus?.ok === true && syncStatus.enabled === true;
+  // Set when a refused activation attempt enabled the sync switch — a
+  // follow-up add-coder within this flyout session may then activate.
+  const syncArmedRef = useRef(false);
   const syncError = Boolean(syncStatus?.last_error);
   const refreshHelpAnchor = helpOpen === "refresh" ? refreshHelpAnchorEl : null;
 
@@ -322,12 +325,13 @@ export function CoderSwitcher() {
     setAdding(false);
     setNewName("");
     // Adding a second coder with sync on starts collaboration mode. The
-    // sync switch may still be propagating from an earlier refused
-    // activation attempt — enable it here rather than trusting the flag,
-    // otherwise activation is silently skipped.
+    // switch may still be propagating right after a REFUSED activation
+    // attempt (which enables it) — re-arm in that case instead of silently
+    // skipping. Ordinary adds without sync stay untouched.
     let canActivate = syncEnabled;
-    if (!canActivate && collabMode !== "collaboration") {
+    if (!canActivate && syncArmedRef.current) {
       canActivate = await setSyncEnabled(true, { remember: true });
+      syncArmedRef.current = false;
     }
     if (canActivate && collabMode !== "collaboration") {
       const activated = await activateCollaboration();
@@ -345,6 +349,7 @@ export function CoderSwitcher() {
       // Collaboration requires background sync; enabling is part of the
       // explicit activation (never automatic elsewhere).
       await setSyncEnabled(true, { remember: true });
+      syncArmedRef.current = true;
       const ok = await activateCollaboration();
       if (ok) toast.success(t("collab.activated"));
       else toast.error(t("collab.activateFailed"));
