@@ -93,6 +93,16 @@ body,
   height: 100%;
 }
 
+/* Touchpad swipes that hit a scroll edge chained into the document and panned
+   the whole app past its border (a visible background gap). The document
+   itself NEVER scrolls — every view owns its own scrollers — so disable
+   document-level scrolling and overscroll chaining outright. */
+html,
+body {
+  overflow: hidden;
+  overscroll-behavior: none;
+}
+
 body {
   font-family: var(--font-sans);
   font-size: 12px;

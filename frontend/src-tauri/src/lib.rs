@@ -13,6 +13,24 @@ use std::process::{Child, Command};
 use std::sync::Mutex;
 use std::time::Duration;
 
+/// Windows: spawn helper processes (python, the PyInstaller backend,
+/// taskkill) WITHOUT a flashing console window. taskkill.exe is a console
+/// program — invoked plainly at app exit it briefly popped a terminal.
+#[cfg(windows)]
+fn hide_console(mut cmd: Command) -> Command {
+    use std::os::windows::process::CommandExt;
+
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    cmd.creation_flags(CREATE_NO_WINDOW);
+    cmd
+}
+
+/// No-op on platforms without console windows.
+#[cfg(not(windows))]
+fn hide_console(cmd: Command) -> Command {
+    cmd
+}
+
 #[cfg(not(debug_assertions))]
 use tauri::Manager;
 
@@ -101,7 +119,7 @@ fn start_backend(app: &tauri::AppHandle) {
         let python = std::env::var("QUALCODER_PYTHON")
             .unwrap_or_else(|_| "../../backend/.venv/Scripts/python.exe".to_string());
         eprintln!("[tauri] spawning dev backend: {python} -m uvicorn qualcoder_api.main:app --port 8765");
-        let child = Command::new(&python)
+        let child = hide_console(Command::new(&python))
             .args(["-m", "uvicorn", "qualcoder_api.main:app", "--port", "8765"])
             .current_dir("../../backend")
             .spawn();
@@ -132,7 +150,7 @@ fn spawn_release_backend(app: &tauri::AppHandle) -> std::io::Result<Child> {
             .and_then(Path::parent)
             .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "bad python path"))?;
         eprintln!("[tauri] spawning backend: {} (cwd {})", python.display(), backend_dir.display());
-        Command::new(python)
+        hide_console(Command::new(python))
             .args(BACKEND_PYTHON_ARGS)
             .current_dir(backend_dir)
             .spawn()
@@ -160,7 +178,7 @@ fn spawn_release_backend(app: &tauri::AppHandle) -> std::io::Result<Child> {
             .parent()
             .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "bad resource path"))?;
         eprintln!("[tauri] spawning bundled backend: {} (cwd {})", resource.display(), dir.display());
-        Command::new(&resource).current_dir(dir).spawn()
+        hide_console(Command::new(&resource)).current_dir(dir).spawn()
     }
 
     // 1. Bundled onedir in the resource dir (installed by the installer).
@@ -172,7 +190,7 @@ fn spawn_release_backend(app: &tauri::AppHandle) -> std::io::Result<Child> {
     if let Ok(exe) = std::env::var("QUALCODER_BACKEND_EXE") {
         if !exe.is_empty() {
             eprintln!("[tauri] spawning bundled backend: {exe}");
-            return Command::new(&exe).spawn();
+            return hide_console(Command::new(&exe)).spawn();
         }
     }
 
@@ -241,7 +259,7 @@ fn kill_backend() {
         #[cfg(windows)]
         {
             let pid = child.id();
-            let _ = Command::new("taskkill")
+            let _ = hide_console(Command::new("taskkill"))
                 .args(["/T", "/F", "/PID", &pid.to_string()])
                 .stdout(std::process::Stdio::null())
                 .stderr(std::process::Stdio::null())

@@ -20,6 +20,7 @@ import {
   Plus,
   Quote,
   ScrollText,
+  Search,
   StickyNote,
   Trash2,
 } from "lucide-react";
@@ -85,6 +86,14 @@ export function QttList() {
   const [createBusy, setCreateBusy] = useState(false);
   const [renamingId, setRenamingId] = useState<number | null>(null);
   const [rowMenu, setRowMenu] = useState<{ x: number; y: number; sheet: QttSheet } | null>(null);
+  const [query, setQuery] = useState("");
+
+  /** Client-side name filter — mirrors the other left bars' search boxes. */
+  const visible = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return sheets;
+    return sheets.filter((s) => s.name.toLowerCase().includes(q));
+  }, [sheets, query]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -175,14 +184,31 @@ export function QttList() {
         />
       }
     >
+      {/* Search — same pattern as the files/codes left bars. */}
+      <div className="relative shrink-0 border-b border-border px-3 py-1.5">
+        <Search
+          size={14}
+          className="pointer-events-none absolute left-5 top-1/2 -translate-y-1/2 text-text-secondary"
+          aria-hidden
+        />
+        <Input
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder={t("qtt.search")}
+          aria-label={t("qtt.search")}
+          className="w-full pl-7!"
+        />
+      </div>
       {error && <ErrorBanner onClose={() => setError(null)}>{error}</ErrorBanner>}
       {loading && sheets.length === 0 ? (
         <LoadingState>{t("qtt.loading")}</LoadingState>
       ) : sheets.length === 0 ? (
         <EmptyState>{t("qtt.empty")}</EmptyState>
+      ) : visible.length === 0 ? (
+        <EmptyState>{t("qtt.searchEmpty")}</EmptyState>
       ) : (
         <div className="divide-y divide-border">
-          {sheets.map((sheet) => {
+          {visible.map((sheet) => {
             const count = Object.values(sheet.counts).reduce((a, b) => a + b, 0);
             if (renamingId === sheet.id) {
               return (
@@ -212,39 +238,60 @@ export function QttList() {
               );
             }
             return (
-              <button
-                key={sheet.id}
-                type="button"
-                onClick={() => setQttUi({ selectedId: sheet.id })}
-                onContextMenu={(e) => {
-                  e.preventDefault();
-                  setRowMenu({ x: e.clientX, y: e.clientY, sheet });
-                }}
-                className={`flex w-full items-center gap-1.5 px-3 py-2 text-left hover:bg-surface-higher ${
-                  qttUi.selectedId === sheet.id ? "bg-accent/10" : ""
-                }`}
-              >
-                <ScrollText
-                  size={14}
-                  className="shrink-0 text-text-secondary"
-                  aria-hidden
-                />
-                <span className="min-w-0 flex-1">
-                  <span className="block truncate text-sm text-text-primary">{sheet.name}</span>
-                  <span className="mt-0.5 flex items-center gap-1.5 text-xs text-text-secondary">
-                    <span
-                      className={`rounded-sm px-1 py-px text-[10px] font-medium uppercase ${
-                        sheet.kind === "mixed" ? "bg-accent/15 text-accent" : "bg-surface-higher"
-                      }`}
-                    >
-                      {sheet.kind === "mixed" ? t("qtt.kindMixed") : t("qtt.kindQual")}
-                    </span>
-                    <span className="truncate">
-                      {count} {t("qtt.itemCount", { count })}
+              <div key={sheet.id} className="group flex items-center">
+                <button
+                  type="button"
+                  onClick={() => setQttUi({ selectedId: sheet.id })}
+                  onContextMenu={(e) => {
+                    e.preventDefault();
+                    setRowMenu({ x: e.clientX, y: e.clientY, sheet });
+                  }}
+                  className={`flex min-w-0 flex-1 items-center gap-1.5 px-3 py-2 text-left hover:bg-surface-higher ${
+                    qttUi.selectedId === sheet.id ? "bg-accent/10" : ""
+                  }`}
+                >
+                  <ScrollText
+                    size={14}
+                    className="shrink-0 text-text-secondary"
+                    aria-hidden
+                  />
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-sm text-text-primary">{sheet.name}</span>
+                    <span className="mt-0.5 flex items-center gap-1.5 text-xs text-text-secondary">
+                      <span
+                        className={`rounded-sm px-1 py-px text-[10px] font-medium uppercase ${
+                          sheet.kind === "mixed" ? "bg-accent/15 text-accent" : "bg-surface-higher"
+                        }`}
+                      >
+                        {sheet.kind === "mixed" ? t("qtt.kindMixed") : t("qtt.kindQual")}
+                      </span>
+                      <span className="truncate">
+                        {count} {t("qtt.itemCount", { count })}
+                      </span>
                     </span>
                   </span>
+                </button>
+                {/* Inline rename/delete on hover — aligned with the other bars. */}
+                <span className="flex shrink-0 items-center gap-0.5 pr-2 opacity-0 transition-opacity group-hover:opacity-100">
+                  <IconButton
+                    label={t("qtt.renameFor", { name: sheet.name })}
+                    title={t("qtt.renameFor", { name: sheet.name })}
+                    size="row"
+                    onClick={() => setRenamingId(sheet.id)}
+                  >
+                    <Pencil size={12} aria-hidden />
+                  </IconButton>
+                  <IconButton
+                    label={t("common.delete")}
+                    title={t("common.delete")}
+                    size="row"
+                    className="hover:text-danger"
+                    onClick={() => void deleteSheet(sheet)}
+                  >
+                    <Trash2 size={12} aria-hidden />
+                  </IconButton>
                 </span>
-              </button>
+              </div>
             );
           })}
         </div>

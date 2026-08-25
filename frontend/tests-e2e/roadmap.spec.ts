@@ -228,7 +228,9 @@ test("QTT ribbon nav, worksheet creation and note entry", async ({ page }) => {
   await expect(dialog).toBeHidden({ timeout: 10_000 });
 
   // The sheet appears in the left bar; selecting it shows the info editors.
-  await page.getByRole("button", { name: "RQ Sheet" }).click();
+  // (Kind label in the accessible name disambiguates from the row's
+  // hover-visible "Rename worksheet …" button — role-name is substring.)
+  await page.getByRole("button", { name: "RQ Sheet Qualitative" }).click();
   await expect(page.getByText("Worksheet info", { exact: true })).toBeVisible({ timeout: 10_000 });
   const rq = page.getByLabel("Research question");
   await expect(rq).toBeVisible();
