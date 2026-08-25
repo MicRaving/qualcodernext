@@ -454,14 +454,16 @@ async def test_undo_redo_coders(client, open_project, settings_file):
     names = [c["name"] for c in (await client.get("/api/v1/coders")).json()["coders"]]
     assert "Bob" not in names
 
-    # Visibility: hide → undo removes the coder_names row again.
+    # Visibility: hide → undo restores the coder as visible again.
+    # (Creation registers the coder in coder_names with visibility=1, so the
+    # recorded "before" of the first hide is visible=1 — undo returns there.)
     await client.post("/api/v1/coders", json={"name": "Bob"})
     res = await client.put("/api/v1/coders/Bob/visibility", json={"visible": False})
     assert res.status_code == 200, res.text
     aid = await _find_audit_id(client, "coder.visibility")
     await _undo(client, aid)
     visibility = (await client.get("/api/v1/coders/visibility")).json()["visibility"]
-    assert "Bob" not in visibility
+    assert visibility.get("Bob") == 1
     await _redo(client, aid)
     visibility = (await client.get("/api/v1/coders/visibility")).json()["visibility"]
     assert visibility.get("Bob") == 0
