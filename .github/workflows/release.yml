@@ -14,7 +14,9 @@ name: Release
 # artifacts disabled, no update manifest) so the pipeline never fails at the
 # signing step — the "A public key has been found, but no private key" error.
 #
-# Only the NSIS setup .exe is uploaded for Windows (NOT the MSI).
+# Only the NSIS setup .exe is uploaded for Windows (NOT the MSI and NOT the
+# bare target/release/qcnext.exe, which cannot run standalone). The macOS
+# .app.tar.gz + .sig ARE shipped: they are what the auto-updater downloads.
 #
 # Linux ships as a single-file .flatpak: the stock Tauri v2 CLI cannot emit
 # flatpak bundles (`--bundles` only accepts deb/rpm/appimage on Linux), so the
@@ -64,7 +66,7 @@ jobs:
     if: github.event_name == 'workflow_dispatch' && !startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Resolve the version (input wins over tauri.conf.json)
         id: version
@@ -133,8 +135,10 @@ jobs:
           - os: windows-latest
             target: windows-x86_64
             bundles: nsis
+            # Only the NSIS setup ships — the bare target/release/qcnext.exe
+            # is a broken "portable" build (its resources live next to the
+            # installed copy, not beside this file).
             release_files: |
-              frontend/src-tauri/target/release/qcnext.exe
               frontend/src-tauri/target/release/bundle/nsis/*setup.exe
               frontend/src-tauri/target/release/bundle/nsis/*setup.exe.sig
           - os: macos-15-intel
@@ -161,14 +165,14 @@ jobs:
             release_files: |
               frontend/src-tauri/target/release/bundle/flatpak/*.flatpak
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.11"
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
-          node-version: "24"
+          node-version: "20"
           cache: npm
           cache-dependency-path: frontend/package-lock.json
       - uses: dtolnay/rust-toolchain@stable
@@ -301,7 +305,7 @@ jobs:
 
       - name: Upload manifest fragment
         if: env.UNSIGNED_BUILD != 'true' && matrix.target != 'linux-x86_64'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: fragment-${{ matrix.target }}
           path: ${{ runner.temp }}/fragment-${{ matrix.target }}.json
@@ -334,7 +338,7 @@ jobs:
 
       - name: Publish the GitHub release
         if: startsWith(github.ref, 'refs/tags/')
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           body_path: frontend/release-body.md
           generate_release_notes: true
@@ -345,10 +349,10 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Download all manifest fragments
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: fragment-*
           path: fragments
@@ -381,6 +385,6 @@ jobs:
 
       - name: Upload the update manifest
         if: hashFiles('qcnext-latest.json') != '' && startsWith(github.ref, 'refs/tags/')
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: qcnext-latest.json
