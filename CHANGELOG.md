@@ -3,6 +3,26 @@
      release body for tag vX.Y.Z, appending auto-generated commit notes.
      Add a section like "## 0.3.0 (2026-09-01)" at the TOP of the file. -->
 
+## 0.2.1 (2026-08-26)
+
+Critical collaboration fix — everyone working in shared projects should
+update.
+
+### Fixed
+
+- **New collaborators saw a completely empty project.** Opening an online
+  project for the first time could race its activation: the marker that
+  tells other machines "rebuild from the sync log" was written before the
+  sync-log snapshot itself was complete. Activation now publishes the full
+  snapshot first and writes the marker last, and if a rebuild still comes
+  up empty, the new sandbox falls back to the project archive instead of
+  staying blank.
+- Hardened earlier collaboration fixes (coder registry on add/switch,
+  change-sequence numbering, activation mode resolution) are included in
+  this build; mixed 0.1.1/0.2.x sessions now behave correctly.
+
+**Full Changelog**: https://github.com/MicRaving/qualcodernext/compare/v0.2.0...v0.2.1
+
 ## 0.2.0 (2026-08-25)
 
 Collaboration hardening release — the multi-rater flow was verified with a
