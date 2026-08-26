@@ -3,6 +3,44 @@
      release body for tag vX.Y.Z, appending auto-generated commit notes.
      Add a section like "## 0.3.0 (2026-09-01)" at the TOP of the file. -->
 
+## 0.2.0 (2026-08-25)
+
+Collaboration hardening release — the multi-rater flow was verified with a
+scripted **live two-instance test** (separate profiles and sandboxes sharing
+one project folder), which surfaced and fixed three real sync bugs.
+
+### Collaboration
+
+- Fixed: adding a second coder could never activate collaboration on a fresh
+  project (coder registry mismatch between settings and project database).
+- Fixed: peers silently dropped every change exported after the activation
+  snapshot (sequence-space collision between snapshot and incremental
+  exports) — new data now reaches the other instance reliably.
+- Fixed: a concurrent activation by the other instance left the UI stuck in
+  single-coder mode; activation now resolves the real mode from the backend.
+- Fixed: adding a coder right after a refused activation attempt silently
+  skipped collaboration start; the follow-up attempt re-enables sync.
+- Live-test coverage: offline→online conversion, second rater joining with
+  their own coder, bidirectional data+coding rounds, convergence counts,
+  live presence, sidecar integrity, zero conflicts.
+
+### General
+
+- Fixed: the displayed app version now follows the released version
+  (previously every installer showed v0.1.0).
+- Fixed: the built-in updater pointed at a wrong repository and always
+  reported "Could not fetch a valid release JSON".
+- Crafter left bar aligned with other views: search box plus inline
+  rename/delete per worksheet.
+- Fixed touchpad edge-swipes panning the whole interface past its border.
+- Fixed a terminal window flashing when closing the app (Windows).
+
+### Packaging & CI
+
+- Releases now ship Windows setup, macOS dmg (Intel + Apple Silicon) with
+  signed updater archives, and a Linux flatpak — cut automatically from
+  CHANGELOG.md via the Release workflow.
+
 ## 0.1.1 (2026-08-25)
 
 First tagged release of the reworked pipeline. Ships Windows (NSIS setup),
