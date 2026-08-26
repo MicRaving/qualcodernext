@@ -448,16 +448,23 @@ class ProjectService:
         uuid = secrets.token_hex(6)  # 12 hex chars, unique per activation
         await checkpoint(self.db_path())  # data.qda (WAL) -> self-consistent
         sandbox.create_sandbox_from(self.db_path(), uuid)
-        # Marker LAST so a mid-failure never strands an unopened sandbox.
-        project_marker.write_marker(self.project_path, uuid, codername=codername)
         self.uuid = uuid
         self.collab = True
 
+        # Reopen on the SANDBOX and export the full state to this instance's
+        # sidecar BEFORE writing the marker: the marker is the signal for
+        # other instances to rebuild from the sidecars alone. Writing it
+        # first let a second rater opening mid-activation rebuild from an
+        # EMPTY sidecar and see a blank project.
         await self._dispose_engine_if_any()
         await self._open_engine()
         _, factory = self._ensure_engine()
         async with factory() as session:
             await sync.export_full_state(session, self.project_path, get_instance_id())
+
+        # Marker LAST — the one-way door opens only once everything above
+        # (sandbox + complete sidecar snapshot) is durably in place.
+        project_marker.write_marker(self.project_path, uuid, codername=codername)
         return {"ok": True, "uuid": uuid, "reason": "collaboration activated"}
 
     async def revert_collaboration(self) -> dict:
@@ -770,10 +777,32 @@ class ProjectService:
             await checkpoint(str(archive))
             sandbox.create_sandbox_from(str(archive), self.uuid)
             return
+
+        # Sidecars exist: rebuild the full database from them. If the rebuild
+        # finds NOTHING to replay (torn/partial sidecar write racing this
+        # open) but the cold archive carries data, fall back to seeding from
+        # the archive — an empty project is worse than a slightly stale one,
+        # and the next sync cycle reconciles the difference.
         await sandbox.create_fresh_sandbox(self.uuid, codername=codername)
         engine = create_project_engine(str(sandbox.sandbox_path(self.uuid)))
         try:
             factory = create_session_factory(engine)
-            await sync.rebuild_from_sidecars(factory, project_path, get_instance_id())
+            result = await sync.rebuild_from_sidecars(
+                factory, project_path, get_instance_id()
+            )
         finally:
             await dispose_engine(engine)
+
+        entries = int(result.get("entries", 0)) if isinstance(result, dict) else 0
+        applied = int(result.get("applied", 0)) if isinstance(result, dict) else 0
+        emptyRebuild = entries == 0 or (
+            entries > 0 and applied == 0 and result.get("retries", 0) >= 1
+        )
+        if emptyRebuild and archive.exists():
+            logger.warning(
+                "sidecar rebuild yielded nothing (entries=%s applied=%s) "
+                "— falling back to seeding the sandbox from the cold archive",
+                entries,
+                applied,
+            )
+            await sandbox.create_sandbox_from(str(archive), self.uuid)
