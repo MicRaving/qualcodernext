@@ -810,8 +810,59 @@ class ProjectService:
         from qualcoder_api.services import sandbox, sync
         from qualcoder_api.services.user_settings import get_instance_id
 
+        # Existing sandbox: verify it is not empty/corrupted (e.g. LSTeach
+        # with 2 sources vs 23 in the archive).  A stale sandbox must be
+        # rebuilt — otherwise the second rater (or the first after a crash)
+        # stays on an empty project forever.
         if sandbox.sandbox_exists(self.uuid):
-            return
+            corrupted = False
+            try:
+                archive_probe = Path(project_path) / "data.qda"
+                if archive_probe.exists():
+                    probe_engine = create_project_engine(str(sandbox.sandbox_path(self.uuid)))
+                    try:
+                        probe_factory = create_session_factory(probe_engine)
+                        async with probe_factory() as probe_session:
+                            s_cnt = (await probe_session.execute(text("SELECT COUNT(*) FROM source"))).scalar() or 0
+                            c_cnt = (await probe_session.execute(text("SELECT COUNT(*) FROM code_name"))).scalar() or 0
+                            import aiosqlite as _aiosqlite2
+
+                            try:
+                                conn2 = await _aiosqlite2.connect(str(archive_probe))
+                                try:
+                                    cur2 = await conn2.cursor()
+                                    await cur2.execute("SELECT COUNT(*) FROM source")
+                                    a_s = (await cur2.fetchone())[0] or 0
+                                    await cur2.execute("SELECT COUNT(*) FROM code_name")
+                                    a_c = (await cur2.fetchone())[0] or 0
+                                finally:
+                                    await conn2.close()
+                                if (int(s_cnt) == 0 and int(c_cnt) == 0 and (int(a_s) > 0 or int(a_c) > 0)) or (
+                                    int(a_s) > 5 and int(s_cnt) * 2 < int(a_s)
+                                ):
+                                    logger.warning(
+                                        "existing sandbox for %s is empty/corrupted (src=%s/%s code=%s/%s) — rebuilding",
+                                        self.uuid,
+                                        s_cnt,
+                                        a_s,
+                                        c_cnt,
+                                        a_c,
+                                    )
+                                    corrupted = True
+                            except Exception:
+                                pass
+                    finally:
+                        with contextlib.suppress(Exception):
+                            await dispose_engine(probe_engine)
+                    if corrupted:
+                        sandbox.remove_sandbox(self.uuid)
+                    else:
+                        return
+                else:
+                    return
+            except Exception as err:
+                logger.debug("sandbox emptiness probe failed for %s: %s", self.uuid, err)
+                return
         archive = Path(project_path) / "data.qda"
         changes_root = Path(project_path) / sync.SYNC_DIR_NAME
 

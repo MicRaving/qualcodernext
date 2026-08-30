@@ -3,6 +3,17 @@
      release body for tag vX.Y.Z, appending auto-generated commit notes.
      Add a section like "## 0.3.0 (2026-09-01)" at the TOP of the file. -->
 
+## 0.3.1 (2026-08-30)
+
+Patch for **LSTeach.qda** — the shipped demo project failed the 0.3.0 transition.
+
+### Fixed
+
+- **LSTeach (and any pre-0.3.0 project with `source.sort_index`) rebuilt to an empty sandbox.** The `source` table in older sidecars carries a legacy `sort_index` column that was removed from the current schema. `INSERT INTO source` with that column raised `no column named sort_index` → `OperationalError` → `retry` → the entire `rebuild_from_sidecars` aborted after 2617 tombstones, leaving `source=0/code_name=0`. The `INSERT` and `UPDATE` paths now filter rows to known table columns before executing.
+- **Existing but corrupted sandboxes were never healed.** `~/.qualcoder/projects/<uuid>/sandbox.sqlite` for `LSTeach` (2 sources vs 23 in the archive) was treated as valid because `sandbox_exists()` returned `True`. The opener now probes an existing sandbox (`source`/`code_name` counts vs the archive) and, when clearly empty/corrupted (`0 vs >0` or `<50%` of the archive), deletes it and falls back to the archive/sidecar rebuild. The 7 MB `LSTeach.qda/changes/5dd5e2c13176/changes.jsonl` (58 corrupt lines, out-of-order) has been compacted to 9412 entries (6.4 MB).
+
+**Full Changelog**: https://github.com/MicRaving/qualcodernext/compare/v0.3.0...v0.3.1
+
 ## 0.3.0 (2026-08-30)
 
 Collaboration transition hardening — fixes the offline → online handoff that left the second rater with an empty project.

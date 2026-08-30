@@ -113,6 +113,19 @@ async def _record_conflict(
 
 async def _insert_row(session: AsyncSession, entity: str, row: dict) -> None:
     """Insert a row into *entity* (monkeypatchable in tests)."""
+    # LSTeach sidecars contain legacy columns (e.g. source.sort_index)
+    # that no longer exist in the current schema.  Filter to known columns
+    # so a stale sidecar does not abort the entire rebuild with
+    # "no column named sort_index" (OperationalError → retry → empty sandbox).
+    table = getattr(tables, entity, None)
+    if table is not None:
+        try:
+            allowed = {c.name for c in table.columns}
+            row = {k: v for k, v in row.items() if k in allowed}
+        except Exception:
+            pass
+    if not row:
+        return
     cols = ", ".join(row.keys())
     placeholders = ", ".join(":" + k for k in row)
     await session.execute(
@@ -492,6 +505,14 @@ async def _replay_one(
         update_row = dict(row)
         pk_cols = set(_pk_cols(pk_name))
         update_cols = {k: v for k, v in update_row.items() if k not in pk_cols}
+        # Filter legacy columns (e.g. source.sort_index) that no longer exist.
+        table = getattr(tables, entity, None)
+        if table is not None:
+            try:
+                allowed = {c.name for c in table.columns}
+                update_cols = {k: v for k, v in update_cols.items() if k in allowed}
+            except Exception:
+                pass
         if update_cols:
             set_clause = ", ".join(f"{k} = :{k}" for k in update_cols)
             where, params = _pk_where(pk_name)
