@@ -550,7 +550,14 @@ async def export_pending(session: AsyncSession, project_path: str, instance_id: 
         return {"exported": 0}
 
     coder = current_user()
-    sidecar = _sidecar_path(project_path, instance_id)
+    # Per-session replay files (new spec 2a) vs legacy per-instance sidecars
+    from qualcoder_api.services.sync_sidecar import _is_session_id, _replay_path
+
+    is_session = _is_session_id(instance_id)
+    if is_session:
+        sidecar = _replay_path(project_path, instance_id)
+    else:
+        sidecar = _sidecar_path(project_path, instance_id)
     sidecar.parent.mkdir(parents=True, exist_ok=True)
 
     # Sidecar seqs are GLOBAL across the whole shared folder (the activation
@@ -604,20 +611,42 @@ async def export_pending(session: AsyncSession, project_path: str, instance_id: 
 
 async def import_pending(session: AsyncSession, project_path: str, instance_id: str) -> dict:
     """Read every other instance's sidecar and replay rows newer than the watermark."""
+
     state = load_state(project_path)
-    changes_root = Path(project_path) / SYNC_DIR_NAME
     report: dict[str, dict] = {}
-    if not changes_root.is_dir():
+
+    # Collect all replay sources: per-session replays + legacy sidecars
+    replay_sources: list[tuple[Path, str]] = []
+
+    # Per-session replays (new spec 2a) — skip our own session
+    replays_root = Path(project_path) / "replays"
+    if replays_root.is_dir():
+        for p in sorted(replays_root.glob("*.jsonl")):
+            if p.name == "merged.json":
+                continue
+            sid = p.stem
+            if sid == instance_id:
+                continue
+            # Also skip if this is a legacy instance sidecar that we already handle via changes/
+            replay_sources.append((p, sid))
+
+    # Legacy per-instance sidecars (for migration, e.g. LSTeach)
+    changes_root = Path(project_path) / SYNC_DIR_NAME
+    if changes_root.is_dir():
+        for sidecar_dir in sorted(changes_root.iterdir()):
+            if not sidecar_dir.is_dir() or sidecar_dir.name == instance_id:
+                continue
+            sidecar = sidecar_dir / "changes.jsonl"
+            if not sidecar.exists():
+                continue
+            # Avoid double-counting if this instance_id is actually a session_id that already has a per-session replay
+            # (session_ids contain dash, instance_ids don't, so this is safe)
+            replay_sources.append((sidecar, sidecar_dir.name))
+
+    if not replay_sources:
         return report
 
-    for sidecar_dir in sorted(changes_root.iterdir()):
-        if not sidecar_dir.is_dir() or sidecar_dir.name == instance_id:
-            continue
-        sidecar = sidecar_dir / "changes.jsonl"
-        if not sidecar.exists():
-            continue
-
-        remote_instance = sidecar_dir.name
+    for sidecar, remote_instance in replay_sources:
 
         # Replay rows newer than the watermark, keeping only the LATEST entry
         # per (entity, pk) above it.  Append-only sidecars accumulate
@@ -702,6 +731,17 @@ async def import_pending(session: AsyncSession, project_path: str, instance_id: 
                 state.get("conflicts", {}).get(remote_instance, []) + conflicts
             )
         save_state(project_path, state)
+        # Spec 2e: ack that we have merged this replay (for deletion)
+        # Do this after the watermark is saved, so the ack is durable.
+        try:
+            from qualcoder_api.services import replay_service
+
+            # Ack for any replay that we advanced (including per-session and legacy)
+            # The replay's session id is remote_instance; our session/instance is instance_id
+            if highest_applied > 0:
+                replay_service.write_ack(project_path, remote_instance, instance_id)
+        except Exception:
+            pass
         report[remote_instance] = {
             "applied": applied,
             "conflicts": conflicts,
@@ -770,7 +810,14 @@ async def export_full_state(
     if not entries:
         return {"exported": 0}
 
-    sidecar = _sidecar_path(project_path, instance_id)
+    # Per-session replay (new spec 2a) vs legacy per-instance sidecar
+    from qualcoder_api.services.sync_sidecar import _is_session_id, _replay_path
+
+    is_session = _is_session_id(instance_id)
+    if is_session:
+        sidecar = _replay_path(project_path, instance_id)
+    else:
+        sidecar = _sidecar_path(project_path, instance_id)
     sidecar.parent.mkdir(parents=True, exist_ok=True)
     lines = "\n".join(json.dumps(e, ensure_ascii=False) for e in entries) + "\n"
     try:
@@ -802,9 +849,31 @@ async def rebuild_from_sidecars(
     """
     state = load_state(project_path)
     changes_root = Path(project_path) / SYNC_DIR_NAME
+    replays_root = Path(project_path) / "replays"
 
     latest: dict[tuple[str, str], dict] = {}
     max_seq_by_instance: dict[str, int] = {}
+    # Per-session replays (new spec 2a)
+    if replays_root.is_dir():
+        for p in sorted(replays_root.glob("*.jsonl")):
+            if p.name == "merged.json":
+                continue
+            remote_instance = p.stem
+            inst_max = 0
+            for e in _parse_sidecar(p):
+                try:
+                    seq = int(e.get("seq", 0))
+                except (TypeError, ValueError):
+                    seq = 0
+                inst_max = max(inst_max, seq)
+                key = (str(e.get("entity", "")), str(e.get("pk_value", "")))
+                prev = latest.get(key)
+                if prev is not None and int(prev.get("seq", 0)) >= seq:
+                    continue
+                latest[key] = e
+            if inst_max:
+                max_seq_by_instance[remote_instance] = inst_max
+    # Legacy per-instance sidecars (for migration, e.g. LSTeach)
     if changes_root.is_dir():
         for sidecar_dir in changes_root.iterdir():
             if not sidecar_dir.is_dir():
@@ -812,6 +881,10 @@ async def rebuild_from_sidecars(
             remote_instance = sidecar_dir.name
             sidecar = sidecar_dir / "changes.jsonl"
             if not sidecar.exists():
+                continue
+            # Skip if this instance already has a per-session replay (avoid double counting)
+            # Session ids contain dash, instance ids don't, so this is safe
+            if (replays_root / f"{remote_instance}.jsonl").exists():
                 continue
             inst_max = 0
             for e in _parse_sidecar(sidecar):

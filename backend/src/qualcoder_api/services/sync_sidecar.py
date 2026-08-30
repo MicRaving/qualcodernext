@@ -29,7 +29,18 @@ def _facade():
 
 
 def _sidecar_path(project_path: str, instance_id: str) -> Path:
+    """Legacy per-instance sidecar path (kept for migration)."""
     return Path(project_path) / SYNC_DIR_NAME / instance_id / "changes.jsonl"
+
+
+def _replay_path(project_path: str, session_id: str) -> Path:
+    """Per-session replay file (new spec 2a)."""
+    return Path(project_path) / "replays" / f"{session_id}.jsonl"
+
+
+def _is_session_id(s: str) -> bool:
+    """Heuristic: session ids contain a dash and are longer than instance ids."""
+    return "-" in s and len(s) > 12
 
 
 def _parse_sidecar(path: Path) -> list[dict]:
@@ -158,20 +169,32 @@ async def _trim_sync_log(session: AsyncSession, exported_seq: int) -> int:
 
 
 def _max_sidecar_seq(project_path: str) -> int:
-    """The highest ``seq`` across every instance's sidecar (0 when none)."""
-    changes_root = Path(project_path) / SYNC_DIR_NAME
-    if not changes_root.is_dir():
-        return 0
+    """The highest ``seq`` across every instance's sidecar and per-session replays (0 when none)."""
     max_seq = 0
-    for sidecar_dir in changes_root.iterdir():
-        if not sidecar_dir.is_dir():
-            continue
-        sidecar = sidecar_dir / "changes.jsonl"
-        if not sidecar.exists():
-            continue
-        for e in _parse_sidecar(sidecar):
-            try:
-                max_seq = max(max_seq, int(e.get("seq", 0)))
-            except (TypeError, ValueError):
+    # Legacy per-instance sidecars
+    changes_root = Path(project_path) / SYNC_DIR_NAME
+    if changes_root.is_dir():
+        for sidecar_dir in changes_root.iterdir():
+            if not sidecar_dir.is_dir():
                 continue
+            sidecar = sidecar_dir / "changes.jsonl"
+            if not sidecar.exists():
+                continue
+            for e in _parse_sidecar(sidecar):
+                try:
+                    max_seq = max(max_seq, int(e.get("seq", 0)))
+                except (TypeError, ValueError):
+                    continue
+    # Per-session replays (new spec 2a)
+    replays_root = Path(project_path) / "replays"
+    if replays_root.is_dir():
+        for p in replays_root.glob("*.jsonl"):
+            # Skip merged watermark file
+            if p.name == "merged.json":
+                continue
+            for e in _parse_sidecar(p):
+                try:
+                    max_seq = max(max_seq, int(e.get("seq", 0)))
+                except (TypeError, ValueError):
+                    continue
     return max_seq

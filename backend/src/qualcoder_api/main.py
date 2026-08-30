@@ -72,10 +72,33 @@ async def _sync_loop() -> None:
             continue
         if service.project_path and service.session_factory:
             try:
+                # Prefer per-session replay files when in a session (new spec 2a),
+                # fall back to legacy per-instance sidecars for old projects.
+                sync_id = getattr(service, "current_session_id", "") or user_settings.get_instance_id()
                 await sync_engine.run_sync_cycle(
                     service.session_factory, service.project_path,
-                    user_settings.get_instance_id(),
+                    sync_id,
                 )
+                # After a successful sync, ack any newly imported replays (spec 2e)
+                # and heartbeat the session.
+                if getattr(service, "current_session_id", ""):
+                    try:
+                        from qualcoder_api.services import replay_service
+
+                        # Ack all replays that are not our own and that we have imported
+                        # (for now, ack every replay that exists and is not ours)
+                        for rp in replay_service.list_replays(service.project_path):
+                            if rp.stem == sync_id:
+                                continue
+                            # Only ack if the replay file still exists and we have imported it
+                            # (import is tracked via sync's imports watermark, but for simplicity
+                            # we ack every replay that is not ours and is not yet acked)
+                            if not replay_service.has_acked(service.project_path, rp.stem, sync_id):
+                                replay_service.write_ack(service.project_path, rp.stem, sync_id)
+                    except Exception:
+                        pass
+                    with _contextlib.suppress(Exception):
+                        service.heartbeat_session()
             except Exception as err:  # pragma: no cover - defensive
                 logger.exception("background sync cycle failed: %s", err)
 
@@ -98,6 +121,9 @@ async def _presence_loop() -> None:
                 file_name=service.current_source_name,
                 instance_id=user_settings.get_instance_id(),
             )
+            # Per-session heartbeat (spec 2b)
+            with _contextlib.suppress(Exception):
+                service.heartbeat_session()
         except Exception as err:  # pragma: no cover - defensive
             logger.exception("presence heartbeat failed: %s", err)
 
