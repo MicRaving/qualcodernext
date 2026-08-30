@@ -54,6 +54,7 @@ def _parse_sidecar(path: Path) -> list[dict]:
 
 def _append_sidecar(sidecar: Path, lines: str) -> None:
     """Append exported JSONL lines to a sidecar file (atomic tail)."""
+    sidecar.parent.mkdir(parents=True, exist_ok=True)
     if sidecar.exists() and sidecar.stat().st_size > 0:
         with open(sidecar, "rb") as rf:
             rf.seek(-1, os.SEEK_END)
@@ -64,6 +65,27 @@ def _append_sidecar(sidecar: Path, lines: str) -> None:
         f.write(lines.encode("utf-8"))
         f.flush()
         os.fsync(f.fileno())
+    # Directory fsync so the new file/size is visible to a second rater
+    # opening immediately after activation (network-share cache).  O_DIRECTORY
+    # is not available on Windows, so this is best-effort and POSIX-only.
+    if hasattr(os, "O_DIRECTORY"):
+        try:
+            dir_fd = os.open(str(sidecar.parent), os.O_DIRECTORY)
+            try:
+                os.fsync(dir_fd)
+            finally:
+                os.close(dir_fd)
+            # Also fsync the changes root to make the new instance subdir visible.
+            try:
+                root_fd = os.open(str(sidecar.parent.parent), os.O_DIRECTORY)
+                try:
+                    os.fsync(root_fd)
+                finally:
+                    os.close(root_fd)
+            except OSError:
+                pass
+        except OSError:
+            pass
 
 
 # Indirection hook — sync.py replaces this at import time so that

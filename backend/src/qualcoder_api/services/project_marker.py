@@ -70,7 +70,43 @@ def write_marker(
         path.parent.mkdir(parents=True, exist_ok=True)
         tmp = path.with_suffix(".tmp")
         tmp.write_text(json.dumps(marker, indent=2), encoding="utf-8")
+        # Durability: flush file and directory so a second rater opening
+        # immediately after activation sees the marker.  The sidecar is
+        # already fsynced; the marker is the signal to rebuild from it.
+        try:
+            import os
+
+            with open(tmp, "rb") as f:
+                f.flush()
+                os.fsync(f.fileno())
+            # Best-effort directory fsync (POSIX only).
+            if hasattr(os, "O_DIRECTORY"):
+                try:
+                    dir_fd = os.open(str(path.parent), os.O_DIRECTORY)
+                    try:
+                        os.fsync(dir_fd)
+                    finally:
+                        os.close(dir_fd)
+                except OSError:
+                    pass
+        except OSError:
+            pass
         tmp.replace(path)
+        # Also fsync the directory after the rename so the new name is durable.
+        try:
+            import os
+
+            if hasattr(os, "O_DIRECTORY"):
+                try:
+                    dir_fd = os.open(str(path.parent), os.O_DIRECTORY)
+                    try:
+                        os.fsync(dir_fd)
+                    finally:
+                        os.close(dir_fd)
+                except OSError:
+                    pass
+        except OSError:
+            pass
     except OSError as err:  # pragma: no cover - defensive
         logger.warning("could not write project marker: %s", err)
     return marker

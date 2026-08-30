@@ -3,6 +3,17 @@
      release body for tag vX.Y.Z, appending auto-generated commit notes.
      Add a section like "## 0.3.0 (2026-09-01)" at the TOP of the file. -->
 
+## 0.3.0 (2026-08-30)
+
+Collaboration transition hardening — fixes the offline → online handoff that left the second rater with an empty project.
+
+### Fixed
+
+- **Collaboration transition could leave the second computer empty.** After `Enable online collaboration` on coder 1's offline project, coder 2 joining from a second machine rebuilt its local sandbox from the sidecar snapshot. On slow/shared folders (OneDrive, Syncthing, SMB) the snapshot could be absent, truncated or not yet flushed when the marker became visible, or the rebuild could otherwise conclude empty (conflicts/skipped rows). The opener now: (a) polls briefly for the sidecar to appear, (b) verifies the rebuilt sandbox is non-empty by probing `source`/`code_name` counts vs the cold `data.qda` archive and falls back to the archive when empty, (c) retries a busy WAL checkpoint before copying, and (d) rolls back the activation if the sidecar append was deferred (locked). The marker and sidecar writes are now `fsync`'d (file + directory, POSIX) so the second rater sees them immediately.
+- **Activation durability.** `activate_collaboration` now only publishes the `.qcnext-project` marker after the full-state sidecar is durably on disk (verified non-empty), with a short retry for a deferred/locked sidecar.
+
+**Full Changelog**: https://github.com/MicRaving/qualcodernext/compare/v0.2.1...v0.3.0
+
 ## 0.2.1 (2026-08-26)
 
 Critical collaboration fix — everyone working in shared projects should

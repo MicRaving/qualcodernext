@@ -446,7 +446,14 @@ class ProjectService:
             return {"ok": False, "reason": reason}
 
         uuid = secrets.token_hex(6)  # 12 hex chars, unique per activation
-        await checkpoint(self.db_path())  # data.qda (WAL) -> self-consistent
+        # Checkpoint with a brief retry if the WAL is busy (another connection
+        # still holds a read transaction).  A busy checkpoint would leave the
+        # copied sandbox stale and the sidecar snapshot incomplete.
+        for _ in range(3):
+            ck = await checkpoint(self.db_path())  # data.qda (WAL) -> self-consistent
+            if not ck.get("busy"):
+                break
+            await asyncio.sleep(0.2)
         sandbox.create_sandbox_from(self.db_path(), uuid)
         self.uuid = uuid
         self.collab = True
@@ -459,8 +466,50 @@ class ProjectService:
         await self._dispose_engine_if_any()
         await self._open_engine()
         _, factory = self._ensure_engine()
+        export_result: dict = {}
         async with factory() as session:
-            await sync.export_full_state(session, self.project_path, get_instance_id())
+            export_result = await sync.export_full_state(session, self.project_path, get_instance_id())
+        # If the sidecar append was deferred (locked) the snapshot never
+        # reached the shared folder — writing the marker would strand the
+        # second rater on an empty sidecar.  Retry once after a short wait,
+        # and if it still defers, roll back the activation.
+        if export_result.get("deferred"):
+            await asyncio.sleep(0.3)
+            _, factory = self._ensure_engine()
+            async with factory() as session:
+                retry = await sync.export_full_state(session, self.project_path, get_instance_id())
+                if not retry.get("deferred"):
+                    export_result = retry
+        if export_result.get("deferred"):
+            # Roll back: remove the sandbox we just created and reset mode.
+            logger.warning("collaboration activation deferred: sidecar locked, rolling back")
+            await self._dispose_engine_if_any()
+            try:
+                sandbox.remove_sandbox(uuid)
+            except Exception:
+                pass
+            self.collab = False
+            self.uuid = ""
+            await self._open_engine()
+            return {"ok": False, "reason": "sidecar locked, try again"}
+
+        # Verify the sidecar actually landed on disk and is non-empty before
+        # publishing the marker.  On network shares the file can be delayed
+        # by the OS cache even after fsync.
+        from pathlib import Path as _Path
+
+        from qualcoder_api.services.sync_sidecar import _parse_sidecar
+
+        sidecar_path = _Path(self.project_path) / sync.SYNC_DIR_NAME / get_instance_id() / "changes.jsonl"
+        for _ in range(5):
+            if sidecar_path.exists() and sidecar_path.stat().st_size > 0:
+                # Also ensure it parses to at least one entry.
+                try:
+                    if len(_parse_sidecar(sidecar_path)) > 0:
+                        break
+                except Exception:
+                    pass
+            await asyncio.sleep(0.2)
 
         # Marker LAST — the one-way door opens only once everything above
         # (sandbox + complete sidecar snapshot) is durably in place.
@@ -766,11 +815,31 @@ class ProjectService:
             return
         archive = Path(project_path) / "data.qda"
         changes_root = Path(project_path) / sync.SYNC_DIR_NAME
-        has_sidecars = bool(changes_root.is_dir()) and any(
-            (d / "changes.jsonl").exists()
-            for d in changes_root.iterdir()
-            if d.is_dir()
-        )
+
+        def _has_sidecars() -> bool:
+            return bool(changes_root.is_dir()) and any(
+                (d / "changes.jsonl").exists()
+                for d in changes_root.iterdir()
+                if d.is_dir()
+            )
+
+        has_sidecars = _has_sidecars()
+        # Network/cloud shares can delay file creation visibility by a fraction
+        # of a second.  If the marker is present but no sidecar is yet
+        # visible, poll briefly before concluding "no sidecars" — otherwise
+        # a second rater opening mid-activation would incorrectly seed from
+        # the (potentially stale) archive and miss the snapshot.
+        if not has_sidecars:
+            # Only wait when we are truly in collaboration mode (marker
+            # already tells us a sidecar *should* exist).  A tight loop is
+            # cheap and avoids an empty rebuild.
+            import asyncio as _asyncio
+
+            for _ in range(5):
+                await _asyncio.sleep(0.2)
+                if _has_sidecars():
+                    has_sidecars = True
+                    break
         if not has_sidecars and archive.exists():
             from qualcoder_api.services.cleanup_service import checkpoint
 
@@ -798,6 +867,53 @@ class ProjectService:
         emptyRebuild = entries == 0 or (
             entries > 0 and applied == 0 and result.get("retries", 0) >= 1
         )
+        # Additional safety: even when the sidecar appeared non-empty, the
+        # rebuild can still leave an empty sandbox (e.g. all entries were
+        # skipped as "converged" due to a truncated tail, or every insert
+        # hit a unique-constraint conflict).  In that case the archive
+        # still carries the full offline project — a stale copy beats an
+        # empty one, and the next sync cycle reconciles the difference.
+        if not emptyRebuild and archive.exists():
+            try:
+                # Lightweight emptiness probe on the freshly rebuilt sandbox.
+                probe_engine = create_project_engine(str(sandbox.sandbox_path(self.uuid)))
+                try:
+                    probe_factory = create_session_factory(probe_engine)
+                    async with probe_factory() as probe_session:
+                        src_cnt = (await probe_session.execute(text("SELECT COUNT(*) FROM source"))).scalar() or 0
+                        code_cnt = (await probe_session.execute(text("SELECT COUNT(*) FROM code_name"))).scalar() or 0
+                        # Archive probe: does the cold archive actually carry data?
+                        if int(src_cnt) == 0 and int(code_cnt) == 0:
+                            import aiosqlite as _aiosqlite
+
+                            try:
+                                conn = await _aiosqlite.connect(str(archive))
+                                try:
+                                    cur = await conn.cursor()
+                                    await cur.execute("SELECT COUNT(*) FROM source")
+                                    arch_src = (await cur.fetchone())[0] or 0
+                                    await cur.execute("SELECT COUNT(*) FROM code_name")
+                                    arch_code = (await cur.fetchone())[0] or 0
+                                finally:
+                                    await conn.close()
+                                if int(arch_src) > 0 or int(arch_code) > 0:
+                                    emptyRebuild = True
+                                    entries = int(entries)
+                                    applied = int(applied)
+                                    logger.warning(
+                                        "sidecar rebuild left sandbox empty (src=%s code=%s) "
+                                        "but archive has data (src=%s code=%s) — falling back to archive",
+                                        src_cnt,
+                                        code_cnt,
+                                        arch_src,
+                                        arch_code,
+                                    )
+                            except Exception:
+                                pass
+                finally:
+                    await dispose_engine(probe_engine)
+            except Exception as err:
+                logger.debug("empty-sandbox probe failed: %s", err)
         if emptyRebuild and archive.exists():
             logger.warning(
                 "sidecar rebuild yielded nothing (entries=%s applied=%s) "
@@ -805,4 +921,10 @@ class ProjectService:
                 entries,
                 applied,
             )
-            await sandbox.create_sandbox_from(str(archive), self.uuid)
+            from qualcoder_api.services.cleanup_service import checkpoint
+
+            try:
+                await checkpoint(str(archive))
+            except Exception:
+                pass
+            sandbox.create_sandbox_from(str(archive), self.uuid)
