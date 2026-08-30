@@ -6,6 +6,7 @@ Pure backend: no Qt, no UI. The FastAPI layer wraps these methods.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import getpass
 import logging
 import os
@@ -484,10 +485,8 @@ class ProjectService:
             # Roll back: remove the sandbox we just created and reset mode.
             logger.warning("collaboration activation deferred: sidecar locked, rolling back")
             await self._dispose_engine_if_any()
-            try:
+            with contextlib.suppress(Exception):
                 sandbox.remove_sandbox(uuid)
-            except Exception:
-                pass
             self.collab = False
             self.uuid = ""
             await self._open_engine()
@@ -923,8 +922,6 @@ class ProjectService:
             )
             from qualcoder_api.services.cleanup_service import checkpoint
 
-            try:
+            with contextlib.suppress(Exception):
                 await checkpoint(str(archive))
-            except Exception:
-                pass
             sandbox.create_sandbox_from(str(archive), self.uuid)
