@@ -1932,6 +1932,10 @@ export const en: Record<string, string> = {
   "coder.duplicateWarning": "Another instance is already open as coder “{name}”. Working as the same coder on two instances can corrupt the shared project. Switch to a unique coder name or close the other instance.",
   "coder.duplicateSwitch": "Switch coder",
   "coder.duplicateContinue": "Continue anyway",
+  "coder.duplicateAvailable": "Available coders",
+  "coder.duplicateSwitchTo": "Switch to {name}",
+  "coder.duplicateAddNew": "Add new coder",
+  "coder.duplicateConfirmStay": "You are about to continue as “{name}” which is already in use by another live instance. This can corrupt the shared project. Are you sure?",
 
   // R console (Rscript bridge)
   "analyze.titleRConsole": "R console",

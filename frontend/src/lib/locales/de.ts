@@ -1817,6 +1817,10 @@ export const de: Record<string, string> = {
   "coder.duplicateWarning": "Eine andere Instanz ist bereits als Coder „{name}“ geöffnet. Als gleicher Coder auf zwei Instanzen zu arbeiten kann das gemeinsame Projekt beschädigen. Wähle einen eindeutigen Coder-Namen oder schließe die andere Instanz.",
   "coder.duplicateSwitch": "Coder wechseln",
   "coder.duplicateContinue": "Trotzdem fortfahren",
+  "coder.duplicateAvailable": "Verfügbare Coder",
+  "coder.duplicateSwitchTo": "Zu {name} wechseln",
+  "coder.duplicateAddNew": "Neuen Coder hinzufügen",
+  "coder.duplicateConfirmStay": "Du bist dabei, als „{name}“ fortzufahren, der bereits von einer anderen aktiven Instanz verwendet wird. Dies kann das gemeinsame Projekt beschädigen. Bist du sicher?",
 
   // Restructured analysis area (merged report screens)
   "analyze.fileCodeTitle": "Datei × Code",

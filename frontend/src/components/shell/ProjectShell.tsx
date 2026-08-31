@@ -24,6 +24,7 @@ import {
   Terminal,
   Trash2,
   Upload,
+  UserPlus,
   Users,
   X,
 } from "lucide-react";
@@ -58,9 +59,10 @@ import { useWorkspaceStore, type WorkspaceView } from "@/stores/workspace";
 import { useProjectStore } from "@/stores/project";
 import { A11ySkipLink } from "@/features/accessibility/A11yControls";
 import { useUpdatesStore } from "@/stores/updates";
-import { Button, Modal } from "@/components/ui/orchestrator";
+import { Button, Input, Modal, Select } from "@/components/ui/orchestrator";
 import { cls } from "@/components/ui/tokens";
 import { Menu, MenuItem } from "@/components/ui/orchestrator";
+import { useCoderStore } from "@/stores/coder";
 
 /** Circular progress indicator (same size as the ribbon icon buttons). */
 function TaskIndicator({ progress }: { progress: number }) {
@@ -193,6 +195,27 @@ export function ProjectShell() {
   const tasksPaused = useProjectStore((s) => s.tasksPaused);
   const duplicateCoder = useProjectStore((s) => s.duplicateCoder);
   const acknowledgeDuplicateCoder = useProjectStore((s) => s.acknowledgeDuplicateCoder);
+  const coders = useCoderStore((s) => s.coders);
+  const createCoder = useCoderStore((s) => s.createCoder);
+  const switchCoder = useCoderStore((s) => s.switchCoder);
+  const [duplicateSelected, setDuplicateSelected] = useState<string>("");
+  const [showNewCoderInput, setShowNewCoderInput] = useState(false);
+  const [newCoderName, setNewCoderName] = useState("");
+  const availableCoders = coders.filter((c) => c.name !== duplicateCoder);
+  useEffect(() => {
+    if (!duplicateCoder) {
+      setDuplicateSelected("");
+      setShowNewCoderInput(false);
+      setNewCoderName("");
+      return;
+    }
+    const availableNames = coders.filter((c) => c.name !== duplicateCoder).map((c) => c.name);
+    if (availableNames.length > 0 && !availableNames.includes(duplicateSelected)) {
+      setDuplicateSelected(availableNames[0]);
+    } else if (availableNames.length === 0) {
+      setDuplicateSelected("");
+    }
+  }, [duplicateCoder, coders, duplicateSelected]);
   const syncAutoNotice = usePrefsStore((s) => s.syncAutoNotice);
   const [queueOpen, setQueueOpen] = useState(false);
   const [dragId, setDragId] = useState<string | null>(null);
@@ -450,11 +473,95 @@ export function ProjectShell() {
             <p className="text-sm leading-relaxed text-text-primary">
               {t("coder.duplicateWarning", { name: duplicateCoder })}
             </p>
-            <div className="flex justify-end gap-2">
-              <Button variant="secondary" onClick={acknowledgeDuplicateCoder}>
-                {t("coder.duplicateSwitch")}
-              </Button>
-              <Button variant="primary" onClick={acknowledgeDuplicateCoder}>
+            {availableCoders.length > 0 && (
+              <div className="flex flex-col gap-2">
+                <span className="text-xs font-medium text-text-secondary">
+                  {t("coder.duplicateAvailable")}
+                </span>
+                <div className="flex gap-2">
+                  <Select
+                    value={duplicateSelected}
+                    onChange={(e) => setDuplicateSelected(e.target.value)}
+                    className="min-w-0 flex-1"
+                    aria-label={t("coder.duplicateAvailable")}
+                  >
+                    {availableCoders.map((c) => (
+                      <option key={c.name} value={c.name}>
+                        {c.name} ({c.coding_count})
+                      </option>
+                    ))}
+                  </Select>
+                  <Button
+                    variant="primary"
+                    disabled={!duplicateSelected}
+                    onClick={async () => {
+                      if (!duplicateSelected) return;
+                      await switchCoder(duplicateSelected);
+                      acknowledgeDuplicateCoder();
+                    }}
+                  >
+                    {t("coder.duplicateSwitchTo", { name: duplicateSelected })}
+                  </Button>
+                </div>
+              </div>
+            )}
+            <div className="flex flex-col gap-2">
+              {!showNewCoderInput ? (
+                <Button
+                  variant="secondary"
+                  icon={<UserPlus size={12} aria-hidden />}
+                  onClick={() => setShowNewCoderInput(true)}
+                >
+                  {t("coder.duplicateAddNew")}
+                </Button>
+              ) : (
+                <div className="flex gap-2">
+                  <Input
+                    autoFocus
+                    value={newCoderName}
+                    onChange={(e) => setNewCoderName(e.target.value)}
+                    placeholder={t("coder.newNamePlaceholder")}
+                    aria-label={t("coder.newNamePlaceholder")}
+                    className="min-w-0 flex-1"
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" && newCoderName.trim()) {
+                        void (async () => {
+                          const ok = await createCoder(newCoderName.trim());
+                          if (ok) {
+                            await switchCoder(newCoderName.trim());
+                            acknowledgeDuplicateCoder();
+                          }
+                        })();
+                      }
+                    }}
+                  />
+                  <Button
+                    variant="primary"
+                    disabled={!newCoderName.trim()}
+                    onClick={async () => {
+                      const ok = await createCoder(newCoderName.trim());
+                      if (ok) {
+                        await switchCoder(newCoderName.trim());
+                        acknowledgeDuplicateCoder();
+                      }
+                    }}
+                  >
+                    {t("coder.confirmAdd")}
+                  </Button>
+                  <Button variant="secondary" onClick={() => setShowNewCoderInput(false)}>
+                    {t("common.cancel")}
+                  </Button>
+                </div>
+              )}
+            </div>
+            <div className="flex justify-end gap-2 border-t border-border pt-4">
+              <Button
+                variant="secondary"
+                onClick={() => {
+                  if (!window.confirm(t("coder.duplicateConfirmStay", { name: duplicateCoder }))) return;
+                  acknowledgeDuplicateCoder();
+                }}
+              >
                 {t("coder.duplicateContinue")}
               </Button>
             </div>

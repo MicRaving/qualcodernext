@@ -4,8 +4,28 @@
      Keep the section SHORT — one-line bullets ("Improved animations.") that
      briefly describe the changes. The detail lives behind the **Full
      Changelog** compare link below the bullets, which every section must
-     include. Add a section like "## 0.4.2 (2026-08-31)" at the TOP of the
-     file. -->
+     include. Add a section like "## 0.1.1 (2026-08-31)" at the TOP of the
+     file.
+
+     Versioning: Bugfixes bump 0.0.1 (e.g. 0.1.0 → 0.1.1), only major new
+     features justify a 0.1 bump (e.g. 0.1.x → 0.2.0), and +1.0 releases are
+     manually administered by the owner. -->
+
+## 0.1.1 (2026-08-31)
+
+- Complete rewrite on FastAPI, React, and Tauri.
+- Simplified three-column UI with inline editing.
+- Simultaneous collaboration with live sync and presence.
+- Extended AI assistant, semantic search, and analysis suite.
+- New importers, exporters, and workspaces.
+- Collaboration reliability and LSTeach fixes.
+- Coherent animations and shortcut bar redesign.
+- Added OLED dark mode and UI polish.
+- Fixed updater to also terminate the backend on update.
+- Fixed search box and delimiter styles in Cases and Journal left bars.
+- Improved duplicate coder warning with available coder selection and second confirmation.
+
+**Full Changelog**: https://github.com/MicRaving/qualcodernext/compare/v0.1.0...v0.1.1
 
 ## 0.4.5 (2026-08-31)
 

@@ -38,6 +38,66 @@ use tauri::Manager;
 /// `const Mutex::new` is stable since Rust 1.63; rust-version is 1.77.
 static BACKEND_CHILD: Mutex<Option<Child>> = Mutex::new(None);
 
+#[cfg(windows)]
+static BACKEND_JOB: Mutex<Option<windows::Win32::Foundation::HANDLE>> = Mutex::new(None);
+
+#[cfg(windows)]
+fn ensure_backend_job() -> Option<windows::Win32::Foundation::HANDLE> {
+    let mut guard = match BACKEND_JOB.lock() {
+        Ok(g) => g,
+        Err(p) => p.into_inner(),
+    };
+    if let Some(handle) = *guard {
+        if !handle.is_invalid() {
+            return Some(handle);
+        }
+    }
+    unsafe {
+        use windows::Win32::System::JobObjects::{
+            CreateJobObjectW, JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectExtendedLimitInformation,
+            SetInformationJobObject, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+        };
+        let handle = match CreateJobObjectW(None, windows::core::PCWSTR::null()) {
+            Ok(h) => h,
+            Err(_) => return None,
+        };
+        if handle.is_invalid() {
+            return None;
+        }
+        let mut info: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = std::mem::zeroed();
+        info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+        if SetInformationJobObject(
+            handle,
+            JobObjectExtendedLimitInformation,
+            &info as *const _ as *const std::ffi::c_void,
+            std::mem::size_of_val(&info) as u32,
+        )
+        .is_err()
+        {
+            let _ = windows::Win32::Foundation::CloseHandle(handle);
+            return None;
+        }
+        *guard = Some(handle);
+        Some(handle)
+    }
+}
+
+#[cfg(windows)]
+fn assign_child_to_job(child: &Child) {
+    let Some(job) = ensure_backend_job() else { return };
+    unsafe {
+        use windows::Win32::System::JobObjects::AssignProcessToJobObject;
+        use windows::Win32::System::Threading::{OpenProcess, PROCESS_SET_QUOTA, PROCESS_TERMINATE};
+        let pid = child.id();
+        let proc_handle = OpenProcess(PROCESS_SET_QUOTA | PROCESS_TERMINATE, false, pid);
+        if let Ok(handle) = proc_handle {
+            let _ = AssignProcessToJobObject(job, handle);
+            let _ = windows::Win32::Foundation::CloseHandle(handle);
+        }
+        let _ = std::mem::ManuallyDrop::new(job);
+    }
+}
+
 /// Returns whether the Python backend answers on 127.0.0.1:8765.
 ///
 /// Placeholder for the tray menu (added later). The frontend already shows
@@ -237,6 +297,8 @@ fn spawn_release_backend(app: &tauri::AppHandle) -> std::io::Result<Child> {
 fn store_child(spawn_result: std::io::Result<Child>) {
     match spawn_result {
         Ok(child) => {
+            #[cfg(windows)]
+            assign_child_to_job(&child);
             let mut guard = match BACKEND_CHILD.lock() {
                 Ok(guard) => guard,
                 Err(poisoned) => poisoned.into_inner(),
@@ -273,6 +335,18 @@ fn kill_backend() {
         }
     }
     drop(guard);
+    #[cfg(windows)]
+    {
+        let mut job_guard = match BACKEND_JOB.lock() {
+            Ok(g) => g,
+            Err(p) => p.into_inner(),
+        };
+        if let Some(handle) = job_guard.take() {
+            unsafe {
+                let _ = windows::Win32::Foundation::CloseHandle(handle);
+            }
+        }
+    }
 }
 
 /// App entry point: build the Tauri app, then run the event loop so we can

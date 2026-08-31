@@ -238,7 +238,7 @@ export function NotesList() {
         />
       }
     >
-      <div className="relative shrink-0 px-3 py-2">
+      <div className="relative shrink-0 border-b border-border px-3 py-1.5">
         <Search
           size={14}
           className="pointer-events-none absolute left-5 top-1/2 -translate-y-1/2 text-text-secondary"
@@ -249,7 +249,7 @@ export function NotesList() {
           onChange={(e) => setNotesUi({ query: e.target.value })}
           placeholder={t("notes.searchPlaceholder")}
           aria-label={t("notes.searchAria")}
-          className="w-full pl-7 pr-2"
+          className="w-full pl-7!"
         />
       </div>
       <div className="min-h-0 flex-1 overflow-auto">

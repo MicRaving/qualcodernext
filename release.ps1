@@ -1,5 +1,9 @@
 # QCnext - unified release pipeline (compile + release)
 #
+# Versioning: Bugfixes bump 0.0.1 (e.g. 0.1.0 → 0.1.1), only major new
+# features justify a 0.1 bump (e.g. 0.1.x → 0.2.0), and +1.0 releases are
+# manually administered by the owner.
+#
 # Single script that REPLACES the old compile.ps1 + release.ps1 +
 # release-all.ps1. Compile and release can be run together (default) or
 # separately:
