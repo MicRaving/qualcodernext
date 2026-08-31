@@ -118,7 +118,7 @@ function AnchorPopover({
     <div
       ref={ref}
       role="dialog"
-      className={`fixed z-50 ${className}`}
+      className={`fixed z-50 ${className} ${pos ? "qc-popover" : ""}`}
       style={pos ? { left: pos.left, top: pos.top } : { visibility: "hidden" }}
     >
       {children}

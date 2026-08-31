@@ -889,7 +889,7 @@ export function GraphsView() {
       )}
 
       {saving && (
-        <div className={`pointer-events-none ${cls.modalOverlay}`}>
+        <div className={`pointer-events-none ${cls.modalOverlay} qc-modal-backdrop`}>
           <LoaderCircle size={18} className="animate-spin text-text-secondary" aria-hidden />
         </div>
       )}

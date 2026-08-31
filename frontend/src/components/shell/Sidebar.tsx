@@ -1626,7 +1626,7 @@ export function Sidebar() {
           {fileDropActive && (
             <div
               aria-hidden
-              className="pointer-events-none absolute inset-0 z-20 flex flex-col items-center justify-center gap-1.5 border-2 border-dashed border-accent bg-accent/10"
+              className="pointer-events-none absolute inset-0 z-20 flex flex-col items-center justify-center gap-1.5 border-2 border-dashed border-accent bg-accent/10 qc-enter-fade"
             >
               <Upload size={22} className="text-accent" aria-hidden />
               <p className="text-sm font-medium text-accent">{t("files.dropImport")}</p>
@@ -1642,7 +1642,7 @@ export function Sidebar() {
         <div
           role="toolbar"
           aria-label={t("sidebar.massDeleteAria")}
-          className="flex shrink-0 items-center gap-2 border-t border-border bg-surface px-2 py-1.5"
+          className="qc-enter-fade flex shrink-0 items-center gap-2 border-t border-border bg-surface px-2 py-1.5"
         >
           <span className="min-w-0 flex-1 truncate text-xs text-text-secondary">
             {t("sidebar.massMarked", { count: markedCount })}

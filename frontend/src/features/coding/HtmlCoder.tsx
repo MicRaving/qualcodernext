@@ -1539,7 +1539,7 @@ export function HtmlCoder({ source }: { source: Source }) {
       {frameSelPos && frameSel && (
         <div
           ref={frameToolbarRef}
-          className="fixed z-40"
+          className="fixed z-40 qc-enter"
           style={{ left: frameSelPos.left, top: frameSelPos.top }}
         >
           <div

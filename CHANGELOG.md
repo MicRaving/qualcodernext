@@ -7,6 +7,12 @@
      include. Add a section like "## 0.4.2 (2026-08-31)" at the TOP of the
      file. -->
 
+## 0.4.4 (2026-08-31)
+
+- Improved animations.
+
+**Full Changelog**: https://github.com/MicRaving/qualcodernext/compare/v0.4.3...v0.4.4
+
 ## 0.4.3 (2026-08-31)
 
 - Added OLED dark mode.

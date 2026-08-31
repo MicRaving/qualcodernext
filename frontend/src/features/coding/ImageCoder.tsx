@@ -501,7 +501,7 @@ export function ImageCoder({ source }: { source: Source }) {
 
       {/* Details panel */}
       {selected && (
-        <div className="shrink-0 border-t border-border bg-surface px-3 py-2">
+        <div className="qc-enter shrink-0 border-t border-border bg-surface px-3 py-2">
           <div className="flex items-center gap-3">
             <span
               className="h-3 w-3 shrink-0 rounded-sm border border-border"
@@ -595,7 +595,7 @@ export function ImageCoder({ source }: { source: Source }) {
         onPick={(code) => void handlePick(code)}
       />
       {saving && (
-        <div className={`pointer-events-none bg-bg/40 ${cls.modalOverlay}`}>
+        <div className={`pointer-events-none bg-bg/40 ${cls.modalOverlay} qc-modal-backdrop`}>
           <LoaderCircle size={20} className="animate-spin text-text-secondary" aria-hidden />
         </div>
       )}

@@ -433,7 +433,7 @@ export function ProjectShell() {
           aria-live="polite"
           className="pointer-events-none fixed left-1/2 top-12 z-40 -translate-x-1/2"
         >
-          <div className="flex items-center gap-1.5 rounded-md border border-border bg-surface px-3 py-1.5 text-xs text-text-primary shadow-qc-md">
+          <div className="qc-enter flex items-center gap-1.5 rounded-md border border-border bg-surface px-3 py-1.5 text-xs text-text-primary shadow-qc-md">
             <Users size={13} className="shrink-0 text-accent" aria-hidden />
             {t("sync.autoEnabled")}
           </div>
@@ -486,7 +486,7 @@ export function ProjectShell() {
                 disabled={!projectOpen}
                 aria-label={label}
                 title={projectOpen ? label : t("shell.navDisabled")}
-                className={`flex items-center gap-1.5 rounded-sm px-2 py-1 ${
+                className={`flex items-center gap-1.5 rounded-sm px-2 py-1 qc-motion ${
                   !projectOpen
                     ? "cursor-not-allowed text-text-secondary/40"
                     : `hover:bg-surface-higher ${
@@ -725,7 +725,7 @@ export function ProjectShell() {
                   aria-label={label}
                   title={label}
                   aria-pressed={active}
-                  className={`rounded-sm px-2 py-1 hover:bg-surface-higher ${
+                  className={`rounded-sm px-2 py-1 hover:bg-surface-higher qc-motion ${
                     active ? "bg-surface-higher text-accent" : "text-text-secondary"
                   }`}
                 >
@@ -753,7 +753,7 @@ export function ProjectShell() {
           aria-label={t("nav.settings")}
           title={t("nav.settings")}
           aria-pressed={rightPane === "settings"}
-          className={`rounded-sm px-2 py-1 hover:bg-surface-higher ${
+          className={`rounded-sm px-2 py-1 hover:bg-surface-higher qc-motion ${
             rightPane === "settings" ? "bg-surface-higher text-accent" : "text-text-secondary"
           }`}
         >
@@ -797,29 +797,34 @@ export function ProjectShell() {
       }
       statusBar={<StatusBar />}
     >
-      {projectOpen ? (
-        view.kind === "coding" ? (
-          <CodingWorkspace sourceId={view.sourceId} />
-        ) : view.kind === "files" ? (
-          <FileManager />
-        ) : view.kind === "cases" ? (
-          <CaseDetails />
-        ) : view.kind === "notes" ? (
-          <NotesEditor />
-        ) : view.kind === "qtt" ? (
-          <QttView />
-        ) :         view.kind === "analyze" ? (
-          analyzeUi.selectedId === "graphs" ? (
-            <GraphsView />
+      <div
+        key={projectOpen ? view.kind : "dashboard"}
+        className="qc-enter-fade h-full min-w-0"
+      >
+        {projectOpen ? (
+          view.kind === "coding" ? (
+            <CodingWorkspace sourceId={view.sourceId} />
+          ) : view.kind === "files" ? (
+            <FileManager />
+          ) : view.kind === "cases" ? (
+            <CaseDetails />
+          ) : view.kind === "notes" ? (
+            <NotesEditor />
+          ) : view.kind === "qtt" ? (
+            <QttView />
+          ) : view.kind === "analyze" ? (
+            analyzeUi.selectedId === "graphs" ? (
+              <GraphsView />
+            ) : (
+              <AnalyzeView />
+            )
           ) : (
-            <AnalyzeView />
+            <DashboardView />
           )
         ) : (
           <DashboardView />
-        )
-      ) : (
-        <DashboardView />
-      )}
+        )}
+      </div>
       </WorkspaceLayout>
       <BugReportView />
       <SearchDialog

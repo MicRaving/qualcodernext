@@ -311,6 +311,21 @@ select {
   animation: qc-row-in var(--qc-motion-fast) var(--qc-ease);
 }
 
+/* Collapsible section: grid-row height transition (user-initiated expand).
+   Only layout-shifting animation in the app — justified for explicit toggles.
+   Inner div must be overflow:hidden (provided by the wrapper). */
+.qc-collapse {
+  display: grid;
+  grid-template-rows: 0fr;
+  transition: grid-template-rows var(--qc-motion-base) var(--qc-ease);
+}
+.qc-collapse.open {
+  grid-template-rows: 1fr;
+}
+.qc-collapse > div {
+  overflow: hidden;
+}
+
 /* Themed scrollbars — thin, quiet, matching the border/surface palette. */
 * {
   scrollbar-width: thin;

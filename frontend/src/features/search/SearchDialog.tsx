@@ -298,7 +298,7 @@ export function SearchDialog({
       ref={ref}
       role="dialog"
       aria-label={t("search.title")}
-      className="fixed z-50 flex w-[44rem] max-w-[94vw] flex-col overflow-hidden rounded-md border border-border bg-surface shadow-qc-lg"
+      className={`fixed z-50 flex w-[44rem] max-w-[94vw] flex-col overflow-hidden rounded-md border border-border bg-surface shadow-qc-lg ${pos ? "qc-popover" : ""}`}
       style={
         pos
           ? { left: pos.left, top: pos.top, maxHeight: "min(70dvh, 30rem)" }

@@ -508,7 +508,7 @@ export function ErrorBanner({
         ? "flex shrink-0 items-center gap-2 border-b border-border bg-surface px-3 py-1.5 text-sm text-success"
         : "flex shrink-0 items-center gap-2 border-b border-danger bg-danger/10 px-3 py-1.5 text-sm text-danger";
   return (
-    <div className={bannerCls} role="status">
+    <div className={`${bannerCls} qc-enter-fade`} role="status">
       <span className="min-w-0 flex-1 truncate">{children}</span>
       {onClose && (
         <IconButton label="Dismiss" size="sm" onClick={onClose} className="text-danger hover:text-danger">

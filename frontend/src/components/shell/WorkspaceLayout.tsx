@@ -150,7 +150,10 @@ export function WorkspaceLayout({
       )}
       <div className="flex min-h-0 flex-1">
         {leftBar && (
-          <div className="relative flex shrink-0" style={{ width: leftHidden ? EDGE_TAB : leftW }}>
+          <div
+            className={`relative flex shrink-0 ${dragging ? "" : "transition-[width] duration-200 ease-[var(--qc-ease)]"}`}
+            style={{ width: leftHidden ? EDGE_TAB : leftW }}
+          >
             {!leftHidden && (
               <BarWidthContext.Provider value={leftW}>
                 <div className="h-full min-w-0">{leftBar}</div>
@@ -183,7 +186,10 @@ export function WorkspaceLayout({
           {children}
         </main>
         {rightBar && (
-          <div className="relative flex shrink-0" style={{ width: rightHidden ? EDGE_TAB : rightW }}>
+          <div
+            className={`relative flex shrink-0 ${dragging ? "" : "transition-[width] duration-200 ease-[var(--qc-ease)]"}`}
+            style={{ width: rightHidden ? EDGE_TAB : rightW }}
+          >
             {rightHidden ? (
               <button
                 type="button"

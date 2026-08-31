@@ -1714,7 +1714,7 @@ export function AvCoder({ source }: { source: Source }) {
             {/* Annotate popover */}
             {tAnnotateOpen && (
               <div
-                className={`fixed z-40 w-72 p-2 ${cls.popup}`}
+                className={`fixed z-40 w-72 p-2 ${cls.popup} qc-enter`}
                 style={{ left: Math.min(tSel?.left ?? 0, window.innerWidth - 300), top: tSel?.top ?? 0 }}
                 role="dialog"
                 aria-modal="true"
