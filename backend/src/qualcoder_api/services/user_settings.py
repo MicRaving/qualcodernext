@@ -226,9 +226,10 @@ def save_sync_settings(
 ) -> dict:
     """Persist the collaboration-sync switch (and optional cadence)."""
     settings = settings or load_settings()
-    sync = settings.get("sync")
-    if not isinstance(sync, dict):
-        sync = {}
+    # Copy the nested dict to avoid mutating DEFAULT_SETTINGS via the shallow
+    # copy that load_settings returns when the file does not exist.
+    raw_sync = settings.get("sync")
+    sync = dict(raw_sync) if isinstance(raw_sync, dict) else {}
     sync["enabled"] = bool(enabled)
     if interval_secs is not None:
         if int(interval_secs) not in SYNC_INTERVAL_CHOICES_SECS:
@@ -290,7 +291,9 @@ def save_auto_open_project(enabled: bool, settings: dict | None = None) -> bool:
 
 def load_settings() -> dict:
     """Load user settings, merging defaults for missing keys."""
-    settings = dict(DEFAULT_SETTINGS)
+    import copy
+
+    settings = copy.deepcopy(DEFAULT_SETTINGS)
     try:
         with _SETTINGS_LOCK:
             if SETTINGS_FILE.exists():
