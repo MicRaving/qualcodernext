@@ -3,6 +3,18 @@
      release body for tag vX.Y.Z, appending auto-generated commit notes.
      Add a section like "## 0.3.0 (2026-09-01)" at the TOP of the file. -->
 
+## 0.4.1 (2026-08-31)
+
+### Fixed
+
+- Settings persistence could mutate the in-memory default dict via a shallow
+  copy, so enabling sync in one test polluted later tests (and, at runtime,
+  a fresh project could inherit a stale `enabled` flag). `load_settings`
+  now deep-copies the defaults and `save_sync_settings` copies the nested
+  sync dict before mutating.
+
+**Full Changelog**: https://github.com/MicRaving/qualcodernext/compare/v0.4.0...v0.4.1
+
 ## 0.4.0 (2026-08-31)
 
 Collaboration reliability rework — fixes "different instances show different coders",
