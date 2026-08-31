@@ -7,6 +7,12 @@
      include. Add a section like "## 0.4.2 (2026-08-31)" at the TOP of the
      file. -->
 
+## 0.4.5 (2026-08-31)
+
+- Replaced hover lift animations with minimal shadows.
+
+**Full Changelog**: https://github.com/MicRaving/qualcodernext/compare/v0.4.4...v0.4.5
+
 ## 0.4.4 (2026-08-31)
 
 - Improved animations.

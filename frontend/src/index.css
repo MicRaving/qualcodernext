@@ -218,21 +218,21 @@ select {
     transform var(--qc-motion-fast) var(--qc-ease);
 }
 
-/* Hover lifts are 1px, never more; the primary button also
-   compresses on press. */
+/* Hover feedback is a minimal shadow (no layout shift) — avoids overlap
+   with adjacent buttons. The primary button still has a subtle press. */
 .qc-btn-lift:hover:not(:disabled) {
-  transform: translateY(-1px);
+  box-shadow: var(--qc-shadow-sm);
 }
 .qc-btn-primary:active:not(:disabled) {
   transform: scale(0.98);
 }
 
-/* Cards lift 1px on hover. */
+/* Cards get a minimal shadow on hover (no lift). */
 .qc-card {
-  transition: transform var(--qc-motion-fast) var(--qc-ease);
+  transition: box-shadow var(--qc-motion-fast) var(--qc-ease);
 }
 .qc-card:hover {
-  transform: translateY(-1px);
+  box-shadow: var(--qc-shadow-sm);
 }
 
 /* Fields: border snaps to accent and a 2px accent ring appears on
