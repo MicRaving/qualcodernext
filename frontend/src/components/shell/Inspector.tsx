@@ -964,7 +964,12 @@ export function Inspector() {
         />
       }
     >
-      {body}
+      <div
+        key={selection ? `${selection.kind}-${selection.id}` : "empty"}
+        className="qc-enter-fade flex h-full min-h-0 flex-col"
+      >
+        {body}
+      </div>
     </LeftBar>
   );
 }

@@ -230,9 +230,8 @@ test("csv table view codes cell text and shows the badge", async ({ page }) => {
   await page.getByTestId("inline-name-edit").fill("TblCode");
   await page.keyboard.press("Enter");
   await expect(page.getByText("TblCode", { exact: true }).first()).toBeVisible({ timeout: 10_000 });
-  // Clicking the code makes it the ACTIVE code (the selection toolbar then
-  // offers it directly; no selection exists yet, so the assign event is a
-  // no-op).
+  // Clicking the code makes it the ACTIVE code (no selection exists yet,
+  // so the assign event is a no-op).
   await page.getByRole("button", { name: "TblCode", exact: true }).first().click();
 
   const cell = page.locator('[data-qc-cell-text]').filter({ hasText: "This is a great" }).first();
@@ -250,10 +249,15 @@ test("csv table view codes cell text and shows the badge", async ({ page }) => {
   await page.mouse.move(ex, sy, { steps: 6 });
   await page.mouse.up();
 
-  // The selection toolbar offers the ACTIVE code — coding lands in the cell.
+  // The toolbar's Code button always opens the code flyout — pick TblCode
+  // there and the coding lands in the cell.
   const toolbar = page.getByRole("toolbar", { name: "Text selection actions" });
   await expect(toolbar).toBeVisible({ timeout: 10_000 });
-  await toolbar.getByRole("button", { name: /TblCode/ }).click();
+  await toolbar.getByRole("button", { name: /^Code…$/ }).click();
+  const picker = page.getByRole("dialog", { name: "Pick a code" });
+  await expect(picker).toBeVisible({ timeout: 10_000 });
+  await picker.getByText("TblCode", { exact: true }).click();
+  await expect(picker).toBeHidden({ timeout: 10_000 });
   await expect(toolbar).toBeHidden({ timeout: 10_000 });
 
   // The cell now shows ONLY the marked sub-span highlighted (not the whole

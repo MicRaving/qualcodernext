@@ -475,6 +475,8 @@ per-file transition/animation class.
 | Shared transition layer | `.qc-motion` — transitions background-color / border-color / color / box-shadow / transform at fast + ease. Applied by `Button`, `IconButton`, `Input`/`Select`/`Textarea`, `MenuItem`, `Card` |
 | Modal entry | `.qc-modal-backdrop` = fade-in 150ms; `.qc-modal-panel` = pop (fade + `translateY(6px) scale(0.985)`) 250ms |
 | Menu / popover entry | `.qc-popover` = rise (fade + `translateY(4px)`) 150ms |
+| Transient surfaces | `.qc-enter` = rise (fade + `translateY(4px)`) 150ms — floating selection toolbar, bottom details bars, AV details panel; `.qc-enter-fade` = opacity-only 150ms for elements whose own transform must survive (memo bubble's `-translate-y-full`, the Inspector body on selection change) |
+| New content | `.qc-seg-new` = brief accent pulse (900ms) on a just-created coded segment; `.qc-row-in` = fade + 2px rise (150ms) on newly inserted list rows (stable keys mean filtering/re-renders never replay it) |
 | Toast entry/exit | `.qc-toast` = slide-in from right 150ms; `.qc-toast-out` = fade-out 150ms |
 | Hover / press | `.qc-btn-lift:hover:not(:disabled)` → `translateY(-1px)`; `.qc-btn-primary:active:not(:disabled)` → `scale(0.98)`; `.qc-card:hover` → `translateY(-1px)`. **Hover lifts are 1px, never more** |
 | Focus ring | Global `:focus-visible { outline: 2px solid var(--qc-accent); outline-offset: 1px }`; form fields use `.qc-field:focus` instead — `outline: none`, `border-color: var(--qc-accent)`, plus a 2px `box-shadow` ring (`color-mix(in srgb, var(--qc-accent) 30%, transparent)`) |

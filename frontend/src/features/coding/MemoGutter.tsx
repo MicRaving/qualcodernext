@@ -490,7 +490,7 @@ export function MemoGutterBubble({
     <div
       ref={bubbleRef}
       data-gutter=""
-      className="fixed z-50 w-80 -translate-y-full rounded-sm border border-border bg-surface p-2 shadow-lg"
+      className="fixed z-50 w-80 -translate-y-full rounded-sm border border-border bg-surface p-2 shadow-lg qc-enter-fade"
       style={{ left: Math.max(8, pos?.left ?? 8), top: Math.max(8, pos?.top ?? 8) }}
       role="dialog"
       aria-label={t("coder.segmentDetails")}

@@ -3,6 +3,36 @@
      release body for tag vX.Y.Z, appending auto-generated commit notes.
      Add a section like "## 0.3.0 (2026-09-01)" at the TOP of the file. -->
 
+## 0.4.2 (2026-08-31)
+
+### Added
+
+- **Coherent micro-interactions.** The app now visibly answers every user
+  action with subtle, non-intrusive motion: the selection toolbar, memo
+  bubble, bottom details bars and the AV details panel rise into place, the
+  Inspector body fades on selection change, a just-created coded segment
+  pulses once, and newly inserted list rows slide in. All animations are
+  opacity/transform only and are fully neutralized by the reduced-motion,
+  screenreader and high-contrast accessibility modes.
+
+### Changed
+
+- **Coding shortcut bar redesigned.** Marking a segment opens the helper bar
+  whose leftmost button always opens the code-selection flyout — existing
+  codes plus a "new code" field, so new codes can be created inline. The
+  redundant "Segment memo" and "Code as new code" shortcuts are gone; memo
+  editing now happens by clicking the coded segment, which opens its memo
+  editor. The bar no longer leaks a stale memo popover between selections
+  (the AV transcript toolbar mirrors the same behavior).
+
+### Fixed
+
+- **Inspector close button could disappear.** The right-bar title now
+  truncates instead of refusing to shrink, so the close X stays visible even
+  for long code/file names.
+
+**Full Changelog**: https://github.com/MicRaving/qualcodernext/compare/v0.4.1...v0.4.2
+
 ## 0.4.1 (2026-08-31)
 
 ### Fixed

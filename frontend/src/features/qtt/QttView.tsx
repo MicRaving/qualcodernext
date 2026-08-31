@@ -238,7 +238,7 @@ export function QttList() {
               );
             }
             return (
-              <div key={sheet.id} className="group flex items-center">
+              <div key={sheet.id} className="qc-row-in group flex items-center">
                 <button
                   type="button"
                   onClick={() => setQttUi({ selectedId: sheet.id })}

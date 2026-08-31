@@ -169,7 +169,7 @@ export function CasesList() {
                 if (e.key === "Enter" || e.key === " ") setCasesUi({ selectedId: c.caseid });
               }}
               className={cn(
-                "flex cursor-pointer items-center gap-2 border-b border-border px-3 py-2 hover:bg-surface-higher",
+                "qc-row-in flex cursor-pointer items-center gap-2 border-b border-border px-3 py-2 hover:bg-surface-higher",
                 casesUi.selectedId === c.caseid && "bg-accent/10",
               )}
             >

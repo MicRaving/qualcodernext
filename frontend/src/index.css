@@ -245,6 +245,56 @@ select {
   animation: qc-toast-fade-out var(--qc-motion-fast) var(--qc-ease) forwards;
 }
 
+/* ------------------------------------------------------------------ */
+/* Coherent reaction layer — transient surfaces that appear in         */
+/* response to a user action (selection toolbar, details bars, memo    */
+/* bubble, inspector swap) and newly created content (coded segment,   */
+/* list rows) get ONE subtle entrance so the app visibly answers       */
+/* every click. Opacity / transform only — never layout. The a11y      */
+/* modes and prefers-reduced-motion guards below neutralize these.     */
+/* ------------------------------------------------------------------ */
+
+/* Generic entrance: fade + 4px rise — panels that mount on a user
+   action (floating toolbar, bottom details bars). */
+@keyframes qc-enter-rise {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.qc-enter {
+  animation: qc-enter-rise var(--qc-motion-fast) var(--qc-ease);
+}
+
+/* Soft fade — in-place content swaps where a translate would fight the
+   element's own transform (memo bubble uses -translate-y-full) or where
+   the surface re-keys on selection (Inspector body). */
+@keyframes qc-enter-fade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+.qc-enter-fade {
+  animation: qc-enter-fade var(--qc-motion-fast) var(--qc-ease);
+}
+
+/* Newly coded segment: a brief accent pulse so the mark visibly lands
+   right where it was created (distinct from the 2s jump-flash). */
+@keyframes qc-seg-new {
+  0% { box-shadow: 0 0 0 3px color-mix(in srgb, var(--qc-accent) 45%, transparent); }
+  100% { box-shadow: 0 0 0 0 transparent; }
+}
+.qc-seg.qc-seg-new {
+  animation: qc-seg-new 900ms var(--qc-ease);
+}
+
+/* Newly inserted list row: fade + 2px rise so additions feel live
+   (rows keep stable keys — filtering/re-renders do NOT replay it). */
+@keyframes qc-row-in {
+  from { opacity: 0; transform: translateY(2px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.qc-row-in {
+  animation: qc-row-in var(--qc-motion-fast) var(--qc-ease);
+}
+
 /* Themed scrollbars — thin, quiet, matching the border/surface palette. */
 * {
   scrollbar-width: thin;

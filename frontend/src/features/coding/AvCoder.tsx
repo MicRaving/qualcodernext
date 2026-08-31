@@ -23,7 +23,6 @@ import {
   Plus,
   Sparkles,
   StickyNote,
-  Tag,
   Trash2,
   Undo2,
   Video,
@@ -69,7 +68,6 @@ import {
   Button,
   ErrorBanner,
   IconButton,
-  Input,
   LoadingState,
   Select,
   Textarea,
@@ -313,10 +311,6 @@ export function AvCoder({ source }: { source: Source }) {
   const [tAnnotateOpen, setTAnnotateOpen] = useState(false);
   const [tAnnotateMemo, setTAnnotateMemo] = useState("");
   const [tPickerOpen, setTPickerOpen] = useState(false);
-  const [tInVivoOpen, setTInVivoOpen] = useState(false);
-  const [tInVivoName, setTInVivoName] = useState("");
-  const [tInVivoCat, setTInVivoCat] = useState<number | null>(null);
-  const [tInVivoBusy, setTInVivoBusy] = useState(false);
   const tSelRef = useRef(tSel);
   tSelRef.current = tSel;
   /** Which coding gesture the user last performed: a transcript text
@@ -421,44 +415,6 @@ export function AvCoder({ source }: { source: Source }) {
       }
     } catch (e) {
       setTError(errorMessage(e, t("coder.createError")));
-    }
-  }
-
-  /** In-vivo coding: create a NEW code from the selected transcript text,
-   *  then code the current transcript selection with it. */
-  async function codeTranscriptInVivo() {
-    const name = tInVivoName.trim();
-    const sel = tSelRef.current;
-    if (!name || tInVivoBusy || !sel || transcriptId == null || jobPending) return;
-    setTInVivoBusy(true);
-    setTError(null);
-    try {
-      const res = await api.createCode(name, { catid: tInVivoCat });
-      const pos0 = renderedToRaw(transcriptRaw, crAt, sel.start);
-      const pos1 = renderedToRaw(transcriptRaw, crAt, sel.end);
-      const created = await api.createTextCoding({
-        cid: res.cid,
-        fid: transcriptId,
-        seltext: transcriptRaw.slice(pos0, pos1),
-        pos0,
-        pos1,
-      });
-      setTSel(null);
-      setTInVivoOpen(false);
-      await useProjectStore.getState().refreshProject();
-      const next = await loadTranscriptCodings();
-      // Auto-show the freshly created coding (gated on the
-      // "Auto-show segment details" pref).
-      if (autoShowDetails) {
-        setSelected(null);
-        setSelectedText(next.find((c) => c.ctid === created.ctid) ?? null);
-      } else {
-        setSelectedText(null);
-      }
-    } catch (e) {
-      setTError(errorMessage(e, t("coder.inVivoCreateError")));
-    } finally {
-      setTInVivoBusy(false);
     }
   }
 
@@ -590,12 +546,6 @@ export function AvCoder({ source }: { source: Source }) {
 
   const { colorByCid, nameByCid } = useCodeMaps(codes);
   const { byId: codeById } = useCodeIndex(codes);
-
-  /** Top-level code categories for the in-vivo popover's optional target. */
-  const categories = useMemo(
-    () => storeCodeTree.filter((c) => c.kind === "category"),
-    [storeCodeTree],
-  );
 
   const codeColor = (coding: AVCoding) => colorByCid.get(coding.cid) ?? "rgba(0,0,0,0.15)";
 
@@ -1028,8 +978,6 @@ export function AvCoder({ source }: { source: Source }) {
     setTranscribeMode(false);
     setTranscribeDraft("");
     setTSel(null);
-    setTInVivoOpen(false);
-    setTInVivoName("");
   }, [transcriptId]);
 
   // Transcription mode is implicit for sources without transcript CONTENT:
@@ -1299,16 +1247,11 @@ export function AvCoder({ source }: { source: Source }) {
   }
 
   // Escape dismisses the topmost transcript/timeline UI layer: popovers
-  // (picker, in-vivo, annotate) first, then the details footers.
+  // (picker, annotate) first, then the details footers.
   useEscapeStack([
     () => {
       if (!tPickerOpen) return false;
       setTPickerOpen(false);
-      return true;
-    },
-    () => {
-      if (!tInVivoOpen) return false;
-      setTInVivoOpen(false);
       return true;
     },
     () => {
@@ -1722,9 +1665,9 @@ export function AvCoder({ source }: { source: Source }) {
             </div>
             )}
             {/* Floating selection toolbar (code / annotate) */}
-            {tSel && !tAnnotateOpen && !tInVivoOpen && (
+            {tSel && !tAnnotateOpen && (
               <div
-                className={`${cls.popup} fixed z-40 flex items-center gap-1 p-1`}
+                className={`${cls.popup} qc-enter fixed z-40 flex items-center gap-1 p-1`}
                 style={{ left: Math.min(tSel.left, window.innerWidth - 200), top: tSel.top }}
                 role="toolbar"
                 aria-label={t("coder.selectionActions")}
@@ -1733,11 +1676,8 @@ export function AvCoder({ source }: { source: Source }) {
                   variant="primary"
                   icon={<Code size={12} aria-hidden />}
                   className="max-w-56"
-                  onClick={() => {
-                    const activeCodeId = useCoderStore.getState().activeCodeId;
-                    if (activeCodeId != null) void codeTranscriptSelection(activeCodeId);
-                    else setTPickerOpen(true);
-                  }}
+                  onClick={() => setTPickerOpen(true)}
+                  title={t("coder.pickCode")}
                 >
                   <span className="truncate">{t("coder.codeAction")}</span>
                 </Button>
@@ -1750,19 +1690,6 @@ export function AvCoder({ source }: { source: Source }) {
                   }}
                 >
                   {t("coder.annotate")}
-                </Button>
-                <Button
-                  variant="secondary"
-                  icon={<Tag size={12} aria-hidden />}
-                  onClick={() => {
-                    setTInVivoName("");
-                    setTInVivoCat(null);
-                    setTAnnotateOpen(false);
-                    setTInVivoOpen(true);
-                  }}
-                  title={t("coder.inVivo")}
-                >
-                  {t("coder.inVivo")}
                 </Button>
                 <Button
                   variant="secondary"
@@ -1782,61 +1709,6 @@ export function AvCoder({ source }: { source: Source }) {
                     {t("coder.pasteLinkHere")}
                   </Button>
                 )}
-              </div>
-            )}
-            {/* In-vivo popover: create a new code and code the selection */}
-            {tInVivoOpen && (
-              <div
-                className={`fixed z-40 w-64 p-2 ${cls.popup}`}
-                style={{ left: Math.min(tSel?.left ?? 0, window.innerWidth - 280), top: tSel?.top ?? 0 }}
-                role="dialog"
-                aria-modal="true"
-                aria-label={t("coder.inVivo")}
-              >
-                <Input
-                  autoFocus
-                  value={tInVivoName}
-                  onChange={(e) => setTInVivoName(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") void codeTranscriptInVivo();
-                  }}
-                  placeholder={t("coder.inVivoNamePlaceholder")}
-                  aria-label={t("coder.inVivoNamePlaceholder")}
-                />
-                <Select
-                  value={tInVivoCat ?? ""}
-                  onChange={(e) =>
-                    setTInVivoCat(e.target.value === "" ? null : Number(e.target.value))
-                  }
-                  aria-label={t("coder.inVivoCategory")}
-                  className="mt-1.5 w-full"
-                >
-                  <option value="">{t("coder.inVivoNoCategory")}</option>
-                  {categories.map((c) => (
-                    <option key={c.id} value={c.id}>
-                      {c.name}
-                    </option>
-                  ))}
-                </Select>
-                <div className="mt-2 flex justify-end gap-1.5">
-                  <Button variant="secondary" onClick={() => setTInVivoOpen(false)}>
-                    {t("common.cancel")}
-                  </Button>
-                  <Button
-                    variant="primary"
-                    icon={
-                      tInVivoBusy ? (
-                        <LoaderCircle size={12} className="animate-spin" aria-hidden />
-                      ) : (
-                        <Tag size={12} aria-hidden />
-                      )
-                    }
-                    onClick={() => void codeTranscriptInVivo()}
-                    disabled={tInVivoBusy || tInVivoName.trim() === ""}
-                  >
-                    {t("common.create")}
-                  </Button>
-                </div>
               </div>
             )}
             {/* Annotate popover */}
@@ -1939,7 +1811,7 @@ export function AvCoder({ source }: { source: Source }) {
           transcript coding's details open in the memo bubble instead.
           Renders purely from client state — nothing is fetched on open. */}
       {selected && (
-        <div className="flex shrink-0 flex-wrap items-center gap-3 border-b border-border bg-surface px-3 py-2">
+        <div className="qc-enter flex shrink-0 flex-wrap items-center gap-3 border-b border-border bg-surface px-3 py-2">
           {selected && (
             <>
               <span

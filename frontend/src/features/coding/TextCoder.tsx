@@ -253,6 +253,11 @@ export function TextCoder({
   const flashTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const gotoSegment = useInspectorStore((s) => s.gotoSegment);
 
+  /** Short accent pulse on the JUST-created coding — independent from the
+   *  inspector jump flash, so every new mark visibly lands in place. */
+  const [newCtid, setNewCtid] = useState<number | null>(null);
+  const newTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   /** Scroll ONLY this coder's own scroll container so `el` is centered.
    *  scrollIntoView would also scroll every scrollable ancestor (the app
    *  shell, the window), shifting unrelated panes — e.g. it made the PDF
@@ -286,6 +291,7 @@ export function TextCoder({
   useEffect(
     () => () => {
       if (flashTimer.current) clearTimeout(flashTimer.current);
+      if (newTimer.current) clearTimeout(newTimer.current);
     },
     [],
   );
@@ -416,6 +422,7 @@ export function TextCoder({
     setToolbarPos(null);
     setSelectedSeg(null);
     setSelectedAnnSeg(null);
+    setNewCtid(null);
     undo.clear();
     setAutoOpen(false);
     if (!controlled) {
@@ -667,6 +674,10 @@ export function TextCoder({
    *  "Auto-show segment details" pref — when OFF, creating a coding does
    *  not open the bar (clicking a segment still views it). */
   function selectCreatedSegment(created: Coding, next: Coding[]) {
+    // The freshly coded span always pulses so the mark visibly lands.
+    setNewCtid(created.ctid);
+    if (newTimer.current) clearTimeout(newTimer.current);
+    newTimer.current = setTimeout(() => setNewCtid(null), 1000);
     if (!autoShowDetails) {
       setSelectedSeg(null);
       setSelectedAnnSeg(null);
@@ -895,6 +906,8 @@ export function TextCoder({
           data-ctids={seg.ctids.join(" ")}
           className={`cursor-pointer rounded-sm qc-seg ${hidden ? "qc-seg-hidden" : ""} ${
             flashCtid != null && seg.ctids.includes(flashCtid) ? "qc-seg-flash" : ""
+          } ${
+            newCtid != null && seg.ctids.includes(newCtid) ? "qc-seg-new" : ""
           } ${
             segLinks.length > 0
               ? "underline decoration-wavy decoration-accent/60 underline-offset-2"

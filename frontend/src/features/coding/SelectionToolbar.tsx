@@ -1,10 +1,13 @@
 /**
- * SelectionToolbar — floating coding toolbar for a text selection: code
- * with the active code (or pick/create one), annotate, in-vivo, segment
- * links (copy / paste) and "send to QTT". Owns ALL popover state (annotate,
- * in-vivo, QTT sheet picker, code picker) and every mutation it triggers,
- * so any coder surface can reuse it — the text coder and the CSV table view
- * both mount it next to their selection.
+ * SelectionToolbar — floating coding toolbar for a text selection: pick a
+ * code (the primary button always opens the code-selection flyout, which
+ * can also create new codes), segment links (copy / paste) and "send to
+ * QTT". Owns ALL popover state (QTT sheet picker, code picker) and every
+ * mutation it triggers, so any coder surface can reuse it — the text coder
+ * and the CSV table view both mount it next to their selection.
+ *
+ * Memos are NOT edited here: clicking an already-coded segment opens its
+ * memo editor instead (see the coders' memo gutter / bubble).
  *
  * Contract with the host:
  * - `anchor` / `selection` — where to show the popup and what it operates
@@ -16,21 +19,12 @@
  * - `onChanged` reloads annotations/codes/links after non-coding mutations.
  */
 import { errorMessage } from "@/lib/utils";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useAsyncEffect } from "@/lib/useAsync";
-import {
-  Check,
-  Code,
-  Link as LinkIcon,
-  LoaderCircle,
-  ScrollText,
-  StickyNote,
-  Tag,
-} from "lucide-react";
-import { Button, Input, Menu, MenuItem, Select, Textarea } from "@/components/ui/orchestrator";
+import { Check, Code, Link as LinkIcon, LoaderCircle, ScrollText } from "lucide-react";
+import { Button, Menu, MenuItem } from "@/components/ui/orchestrator";
 import { api, type CodeTreeItem, type Coding } from "@/lib/api";
 import { CodePicker, type PickedCode } from "@/features/coding/CodePicker";
-import { patchCodingMemo } from "@/features/coding/codingApi";
 import { listQttSheets, sendSegmentToQtt, type QttSheet } from "@/lib/qttApi";
 import {
   copyLinkPayload,
@@ -38,7 +32,6 @@ import {
   readLinkPayload,
   type LinkSpanTarget,
 } from "@/features/coding/links";
-import { useCoderStore } from "@/stores/coder";
 import { useWorkspaceStore } from "@/stores/workspace";
 import { useI18n } from "@/lib/i18n";
 import { cls } from "@/components/ui/tokens";
@@ -81,15 +74,8 @@ export function SelectionToolbar({
   onError,
 }: SelectionToolbarProps) {
   const { t } = useI18n();
-  const activeCodeId = useCoderStore((s) => s.activeCodeId);
 
   const [pickerOpen, setPickerOpen] = useState(false);
-  const [memoOpen, setMemoOpen] = useState(false);
-  const [segmentMemo, setSegmentMemo] = useState("");
-  const [inVivoOpen, setInVivoOpen] = useState(false);
-  const [inVivoName, setInVivoName] = useState("");
-  const [inVivoCat, setInVivoCat] = useState<number | null>(null);
-  const [inVivoBusy, setInVivoBusy] = useState(false);
 
   /* Segment links: whether a qcnext-link payload is on the clipboard (the
      "Paste link here" button) + a transient "copied" feedback. */
@@ -116,36 +102,12 @@ export function SelectionToolbar({
     [],
   );
 
-  const codeById = useMemo(() => {
-    const m = new Map<number, CodeTreeItem>();
-    for (const c of codes) if (c.kind === "code") m.set(c.id, c);
-    return m;
-  }, [codes]);
-
-  /** Lazy name lookup for an active code the host's list does not know yet
-   *  (it was created while the coder was open) — the toolbar must still
-   *  label its primary button correctly. */
-  const [extraNames, setExtraNames] = useState<Map<number, string> | null>(null);
-  useAsyncEffect(async (signal) => {
-    if (activeCodeId == null || codeById.has(activeCodeId)) return;
-    try {
-      const flat = await api.codesFlat();
-      signal.throwIfAborted();
-      setExtraNames(new Map(flat.filter((c) => c.kind === "code").map((c) => [c.id, c.name])));
-    } catch {
-      /* a lazy-name fetch failure should not disturb the toolbar */
-    }
-  }, [activeCodeId, codeById]);
-
-  const activeCodeName =
-    (activeCodeId != null ? codeById.get(activeCodeId)?.name : undefined) ??
-    (activeCodeId != null ? extraNames?.get(activeCodeId) : undefined);
-
-  /** Top-level code categories for the in-vivo popover's optional target. */
-  const categories = useMemo(
-    () => codes.filter((c) => c.kind === "category"),
-    [codes],
-  );
+  /* A NEW selection always opens the helper bar fresh — no popover state
+     (QTT worksheet menu) may leak from the previous selection. */
+  useEffect(() => {
+    setQttOpen(false);
+    setQttSent(false);
+  }, [selection?.pos0, selection?.pos1]);
 
   /* ------------------------------------------------------------------ ops */
 
@@ -202,75 +164,6 @@ export function SelectionToolbar({
       onChanged();
     }
     if (failed === 0) onClose();
-  }
-
-  /** In-vivo coding: create a NEW code from the selection text, then code
-   *  the current selection with it. */
-  function codeInVivo() {
-    const name = inVivoName.trim();
-    const sel = selection;
-    if (!name || inVivoBusy || !sel) return;
-    setInVivoBusy(true);
-    void (async () => {
-      try {
-        const res = await api.createCode(name, { catid: inVivoCat });
-        const created = await api.createTextCoding({
-          cid: res.cid,
-          fid,
-          seltext: sel.text,
-          pos0: sel.pos0,
-          pos1: sel.pos1,
-        });
-        const next = await refreshCodings();
-        onCoded?.(created, next);
-        onChanged();
-        onClose();
-      } catch (e) {
-        // Keep the selection so the user can retry without re-selecting.
-        onError(errorMessage(e, t("coder.inVivoCreateError")));
-      } finally {
-        setInVivoBusy(false);
-      }
-    })();
-  }
-
-  function saveSegmentMemo() {
-    const sel = selection;
-    if (!sel) return;
-    const memoText = segmentMemo.trim();
-    // Code the selection with the active code (or open picker if none)
-    const cid = activeCodeId;
-    if (cid == null) {
-      setPickerOpen(true);
-      return;
-    }
-    void (async () => {
-      try {
-        const created = await api.createTextCoding({
-          cid,
-          fid,
-          seltext: sel.text,
-          pos0: sel.pos0,
-          pos1: sel.pos1,
-        });
-        // If a memo was entered, save it to the coding. A failed memo PATCH
-        // must not look like a failed coding (a retry would duplicate the
-        // segment), so it is reported separately and the flow completes.
-        if (memoText) {
-          try {
-            await patchCodingMemo("text", created.ctid, memoText);
-          } catch (e) {
-            onError(errorMessage(e, t("coder.updateError")));
-          }
-        }
-        const next = await refreshCodings();
-        onCoded?.(created, next);
-        onChanged();
-        onClose();
-      } catch (e) {
-        onError(errorMessage(e, t("coder.createError")));
-      }
-    })();
   }
 
   function copySegmentLink() {
@@ -391,21 +284,11 @@ export function SelectionToolbar({
       if (pickerOpen) {
         setPickerOpen(false);
         e.stopImmediatePropagation();
-        return;
-      }
-      if (memoOpen) {
-        setMemoOpen(false);
-        e.stopImmediatePropagation();
-        return;
-      }
-      if (inVivoOpen) {
-        setInVivoOpen(false);
-        e.stopImmediatePropagation();
       }
     };
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
-  }, [qttOpen, pickerOpen, memoOpen, inVivoOpen]);
+  }, [qttOpen, pickerOpen]);
 
   // Clicking outside the popup hides it (the code picker is a modal and
   // survives — matches the popup/selection split the host expects).
@@ -426,76 +309,12 @@ export function SelectionToolbar({
   return (
     <>
       {popupVisible && (
-        <div ref={popupRef} className="fixed z-40" style={{ left: anchor.left, top: anchor.top }}>
-          {memoOpen ? (
-            <div
-              className={`w-72 p-2 ${cls.popup}`}
-              role="dialog"
-              aria-modal="true"
-              aria-label={t("coder.segmentMemo")}
-            >
-              <Textarea
-                autoFocus
-                value={segmentMemo}
-                onChange={(e) => setSegmentMemo(e.target.value)}
-                placeholder={t("coder.segmentMemoPlaceholder")}
-                aria-label={t("coder.segmentMemoPlaceholder")}
-                className="h-20 w-full resize-none p-1.5"
-              />
-              <div className="mt-2 flex justify-end gap-1.5">
-                <Button variant="secondary" onClick={() => setMemoOpen(false)}>
-                  {t("common.cancel")}
-                </Button>
-                <Button variant="primary" icon={<Check size={12} aria-hidden />} onClick={saveSegmentMemo}>
-                  {t("common.save")}
-                </Button>
-              </div>
-            </div>
-          ) : inVivoOpen ? (
-            <div
-              className={`w-64 p-2 ${cls.popup}`}
-              role="dialog"
-              aria-modal="true"
-              aria-label={t("coder.inVivo")}
-            >
-              <Input
-                autoFocus
-                value={inVivoName}
-                onChange={(e) => setInVivoName(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") codeInVivo();
-                }}
-                placeholder={t("coder.inVivoNamePlaceholder")}
-                aria-label={t("coder.inVivoNamePlaceholder")}
-              />
-              <Select
-                value={inVivoCat ?? ""}
-                onChange={(e) => setInVivoCat(e.target.value === "" ? null : Number(e.target.value))}
-                aria-label={t("coder.inVivoCategory")}
-                className="mt-1.5 w-full"
-              >
-                <option value="">{t("coder.inVivoNoCategory")}</option>
-                {categories.map((c) => (
-                  <option key={c.id} value={c.id}>
-                    {c.name}
-                  </option>
-                ))}
-              </Select>
-              <div className="mt-2 flex justify-end gap-1.5">
-                <Button variant="secondary" onClick={() => setInVivoOpen(false)}>
-                  {t("common.cancel")}
-                </Button>
-                <Button
-                  variant="primary"
-                  icon={inVivoBusy ? <LoaderCircle size={12} className="animate-spin" aria-hidden /> : <Tag size={12} aria-hidden />}
-                  onClick={codeInVivo}
-                  disabled={inVivoBusy || inVivoName.trim() === ""}
-                >
-                  {t("common.create")}
-                </Button>
-              </div>
-            </div>
-          ) : qttOpen ? (
+        <div
+          ref={popupRef}
+          className="fixed z-40 qc-enter"
+          style={{ left: anchor.left, top: anchor.top }}
+        >
+          {qttOpen ? (
             <Menu role="menu" className="w-64" aria-label={t("qtt.sendTitle")}>
               <div className="border-b border-border px-2 py-1 text-[11px] font-medium uppercase tracking-wide text-text-secondary">
                 {t("qtt.sendTitle")}
@@ -539,43 +358,10 @@ export function SelectionToolbar({
                 variant="primary"
                 icon={<Code size={12} aria-hidden />}
                 className="max-w-56"
-                onClick={() => {
-                  if (activeCodeId != null) void codeSelection(activeCodeId);
-                  else setPickerOpen(true);
-                }}
-                title={
-                  activeCodeId != null
-                    ? t("coder.codeWithActive", { name: activeCodeName ?? "" })
-                    : t("coder.codeAction")
-                }
+                onClick={() => setPickerOpen(true)}
+                title={t("coder.pickCode")}
               >
-                <span className="truncate">
-                  {activeCodeId != null ? activeCodeName ?? t("coder.codeAction") : t("coder.codeAction")}
-                </span>
-              </Button>
-              <Button
-                variant="secondary"
-                icon={<StickyNote size={12} aria-hidden />}
-                onClick={() => {
-                  setSegmentMemo("");
-                  setInVivoOpen(false);
-                  setMemoOpen(true);
-                }}
-              >
-                {t("coder.segmentMemo")}
-              </Button>
-              <Button
-                variant="secondary"
-                icon={<Tag size={12} aria-hidden />}
-                onClick={() => {
-                  setInVivoName("");
-                  setInVivoCat(null);
-                  setMemoOpen(false);
-                  setInVivoOpen(true);
-                }}
-                title={t("coder.inVivo")}
-              >
-                {t("coder.inVivo")}
+                <span className="truncate">{t("coder.codeAction")}</span>
               </Button>
               <Button
                 variant="secondary"

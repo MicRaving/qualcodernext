@@ -31,7 +31,7 @@ export function CodingDetailsBar({
 }) {
   const { t } = useI18n();
   return (
-    <div className="shrink-0 border-t border-border bg-surface px-3 py-2">
+    <div className="qc-enter shrink-0 border-t border-border bg-surface px-3 py-2">
       <div className="flex items-center gap-2">
         <span className="text-xs font-medium text-text-secondary">{t("coder.codingDetails")}</span>
         <div className="flex-1" />
@@ -113,7 +113,7 @@ export function AnnotationDetailsBar({  rows,
   const [editingAnnMemo, setEditingAnnMemo] = useState<{ anid: number; memo: string } | null>(null);
 
   return (
-    <div className="shrink-0 border-t border-border bg-surface px-3 py-2">
+    <div className="qc-enter shrink-0 border-t border-border bg-surface px-3 py-2">
       <div className="flex items-center gap-2">
         <span className="text-xs font-medium text-text-secondary">{t("coder.annotationDetails")}</span>
         <div className="flex-1" />

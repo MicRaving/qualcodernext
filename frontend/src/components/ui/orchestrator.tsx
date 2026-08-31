@@ -152,7 +152,7 @@ export interface BarHeaderProps extends Omit<HTMLAttributes<HTMLElement>, "title
 export function BarHeader({ title, count, actions, children, ...rest }: BarHeaderProps) {
   return (
     <header className={cls.bar} {...rest}>
-      <h1 className="shrink-0 truncate text-sm font-semibold text-text-primary">{title}</h1>
+      <h1 className="min-w-0 truncate text-sm font-semibold text-text-primary">{title}</h1>
       {count !== undefined && <CountBadge value={count} />}
       <div className="flex-1" />
       {children ?? actions}

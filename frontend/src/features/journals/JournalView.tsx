@@ -112,7 +112,7 @@ export function JournalList() {
             );
           }
           return (
-            <div key={j.jid} className="group border-b border-border">
+            <div key={j.jid} className="qc-row-in group border-b border-border">
               <button
                 type="button"
                 onClick={() => setNotesUi({ selectedId: j.jid })}
