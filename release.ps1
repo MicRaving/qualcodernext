@@ -359,41 +359,17 @@ if ($doRelease) {
     foreach ($line in (& git log $commitRange --pretty=format:"%s|%h" --no-merges 2>$null)) {
         if ($line) { $commits += $line }
     }
+    $commitCount = $commits.Count
 
-    $breaking = @(); $features = @(); $fixes = @(); $other = @()
-    foreach ($line in $commits) {
-        $sep = $line.IndexOf('|')
-        if ($sep -le 0) { continue }
-        $subject = $line.Substring(0, $sep).Trim()
-        $hash    = $line.Substring($sep + 1).Trim()
-        if ($subject -match '^chore\(release\):') { continue }
-        if ($subject -match '^breaking[:(]' -or $subject -match '^BREAKING CHANGE') {
-            $breaking += "- $subject ($hash)"
-        } elseif ($subject -match '^feat[:(]') {
-            $clean = ($subject -replace '^feat[\(]([^)]*)\):\s*', '[feature-scope] ') -replace '^feat:\s*', ''
-            $features += "- $clean ($hash)"
-        } elseif ($subject -match '^fix[:(]') {
-            $clean = ($subject -replace '^fix[\(]([^)]*)\):\s*', '[fix-scope] ') -replace '^fix:\s*', ''
-            $fixes += "- $clean ($hash)"
-        } else {
-            $other += "- $subject ($hash)"
-        }
-    }
-
-    $body = "## What's Changed in v$newVersion`n`n"
-    if ($breaking.Count -gt 0) { $body += "### Breaking Changes`n" + ($breaking -join "`n") + "`n`n" }
-    if ($features.Count -gt 0) { $body += "### Features`n" + ($features -join "`n") + "`n`n" }
-    if ($fixes.Count -gt 0)    { $body += "### Bug Fixes`n" + ($fixes -join "`n") + "`n`n" }
-    if ($other.Count -gt 0)    { $body += "### Other Changes`n" + ($other -join "`n") + "`n`n" }
-    if (-not ($breaking.Count + $features.Count + $fixes.Count + $other.Count)) {
-        $body += "_No commits recorded since the last tag._`n`n"
-    }
+    # The changelog stays SHORT: a one-line pointer plus the compare link.
+    # GitHub lists every commit behind that link, so the section never
+    # duplicates the detailed list. Edit it afterwards to add real
+    # one-liners ("Improved animations.") when wanted.
     if ($lastTag) { $compareFrom = $lastTag } else { $compareFrom = "v0.0.0" }
-    $body += "---`n**Full changelog**: https://github.com/$repoSlug/compare/$compareFrom...v$newVersion"
+    $body = "- See the full changelog below for a complete list of changes.`n`n**Full Changelog**: https://github.com/$repoSlug/compare/$compareFrom...v$newVersion"
 
-    $commitCount = $breaking.Count + $features.Count + $fixes.Count + $other.Count
-    if ($lastTag) { Ok "Changelog ready: $commitCount commits since $lastTag" }
-    else { Ok "Changelog ready: $commitCount commits (no previous tag)" }
+    if ($lastTag) { Ok "Changelog ready: $commitCount commits since $lastTag (brief section)" }
+    else { Ok "Changelog ready: $commitCount commits (no previous tag, brief section)" }
 
     # --- B4. Bump version + append the CHANGELOG section ---------------------
     Step "B4/6  Bump version + record changelog"

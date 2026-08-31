@@ -191,6 +191,15 @@ Semantics: `User` = coder, `Captions` = transcript, `Mic` = transcribe,
 Status dots (e.g. coder/sync indicator): `h-1.5 w-1.5 rounded-full`,
 `bg-success` / `bg-danger` / `bg-transparent` (off).
 
+Themes: `:root` carries the light palette, `.dark` the dark palette. **OLED**
+is a third theme applied as `html.dark.oled` — true-black surfaces
+(`--qc-bg`/`--qc-surface` = `#000000`, near-black `--qc-surface-higher` and
+`--qc-border`) over the dark palette, so OLED pixels switch fully off. It
+yields to the high-contrast a11y mode (`html.dark.oled:not(.a11y-high-contrast)`).
+
+The theme control (Settings → General → Appearance) is a three-way segmented
+control: Light / Dark / OLED (`theme.light` / `theme.dark` / `theme.oled`).
+
 ---
 
 ## 6. Ribbon (exact order, left → right)

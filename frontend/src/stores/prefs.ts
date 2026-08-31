@@ -9,12 +9,15 @@ import { create } from "zustand";
 import { api, type PresenceEntry, type SyncStatus, type SyncConflictV2 } from "@/lib/api";
 import { useProjectStore } from "./project";
 
-export type ThemeMode = "light" | "dark";
+export type ThemeMode = "light" | "dark" | "oled";
 
-/** Persist + apply the theme: toggle `.dark` on <html> and store in localStorage. */
+/** Persist + apply the theme: OLED builds on the dark palette (`.dark` is
+ *  set too) plus its own `.oled` class; store in localStorage. */
 function applyThemeMode(mode: ThemeMode) {
   if (typeof document !== "undefined") {
-    document.documentElement.classList.toggle("dark", mode === "dark");
+    const root = document.documentElement;
+    root.classList.toggle("dark", mode === "dark" || mode === "oled");
+    root.classList.toggle("oled", mode === "oled");
   }
   if (typeof window !== "undefined") {
     localStorage.setItem("qc-theme", mode);
@@ -25,7 +28,7 @@ function applyThemeMode(mode: ThemeMode) {
 function initialThemeMode(): ThemeMode {
   if (typeof window !== "undefined") {
     const saved = localStorage.getItem("qc-theme");
-    if (saved === "dark" || saved === "light") return saved;
+    if (saved === "dark" || saved === "light" || saved === "oled") return saved;
     if (
       typeof window.matchMedia === "function" &&
       window.matchMedia("(prefers-color-scheme: dark)").matches

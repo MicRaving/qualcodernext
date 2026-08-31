@@ -26,6 +26,7 @@ export const en: Record<string, string> = {
   "theme.switchLabel": "Switch to {theme} theme",
   "theme.light": "Light",
   "theme.dark": "Dark",
+  "theme.oled": "OLED",
 
   // shell navigation
   "nav.dashboard": "Dashboard",

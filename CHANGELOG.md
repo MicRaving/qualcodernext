@@ -1,7 +1,19 @@
 <!-- Release notes: the Release workflow publishes the `## vX.Y.Z` section of
      this file (from that heading to the next `## ` heading) as the GitHub
      release body for tag vX.Y.Z, appending auto-generated commit notes.
-     Add a section like "## 0.3.0 (2026-09-01)" at the TOP of the file. -->
+     Keep the section SHORT — one-line bullets ("Improved animations.") that
+     briefly describe the changes. The detail lives behind the **Full
+     Changelog** compare link below the bullets, which every section must
+     include. Add a section like "## 0.4.2 (2026-08-31)" at the TOP of the
+     file. -->
+
+## 0.4.3 (2026-08-31)
+
+- Added OLED dark mode.
+- Fixed memo bubble duplicate close button.
+- Removed spill-over entrance animations from sidebars.
+
+**Full Changelog**: https://github.com/MicRaving/qualcodernext/compare/v0.4.2...v0.4.3
 
 ## 0.4.2 (2026-08-31)
 

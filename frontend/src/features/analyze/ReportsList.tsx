@@ -34,7 +34,7 @@ export function ReportsList() {
         aria-label={t(entry.titleKey)}
         aria-current={active ? "page" : undefined}
         className={cn(
-          "qc-row-in flex cursor-pointer items-center gap-2 border-b border-border px-3 py-2 hover:bg-surface-higher",
+          "flex cursor-pointer items-center gap-2 border-b border-border px-3 py-2 hover:bg-surface-higher",
           active && "bg-accent/10",
         )}
       >
@@ -80,7 +80,7 @@ export function ReportsList() {
         aria-label={t("graphs.title")}
         aria-current={graphsActive ? "page" : undefined}
         className={cn(
-          "qc-row-in flex cursor-pointer items-center gap-2 border-b border-border px-3 py-2 hover:bg-surface-higher",
+          "flex cursor-pointer items-center gap-2 border-b border-border px-3 py-2 hover:bg-surface-higher",
           graphsActive && "bg-accent/10",
         )}
       >

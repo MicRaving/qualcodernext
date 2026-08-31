@@ -370,7 +370,7 @@ function AnnotationItems() {
           );
         }
         return (
-        <div key={a.anid} className="qc-row-in group">
+        <div key={a.anid} className="group hover:shadow-sm">
           <button
             type="button"
             onClick={() => setNotesUi({ selectedId: a.anid })}
@@ -733,7 +733,7 @@ function MemoItems() {
       const hasChildren = (byParent.get(childrenKey)?.length ?? 0) > 0;
       const isCollapsed = collapsed[key] ?? false;
       return (
-        <div key={key} className="qc-row-in group">
+        <div key={key} className="group hover:shadow-sm">
           {item.kind === "code" ? (
             <button
               type="button"
@@ -823,7 +823,7 @@ function MemoItems() {
           </div>
           <div className="p-1">
             {filesWithMemos.map((s) => (
-              <div key={s.id} className="qc-row-in group">
+              <div key={s.id} className="group hover:shadow-sm">
                 <button
                   type="button"
                   onClick={() => setNotesUi({ selectedId: s.id, selectedKind: "file" })}

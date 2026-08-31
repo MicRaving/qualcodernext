@@ -1140,7 +1140,7 @@ export function Sidebar() {
               never start one). The drop indicator + merge highlight render
               above, driven by the pointer-move zone computation. */}
           <div
-            className="qc-row-in group flex items-center"
+            className="group flex items-center"
             data-tree-row={key}
             data-tree-depth={depth}
             onPointerDown={(e) => handleRowPointerDown(e, item)}
@@ -1324,7 +1324,7 @@ export function Sidebar() {
                   );
                 }
                 return (
-                  <div key={s.id} className="qc-row-in">
+                  <div key={s.id}>
                     <div className="group flex items-center">
                       <button
                         type="button"

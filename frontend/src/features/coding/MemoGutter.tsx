@@ -518,7 +518,6 @@ export function MemoGutterBubble({
             onUpdateWeight={(weight) => onUpdateWeight(row.id, weight)}
             onDelete={() => onDelete(row.id)}
             onToggleImportant={onToggleImportant ? () => onToggleImportant(row.id) : undefined}
-            onCollapse={onClose}
             extras={extrasFor ? extrasFor(row.id) : undefined}
           />
         ))}

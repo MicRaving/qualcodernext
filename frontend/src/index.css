@@ -55,6 +55,22 @@
   --qc-shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.6);
 }
 
+/* OLED dark mode: pure-black surfaces so pixels switch off (the classic
+   OLED power/contrast win). Text, accent and status colors stay on the
+   dark palette; only the surfaces/borders go true black, with a hair of
+   near-black for hover/selected elevations and borders for separation.
+   Sits on top of `.dark` and yields to the high-contrast a11y mode. */
+html.dark.oled:not(.a11y-high-contrast) {
+  --qc-bg: #000000;
+  --qc-surface: #000000;
+  --qc-surface-higher: #0d0d10;
+  --qc-border: #23232a;
+
+  --qc-shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.6);
+  --qc-shadow-md: 0 4px 12px rgba(0, 0, 0, 0.7);
+  --qc-shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.8);
+}
+
 @theme inline {
   --color-bg: var(--qc-bg);
   --color-surface: var(--qc-surface);

@@ -4,14 +4,21 @@
  * pseudonyms, R integration and About.
  */
 import { useEffect, useState, type FormEvent } from "react";
-import { Moon, Sun, Trash2 } from "lucide-react";
+import { CircleDot, Moon, Sun, Trash2 } from "lucide-react";
 import { api, type Pseudonym } from "@/lib/api";
 import { errorDetail } from "@/features/ai/format";
 import { A11yControls } from "@/features/accessibility/A11yControls";
 import { useI18n, LOCALE_NAMES, type Locale } from "@/lib/i18n";
 import { Button, Field, IconButton, Input, SectionLabel, Select, Toggle } from "@/components/ui/orchestrator";
-import { usePrefsStore } from "@/stores/prefs";
+import { usePrefsStore, type ThemeMode } from "@/stores/prefs";
 import { InterchangeView } from "@/features/interchange/InterchangeView";
+
+/** The three theme choices for the appearance segmented control. */
+const THEMES: { mode: ThemeMode; icon: typeof Sun; labelKey: string }[] = [
+  { mode: "light", icon: Sun, labelKey: "theme.light" },
+  { mode: "dark", icon: Moon, labelKey: "theme.dark" },
+  { mode: "oled", icon: CircleDot, labelKey: "theme.oled" },
+];
 
 export function GeneralTab() {
   const { t, locale, setLocale } = useI18n();
@@ -105,21 +112,28 @@ async function removePseudonym(original: string) {
         <div className="grid grid-cols-2 gap-4">
           <div>
             <SectionLabel>{t("settings.appearance")}</SectionLabel>
-            <Toggle
-              checked={themeMode === "dark"}
-              onChange={() => setThemeMode(themeMode === "dark" ? "light" : "dark")}
-              ariaLabel={t("theme.switchLabel", { theme: themeMode === "dark" ? "light" : "dark" })}
-              label={
-                <span className="flex items-center gap-1.5">
-                  {themeMode === "dark" ? (
-                    <Moon size={14} className="text-text-secondary" aria-hidden />
-                  ) : (
-                    <Sun size={14} className="text-text-secondary" aria-hidden />
-                  )}
-                  {themeMode === "dark" ? t("theme.dark") : t("theme.light")}
-                </span>
-              }
-            />
+            <div className="mt-2 flex w-fit items-center gap-0.5 rounded-sm border border-border bg-bg p-0.5">
+              {THEMES.map(({ mode, icon: Icon, labelKey }) => {
+                const active = themeMode === mode;
+                return (
+                  <button
+                    key={mode}
+                    type="button"
+                    onClick={() => setThemeMode(mode)}
+                    aria-pressed={active}
+                    aria-label={t("theme.switchLabel", { theme: t(labelKey) })}
+                    className={`flex items-center gap-1 rounded-sm px-2 py-1 text-xs font-medium ${
+                      active
+                        ? "bg-surface-higher text-accent"
+                        : "text-text-secondary hover:text-text-primary"
+                    }`}
+                  >
+                    <Icon size={12} aria-hidden />
+                    {t(labelKey)}
+                  </button>
+                );
+              })}
+            </div>
           </div>
           <div>
             <SectionLabel>{t("ai.language")}</SectionLabel>
