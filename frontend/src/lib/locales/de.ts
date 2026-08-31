@@ -1764,6 +1764,13 @@ export const de: Record<string, string> = {
   // Collaboration sync (Option C: versionierte Sidecars + Konfliktlösung)
   "sync.title": "Sync",
   "sync.toggle": "Hintergrund-Sync aktivieren",
+  "sync.interval": "Sync-Intervall",
+  "sync.intervalHint": "Wie oft die App Änderungen mit dem freigegebenen Ordner austauscht.",
+  "sync.interval15s": "15 Sekunden",
+  "sync.interval30s": "30 Sekunden",
+  "sync.interval60s": "1 Minute",
+  "sync.interval120s": "2 Minuten",
+  "sync.interval300s": "5 Minuten",
   "sync.pending": "{n} ausstehend",
   "sync.pendingExport": "{n} zu senden",
   "sync.pendingImport": "{n} zu empfangen",

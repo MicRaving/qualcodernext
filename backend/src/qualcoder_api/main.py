@@ -65,9 +65,13 @@ def _unhandled_exception_handler(request: Request, exc: Exception) -> JSONRespon
 
 async def _sync_loop() -> None:
     """Collaboration sync: while the per-machine switch is on, export local
-    changes and import other instances' sidecar files every ``SYNC_INTERVAL_SECS``."""
+    changes and import other instances' sidecar files on a configurable
+    cadence (default 60s; see Settings → the sync interval dropdown). The
+    interval is re-read each tick so a settings change takes effect without
+    restarting the loop."""
+
     while True:
-        await asyncio.sleep(sync_engine.SYNC_INTERVAL_SECS)
+        await asyncio.sleep(user_settings.get_sync_interval_secs())
         if not sync.sync_enabled():
             continue
         if service.project_path and service.session_factory:
@@ -85,18 +89,25 @@ async def _sync_loop() -> None:
                     try:
                         from qualcoder_api.services import replay_service
 
-                        # Ack all replays that are not our own and that we have imported
-                        # (for now, ack every replay that exists and is not ours)
-                        for rp in replay_service.list_replays(service.project_path):
+                        # Ack per-session replays that are not our own and not yet
+                        # acked (import_pending already acks on a real import; this
+                        # covers replays that existed with no new entries).  Legacy
+                        # changes/<instance> sidecars are acked by import_pending
+                        # with the instance id — their file stem ("changes") is not
+                        # a replay id, so they are skipped here.
+                        for rp in replay_service.list_session_replays(service.project_path):
                             if rp.stem == sync_id:
                                 continue
-                            # Only ack if the replay file still exists and we have imported it
-                            # (import is tracked via sync's imports watermark, but for simplicity
-                            # we ack every replay that is not ours and is not yet acked)
                             if not replay_service.has_acked(service.project_path, rp.stem, sync_id):
                                 replay_service.write_ack(service.project_path, rp.stem, sync_id)
                     except Exception:
                         pass
+                    # Admin merge (spec 2c): when every other session is closed or
+                    # stale, snapshot the sandbox into the master archive so a
+                    # crashed instance's changes still land.  No-op while another
+                    # session is active.
+                    with _contextlib.suppress(Exception):
+                        await service._maybe_merge_master(service.current_session_id)
                     with _contextlib.suppress(Exception):
                         service.heartbeat_session()
             except Exception as err:  # pragma: no cover - defensive

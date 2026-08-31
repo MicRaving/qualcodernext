@@ -33,6 +33,7 @@ SYNC_ENTITIES = {
     "gr_free_line_item", "gr_pix_item", "gr_av_item",
     "link", "dictionary", "dictionary_entry", "qtt_sheet", "qtt_item",
     "creative_item", "comment", "code_set", "code_set_member", "r_script",
+    "coder_names",
 }
 
 # Natural (business) keys — the columns that identify the SAME logical row
@@ -59,6 +60,8 @@ NATURAL_KEYS: dict[str, list[str]] = {
     # the primary key.  FK translation normalises the values to local ids
     # before matching, so it is safe to treat both columns as natural.
     "code_set_member": ["set_id", "cid"],
+    # Coder roster: `name` is both the natural key and the primary key.
+    "coder_names": ["name"],
 }
 
 # Foreign-key columns: ``column`` on a row stores the autoincrement PK of
@@ -127,6 +130,7 @@ ENTITY_PKS: dict[str, str] = {
     "code_set": "id",
     "code_set_member": "set_id,cid",
     "r_script": "id",
+    "coder_names": "name",
 }
 
 # Dependency-ordered export/rebuild sequence: parent tables come before the
@@ -168,6 +172,7 @@ EXPORT_ORDER: list[str] = [
     "code_set",
     "code_set_member",
     "r_script",
+    "coder_names",
 ]
 
 # ── PK helpers ───────────────────────────────────────────────────────────

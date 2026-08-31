@@ -331,8 +331,16 @@ class ProjectService:
         if self.collab and self.uuid:
             from qualcoder_api.services import sandbox
 
-            return str(sandbox.sandbox_path(self.uuid))
+            return str(sandbox.sandbox_path(self.uuid, self._sandbox_instance()))
         return os.path.join(self.project_path, "data.qda")
+
+    def _sandbox_instance(self) -> str:
+        """The per-instance sandbox key (stable per machine).  Two raters on
+        the same machine never share a sandbox file; a machine's sandbox is
+        rebuilt/kept independently of other machines'."""
+        from qualcoder_api.services.user_settings import get_instance_id
+
+        return get_instance_id()
 
     # ------------------------------------------------------------------
     # Close / dispose
@@ -399,125 +407,46 @@ class ProjectService:
         self.current_source_name = ""
         self.current_session_id = ""
 
-    async def _consolidate_on_close(self) -> None:
-        """Collaboration-mode close: converge, then refresh the cold archive.
+    async def _converge(self, session_id: str) -> None:
+        """Export THIS session's pending rows to its replay, then import every
+        other session's replays into the local sandbox (so the sandbox holds
+        the merged latest state before any master snapshot)."""
+        from qualcoder_api.services import sync
 
-        Final export + import bring the sandbox to the merged latest state;
-        the engine is disposed; the sandbox WAL is flushed and the sandbox is
-        copied over the shared ``data.qda`` archive (switched to a rollback
-        journal so it is a single self-consistent file); stray conflicted
-        copies are removed and the consolidation watermark is advanced.
+        _, factory = self._ensure_engine()
+        async with factory() as session:
+            await sync.export_pending(session, self.project_path, session_id)
+        async with factory() as session:
+            await sync.import_pending(session, self.project_path, session_id)
 
-        Session-based online handling (spec 2c): the master is only updated
-        when every other session is reported closed (or stale).  Otherwise
-        this closing session just leaves its replay file for peers to import;
-        the last-closing session (the admin) performs the merge.
+    async def _snapshot_master(self) -> bool:
+        """Refresh the cold ``data.qda`` archive from the live sandbox.
+
+        Uses ``VACUUM INTO`` (safe while the engine stays open — a separate raw
+        connection reads the sandbox and writes a fresh self-consistent file),
+        then switches the archive to a rollback journal and advances the
+        consolidation watermark.  This replaces the old dispose → checkpoint →
+        copy2 sequence, which kept failing on Windows with "database is locked".
+        Returns True when the snapshot was written.
         """
         from qualcoder_api.core.timeutil import now
-        from qualcoder_api.services import project_marker, sandbox, sync, sync_engine
-        from qualcoder_api.services.user_settings import get_instance_id
+        from qualcoder_api.services import project_marker, sync_engine
 
-        # Use per-session replay files when a session is active, fall back to
-        # legacy per-instance sidecars for old projects (LSTeach).
-        session_id = getattr(self, "current_session_id", "") or ""
+        sandbox_db = self.db_path()
+        archive = Path(self.project_path) / "data.qda"
+        import aiosqlite as _aiosqlite
+
         try:
-            if session_id:
-                # Per-session path (new)
-                from qualcoder_api.services import replay_service, session_service
-
-                _, factory = self._ensure_engine()
-                # Export pending changes to THIS session's replay file
-                async with factory() as session:
-                    # Use the new per-session export (falls back to legacy if needed)
-                    # For now, also export via legacy path for backward compat
-                    await sync.export_pending(session, self.project_path, session_id)
-                    # Also export to per-session replay via replay_service
-                    # (sync.export_pending already handles per-session if session_id is a valid session)
-                    # To support both, we call the legacy and the new
-                    with contextlib.suppress(Exception):
-                        await sync.export_pending(session, self.project_path, get_instance_id())
-                # Import other sessions' replays
-                async with factory() as session:
-                    await sync.import_pending(session, self.project_path, session_id)
-                # After import, ack the replays we just imported
-                try:
-                    for replay_path in replay_service.list_replays(self.project_path):
-                        # Don't ack our own replay
-                        if replay_path.stem == session_id:
-                            continue
-                        # Check if we have already imported it (by checking if we have an ack)
-                        # For now, just ack every replay that exists and is not our own
-                        # A more precise check would be to see if import actually applied it
-                        with contextlib.suppress(Exception):
-                            replay_service.write_ack(self.project_path, replay_path.stem, session_id)
-                except Exception:
-                    pass
-            else:
-                # Legacy fallback: per-instance
-                instance_id = get_instance_id()
-                _, factory = self._ensure_engine()
-                async with factory() as session:
-                    await sync.export_pending(session, self.project_path, instance_id)
-                async with factory() as session:
-                    await sync.import_pending(session, self.project_path, instance_id)
-        except Exception as err:
-            logger.warning("final sync on close failed: %s", err)
-
-        # Check if we are the last-closing session (admin merge condition, spec 2c)
-        # If not all others are closed, we do NOT overwrite the master — we just
-        # leave our replay file for the eventual admin to merge.
-        should_merge = True
-        if session_id:
+            tmp = archive.with_suffix(".tmp")
+            conn = await _aiosqlite.connect(sandbox_db)
             try:
-                from qualcoder_api.services import session_service
-
-                # Need to ensure our own close has been written before checking
-                # (close_session was called in _close_project_locked before this)
-                # But _consolidate_on_close is called BEFORE close_session in the
-                # current flow, so we need to handle both orders.  Check with
-                # the current session considered as closed.
-                # For now, check if all OTHER sessions are closed (excluding us,
-                # which we will consider as closed for the check).
-                # We do this by temporarily marking our session as closed in the check.
-                # The simplest is to call is_all_other_closed, which already
-                # excludes the current session, but the current session's file
-                # may not yet have closed=true.  So we treat it as closed.
-                all_closed = session_service.is_all_other_closed(self.project_path, session_id)
-                # Also consider the case where our session file hasn't been marked
-                # closed yet — if we are in the process of closing, we are
-                # effectively closed.
-                if not all_closed:
-                    # Double-check: if the only other sessions are our own session
-                    # (which is about to be closed), then we are the last.
-                    # is_all_other_closed already excludes us, so if it returns
-                    # False, there is at least one other active session.
-                    should_merge = False
-                    logger.info(
-                        "not merging master for %s: other sessions still active", session_id
-                    )
-            except Exception as err:
-                logger.debug("is_all_other_closed check failed: %s", err)
-                should_merge = True  # fallback to old behavior (always merge) on error
-
-        if not should_merge:
-            # Not the admin — don't touch the master, just dispose and return.
-            # The replay file for this session remains for the admin to merge later.
-            await self._dispose_engine_if_any()
-            return
-
-        await self._dispose_engine_if_any()
-
-        try:
-            from qualcoder_api.services.cleanup_service import checkpoint
-
-            sandbox_db = str(sandbox.sandbox_path(self.uuid))
-            await checkpoint(sandbox_db)
-            archive = Path(self.project_path) / "data.qda"
-            shutil.copy2(sandbox_db, archive)
-            conn = await aiosqlite.connect(str(archive))
+                await conn.execute(f"VACUUM INTO '{tmp}'")
+            finally:
+                await conn.close()
+            tmp.replace(archive)
+            conn = await _aiosqlite.connect(str(archive))
             try:
                 await conn.execute("PRAGMA journal_mode=DELETE")
-                await conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
             finally:
                 await conn.close()
             for suffix in ("-wal", "-shm"):
@@ -526,33 +455,97 @@ class ProjectService:
             project_marker.update_consolidation_watermark(
                 self.project_path, now(), sync_engine._max_sidecar_seq(self.project_path)
             )
-            # Per-session master watermark + ack + cleanup (spec 2c/2e)
-            if session_id:
-                try:
-                    from qualcoder_api.services import replay_service
+            return True
+        except Exception as err:  # pragma: no cover - depends on sqlite version
+            logger.warning("master snapshot failed: %s", err)
+            return False
 
-                    # All per-session replays that existed at merge time are now in master
-                    all_replays = replay_service.list_session_replays(self.project_path)
-                    merged_ids = [p.stem for p in all_replays]
-                    # Include legacy sidecars as well if they exist (migration)
-                    # For the watermark, use the global max seq
-                    max_seq = sync_engine._max_sidecar_seq(self.project_path)
-                    with contextlib.suppress(Exception):
-                        max_seq = max(max_seq, replay_service._max_replay_seq(self.project_path))
-                    replay_service.write_master_watermark(
-                        self.project_path, merged_ids, max_seq, session_id
-                    )
-                    for rid in merged_ids:
-                        with contextlib.suppress(Exception):
-                            replay_service.write_ack(self.project_path, rid, session_id)
-                    with contextlib.suppress(Exception):
-                        deleted = replay_service.cleanup_replays(self.project_path)
-                        if deleted:
-                            logger.info("cleaned up %s merged replays for %s", deleted, session_id)
-                except Exception as err:
-                    logger.debug("master watermark/ack update failed: %s", err)
+    async def _maybe_merge_master(self, session_id: str) -> bool:
+        """Admin merge (spec 2c): when every OTHER session is closed or stale,
+        snapshot the local sandbox into the master ``data.qda``, record the
+        merged replays in ``replays/merged.json``, ack them, and clean up the
+        ones that are merged and acked.  Returns True when a merge ran.
+
+        Also called from the background sync loop so a crashed instance's
+        replay is still merged once its session goes stale — not only on the
+        next explicit close.
+        """
+        from qualcoder_api.core.timeutil import now
+        from qualcoder_api.services import (
+            project_marker,
+            replay_service,
+            session_service,
+            sync_engine,
+        )
+
+        if not session_id:
+            return False
+        try:
+            if not session_service.is_all_other_closed(self.project_path, session_id):
+                logger.debug("not merging master for %s: other sessions still active", session_id)
+                return False
         except Exception as err:
-            logger.warning("consolidation on close failed: %s", err)
+            logger.debug("is_all_other_closed check failed: %s", err)
+            return False
+
+        merged = await self._snapshot_master()
+        if not merged:
+            return False
+        try:
+            # All per-session replays that existed at merge time are now in the
+            # master.  Record them in the watermark so the acks/cleanup can
+            # decide what is safe to delete.
+            all_replays = replay_service.list_session_replays(self.project_path)
+            merged_ids = [p.stem for p in all_replays]
+            max_seq = sync_engine._max_sidecar_seq(self.project_path)
+            with contextlib.suppress(Exception):
+                max_seq = max(max_seq, replay_service._max_replay_seq(self.project_path))
+            replay_service.write_master_watermark(
+                self.project_path, merged_ids, max_seq, session_id
+            )
+            for rid in merged_ids:
+                if rid == session_id:
+                    continue
+                with contextlib.suppress(Exception):
+                    replay_service.write_ack(self.project_path, rid, session_id)
+            with contextlib.suppress(Exception):
+                deleted = replay_service.cleanup_replays(self.project_path)
+                if deleted:
+                    logger.info("cleaned up %s merged replays for %s", deleted, session_id)
+            project_marker.update_consolidation_watermark(self.project_path, now(), max_seq)
+        except Exception as err:
+            logger.debug("master watermark/ack update failed: %s", err)
+        return True
+
+    async def _consolidate_on_close(self) -> None:
+        """Collaboration-mode close: converge, then refresh the cold archive.
+
+        Final export + import bring the sandbox to the merged latest state;
+        the sandbox is snapshotted over the shared ``data.qda`` archive via
+        ``VACUUM INTO`` and stray conflicted copies are removed.
+
+        Session-based online handling (spec 2c): the master is only updated
+        when every other session is reported closed (or stale).  Otherwise
+        this closing session just leaves its replay file for peers to import;
+        the last-closing session (the admin) performs the merge.
+        """
+        from qualcoder_api.services.user_settings import get_instance_id
+
+        session_id = getattr(self, "current_session_id", "") or ""
+        try:
+            if session_id:
+                await self._converge(session_id)
+            else:
+                # Legacy per-instance path (pre-session projects, e.g. LSTeach).
+                await self._converge(get_instance_id())
+        except Exception as err:
+            logger.warning("final sync on close failed: %s", err)
+
+        if session_id:
+            await self._maybe_merge_master(session_id)
+        else:
+            await self._snapshot_master()
+        await self._dispose_engine_if_any()
 
     @staticmethod
     def _cleanup_conflicted_copies(project_path: str) -> None:
@@ -603,7 +596,7 @@ class ProjectService:
             if not ck.get("busy"):
                 break
             await asyncio.sleep(0.2)
-        sandbox.create_sandbox_from(self.db_path(), uuid)
+        sandbox.create_sandbox_from(self.db_path(), uuid, self._sandbox_instance())
         self.uuid = uuid
         self.collab = True
 
@@ -778,49 +771,19 @@ class ProjectService:
         open), switches the archive to a rollback journal, and advances the
         consolidation watermark.
         """
-        from qualcoder_api.core.timeutil import now
-        from qualcoder_api.services import project_marker, sync, sync_engine
         from qualcoder_api.services.user_settings import get_instance_id
 
         if not self.collab or not self.uuid:
             return {"ok": False, "reason": "not in collaboration mode"}
 
+        session_id = getattr(self, "current_session_id", "") or get_instance_id()
         try:
-            instance_id = get_instance_id()
-            _, factory = self._ensure_engine()
-            async with factory() as session:
-                await sync.export_pending(session, self.project_path, instance_id)
-            async with factory() as session:
-                await sync.import_pending(session, self.project_path, instance_id)
+            await self._converge(session_id)
         except Exception as err:
             logger.warning("consolidate converge failed: %s", err)
 
-        sandbox_db = self.db_path()
-        archive = Path(self.project_path) / "data.qda"
-        import aiosqlite as _aiosqlite
-
-        try:
-            tmp = archive.with_suffix(".tmp")
-            conn = await _aiosqlite.connect(sandbox_db)
-            try:
-                await conn.execute(f"VACUUM INTO '{tmp}'")
-            finally:
-                await conn.close()
-            tmp.replace(archive)
-            conn = await _aiosqlite.connect(str(archive))
-            try:
-                await conn.execute("PRAGMA journal_mode=DELETE")
-            finally:
-                await conn.close()
-            for suffix in ("-wal", "-shm"):
-                Path(str(archive) + suffix).unlink(missing_ok=True)
-            self._cleanup_conflicted_copies(self.project_path)
-            project_marker.update_consolidation_watermark(
-                self.project_path, now(), sync_engine._max_sidecar_seq(self.project_path)
-            )
-        except Exception as err:  # pragma: no cover - depends on sqlite version
-            logger.warning("consolidate archive refresh failed: %s", err)
-            return {"ok": False, "reason": f"consolidation failed: {err}"}
+        if not await self._snapshot_master():
+            return {"ok": False, "reason": "consolidation failed"}
         return {"ok": True, "reason": "archive refreshed"}
 
     # ------------------------------------------------------------------
@@ -1028,12 +991,12 @@ class ProjectService:
         # with 2 sources vs 23 in the archive).  A stale sandbox must be
         # rebuilt — otherwise the second rater (or the first after a crash)
         # stays on an empty project forever.
-        if sandbox.sandbox_exists(self.uuid):
+        if sandbox.sandbox_exists(self.uuid, self._sandbox_instance()):
             corrupted = False
             try:
                 archive_probe = Path(project_path) / "data.qda"
                 if archive_probe.exists():
-                    probe_engine = create_project_engine(str(sandbox.sandbox_path(self.uuid)))
+                    probe_engine = create_project_engine(str(sandbox.sandbox_path(self.uuid, self._sandbox_instance())))
                     try:
                         probe_factory = create_session_factory(probe_engine)
                         async with probe_factory() as probe_session:
@@ -1119,7 +1082,7 @@ class ProjectService:
             from qualcoder_api.services.cleanup_service import checkpoint
 
             await checkpoint(str(archive))
-            sandbox.create_sandbox_from(str(archive), self.uuid)
+            sandbox.create_sandbox_from(str(archive), self.uuid, self._sandbox_instance())
             return
 
         # Sidecars exist: rebuild the full database from them. If the rebuild
@@ -1127,8 +1090,8 @@ class ProjectService:
         # open) but the cold archive carries data, fall back to seeding from
         # the archive — an empty project is worse than a slightly stale one,
         # and the next sync cycle reconciles the difference.
-        await sandbox.create_fresh_sandbox(self.uuid, codername=codername)
-        engine = create_project_engine(str(sandbox.sandbox_path(self.uuid)))
+        await sandbox.create_fresh_sandbox(self.uuid, codername=codername, instance_id=self._sandbox_instance())
+        engine = create_project_engine(str(sandbox.sandbox_path(self.uuid, self._sandbox_instance())))
         try:
             factory = create_session_factory(engine)
             result = await sync.rebuild_from_sidecars(
@@ -1151,7 +1114,7 @@ class ProjectService:
         if not emptyRebuild and archive.exists():
             try:
                 # Lightweight emptiness probe on the freshly rebuilt sandbox.
-                probe_engine = create_project_engine(str(sandbox.sandbox_path(self.uuid)))
+                probe_engine = create_project_engine(str(sandbox.sandbox_path(self.uuid, self._sandbox_instance())))
                 try:
                     probe_factory = create_session_factory(probe_engine)
                     async with probe_factory() as probe_session:
@@ -1212,4 +1175,4 @@ class ProjectService:
 
             with contextlib.suppress(Exception):
                 await checkpoint(str(archive))
-            sandbox.create_sandbox_from(str(archive), self.uuid)
+            sandbox.create_sandbox_from(str(archive), self.uuid, self._sandbox_instance())

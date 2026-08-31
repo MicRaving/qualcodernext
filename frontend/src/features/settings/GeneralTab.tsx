@@ -21,6 +21,9 @@ export function GeneralTab() {
   // Auto-load project on start (packaged app only; harmless elsewhere).
   const [autoLoadProject, setAutoLoadProject] = useState(true);
 
+  // Collaboration sync cadence (1 min default; Settings → Sync).
+  const [syncIntervalSecs, setSyncIntervalSecs] = useState(60);
+
   // Pseudonyms
   const [pseudonyms, setPseudonyms] = useState<Pseudonym[]>([]);
   const [pseudoOriginal, setPseudoOriginal] = useState("");
@@ -33,6 +36,12 @@ export function GeneralTab() {
       .then((s) => setAutoLoadProject(s.auto_open_project))
       .catch(() => {
         /* backend unreachable — keep the default */
+      });
+    api
+      .syncSettings()
+      .then((s) => setSyncIntervalSecs(s.interval_secs))
+      .catch(() => {
+        /* backend unreachable — keep the 1-minute default */
       });
     void loadPseudonyms();
   }, []);
@@ -70,12 +79,23 @@ export function GeneralTab() {
     }
   }
 
-  async function removePseudonym(original: string) {
+async function removePseudonym(original: string) {
     try {
       await api.deletePseudonym(original);
       await loadPseudonyms();
     } catch (err) {
       setPseudoError(errorDetail(err, "Could not delete pseudonym"));
+    }
+  }
+
+  async function saveSyncInterval(secs: number) {
+    setSyncIntervalSecs(secs);
+    try {
+      // Keep the enabled flag; the backend stores/validates the cadence.
+      const s = await api.syncSettings();
+      await api.setSyncEnabled(s.enabled, secs);
+    } catch {
+      /* the next load falls back to the stored value */
     }
   }
 
@@ -127,8 +147,29 @@ export function GeneralTab() {
           />
         </div>
 
-        <div className="mt-3 border-t border-border pt-3">
+<div className="mt-3 border-t border-border pt-3">
           <A11yControls />
+        </div>
+      </section>
+
+      {/* Collaboration sync cadence */}
+      <section className="p-3">
+        <h2 className="text-sm font-semibold text-text-primary">{t("sync.title")}</h2>
+        <div className="mt-2">
+          <SectionLabel>{t("sync.interval")}</SectionLabel>
+          <Select
+            value={syncIntervalSecs}
+            onChange={(e) => void saveSyncInterval(Number(e.target.value))}
+            className="mt-2 w-full"
+            aria-label={t("sync.interval")}
+          >
+            <option value={15}>{t("sync.interval15s")}</option>
+            <option value={30}>{t("sync.interval30s")}</option>
+            <option value={60}>{t("sync.interval60s")}</option>
+            <option value={120}>{t("sync.interval120s")}</option>
+            <option value={300}>{t("sync.interval300s")}</option>
+          </Select>
+          <p className="mt-1 text-xs text-text-secondary">{t("sync.intervalHint")}</p>
         </div>
       </section>
 

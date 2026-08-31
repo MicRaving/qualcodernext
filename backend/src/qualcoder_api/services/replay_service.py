@@ -177,28 +177,21 @@ def has_acked(project_path: str, replay_session_id: str, acker_session_id: str) 
 
 
 def all_acked(project_path: str, replay_session_id: str) -> bool:
-    """True if every *active* session has acked this replay."""
-    # For now, check all session files (including closed) that are not stale.
-    # A more precise check would be "all sessions that existed at ack time",
-    # but for minimal data loss we require every currently known session to have acked.
+    """True if every *active* (non-closed, non-stale) session has acked this replay.
+
+    Closed and stale (crashed, no heartbeat for the TTL) sessions are
+    implicitly acked — they can no longer import, so their ack would block
+    replay deletion forever.  The replay's own session is considered to have
+    merged it (it created it).
+    """
     from qualcoder_api.services.session_service import list_sessions
 
     sessions = list_sessions(project_path, include_closed=True)
-    # Filter to sessions that are not the replay's own session (a session doesn't need to ack itself, but we count it as acked)
-    # For a replay to be deletable, every *other* session must have acked it.
-    # The replay's own session is considered to have merged it (since it created it).
     for s in sessions:
         sid = s.get("session_id")
         if sid == replay_session_id:
             continue
-        # Stale sessions are treated as closed and don't need to ack (they're gone)
-        # But we still require ack from non-stale sessions.
-        # For simplicity, require ack from every non-stale session.
-        # Check staleness: if session is closed or stale, it doesn't need to ack
-        if s.get("closed"):
-            # Closed sessions are considered to have merged before closing (they exported final)
-            # But we still want ack from them if they were open when replay was created.
-            # For now, require ack only from sessions that are still active (not closed, not stale)
+        if s.get("closed") or s.get("_stale"):
             continue
         # Active session must have acked
         if not has_acked(project_path, replay_session_id, sid):
@@ -272,11 +265,16 @@ def delete_replay_if_deletable(project_path: str, replay_session_id: str) -> boo
 
 
 def cleanup_replays(project_path: str) -> int:
-    """Delete all deletable replays. Returns count deleted."""
+    """Delete all deletable replays (merged into master + acked by every
+    active session), then prune closed/stale session files. Returns count deleted."""
+    from qualcoder_api.services.session_service import prune_sessions
+
     count = 0
     # Only consider per-session replays for deletion; legacy sidecars are not deleted via acks
     for replay_file in list_session_replays(project_path):
         session_id = replay_file.stem
         if delete_replay_if_deletable(project_path, session_id):
             count += 1
+    with contextlib.suppress(Exception):
+        prune_sessions(project_path)
     return count

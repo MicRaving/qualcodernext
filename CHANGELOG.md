@@ -3,6 +3,28 @@
      release body for tag vX.Y.Z, appending auto-generated commit notes.
      Add a section like "## 0.3.0 (2026-09-01)" at the TOP of the file. -->
 
+## 0.4.0 (2026-08-31)
+
+Collaboration reliability rework — fixes "different instances show different coders",
+"coded segments are not updated" and the intermittent `database is locked` on close.
+
+### Added
+
+- **Configurable sync interval** (Settings → Sync → *Sync interval* dropdown; 1 minute default, 15s/30s/1m/2m/5m). The background exchange loop re-reads the stored value each tick, so a change takes effect immediately.
+- **Automatic pull of remote changes.** While a project is open and collaboration/sync is on, the app runs a sync cycle every 30s and repaints the project data *and* the open file's coded segments whenever new rows were imported — no manual "Sync now" needed.
+- **`coder_names` is now a synced entity** (name natural key, visibility included in the export order). Adding/renaming/deleting a coder or toggling visibility on one machine now propagates to the other raters' instances.
+
+### Fixed
+
+- **Different instances showed different coders.** The coder roster (`coder_names`) was never part of the sync change log, and the coder list UI only merged per-machine settings with row owners. Coders are now captured into `sync_log`, replayed like every other entity, and the coder list also includes the project's own `coder_names` — so a coder created on one machine appears on all of them.
+- **Coded segments were not updated.** The backend imported other raters' codings into the local sandbox, but the UI never repainted until a manual refresh. The new auto-sync poll refreshes the project and the open coder's segments when imports land.
+- **`consolidation on close failed: database table is locked`.** The close-time master snapshot replaced the fragile dispose→checkpoint→copy sequence with SQLite's `VACUUM INTO` (the same path manual consolidation already used), which works while the engine is open. Closes now merge reliably on Windows.
+- **Replays and session files piled up forever.** Merged replays are now deleted once they are in the master watermark (`replays/merged.json`) and acked by every active session (closed/stale sessions count as acked); closed and crashed session files are pruned after the staleness window.
+- **Stale master archive.** The admin-merge check now also runs from the background sync loop, so a crashed instance's replay is merged into the master once its session goes stale — not only on the next explicit close.
+- **Two sync identities fought over the watermarks.** `PUT /sync/settings`, `/sync/now` and `/sync/status` used the per-machine instance id while the background loop and close used the per-session id, splitting a machine's changes across two replay files. Every sync operation now uses the session identity; the legacy `changes/<instance>` sidecars are read for migration only and no longer written.
+
+**Full Changelog**: https://github.com/MicRaving/qualcodernext/compare/v0.3.2...v0.4.0
+
 ## 0.3.2 (2026-08-30)
 
 Session-based online collaboration — full rewrite to match the specified offline/online model.

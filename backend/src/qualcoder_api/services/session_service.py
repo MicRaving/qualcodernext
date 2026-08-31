@@ -241,3 +241,43 @@ def get_active_sessions(project_path: str) -> list[dict]:
             continue
         active.append(s)
     return active
+
+
+def prune_sessions(project_path: str) -> int:
+    """Delete session files that can no longer matter: closed sessions older
+    than the TTL, and stale (crashed) sessions whose heartbeat is long gone.
+    Closed sessions have already exported their final replay, so their file is
+    only needed for ack/merge bookkeeping for one TTL window.  Returns the
+    number of files removed."""
+    root = _sessions_dir(project_path)
+    if not root.is_dir():
+        return 0
+    now = time.time()
+    removed = 0
+    for p in root.glob("*.json"):
+        if p.name.endswith(".tmp"):
+            continue
+        try:
+            data = json.loads(p.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        closed_at = float(data.get("closed_at", 0))
+        last = float(data.get("last_heartbeat", 0) or data.get("opened_at", 0))
+        if data.get("closed"):
+            if closed_at and now - closed_at > SESSION_TTL_SECS:
+                with contextlib.suppress(OSError):
+                    p.unlink(missing_ok=True)
+                    removed += 1
+        elif now - last > SESSION_TTL_SECS * 2 or last - now > SESSION_TTL_SECS * 2:
+            # Crashed long ago — prune its file and (below) its acks.
+            with contextlib.suppress(OSError):
+                p.unlink(missing_ok=True)
+                removed += 1
+        # Best-effort: drop this session's acks (they can no longer be needed).
+        ack_dir = _acks_dir(project_path) / p.stem
+        if ack_dir.is_dir():
+            with contextlib.suppress(OSError):
+                for f in ack_dir.glob("*.json"):
+                    f.unlink(missing_ok=True)
+                ack_dir.rmdir()
+    return removed

@@ -48,7 +48,7 @@ async def test_activate_writes_marker_and_sandbox(collab_svc):
     assert svc.collaboration_mode() is True
     assert svc.uuid
     assert project_marker.marker_exists(path) is True
-    assert sandbox.sandbox_exists(svc.uuid) is True
+    assert sandbox.sandbox_exists(svc.uuid, svc._sandbox_instance()) is True
     # Idempotent.
     again = await svc.activate_collaboration(codername="alice")
     assert again["ok"] is False
@@ -99,6 +99,32 @@ async def test_close_consolidates_and_reopens_in_collab(collab_svc):
     marker = project_marker.read_marker(path)
     if marker:
         sandbox.remove_sandbox(marker["uuid"])
+
+
+async def test_close_merge_writes_watermark_and_cleans_replays(collab_svc):
+    """Closing the sole session (the admin) snapshots the master, records
+    ``replays/merged.json`` with the merged session, and deletes the merged
+    replay — so replays don't pile up and a fresh opener rebuilds from the
+    master + watermark."""
+    import json
+
+    from qualcoder_api.persistence.repositories import CodeRepository
+
+    svc, path = collab_svc
+    sync.set_current_user("alice")
+    await svc.activate_collaboration(codername="alice")
+    sid = svc.current_session_id
+    async with svc.session_factory() as session:
+        await CodeRepository(session).add_code(name="fear", owner="alice")
+    await svc.close_project()
+
+    replays = Path(path) / "replays"
+    merged = replays / "merged.json"
+    assert merged.exists()
+    wm = json.loads(merged.read_text(encoding="utf-8"))
+    assert sid in wm.get("merged_sessions", [])
+    # The merged replay is gone (merged into master + implicitly acked).
+    assert not (replays / f"{sid}.jsonl").exists()
 
 
 async def test_revert_returns_to_single_coder(collab_svc):

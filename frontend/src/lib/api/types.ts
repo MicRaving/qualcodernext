@@ -1018,6 +1018,12 @@ export interface SyncCollaboratorV2 {
   state: "active" | "stale" | "offline";
 }
 
+export interface SyncSettings {
+  enabled: boolean;
+  /** Background sync cadence in seconds (1 min default; 15s-5min dropdown). */
+  interval_secs: number;
+}
+
 export interface SyncStatus {
   ok: boolean;
   reason?: string;

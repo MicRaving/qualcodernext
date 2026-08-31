@@ -18,8 +18,18 @@ from qualcoder_api.services import sync, sync_engine, user_settings
 router = APIRouter(prefix="/sync", tags=["sync"])
 
 
+def _sync_id(svc) -> str:
+    """The active sync identity: the per-session id in collaboration mode
+    (each open gets a fresh replay), falling back to the per-machine
+    instance id for legacy/offline projects.  Every sync operation must use
+    the SAME identity — mixing session and instance ids splits a machine's
+    changes across two replay files with separate watermarks."""
+    return getattr(svc, "current_session_id", "") or user_settings.get_instance_id()
+
+
 class SyncSettingsRequest(BaseModel):
     enabled: bool
+    interval_secs: int | None = None
 
 
 class SyncOverrideRequest(BaseModel):
@@ -51,16 +61,21 @@ async def get_sync_settings() -> dict:
 
 @router.put("/settings")
 async def put_sync_settings(req: SyncSettingsRequest, svc: ServiceDep) -> dict:
-    """Turn the background sync cycle on/off for this machine. Enabling runs
-    an immediate cycle when a project is open."""
+    """Turn the background sync cycle on/off for this machine (and/or change
+    its cadence). Enabling runs an immediate cycle when a project is open."""
     before = user_settings.get_sync_settings().get("enabled", False)
-    saved = user_settings.save_sync_settings(req.enabled)
+    saved = user_settings.save_sync_settings(
+        req.enabled, interval_secs=req.interval_secs
+    )
     if req.enabled and svc.project_path and svc.session_factory:
         import asyncio
 
         # First-sync baseline for NEW collaborators: a fresh instance must
         # adopt the shared project's current state as already-seen instead
         # of replaying the entire sidecar backlog (offline-backup freeze).
+        # Keyed by the STABLE instance id — a per-session key would be a new
+        # watermark on every enable and would wrongly suppress local changes
+        # made between open and enable.
         _, factory = svc._ensure_engine()
         async with factory() as session:
             await sync_engine.baseline_first_sync(
@@ -69,7 +84,7 @@ async def put_sync_settings(req: SyncSettingsRequest, svc: ServiceDep) -> dict:
         asyncio.get_running_loop().create_task(
             sync_engine.run_sync_cycle(
                 svc.session_factory, svc.project_path,
-                user_settings.get_instance_id(),
+                _sync_id(svc),
             )
         )
     # Record the toggle in the open project's history (best effort).
@@ -92,7 +107,7 @@ async def sync_status(svc: ServiceDep) -> dict:
     if svc.project_path == "" or svc.session_factory is None:
         return {"ok": False, "reason": "no project open"}
     return await sync_engine.sync_status(
-        svc.session_factory, svc.project_path, user_settings.get_instance_id()
+        svc.session_factory, svc.project_path, _sync_id(svc)
     )
 
 
@@ -165,7 +180,7 @@ async def put_sync_override(req: SyncOverrideRequest) -> dict:
 async def sync_now(svc: OpenProjectDep) -> dict:
     """Run one export + import cycle immediately."""
     return await sync_engine.run_sync_cycle(
-        svc.session_factory, svc.project_path, user_settings.get_instance_id()
+        svc.session_factory, svc.project_path, _sync_id(svc)
     )
 
 

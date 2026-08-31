@@ -1084,6 +1084,64 @@ async def test_db_locked_replay_is_retried_not_conflict(rater_b, monkeypatch):
         assert len(codes) == 0
 
 
+async def test_session_id_exports_to_replay_not_legacy(rater_a):
+    """A session id (dash) routes exports to ``replays/<id>.jsonl`` only —
+    never to the legacy ``changes/<instance>`` path. One identity → one
+    replay file, so watermarks and imports stay consistent."""
+    sid = "inst1-123456-abcd"
+    sync.set_current_user("anna")
+    async with rater_a.session_factory() as session:
+        await CodeRepository(session).add_code(name="fear", owner="anna")
+    async with rater_a.session_factory() as session:
+        report = await sync.export_pending(session, rater_a.project_path, sid)
+    assert report["exported"] == 1
+    replay = Path(rater_a.project_path) / "replays" / f"{sid}.jsonl"
+    assert replay.exists()
+    assert not (Path(rater_a.project_path) / sync.SYNC_DIR_NAME / sid / "changes.jsonl").exists()
+
+
+async def test_coder_names_roundtrip(rater_a, rater_b):
+    """A coder registered on one machine (the API path, which captures into
+    sync_log) reaches the other machine through the sidecars, so both
+    instances show the same coder roster — fixing the "different instances
+    show different coders" symptom."""
+    from sqlalchemy import text
+
+    from qualcoder_api.api.v1.coders import _ensure_project_coder
+
+    sync.set_current_user("anna")
+    await _ensure_project_coder(rater_a, "carol")
+    await _export(rater_a, "anna")
+    _copy_changes(rater_a.project_path, rater_b.project_path)
+    sync.set_current_user("berta")
+    async with rater_b.session_factory() as session:
+        await sync.import_pending(session, rater_b.project_path, "berta")
+        rows = await session.execute(text("SELECT name FROM coder_names"))
+    names = {r[0] for r in rows}
+    assert "carol" in names
+    # Visibility changes travel too.
+    from qualcoder_api.api.v1.coders import _capture_coder
+
+    sync.set_current_user("anna")
+    async with rater_a.session_factory() as session:
+        await session.execute(
+            text("UPDATE coder_names SET visibility = 0 WHERE name = 'carol'")
+        )
+        await _capture_coder(session, "update", "carol", {"name": "carol", "visibility": 0})
+        await session.commit()
+    await _export(rater_a, "anna")
+    _copy_changes(rater_a.project_path, rater_b.project_path)
+    sync.set_current_user("berta")
+    async with rater_b.session_factory() as session:
+        await sync.import_pending(session, rater_b.project_path, "berta")
+        row = (
+            await session.execute(
+                text("SELECT visibility FROM coder_names WHERE name = 'carol'")
+            )
+        ).first()
+    assert row is not None and row[0] == 0
+
+
 # ----------------------------------------------------------------------
 # Cleanup: sync_log trimming + sidecar compaction
 # ----------------------------------------------------------------------

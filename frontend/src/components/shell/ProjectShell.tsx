@@ -234,6 +234,28 @@ export function ProjectShell() {
     };
   }, [projectOpen]);
 
+  // Collaboration pull: while a project is open AND collaboration/sync is
+  // active, run a background sync cycle on a fixed cadence so remote raters'
+  // sources/codings appear automatically (autoSync refreshes the project and
+  // the open coder's segments when the cycle actually imported rows).
+  const SYNC_POLL_MS = 30_000;
+  useEffect(() => {
+    if (!projectOpen) return;
+    let cancelled = false;
+    const check = async () => {
+      if (cancelled) return;
+      const prefs = usePrefsStore.getState();
+      const syncOn = prefs.syncStatus?.enabled === true || prefs.collabMode === "collaboration";
+      if (!syncOn) return;
+      await prefs.autoSync();
+    };
+    const timer = window.setInterval(() => void check(), SYNC_POLL_MS);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [projectOpen]);
+
   // Report which file this instance is working on whenever the view changes,
   // so other raters see the live "on which file" indicator.
   useEffect(() => {

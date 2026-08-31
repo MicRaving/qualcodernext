@@ -120,6 +120,10 @@ interface PrefsState {
    *  the shared-folder auto-enable passes remember: false. */
   setSyncEnabled: (enabled: boolean, opts?: { remember?: boolean }) => Promise<boolean>;
   runSyncNow: () => Promise<boolean>;
+  /** Background pull: run one cycle and, when it imported new rows, refresh
+   *  the project data + the open coder's segments so other raters' changes
+   *  appear automatically (no manual "Sync now" needed). */
+  autoSync: () => Promise<boolean>;
   /** Set by the store when the backend reported a shared folder on open;
    *  the shell shows a transient notice and clears it. */
   syncAutoNotice: boolean;
@@ -253,6 +257,30 @@ export const usePrefsStore = create<PrefsState>((set) => ({
       if (!res.ok) return false;
       const status = await api.syncStatus();
       set({ syncStatus: status });
+      return true;
+    } catch {
+      return false;
+    }
+  },
+  autoSync: async () => {
+    if (!useProjectStore.getState().projectPath) return false;
+    try {
+      const res = await api.syncNow();
+      if (!res.ok) return false;
+      const status = await api.syncStatus();
+      set({ syncStatus: status });
+      const imported = Object.values(res.imported ?? {}).reduce(
+        (a, r) => a + (r.applied ?? 0),
+        0,
+      );
+      if (imported > 0) {
+        // New rows landed in the local sandbox — repaint project data and the
+        // open coder's segments (coders listen for qc:codings-changed).
+        await useProjectStore.getState().refreshProject().catch(() => {});
+        if (typeof window !== "undefined") {
+          window.dispatchEvent(new Event("qc:codings-changed"));
+        }
+      }
       return true;
     } catch {
       return false;

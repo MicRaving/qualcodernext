@@ -1878,6 +1878,13 @@ export const en: Record<string, string> = {
   // Collaboration sync (Option C: versioned sidecars + conflict resolution)
   "sync.title": "Sync",
   "sync.toggle": "Enable background sync",
+  "sync.interval": "Sync interval",
+  "sync.intervalHint": "How often the app exchanges changes with the shared folder.",
+  "sync.interval15s": "15 seconds",
+  "sync.interval30s": "30 seconds",
+  "sync.interval60s": "1 minute",
+  "sync.interval120s": "2 minutes",
+  "sync.interval300s": "5 minutes",
   "sync.pending": "{n} pending",
   "sync.pendingExport": "{n} to send",
   "sync.pendingImport": "{n} to receive",

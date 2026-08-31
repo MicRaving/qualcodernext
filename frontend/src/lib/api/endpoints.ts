@@ -90,6 +90,7 @@ import type {
   SqlResult,
   SyncResult,
   SyncStatus,
+  SyncSettings,
   PresenceResponse,
   SyncConflictV2,
   TranscribeJob,
@@ -946,10 +947,12 @@ export const api = {
       body: JSON.stringify({ file_id: fileId, file_name: fileName }),
     }),
   syncNow: () => request<SyncResult>("/sync/now", { method: "POST" }),
-  setSyncEnabled: (enabled: boolean) =>
-    request<{ enabled: boolean }>("/sync/settings", {
+  /** Current sync switch state + cadence. */
+  syncSettings: () => request<SyncSettings>("/sync/settings"),
+  setSyncEnabled: (enabled: boolean, intervalSecs?: number) =>
+    request<SyncSettings>("/sync/settings", {
       method: "PUT",
-      body: JSON.stringify({ enabled }),
+      body: JSON.stringify({ enabled, interval_secs: intervalSecs }),
     }),
   /** Remember a per-project sync decision: "on"/"off" win over the
    *  auto-detection on the next open; "auto" re-detects. */

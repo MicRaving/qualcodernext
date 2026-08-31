@@ -201,21 +201,47 @@ def set_last_compact(settings: dict | None = None) -> str:
     return timestamp
 
 
+#: Default background-sync cadence (seconds). Configurable via the settings
+#: dropdown (1 min is the default; the cycle polls the stored value each tick).
+SYNC_INTERVAL_DEFAULT_SECS = 60
+#: Allowed cadences for the settings dropdown (seconds). "Automatic" is not
+#: offered — a concrete interval keeps the shared-folder write rate predictable.
+SYNC_INTERVAL_CHOICES_SECS = (15, 30, 60, 120, 300)
+
+
 def get_sync_settings(settings: dict | None = None) -> dict:
-    """Return the collaboration-sync settings (enabled flag)."""
+    """Return the collaboration-sync settings (enabled flag + interval)."""
     settings = settings or load_settings()
     sync = settings.get("sync")
     if not isinstance(sync, dict):
         sync = {}
-    return {"enabled": bool(sync.get("enabled", False))}
+    interval = int(sync.get("interval_secs", SYNC_INTERVAL_DEFAULT_SECS))
+    if interval not in SYNC_INTERVAL_CHOICES_SECS:
+        interval = SYNC_INTERVAL_DEFAULT_SECS
+    return {"enabled": bool(sync.get("enabled", False)), "interval_secs": interval}
 
 
-def save_sync_settings(enabled: bool, settings: dict | None = None) -> dict:
-    """Persist the collaboration-sync switch."""
+def save_sync_settings(
+    enabled: bool, settings: dict | None = None, interval_secs: int | None = None
+) -> dict:
+    """Persist the collaboration-sync switch (and optional cadence)."""
     settings = settings or load_settings()
-    settings["sync"] = {"enabled": bool(enabled)}
+    sync = settings.get("sync")
+    if not isinstance(sync, dict):
+        sync = {}
+    sync["enabled"] = bool(enabled)
+    if interval_secs is not None:
+        if int(interval_secs) not in SYNC_INTERVAL_CHOICES_SECS:
+            interval_secs = SYNC_INTERVAL_DEFAULT_SECS
+        sync["interval_secs"] = int(interval_secs)
+    settings["sync"] = sync
     save_settings(settings)
-    return {"enabled": bool(enabled)}
+    return {"enabled": bool(enabled), "interval_secs": int(sync.get("interval_secs", SYNC_INTERVAL_DEFAULT_SECS))}
+
+
+def get_sync_interval_secs(settings: dict | None = None) -> int:
+    """The configured background-sync cadence (seconds)."""
+    return int(get_sync_settings(settings).get("interval_secs", SYNC_INTERVAL_DEFAULT_SECS))
 
 
 def get_sync_override(project_path: str, settings: dict | None = None) -> str:

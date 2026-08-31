@@ -60,8 +60,30 @@ async def sync_status(session_factory, project_path: str, instance_id: str) -> d
     except Exception as err:  # pragma: no cover
         return {"ok": False, "reason": str(err)}
 
-    # Per-instance collaborator info.
+    # Per-instance collaborator info — per-session replays first, then legacy
+    # per-instance sidecars (migration).  In the session model each open is a
+    # distinct "collaborator" entry carrying that session's coder.
     collaborators: list[dict] = []
+    replays_root = Path(project_path) / "replays"
+    if replays_root.is_dir():
+        for replay in sorted(replays_root.glob("*.jsonl")):
+            if replay.name == "merged.json" or replay.stem == instance_id:
+                continue
+            entries = _parse_sidecar(replay)
+            try:
+                mtime = replay.stat().st_mtime
+            except OSError:
+                mtime = 0
+            pending_import = sum(
+                1 for e in entries if e.get("seq", 0) > _imported_seq(state, replay.stem)
+            )
+            collaborators.append({
+                "instance": replay.stem,
+                "coder": entries[0].get("coder", "") if entries else "",
+                "last_sync": mtime,
+                "pending_import": pending_import,
+                "state": _collaborator_state(mtime, pending_import),
+            })
     changes_root = Path(project_path) / SYNC_DIR_NAME
     if changes_root.is_dir():
         for sidecar_dir in sorted(changes_root.iterdir()):
