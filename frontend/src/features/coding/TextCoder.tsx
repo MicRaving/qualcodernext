@@ -147,7 +147,6 @@ export function TextCoder({
   onExitPlainText,
   bare = false,
   textOverride,
-  displayText,
   codings: codingsProp,
   annotations: annotationsProp,
   codes: codesProp,
@@ -168,10 +167,6 @@ export function TextCoder({
    *  stored fulltext so a cleaned variant (e.g. empty lines collapsed for
    *  website text) can be shown consistently with the other panes. */
   textOverride?: string;
-  /** Display-only text: when provided, segments are still built from
-   *  `text` (so pos0/pos1 stay aligned), but rendering uses this string
-   *  (e.g. PDF line-break normalization). Length must match `text`. */
-  displayText?: string;
   /** Controlled mode: the parent owns the codings/annotations/codes state and
    *  is notified of every change, so all panes render from the same arrays. */
   codings?: Coding[];
@@ -365,7 +360,6 @@ export function TextCoder({
   }, [pendingFlash, source?.fulltext]);
 
   const text = textOverride ?? source?.fulltext ?? "";
-  const display = displayText ?? text;
   const unsaved = editMode && editText !== text;
 
   /* ---------------------------------------------------------------- load */
@@ -892,7 +886,7 @@ export function TextCoder({
     const out: ReactNode[] = [];
     let pos = 0;
     segments.forEach((seg, i) => {
-      if (seg.start > pos) out.push(display.slice(pos, seg.start));
+      if (seg.start > pos) out.push(text.slice(pos, seg.start));
       const rows = seg.ctids
         .map((ctid) => codings.find((c) => c.ctid === ctid))
         .filter((c): c is Coding => Boolean(c));
@@ -934,7 +928,7 @@ export function TextCoder({
             if (first) void useInspectorStore.getState().selectCode(first.cid);
           }}
         >
-          {wrapColors(seg, display.slice(seg.start, seg.end))}
+          {wrapColors(seg, text.slice(seg.start, seg.end))}
         </span>,
       );
       for (const link of segLinks) {
@@ -957,7 +951,7 @@ export function TextCoder({
       }
       pos = seg.end;
     });
-    if (pos < display.length) out.push(display.slice(pos));
+    if (pos < text.length) out.push(text.slice(pos));
     return out;
   }
 
@@ -983,7 +977,7 @@ export function TextCoder({
           setSelectedSeg(null);
         }}
       >
-        {display.slice(seg.start, seg.end)}
+        {text.slice(seg.start, seg.end)}
       </span>
     ));
   }
@@ -1263,7 +1257,7 @@ export function TextCoder({
         anchor={toolbarPos}
         selection={
           selection
-            ? { pos0: selection.start, pos1: selection.end, text: display.slice(selection.start, selection.end) }
+            ? { pos0: selection.start, pos1: selection.end, text: text.slice(selection.start, selection.end) }
             : null
         }
         fid={sourceId}

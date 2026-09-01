@@ -84,19 +84,6 @@ pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
 
 const DRAG_MIN_SIZE = 5;
 
-/** Collapse artificial single line breaks that PDFs insert at every visual
- *  line end: a lone `\n` (not part of `\n\n`) becomes a space so paragraphs
- *  flow and wrap naturally. Double newlines (paragraph breaks) are kept.
- *  Length is preserved (1 char -> 1 char) so coding positions stay aligned.
- *  Hyphenated splits (`"word-\nnext"`) are joined — the hyphen was an
- *  artifact of the visual line break — but replaced with two spaces to keep
- *  the length stable for existing codings. */
-function normalizePdfBreaks(text: string): string {
-  let out = text.replace(/-\n/g, "  ");
-  out = out.replace(/(?<!\n)\n(?!\n)/g, " ");
-  return out;
-}
-
 /** Download a source's PDF bytes for pdf.js.
  *
  *  `fetchSourceFile` builds the URL from the RESOLVED base — the App boot
@@ -1500,7 +1487,6 @@ export function PdfCoder({ source }: { source: Source }) {
             sourceId={source.id}
             forceText
             bare
-            displayText={normalizePdfBreaks(source.fulltext ?? "")}
             codings={textCodings}
             annotations={annotations}
             codes={codes}
