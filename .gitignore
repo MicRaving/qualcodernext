@@ -43,3 +43,8 @@ updater.key
 
 # Mic's archive - don't touch
 Archive/
+
+# Agent release/versioning docs (internal, not for users/changelogs)
+VERSIONING.md
+AGENTS.md
+.opencode/
