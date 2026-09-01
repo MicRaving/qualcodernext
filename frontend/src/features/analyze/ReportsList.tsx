@@ -11,9 +11,9 @@
 import { ANALYSIS, TOOLS, type NavEntry } from "@/features/analyze/registry";
 import { useI18n } from "@/lib/i18n";
 import { useWorkspaceStore } from "@/stores/workspace";
-import { BarHeader, LeftBar, SectionLabel } from "@/components/ui/orchestrator";
+import { BarHeader, BarTitle, LeftBar, SectionLabel } from "@/components/ui/orchestrator";
 import { cn } from "@/lib/utils";
-import { Network } from "lucide-react";
+import { BarChart3, Network } from "lucide-react";
 
 export function ReportsList() {
   const { t } = useI18n();
@@ -56,7 +56,7 @@ export function ReportsList() {
       className="h-full min-h-0"
       header={
         <BarHeader
-          title={t("nav.analyze")}
+          title={<BarTitle icon={BarChart3} label={t("nav.analyze")} />}
           count={ANALYSIS.length + TOOLS.length}
         />
       }

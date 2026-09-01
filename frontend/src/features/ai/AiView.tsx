@@ -7,7 +7,7 @@
  */
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useAsyncEffect } from "@/lib/useAsync";
-import { Check, FileText, HelpCircle, Hourglass, Pencil, Plus, Trash2 } from "lucide-react";
+import { Check, FileText, HelpCircle, Hourglass, Pencil, Plus, Sparkles, Trash2 } from "lucide-react";
 import { api, type AiChatInfo, type AiPromptInfo, type AiStatus } from "@/lib/api";
 import { AI_REFRESH_MS } from "@/lib/config";
 import {
@@ -18,6 +18,7 @@ import {
   Select,
 } from "@/components/ui/orchestrator";
 import { cls } from "@/components/ui/tokens";
+import { useIsCompactBar } from "@/components/ui/barWidth";
 import { InlineNameEdit } from "@/components/ui/InlineNameEdit";
 import { useI18n } from "@/lib/i18n";
 import { useToast } from "@/lib/toast";
@@ -128,6 +129,7 @@ function AnchorPopover({
 
 export function AiView() {
   const { t } = useI18n();
+  const isCompact = useIsCompactBar();
   const toast = useToast();
   const [prompts, setPrompts] = useState<AiPromptInfo[]>([]);
   const [promptId, setPromptId] = useState("");
@@ -250,7 +252,10 @@ export function AiView() {
       className="h-full min-h-0 max-w-full overflow-hidden"
       header={
         <div className={cls.bar}>
-          <span className="shrink-0 text-sm font-semibold text-text-primary">AI</span>
+          <span className="flex min-w-0 items-center gap-1.5">
+            <Sparkles size={15} className="shrink-0" aria-hidden />
+            {!isCompact && <span className="shrink-0 text-sm font-semibold text-text-primary">AI</span>}
+          </span>
           <span
             role="status"
             title={serviceTitle}

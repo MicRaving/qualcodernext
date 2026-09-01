@@ -34,7 +34,7 @@ import {
 import { api, GRAPH_MODELS, type GraphData } from "@/lib/api";
 
 import { useI18n } from "@/lib/i18n";
-import { Button, ErrorBanner, Field, IconButton, Input, LeftBar, BarHeader, Menu, MenuItem, Modal, Select } from "@/components/ui/orchestrator";
+import { Button, ErrorBanner, Field, IconButton, Input, LeftBar, BarHeader, BarTitle, Menu, MenuItem, Modal, Select } from "@/components/ui/orchestrator";
 import { cls } from "@/components/ui/tokens";
 
 import { useGraphStore } from "@/stores/graph";
@@ -1119,7 +1119,7 @@ export function GraphsInspector() {
     <LeftBar
       borderSide="l"
       className="h-full min-h-0"
-      header={<BarHeader title={t("graphs.title")} />}
+      header={<BarHeader title={<BarTitle icon={Network} label={t("graphs.title")} />} />}
     >
       {selected ? (
         <div className="space-y-2 p-2">

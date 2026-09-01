@@ -70,6 +70,7 @@ import {
   IconButton,
   Input,
   LoadingState,
+  Select,
   ViewHeader,
 } from "@/components/ui/orchestrator";
 import { useCoderStore } from "@/stores/coder";
@@ -1321,55 +1322,54 @@ export function PdfCoder({ source }: { source: Source }) {
         actions={
           <>
             <div className="flex flex-wrap items-center gap-1">
-              <Button
-                variant="toolbar"
-                className={cn(zoom === "fit" && "border-accent text-accent")}
-                onClick={() => setZoom("fit")}
+              <Select
+                value={zoom === "fit" ? "fit" : String(zoom)}
+                onChange={(e) => {
+                  const v = e.target.value;
+                  if (v === "fit") setZoom("fit");
+                  else if (v === "actual") setZoom(1);
+                  else setZoom(Number(v));
+                }}
+                aria-label={t("pdfCoder.zoomLevel")}
+                className="w-28"
               >
-                {t("pdfCoder.fitWidth")}
-              </Button>
-              {([0.5, 0.75, 1, 1.5] as const).map((z) => (
-                <Button
-                  key={z}
-                  variant="toolbar"
-                  className={cn(zoom === z && "border-accent text-accent")}
-                  onClick={() => setZoom(z)}
-                >
-                  {Math.round(z * 100)}%
-                </Button>
-              ))}
+                <option value="fit">{t("pdfCoder.fitWidth")}</option>
+                <option value="actual">{t("pdfCoder.actualSize")}</option>
+                <option value="0.5">50%</option>
+                <option value="0.75">75%</option>
+                <option value="1">100%</option>
+                <option value="1.25">125%</option>
+                <option value="1.5">150%</option>
+                <option value="2">200%</option>
+              </Select>
 
-              {!continuous && (
-                <>
-                  <div className="mx-1 h-4 w-px bg-border" aria-hidden />
-                  <Button
-                    variant="toolbarIcon"
-                    onClick={() => setCurrentPage((p) => clampPage(p - 1))}
-                    disabled={currentPage <= 1}
-                    aria-label={t("pdfCoder.prevPage")}
-                    title={t("pdfCoder.prevPage")}
-                    icon={<ChevronLeft size={14} aria-hidden />}
-                  />
-                  <Input
-                    type="number"
-                    value={currentPage}
-                    min={1}
-                    max={numPages}
-                    onChange={onPageInputChange}
-                    aria-label={t("pdfCoder.jumpToPage")}
-                    className="w-14 text-center"
-                  />
-                  <span className="text-xs text-text-secondary">/ {numPages}</span>
-                  <Button
-                    variant="toolbarIcon"
-                    onClick={() => setCurrentPage((p) => clampPage(p + 1))}
-                    disabled={currentPage >= numPages}
-                    aria-label={t("pdfCoder.nextPage")}
-                    title={t("pdfCoder.nextPage")}
-                    icon={<ChevronRight size={14} aria-hidden />}
-                  />
-                </>
-              )}
+              <div className="mx-1 h-4 w-px bg-border" aria-hidden />
+              <Button
+                variant="toolbarIcon"
+                onClick={() => setCurrentPage((p) => clampPage(p - 1))}
+                disabled={currentPage <= 1}
+                aria-label={t("pdfCoder.prevPage")}
+                title={t("pdfCoder.prevPage")}
+                icon={<ChevronLeft size={14} aria-hidden />}
+              />
+              <Input
+                type="number"
+                value={currentPage}
+                min={1}
+                max={numPages}
+                onChange={onPageInputChange}
+                aria-label={t("pdfCoder.jumpToPage")}
+                className="w-14 text-center"
+              />
+              <span className="text-xs text-text-secondary">/ {numPages}</span>
+              <Button
+                variant="toolbarIcon"
+                onClick={() => setCurrentPage((p) => clampPage(p + 1))}
+                disabled={currentPage >= numPages}
+                aria-label={t("pdfCoder.nextPage")}
+                title={t("pdfCoder.nextPage")}
+                icon={<ChevronRight size={14} aria-hidden />}
+              />
 
               <div className="mx-1 h-4 w-px bg-border" aria-hidden />
               <Button
@@ -1465,7 +1465,7 @@ export function PdfCoder({ source }: { source: Source }) {
         {plainVisible && (
           <div
             className={cn(
-              "flex min-h-0 flex-col overflow-hidden bg-bg",
+              "flex min-h-0 flex-col overflow-hidden bg-bg qc-enter",
               pdfVisible ? "shrink-0" : "flex-1",
             )}
             style={pdfVisible ? { width: textW } : undefined}
@@ -1499,7 +1499,7 @@ export function PdfCoder({ source }: { source: Source }) {
           />
         )}
         {pdfVisible && (
-          <div ref={containerRef} className="relative min-h-0 min-w-0 flex-1 overflow-y-auto bg-bg">
+          <div ref={containerRef} className="relative min-h-0 min-w-0 flex-1 overflow-y-auto bg-bg qc-enter">
             <div className="mx-auto flex w-max min-w-full flex-col items-center gap-4 p-6">
             {pageNumbers.map((p) => {
               const size = pageSizes.get(p);
@@ -1516,7 +1516,7 @@ export function PdfCoder({ source }: { source: Source }) {
                   onMouseMove={(e) => onPageMouseMove(e, p)}
                   onMouseUp={finishDrag}
                 >
-                  <canvas ref={(el) => setCanvasRef(p, el)} className="block" />
+                  <canvas ref={(el) => setCanvasRef(p, el)} className="block qc-pdf-canvas" />
 
                   {overlays.map((o) => (
                     <div
@@ -1630,7 +1630,7 @@ export function PdfCoder({ source }: { source: Source }) {
               pane is shown, TextCoder's own internal gutter takes over
               (same global toggle), anchored to the text spans. */}
           {gutterVisible && pdfVisible && (
-            <div className="absolute top-0 bottom-0 right-0 z-10">
+            <div className="absolute top-0 bottom-0 right-0 z-10 qc-enter-fade">
               <MemoGutter
                 rows={gutterRows}
                 selectedIds={

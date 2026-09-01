@@ -1439,7 +1439,7 @@ export function HtmlCoder({ source }: { source: Source }) {
         {plainVisible && (
           <div
             className={cn(
-              "flex min-h-0 flex-col overflow-hidden bg-bg",
+              "flex min-h-0 flex-col overflow-hidden bg-bg qc-enter",
               webpageVisible ? "shrink-0" : "flex-1",
             )}
             style={webpageVisible ? { width: textW } : undefined}
@@ -1474,7 +1474,7 @@ export function HtmlCoder({ source }: { source: Source }) {
           />
         )}
         {webpageVisible && (
-          <div ref={containerRef} className="relative min-h-0 min-w-0 flex-1 overflow-auto bg-bg">
+          <div ref={containerRef} className="relative min-h-0 min-w-0 flex-1 overflow-auto bg-bg qc-enter">
             {html != null ? (
               <iframe
                 ref={iframeRef}
@@ -1511,7 +1511,7 @@ export function HtmlCoder({ source }: { source: Source }) {
                 plain text pane is shown, TextCoder's own internal gutter takes
                 over (same global toggle), anchored to the text spans. */}
             {gutterVisible && webpageVisible && (
-              <div className="absolute top-0 bottom-0 right-0 z-10 overflow-hidden">
+              <div className="absolute top-0 bottom-0 right-0 z-10 overflow-hidden qc-enter-fade">
                 <MemoGutter
                   rows={gutterRows}
                   selectedIds={selectedCtid != null ? [selectedCtid] : []}

@@ -8,6 +8,7 @@ import {
   ChevronRight,
   FileText,
   Hash,
+  Info,
   Link as LinkIcon,
   LoaderCircle,
   Plus,
@@ -33,6 +34,7 @@ import {
 
 import {
   BarHeader,
+  BarTitle,
   Button,
   IconButton,
   LeftBar,
@@ -40,6 +42,7 @@ import {
   Select,
   Textarea,
 } from "@/components/ui/orchestrator";
+import { useIsCompactBar } from "@/components/ui/barWidth";
 import { useI18n } from "@/lib/i18n";
 import { useCoderStore } from "@/stores/coder";
 import { useInspectorStore } from "@/stores/inspector";
@@ -868,6 +871,7 @@ function FileDetailsPanel({ details }: { details: SourceDetails }) {
 
 export function Inspector() {
   const { t } = useI18n();
+  const isCompact = useIsCompactBar();
   const selection = useInspectorStore((s) => s.inspectorSelection);
   const details = useInspectorStore((s) => s.inspectorDetails);
   const loading = useInspectorStore((s) => s.inspectorLoading);
@@ -941,10 +945,12 @@ export function Inspector() {
                 ) : (
                   <FileText size={13} className="shrink-0 text-text-secondary" aria-hidden />
                 )}
-                <span className="truncate">{itemName ?? t("inspector.details")}</span>
+                {!isCompact && (
+                  <span className="truncate">{itemName ?? t("inspector.details")}</span>
+                )}
               </span>
             ) : (
-              t("inspector.details")
+              <BarTitle icon={Info} label={t("inspector.details")} />
             )
           }
           actions={

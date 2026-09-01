@@ -26,6 +26,7 @@ import {
 } from "lucide-react";
 import {
   BarHeader,
+  BarTitle,
   Button,
   CountBadge,
   EmptyState,
@@ -163,12 +164,7 @@ export function QttList() {
       className="h-full min-h-0"
       header={
         <BarHeader
-          title={
-            <span className="flex items-center gap-1.5">
-              <ScrollText size={15} aria-hidden />
-              {t("nav.qtt")}
-            </span>
-          }
+          title={<BarTitle icon={ScrollText} label={t("nav.qtt")} />}
           count={totalItems}
           actions={
             <Button

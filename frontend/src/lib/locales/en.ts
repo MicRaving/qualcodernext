@@ -734,7 +734,7 @@ export const en: Record<string, string> = {
   "pdfCoder.prevPage": "Previous page",
   "pdfCoder.nextPage": "Next page",
   "pdfCoder.jumpToPage": "Jump to page",
-  "pdfCoder.continuous": "Continuous scroll",
+  "pdfCoder.continuous": "Continuous",
   "pdfCoder.plainText": "Plain text",
   "pdfCoder.pdfView": "PDF",
   "pdfCoder.pdfViewHint": "Show the rendered PDF pages",

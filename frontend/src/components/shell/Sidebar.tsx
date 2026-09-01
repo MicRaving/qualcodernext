@@ -9,11 +9,13 @@ import {
   CircleAlert,
   FileAudio,
   FileImage,
+  Files,
   FileText,
   Folder,
   FolderOpen,
   FolderPlus,
   GitMerge,
+  Hash,
   IndentDecrease,
   IndentIncrease,
   Info,
@@ -34,6 +36,7 @@ import { api, ApiError, type CodeTreeItem, type Source } from "@/lib/api";
 
 import {
   BarHeader,
+  BarTitle,
   Button,
   IconButton,
   Input,
@@ -1400,7 +1403,8 @@ export function Sidebar() {
       header={
         view.kind !== "coding" ? (
           <BarHeader
-            title={t("nav.files")}
+            title={<BarTitle icon={Files} label={t("nav.files")} />}
+            count={sources.length}
             actions={
               <>
                 <Button
@@ -1428,7 +1432,8 @@ export function Sidebar() {
           />
         ) : (
           <BarHeader
-            title={t("nav.codes")}
+            title={<BarTitle icon={Hash} label={t("nav.codes")} />}
+            count={codeTree.filter((c) => c.kind === "code").length}
             actions={
               <>
                 <Button

@@ -7,12 +7,12 @@
  * offline.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ArrowLeft, BookOpen, Bug, LoaderCircle, Send, Sparkles, X } from "lucide-react";
+import { ArrowLeft, BookOpen, Bug, HelpCircle, LoaderCircle, Send, Sparkles, X } from "lucide-react";
 import { api, type AiStatus, type HelpSearchResult, type HelpTopic, type HelpTopicDetail } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 import { errorMessage } from "@/lib/utils";
 import { Markdown } from "@/components/ui/Markdown";
-import { BarHeader, EmptyState, ErrorBanner, IconButton, Input, LeftBar, Textarea } from "@/components/ui/orchestrator";
+import { BarHeader, BarTitle, EmptyState, ErrorBanner, IconButton, Input, LeftBar, Textarea } from "@/components/ui/orchestrator";
 import { useProjectStore } from "@/stores/project";
 
 type Mode = "browse" | "ask";
@@ -128,7 +128,7 @@ export function HelpView() {
       className="h-full min-h-0 max-w-full"
       header={
         <BarHeader
-          title={t("nav.help")}
+          title={<BarTitle icon={HelpCircle} label={t("nav.help")} />}
           actions={
             <IconButton
               label={t("nav.bugReport")}

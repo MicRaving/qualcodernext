@@ -22,6 +22,7 @@ import { InlineNameEdit } from "@/components/ui/InlineNameEdit";
 
 import {
   BarHeader,
+  BarTitle,
   Button,
   ErrorBanner,
   IconButton,
@@ -116,7 +117,8 @@ export function CasesList() {
       className="h-full min-h-0"
       header={
         <BarHeader
-          title={t("nav.cases")}
+          title={<BarTitle icon={Users} label={t("nav.cases")} />}
+          count={cases.length}
           actions={
             <Button
               variant="primary"

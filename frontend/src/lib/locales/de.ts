@@ -768,7 +768,7 @@ export const de: Record<string, string> = {
   "pdfCoder.prevPage": "Vorherige Seite",
   "pdfCoder.nextPage": "Nächste Seite",
   "pdfCoder.jumpToPage": "Zu Seite springen",
-  "pdfCoder.continuous": "Kontinuierliches Scrollen",
+  "pdfCoder.continuous": "Kontinuierlich",
   "pdfCoder.plainText": "Klartext",
   "pdfCoder.textLocateError": "Die Textauswahl konnte nicht im Klartext gefunden werden",
   "pdfCoder.plainTextHint": "Statt Seitenregionen den extrahierten Text codieren",

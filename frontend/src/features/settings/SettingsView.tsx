@@ -8,10 +8,10 @@
  */
 import { useState } from "react";
 import { useAsyncEffect } from "@/lib/useAsync";
-import { Bug, CircleAlert, CircleCheck, LoaderCircle } from "lucide-react";
+import { Bug, CircleAlert, CircleCheck, LoaderCircle, Settings } from "lucide-react";
 import { useI18n } from "@/lib/i18n";
 import { api, type RStatus } from "@/lib/api";
-import { BarHeader, IconButton, LeftBar } from "@/components/ui/orchestrator";
+import { BarHeader, BarTitle, IconButton, LeftBar } from "@/components/ui/orchestrator";
 import { useProjectStore } from "@/stores/project";
 import { GeneralTab } from "@/features/settings/GeneralTab";
 import { AiTab } from "@/features/settings/AiTab";
@@ -37,7 +37,7 @@ export function SettingsView() {
       className="h-full min-h-0"
       header={
         <BarHeader
-          title={t("settings.title")}
+          title={<BarTitle icon={Settings} label={t("settings.title")} />}
           actions={
             <IconButton
               label={t("nav.bugReport")}

@@ -71,6 +71,21 @@ html.dark.oled:not(.a11y-high-contrast) {
   --qc-shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.8);
 }
 
+/* OLED PDF dark mode — pdf.js renders each page to a <canvas> with a white
+   paper background that is painful on pure-black OLED. CSS filter inverts the
+   canvas only (not the overlay siblings that carry code tints/selection), via
+   invert + hue-rotate to keep hues recognizable, with slight dimming for OLED
+   comfort. Scoped to html.dark.oled and yields to high-contrast (solid mono
+   overrides there must win). No transition — canvas is large and filter is not
+   an animation; the global reduced-motion guards already suppress transitions. */
+html.dark.oled:not(.a11y-high-contrast) .qc-pdf-canvas {
+  filter: invert(0.92) hue-rotate(180deg) brightness(1.05) contrast(0.92);
+}
+/* High-contrast must never invert the PDF — keep paper literal. */
+html.a11y-high-contrast .qc-pdf-canvas {
+  filter: none !important;
+}
+
 @theme inline {
   --color-bg: var(--qc-bg);
   --color-surface: var(--qc-surface);

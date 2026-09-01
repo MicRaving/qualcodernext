@@ -611,22 +611,24 @@ export function CsvCoder({ source }: { source: Source }) {
       {errMsg && <ErrorBanner onClose={() => setErrMsg(null)}>{errMsg}</ErrorBanner>}
 
       {view === "plain" ? (
-        <TextCoder
-          sourceId={source.id}
-          forceText
-          bare
-          codings={codings}
-          annotations={annotations}
-          codes={codes}
-          onCodingsChange={setCodings}
-          onAnnotationsChange={setAnnotations}
-          onCodesChange={setEmbeddedCodes}
-        />
+        <div className="min-h-0 flex-1 overflow-hidden bg-bg qc-enter">
+          <TextCoder
+            sourceId={source.id}
+            forceText
+            bare
+            codings={codings}
+            annotations={annotations}
+            codes={codes}
+            onCodingsChange={setCodings}
+            onAnnotationsChange={setAnnotations}
+            onCodesChange={setEmbeddedCodes}
+          />
+        </div>
       ) : parsed && parsed.headers.length > 0 ? (
         <div
           ref={scrollRef}
           onMouseUp={handleTableMouseUp}
-          className="min-h-0 flex-1 overflow-auto bg-bg"
+          className="min-h-0 flex-1 overflow-auto bg-bg qc-enter"
         >
           <table className="qc-selectable w-max min-w-full border-collapse text-sm">
             <thead>

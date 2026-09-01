@@ -32,6 +32,7 @@ import {
 import { api, ApiError, fetchWithTimeout, initApiBase, type Source } from "@/lib/api";
 import {
   BarHeader,
+  BarTitle,
   Button,
   IconButton,
   Input,
@@ -188,15 +189,32 @@ export function NotesList() {
     setNotesUi({ selectedId: first.id, selectedKind: "code", tick: notesUi.tick + 1 });
   }
 
+  const journals = useProjectStore((s) => s.journals);
+  const annotations = useInspectorStore((s) => s.annotationsAll);
+  const codeTree = useProjectStore((s) => s.codeTree);
+  const sources = useProjectStore((s) => s.sources);
+  const filesWithMemosCount = sources.filter((s) => (s.memo ?? "").trim() !== "").length;
+  const codeMemosCount = codeTree.filter((c) => c.kind === "code" && (c.memo ?? "").trim() !== "").length;
   return (
     <LeftBar
       className="h-full min-h-0"
       header={
         <BarHeader
           title={
+            notesUi.tab === "journal" ? (
+              <BarTitle icon={NotebookPen} label={t("nav.notes")} />
+            ) : notesUi.tab === "annotations" ? (
+              <BarTitle icon={StickyNote} label={t("notes.tab.annotations")} />
+            ) : (
+              <BarTitle icon={Hash} label={t("notes.tab.memos")} />
+            )
+          }
+          count={
             notesUi.tab === "journal"
-              ? t("nav.notes")
-              : t(`notes.tab.${notesUi.tab}`)
+              ? journals.length
+              : notesUi.tab === "annotations"
+                ? annotations.length
+                : filesWithMemosCount + codeMemosCount
           }
           actions={
             <>

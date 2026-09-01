@@ -8,7 +8,7 @@
  * existing code. Without an AI assistant the selected code names are matched
  * literally as a fallback.
  */
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { BookOpenText, CheckCircle2, LoaderCircle, Sparkles } from "lucide-react";
 import { api, type AutocodeResponse, type CodeTreeItem } from "@/lib/api";
 import { FALLBACK_CODE_COLOR } from "@/features/coding/tint";
@@ -92,15 +92,52 @@ export function AutocodeDialog({
     .map((c) => c.name);
   const selectedNamesKey = selectedNames.join("|");
 
+  // Category memo context: for each selected code, walk its parent chain
+  // (via parent_id / catid / supercid) to the ancestor category and collect
+  // its memo as "Category {name}: {memo}" (deduped, only when memo present).
+  const categoryMemoSuffix = useMemo(() => {
+    if (selected.size === 0) return "";
+    const catById = new Map<number, CodeTreeItem>();
+    const codeById = new Map<number, CodeTreeItem>();
+    for (const c of codes) {
+      if (c.kind === "category") catById.set(c.id, c);
+      else codeById.set(c.id, c);
+    }
+    const seen = new Set<number>();
+    const lines: string[] = [];
+    for (const cid of selected) {
+      const code = codeById.get(cid);
+      if (!code || code.parent_id == null) continue;
+      let cur: CodeTreeItem | undefined = code.subcode
+        ? codeById.get(code.parent_id)
+        : catById.get(code.parent_id);
+      const visited = new Set<string>();
+      while (cur) {
+        const key = `${cur.kind}:${cur.id}`;
+        if (visited.has(key)) break;
+        visited.add(key);
+        if (cur.kind === "category") {
+          if (!seen.has(cur.id) && cur.memo?.trim()) {
+            seen.add(cur.id);
+            lines.push(`Category ${cur.name}: ${cur.memo.trim()}`);
+          }
+          break;
+        }
+        if (cur.parent_id == null) break;
+        cur = cur.subcode ? codeById.get(cur.parent_id) : catById.get(cur.parent_id);
+      }
+    }
+    return lines.length ? `\n\n${lines.join("\n")}` : "";
+  }, [codes, selected]);
+
   // Prefill the coding prompt from the selection (until the user edits it).
   useEffect(() => {
     if (promptTouched.current) return;
-    setPrompt(
-      t("coder.autoPrompt", {
-        names: selectedNamesKey || t("coder.autoNoCodes"),
-      }),
-    );
-  }, [selectedNamesKey, t]);
+    const base = t("coder.autoPrompt", {
+      names: selectedNamesKey || t("coder.autoNoCodes"),
+    });
+    setPrompt(`${base}${categoryMemoSuffix}`);
+  }, [selectedNamesKey, categoryMemoSuffix, t]);
 
   function toggleCode(cid: number) {
     setSelected((s) => {

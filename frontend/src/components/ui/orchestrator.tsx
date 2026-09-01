@@ -24,7 +24,7 @@ import {
 import { ArrowLeft, CircleAlert, LoaderCircle, X } from "lucide-react";
 import { ViewBackButton } from "@/components/shell/ViewBackButton";
 import { cls } from "@/components/ui/tokens";
-import { BarWidthContext } from "@/components/ui/barWidth";
+import { BarWidthContext, useIsCompactBar } from "@/components/ui/barWidth";
 import { useI18n } from "@/lib/i18n";
 
 /* ------------------------------------------------------------------ */
@@ -157,6 +157,24 @@ export function BarHeader({ title, count, actions, children, ...rest }: BarHeade
       <div className="flex-1" />
       {children ?? actions}
     </header>
+  );
+}
+
+/** Responsive bar title: icon + label, hides label when the bar is too narrow
+ *  (shows icon + counter via BarHeader's count prop, or icon only for right bars). */
+export function BarTitle({
+  icon: Icon,
+  label,
+}: {
+  icon: React.ComponentType<{ size?: number; className?: string; "aria-hidden"?: boolean }>;
+  label: string;
+}) {
+  const isCompact = useIsCompactBar();
+  return (
+    <span className="flex min-w-0 items-center gap-1.5">
+      <Icon size={15} className="shrink-0" aria-hidden />
+      {!isCompact && <span className="truncate">{label}</span>}
+    </span>
   );
 }
 

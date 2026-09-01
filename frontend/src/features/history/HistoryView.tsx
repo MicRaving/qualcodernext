@@ -23,6 +23,7 @@ import { useI18n } from "@/lib/i18n";
 import { useProjectStore } from "@/stores/project";
 import {
   BarHeader,
+  BarTitle,
   Button,
   EmptyState,
   ErrorBanner,
@@ -308,12 +309,7 @@ export function HistoryView() {
       header={
         <>
           <BarHeader
-            title={
-              <span className="flex items-center gap-1.5">
-                <History size={15} aria-hidden />
-                {t("history.title")}
-              </span>
-            }
+            title={<BarTitle icon={History} label={t("history.title")} />}
             actions={
               <IconButton
                 label={t("history.redoTitle")}

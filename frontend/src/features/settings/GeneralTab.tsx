@@ -109,7 +109,7 @@ async function removePseudonym(original: string) {
   return (
     <div className="p-3">
       <section className="p-3">
-        <div className="grid grid-cols-2 gap-4">
+        <div className="flex flex-col gap-4">
           <div>
             <SectionLabel>{t("settings.appearance")}</SectionLabel>
             <div className="mt-2 flex w-fit items-center gap-0.5 rounded-sm border border-border bg-bg p-0.5">

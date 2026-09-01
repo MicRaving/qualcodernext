@@ -31,9 +31,13 @@ export function sortSources(sources: Source[], key: SortKey, dir: SortDir): Sour
   });
 }
 
-/** Human-readable media type; filenames ending in .pdf always report "PDF". */
+/** Human-readable media type; filenames ending in .pdf always report "PDF", .html/.htm report "Website". */
 export function mediaTypeLabel(mediaType: string, name?: string): string {
-  if (name && name.toLowerCase().endsWith(".pdf")) return "PDF";
+  if (name) {
+    const lower = name.toLowerCase();
+    if (lower.endsWith(".html") || lower.endsWith(".htm")) return "Website";
+    if (lower.endsWith(".pdf")) return "PDF";
+  }
   switch (mediaType) {
     case "image":
       return "Image";

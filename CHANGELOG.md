@@ -7,6 +7,14 @@
      include. Add a section like "## 0.1.1 (2026-08-31)" at the TOP of the
      file. -->
 
+## 0.1.2 (2026-08-31)
+
+- Fixed settings layout overlap and improved animations.
+- Improved PDF and website viewer UI.
+- Included code category memo in autocode prompt.
+
+**Full Changelog**: https://github.com/MicRaving/qualcodernext/compare/v0.1.1...v0.1.2
+
 ## 0.1.1 (2026-08-31)
 
 - Complete rewrite on FastAPI, React, and Tauri.

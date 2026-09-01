@@ -329,7 +329,7 @@ export function MemoGutter({
       ref={gutterRef}
       data-gutter=""
       className={cn(
-        "relative shrink-0 border-l border-border bg-surface",
+        "relative shrink-0 border-l border-border bg-surface qc-enter-fade",
         scrollSync === "transform"
           ? "overflow-hidden"
           : "pointer-events-none overflow-y-auto overflow-x-hidden",

@@ -16,6 +16,7 @@ import {
 } from "lucide-react";
 import {
   BarHeader,
+  BarTitle,
   Button,
   EmptyState,
   ErrorBanner,
@@ -186,14 +187,7 @@ export function CreativePanel() {
       className="h-full min-h-0"
       header={
         <>
-          <BarHeader
-            title={
-              <span className="flex items-center gap-1.5">
-                <Lightbulb size={15} aria-hidden />
-                {t("creative.title")}
-              </span>
-            }
-          />
+          <BarHeader title={<BarTitle icon={Lightbulb} label={t("creative.title")} />} />
           {/* Add-note input */}
           <div className="flex shrink-0 flex-col gap-1.5 border-b border-border px-3 py-1.5">
             <Textarea
