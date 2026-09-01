@@ -666,6 +666,18 @@ export function HtmlCoder({ source }: { source: Source }) {
 
   const [webpageVisible, setWebpageVisible] = useState(true);
   const [plainVisible, setPlainVisible] = useState(false);
+  // Keep the plain-text pane mounted for the width transition (200ms) so the
+  // toggle animates like the rightbar; after the transition the content is
+  // removed so `getByText` count goes to 0 (e2e expectation).
+  const [plainMounted, setPlainMounted] = useState(plainVisible);
+  useEffect(() => {
+    if (plainVisible) {
+      setPlainMounted(true);
+    } else {
+      const t = setTimeout(() => setPlainMounted(false), 200);
+      return () => clearTimeout(t);
+    }
+  }, [plainVisible]);
   /** Linked position sync: when both panes are visible, scrolling either one
    *  keeps the other at the corresponding location. The toolbar link button
    *  toggles this off/on. */
@@ -1446,20 +1458,22 @@ export function HtmlCoder({ source }: { source: Source }) {
           )}
           style={plainVisible && webpageVisible ? { width: textW } : undefined}
         >
-          <TextCoder
-            sourceId={source.id}
-            forceText
-            bare
-            textOverride={fulltext ?? undefined}
-            codings={codings}
-            annotations={annotations}
-            codes={codes}
-            onCodingsChange={setCodings}
-            onAnnotationsChange={setAnnotations}
-            onCodesChange={setCodes}
-            scrollElRef={textScrollElRef}
-            suppressGutter={webpageVisible}
-          />
+          {plainMounted && (
+            <TextCoder
+              sourceId={source.id}
+              forceText
+              bare
+              textOverride={fulltext ?? undefined}
+              codings={codings}
+              annotations={annotations}
+              codes={codes}
+              onCodingsChange={setCodings}
+              onAnnotationsChange={setAnnotations}
+              onCodesChange={setCodes}
+              scrollElRef={textScrollElRef}
+              suppressGutter={webpageVisible}
+            />
+          )}
         </div>
         {webpageVisible && plainVisible && (
           <div

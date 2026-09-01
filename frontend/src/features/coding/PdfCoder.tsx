@@ -88,13 +88,11 @@ const DRAG_MIN_SIZE = 5;
  *  line end: a lone `\n` (not part of `\n\n`) becomes a space so paragraphs
  *  flow and wrap naturally. Double newlines (paragraph breaks) are kept.
  *  Length is preserved (1 char -> 1 char) so coding positions stay aligned.
- *  Hyphenated splits (`"word-\nnext"`) are joined without the hyphen/space
- *  — the hyphen was an artifact of the visual line break. */
+ *  Hyphenated splits (`"word-\nnext"`) are joined — the hyphen was an
+ *  artifact of the visual line break — but replaced with two spaces to keep
+ *  the length stable for existing codings. */
 function normalizePdfBreaks(text: string): string {
-  // Join hyphenated line splits: "ex-\nample" -> "example" (remove "-\n")
-  // Do this first so the lone-\n rule doesn't turn the `\n` into a space.
-  let out = text.replace(/-\n/g, "");
-  // Lone \n (not part of \n\n) -> space (paragraphs keep their \n\n)
+  let out = text.replace(/-\n/g, "  ");
   out = out.replace(/(?<!\n)\n(?!\n)/g, " ");
   return out;
 }
@@ -228,6 +226,18 @@ export function PdfCoder({ source }: { source: Source }) {
 
   const [pdfVisible, setPdfVisible] = useState(true);
   const [plainVisible, setPlainVisible] = useState(false);
+  // Keep the plain-text pane mounted for the width transition (200ms) so the
+  // toggle animates like the rightbar; after the transition the content is
+  // removed so `getByText` count goes to 0 (e2e expectation).
+  const [plainMounted, setPlainMounted] = useState(plainVisible);
+  useEffect(() => {
+    if (plainVisible) {
+      setPlainMounted(true);
+    } else {
+      const t = setTimeout(() => setPlainMounted(false), 200);
+      return () => clearTimeout(t);
+    }
+  }, [plainVisible]);
   /** Linked position sync: when both panes are visible, scrolling either
    *  one keeps the other at the corresponding location. The toolbar link
    *  button toggles this off/on. */
@@ -1485,11 +1495,12 @@ export function PdfCoder({ source }: { source: Source }) {
           )}
           style={plainVisible && pdfVisible ? { width: textW } : undefined}
         >
+          {plainMounted && (
           <TextCoder
             sourceId={source.id}
             forceText
             bare
-            textOverride={normalizePdfBreaks(source.fulltext ?? "")}
+            displayText={normalizePdfBreaks(source.fulltext ?? "")}
             codings={textCodings}
             annotations={annotations}
             codes={codes}
@@ -1499,6 +1510,7 @@ export function PdfCoder({ source }: { source: Source }) {
             scrollElRef={textScrollElRef}
             suppressGutter={pdfVisible}
           />
+          )}
         </div>
         {pdfVisible && plainVisible && (
           <div
