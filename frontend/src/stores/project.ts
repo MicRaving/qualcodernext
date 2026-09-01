@@ -457,7 +457,16 @@ export const useProjectStore = create<ProjectLifecycleState>((set, get) => ({
         api.cases(),
         api.journals(),
       ]);
-      set({ summary: summary.summary, sources, codeTree, cases, journals });
+      // Backend hides transcript companions (their ids appear as av_text_id),
+      // but filter again on the client as a safety net: if the backend ever
+      // returns companions (e.g. stale cache, old project without migration),
+      // they must not appear as separate text files and the AV coder must not
+      // fall back to "next text file" ordering — the link is strictly av_text_id.
+      const hiddenIds = new Set(
+        sources.map((s) => s.av_text_id).filter((id): id is number => id != null),
+      );
+      const visibleSources = sources.filter((s) => !hiddenIds.has(s.id));
+      set({ summary: summary.summary, sources: visibleSources, codeTree, cases, journals });
     } catch (e) {
       set({ error: errorMessage(e, "Failed to load project data")});
     }

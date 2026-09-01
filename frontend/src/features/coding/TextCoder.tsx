@@ -670,15 +670,18 @@ export function TextCoder({
   /* ----------------------------------------------------------- coding flow */
 
   /** Select the details for a freshly created coding: locate the rendered
-   *  segment covering its span and show it in the footer. Gated on the
-   *  "Auto-show segment details" pref — when OFF, creating a coding does
-   *  not open the bar (clicking a segment still views it). */
+   *  segment covering its span and show it in the footer/gutter. Gated on
+   *  the "Auto-show segment details" pref — when OFF, creating a coding does
+   *  not open the bar, but if the memo gutter is open the new segment is
+   *  still selected so its empty memo card appears in the gutter until
+   *  deselected. */
   function selectCreatedSegment(created: Coding, next: Coding[]) {
     // The freshly coded span always pulses so the mark visibly lands.
     setNewCtid(created.ctid);
     if (newTimer.current) clearTimeout(newTimer.current);
     newTimer.current = setTimeout(() => setNewCtid(null), 1000);
-    if (!autoShowDetails) {
+    const gutterOpen = gutterVisible && !suppressGutter;
+    if (!autoShowDetails && !gutterOpen) {
       setSelectedSeg(null);
       setSelectedAnnSeg(null);
       return;
@@ -1053,7 +1056,6 @@ export function TextCoder({
     <div className="flex h-full flex-col bg-bg">
       {!bare && (
         <ViewHeader
-          wrap
           title={source.name}
           meta={source.memo}
           actions={

@@ -7,6 +7,14 @@
      include. Add a section like "## 0.1.1 (2026-08-31)" at the TOP of the
      file. -->
 
+## 0.1.3 (2026-08-31)
+
+- Fixed memo gutter animations and text coder header.
+- Fixed webpage memo gutter and added OLED dark mode.
+- Improved PDF text line breaks and transcript linking.
+
+**Full Changelog**: https://github.com/MicRaving/qualcodernext/compare/v0.1.2...v0.1.3
+
 ## 0.1.2 (2026-08-31)
 
 - Fixed settings layout overlap and improved animations.

@@ -84,6 +84,21 @@ pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
 
 const DRAG_MIN_SIZE = 5;
 
+/** Collapse artificial single line breaks that PDFs insert at every visual
+ *  line end: a lone `\n` (not part of `\n\n`) becomes a space so paragraphs
+ *  flow and wrap naturally. Double newlines (paragraph breaks) are kept.
+ *  Length is preserved (1 char -> 1 char) so coding positions stay aligned.
+ *  Hyphenated splits (`"word-\nnext"`) are joined without the hyphen/space
+ *  — the hyphen was an artifact of the visual line break. */
+function normalizePdfBreaks(text: string): string {
+  // Join hyphenated line splits: "ex-\nample" -> "example" (remove "-\n")
+  // Do this first so the lone-\n rule doesn't turn the `\n` into a space.
+  let out = text.replace(/-\n/g, "");
+  // Lone \n (not part of \n\n) -> space (paragraphs keep their \n\n)
+  out = out.replace(/(?<!\n)\n(?!\n)/g, " ");
+  return out;
+}
+
 /** Download a source's PDF bytes for pdf.js.
  *
  *  `fetchSourceFile` builds the URL from the RESOLVED base — the App boot
@@ -1044,7 +1059,7 @@ export function PdfCoder({ source }: { source: Source }) {
             cs.some((c) => c.ctid === created.ctid) ? cs : [...cs, created],
           );
           setSelectedImid(null);
-          if (autoShowDetails) setSelectedTextCtid(created.ctid);
+          if (autoShowDetails || gutterVisible) setSelectedTextCtid(created.ctid);
           setEditDraft(null);
           setFooterError(null);
           // Flash its overlay and scroll the page it sits on into view.
@@ -1057,7 +1072,7 @@ export function PdfCoder({ source }: { source: Source }) {
         }
       })();
     },
-    [source.id, t, refreshTextCodings, flashTextCoding, autoShowDetails],
+    [source.id, t, refreshTextCodings, flashTextCoding, autoShowDetails, gutterVisible],
   );
 
   /** Code the pending drag rectangle with the given code id. */
@@ -1087,7 +1102,7 @@ export function PdfCoder({ source }: { source: Source }) {
           setCodings((cs) =>
             cs.some((c) => c.imid === created.imid) ? cs : [...cs, created],
           );
-          if (autoShowDetails) setSelectedImid(created.imid);
+          if (autoShowDetails || gutterVisible) setSelectedImid(created.imid);
           setSelectedTextCtid(null);
           setEditDraft(null);
           setFooterError(null);
@@ -1100,7 +1115,7 @@ export function PdfCoder({ source }: { source: Source }) {
       })();
       void refreshCodes().catch(() => undefined);
     },
-    [scale, source.id, refreshCodings, refreshCodes, t, autoShowDetails],
+    [scale, source.id, refreshCodings, refreshCodes, t, autoShowDetails, gutterVisible],
   );
 
   const finishDrag = useCallback(() => {
@@ -1462,29 +1477,29 @@ export function PdfCoder({ source }: { source: Source }) {
       {errMsg && <ErrorBanner onClose={() => setErrMsg(null)}>{errMsg}</ErrorBanner>}
 
       <div className="flex min-h-0 flex-1">
-        {plainVisible && (
-          <div
-            className={cn(
-              "flex min-h-0 flex-col overflow-hidden bg-bg qc-enter",
-              pdfVisible ? "shrink-0" : "flex-1",
-            )}
-            style={pdfVisible ? { width: textW } : undefined}
-          >
-            <TextCoder
-              sourceId={source.id}
-              forceText
-              bare
-              codings={textCodings}
-              annotations={annotations}
-              codes={codes}
-              onCodingsChange={setTextCodings}
-              onAnnotationsChange={setAnnotations}
-              onCodesChange={setCodes}
-              scrollElRef={textScrollElRef}
-              suppressGutter={pdfVisible}
-            />
-          </div>
-        )}
+        <div
+          className={cn(
+            "flex min-h-0 flex-col overflow-hidden bg-bg",
+            textDragging ? "" : "transition-[width] duration-200 ease-[var(--qc-ease)]",
+            plainVisible ? (pdfVisible ? "shrink-0" : "flex-1") : "shrink-0 w-0",
+          )}
+          style={plainVisible && pdfVisible ? { width: textW } : undefined}
+        >
+          <TextCoder
+            sourceId={source.id}
+            forceText
+            bare
+            textOverride={normalizePdfBreaks(source.fulltext ?? "")}
+            codings={textCodings}
+            annotations={annotations}
+            codes={codes}
+            onCodingsChange={setTextCodings}
+            onAnnotationsChange={setAnnotations}
+            onCodesChange={setCodes}
+            scrollElRef={textScrollElRef}
+            suppressGutter={pdfVisible}
+          />
+        </div>
         {pdfVisible && plainVisible && (
           <div
             onMouseDown={startTextResize}
@@ -1499,8 +1514,9 @@ export function PdfCoder({ source }: { source: Source }) {
           />
         )}
         {pdfVisible && (
-          <div ref={containerRef} className="relative min-h-0 min-w-0 flex-1 overflow-y-auto bg-bg qc-enter">
-            <div className="mx-auto flex w-max min-w-full flex-col items-center gap-4 p-6">
+          <div className="flex min-h-0 min-w-0 flex-1 overflow-hidden bg-bg qc-enter">
+            <div ref={containerRef} className="min-h-0 min-w-0 flex-1 overflow-y-auto bg-bg">
+              <div className="mx-auto flex w-max min-w-full flex-col items-center gap-4 p-6">
             {pageNumbers.map((p) => {
               const size = pageSizes.get(p);
               const overlays = buildPageOverlays(codings, p, scale, colorByCid);
@@ -1626,53 +1642,48 @@ export function PdfCoder({ source }: { source: Source }) {
               );
             })}
           </div>
-          {/* Gutter anchored to the PDF overlays. When only the plain text
-              pane is shown, TextCoder's own internal gutter takes over
-              (same global toggle), anchored to the text spans. */}
-          {gutterVisible && pdfVisible && (
-            <div className="absolute top-0 bottom-0 right-0 z-10 qc-enter-fade">
-              <MemoGutter
-                rows={gutterRows}
-                selectedIds={
-                  selectedImid != null
-                    ? [selectedImid]
-                    : selectedTextCtid != null
-                      ? [selectedTextCtid]
-                      : []
-                }
-                scrollRef={containerRef}
-                anchorOf={(id) =>
-                  containerRef.current?.querySelector<HTMLElement>(`[data-ctid="${id}"]`) ?? null
-                }
-                onSelect={(id) => {
-                  if (isImageGutterId(id)) {
-                    setSelectedTextCtid(null);
-                    setEditDraft(null);
-                    setSelectedImid(id);
-                    setFooterError(null);
-                  } else {
-                    setSelectedImid(null);
-                    setEditDraft(null);
-                    setSelectedTextCtid(id);
-                    setFooterError(null);
-                  }
-                }}
-                onDeselect={() => clearSelection()}
-                onUpdateMemo={(id, memo) =>
-                  gutterUpdate(id, { memo }, isImageGutterId(id) ? refreshCodings : refreshTextCodings)
-                }
-                onUpdateWeight={(id, weight) =>
-                  gutterUpdate(id, { weight }, isImageGutterId(id) ? refreshCodings : refreshTextCodings)
-                }
-                onDelete={gutterDelete}
-                onToggleImportant={gutterToggleImportant}
-                extrasFor={gutterExtrasFor}
-                visible={gutterVisible}
-                measureSignal={measureTick}
-              />
             </div>
-          )}
-        </div>
+            {/* Gutter as dedicated stripe next to the PDF scroll (not an overlay) — always mounted for width transition like rightbar. */}
+            <MemoGutter
+              rows={gutterRows}
+              selectedIds={
+                selectedImid != null
+                  ? [selectedImid]
+                  : selectedTextCtid != null
+                    ? [selectedTextCtid]
+                    : []
+              }
+              scrollRef={containerRef}
+              anchorOf={(id) =>
+                containerRef.current?.querySelector<HTMLElement>(`[data-ctid="${id}"]`) ?? null
+              }
+              onSelect={(id) => {
+                if (isImageGutterId(id)) {
+                  setSelectedTextCtid(null);
+                  setEditDraft(null);
+                  setSelectedImid(id);
+                  setFooterError(null);
+                } else {
+                  setSelectedImid(null);
+                  setEditDraft(null);
+                  setSelectedTextCtid(id);
+                  setFooterError(null);
+                }
+              }}
+              onDeselect={() => clearSelection()}
+              onUpdateMemo={(id, memo) =>
+                gutterUpdate(id, { memo }, isImageGutterId(id) ? refreshCodings : refreshTextCodings)
+              }
+              onUpdateWeight={(id, weight) =>
+                gutterUpdate(id, { weight }, isImageGutterId(id) ? refreshCodings : refreshTextCodings)
+              }
+              onDelete={gutterDelete}
+              onToggleImportant={gutterToggleImportant}
+              extrasFor={gutterExtrasFor}
+              visible={gutterVisible}
+              measureSignal={measureTick}
+            />
+          </div>
         )}
       </div>
 

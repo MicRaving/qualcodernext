@@ -86,6 +86,16 @@ html.a11y-high-contrast .qc-pdf-canvas {
   filter: none !important;
 }
 
+/* OLED webpage dark mode — the captured snapshot is rendered in an <iframe>
+   with a white paper background that is painful on pure-black OLED. Same
+   invert + hue-rotate filter as PDF, scoped to the iframe element only. */
+html.dark.oled:not(.a11y-high-contrast) .qc-webpage-frame {
+  filter: invert(0.92) hue-rotate(180deg) brightness(1.05) contrast(0.92);
+}
+html.a11y-high-contrast .qc-webpage-frame {
+  filter: none !important;
+}
+
 @theme inline {
   --color-bg: var(--qc-bg);
   --color-surface: var(--qc-surface);

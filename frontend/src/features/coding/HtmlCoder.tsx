@@ -875,8 +875,10 @@ export function HtmlCoder({ source }: { source: Source }) {
         });
         await refreshCodings();
         // Auto-show the freshly created coding in the bottom bar (gated on
-        // the "Auto-show segment details" pref).
-        if (autoShowDetails) {
+        // the "Auto-show segment details" pref), but if the memo gutter is
+        // open the new segment stays selected so its empty memo card appears
+        // in the gutter until deselected.
+        if (autoShowDetails || gutterVisible) {
           setSelectedCtid(created.ctid);
         } else {
           setSelectedCtid(null);
@@ -888,7 +890,7 @@ export function HtmlCoder({ source }: { source: Source }) {
       }
       void refreshCodes().catch(() => undefined);
     },
-    [frameSel, source.id, refreshCodings, refreshCodes, clearFrameSelection, t, autoShowDetails],
+    [frameSel, source.id, refreshCodings, refreshCodes, clearFrameSelection, t, autoShowDetails, gutterVisible],
   );
 
   /** Delete a coding from the webpage's context menu. */
@@ -1436,30 +1438,29 @@ export function HtmlCoder({ source }: { source: Source }) {
       {errMsg && <ErrorBanner onClose={() => setErrMsg(null)}>{errMsg}</ErrorBanner>}
 
       <div className="flex min-h-0 flex-1">
-        {plainVisible && (
-          <div
-            className={cn(
-              "flex min-h-0 flex-col overflow-hidden bg-bg qc-enter",
-              webpageVisible ? "shrink-0" : "flex-1",
-            )}
-            style={webpageVisible ? { width: textW } : undefined}
-          >
-            <TextCoder
-              sourceId={source.id}
-              forceText
-              bare
-              textOverride={fulltext ?? undefined}
-              codings={codings}
-              annotations={annotations}
-              codes={codes}
-              onCodingsChange={setCodings}
-              onAnnotationsChange={setAnnotations}
-              onCodesChange={setCodes}
-              scrollElRef={textScrollElRef}
-              suppressGutter={webpageVisible}
-            />
-          </div>
-        )}
+        <div
+          className={cn(
+            "flex min-h-0 flex-col overflow-hidden bg-bg",
+            textDragging ? "" : "transition-[width] duration-200 ease-[var(--qc-ease)]",
+            plainVisible ? (webpageVisible ? "shrink-0" : "flex-1") : "shrink-0 w-0",
+          )}
+          style={plainVisible && webpageVisible ? { width: textW } : undefined}
+        >
+          <TextCoder
+            sourceId={source.id}
+            forceText
+            bare
+            textOverride={fulltext ?? undefined}
+            codings={codings}
+            annotations={annotations}
+            codes={codes}
+            onCodingsChange={setCodings}
+            onAnnotationsChange={setAnnotations}
+            onCodesChange={setCodes}
+            scrollElRef={textScrollElRef}
+            suppressGutter={webpageVisible}
+          />
+        </div>
         {webpageVisible && plainVisible && (
           <div
             onMouseDown={startTextResize}
@@ -1474,8 +1475,9 @@ export function HtmlCoder({ source }: { source: Source }) {
           />
         )}
         {webpageVisible && (
-          <div ref={containerRef} className="relative min-h-0 min-w-0 flex-1 overflow-auto bg-bg qc-enter">
-            {html != null ? (
+          <div className="flex min-h-0 min-w-0 flex-1 overflow-hidden bg-bg qc-enter">
+            <div ref={containerRef} className="min-h-0 min-w-0 flex-1 overflow-auto bg-bg">
+              {html != null ? (
               <iframe
                 ref={iframeRef}
                 title={t("htmlCoder.webpage")}
@@ -1486,49 +1488,44 @@ export function HtmlCoder({ source }: { source: Source }) {
                   setFrameTick((v) => v + 1);
                   postCodingsToFrame();
                 }}
-                className="h-full w-full border-0"
+                className="h-full w-full border-0 qc-webpage-frame"
               />
-            ) : htmlLoading ? (
-              <div className="flex h-full items-center justify-center gap-2 text-xs text-text-secondary">
-                <LoaderCircle size={14} className="animate-spin" aria-hidden />
-                {t("htmlCoder.loadingWebpage")}
-              </div>
-            ) : (
-              <div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center">
-                <p className="flex items-center justify-center gap-1.5 text-sm text-text-secondary">
-                  <CircleAlert size={16} aria-hidden />
-                  {t("htmlCoder.noSnapshot")}
-                </p>
-                <Button
-                  variant="toolbar"
-                  onClick={() => setHtmlReloadTick((v) => v + 1)}
-                >
-                  {t("common.retry")}
-                </Button>
-              </div>
-            )}
-            {/* Gutter anchored to the rendered webpage's marks. When only the
-                plain text pane is shown, TextCoder's own internal gutter takes
-                over (same global toggle), anchored to the text spans. */}
-            {gutterVisible && webpageVisible && (
-              <div className="absolute top-0 bottom-0 right-0 z-10 overflow-hidden qc-enter-fade">
-                <MemoGutter
-                  rows={gutterRows}
-                  selectedIds={selectedCtid != null ? [selectedCtid] : []}
-                  scrollRef={iframeDocRef}
-                  anchorOf={anchorOf}
-                  onSelect={setSelectedCtid}
-                  onDeselect={() => setSelectedCtid(null)}
-                  onUpdateMemo={gutterUpdateMemo}
-                  onUpdateWeight={gutterUpdateWeight}
-                  onDelete={gutterDelete}
-                  onToggleImportant={gutterToggleImportant}
-                  visible={gutterVisible}
-                  measureSignal={frameTick}
-                  scrollSync="transform"
-                />
-              </div>
-            )}
+              ) : htmlLoading ? (
+                <div className="flex h-full items-center justify-center gap-2 text-xs text-text-secondary">
+                  <LoaderCircle size={14} className="animate-spin" aria-hidden />
+                  {t("htmlCoder.loadingWebpage")}
+                </div>
+              ) : (
+                <div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center">
+                  <p className="flex items-center justify-center gap-1.5 text-sm text-text-secondary">
+                    <CircleAlert size={16} aria-hidden />
+                    {t("htmlCoder.noSnapshot")}
+                  </p>
+                  <Button
+                    variant="toolbar"
+                    onClick={() => setHtmlReloadTick((v) => v + 1)}
+                  >
+                    {t("common.retry")}
+                  </Button>
+                </div>
+              )}
+            </div>
+            {/* Gutter as dedicated stripe next to the webpage scroll (not an overlay). */}
+            <MemoGutter
+              rows={gutterRows}
+              selectedIds={selectedCtid != null ? [selectedCtid] : []}
+              scrollRef={iframeDocRef}
+              anchorOf={anchorOf}
+              onSelect={setSelectedCtid}
+              onDeselect={() => setSelectedCtid(null)}
+              onUpdateMemo={gutterUpdateMemo}
+              onUpdateWeight={gutterUpdateWeight}
+              onDelete={gutterDelete}
+              onToggleImportant={gutterToggleImportant}
+              visible={gutterVisible}
+              measureSignal={frameTick}
+              scrollSync="transform"
+            />
           </div>
         )}
       </div>

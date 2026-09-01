@@ -173,7 +173,7 @@ export function BarTitle({
   return (
     <span className="flex min-w-0 items-center gap-1.5">
       <Icon size={15} className="shrink-0" aria-hidden />
-      {!isCompact && <span className="truncate">{label}</span>}
+      {!isCompact && <span className="shrink-0">{label}</span>}
     </span>
   );
 }

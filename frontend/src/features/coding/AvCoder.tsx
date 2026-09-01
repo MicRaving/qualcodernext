@@ -406,8 +406,10 @@ export function AvCoder({ source }: { source: Source }) {
       await useProjectStore.getState().refreshProject();
       const next = await loadTranscriptCodings();
       // Auto-show the freshly created coding (gated on the
-      // "Auto-show segment details" pref).
-      if (autoShowDetails) {
+      // "Auto-show segment details" pref), but if the memo gutter is
+      // open the new segment stays selected so its empty memo card
+      // appears in the gutter until deselected.
+      if (autoShowDetails || gutterVisible) {
         setSelected(null);
         setSelectedText(next.find((c) => c.ctid === created.ctid) ?? null);
       } else {

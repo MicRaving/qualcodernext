@@ -322,21 +322,32 @@ export function MemoGutter({
 
   const hasAnyData = visibleRows.some((r) => hasGutterData(r));
 
-  if (!visible) return null;
+  const gutterWidthClass = width === "md" ? "w-72" : "w-56";
+  // Like the rightbar, the gutter animates its width when shown/hidden
+  // instead of mounting/unmounting instantly.
+  if (!visible) {
+    return <div className="shrink-0 overflow-hidden border-l border-transparent transition-[width] duration-200 ease-[var(--qc-ease)] w-0" aria-hidden />;
+  }
 
   return (
     <div
-      ref={gutterRef}
-      data-gutter=""
       className={cn(
-        "relative shrink-0 border-l border-border bg-surface qc-enter-fade",
-        scrollSync === "transform"
-          ? "overflow-hidden"
-          : "pointer-events-none overflow-y-auto overflow-x-hidden",
-        width === "md" ? "w-72" : "w-56",
+        "shrink-0 overflow-hidden transition-[width] duration-200 ease-[var(--qc-ease)]",
+        gutterWidthClass,
       )}
-      style={{ minHeight: contentHeight || undefined }}
     >
+      <div
+        ref={gutterRef}
+        data-gutter=""
+        className={cn(
+          "relative h-full border-l border-border bg-surface qc-enter-fade",
+          scrollSync === "transform"
+            ? "overflow-hidden"
+            : "pointer-events-none overflow-y-auto overflow-x-hidden",
+          gutterWidthClass,
+        )}
+        style={{ minHeight: contentHeight || undefined }}
+      >
       {visibleRows.length === 0 && (
         <p className="absolute top-4 left-0 right-0 text-center text-xs text-text-secondary italic">
           {rows.length === 0 ? t("coder.memoGutterNoCodings") : t("coder.memoGutterEmpty")}
@@ -398,6 +409,7 @@ export function MemoGutter({
           </div>
         );
       })}
+      </div>
     </div>
   );
 }
