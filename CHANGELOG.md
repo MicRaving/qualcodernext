@@ -5,11 +5,7 @@
      briefly describe the changes. The detail lives behind the **Full
      Changelog** compare link below the bullets, which every section must
      include. Add a section like "## 0.1.1 (2026-08-31)" at the TOP of the
-     file.
-
-     Versioning: Bugfixes bump 0.0.1 (e.g. 0.1.0 → 0.1.1), only major new
-     features justify a 0.1 bump (e.g. 0.1.x → 0.2.0), and +1.0 releases are
-     manually administered by the owner. -->
+     file. -->
 
 ## 0.1.1 (2026-08-31)
 
