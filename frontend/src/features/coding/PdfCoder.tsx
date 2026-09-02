@@ -235,23 +235,105 @@ function coveredTextItems(
 
 /** Best-effort reverse mapping of a text coding (stored in the extracted
  *  plain text) back onto the pdf.js items of one page: find the run of
- *  items that contain the coding's first and last word, in order. */
-function matchCodingItems(items: TextItemData[], seltext: string): TextItemData[] | null {
+ *  items that contain the coding's first and last word, in order.  When
+ *  ``hint`` (approx. char offset of the selection within the page's text)
+ *  is given the occurrence nearest the hint is returned — this disambiguates
+ *  duplicate phrases that otherwise always snapped to the first copy on the
+ *  page. */
+function matchCodingItems(
+  items: TextItemData[],
+  seltext: string,
+  hint: number | null = null,
+): TextItemData[] | null {
   const words = seltext.split(/\s+/).filter(Boolean);
   if (words.length === 0) return null;
   const first = words[0].toLowerCase();
   const last = words[words.length - 1].toLowerCase();
-  const start = items.findIndex((it) => it.str.toLowerCase().includes(first));
-  if (start < 0) return null;
-  let end = start;
-  for (let i = start; i < items.length; i++) {
-    if (items[i].str.toLowerCase().includes(last)) {
-      end = i;
+  // Collect every (start,end) pair where the first/last word occur in order.
+  const candidates: Array<{ start: number; end: number; charOffset: number }> = [];
+  // Pre-compute char offsets of each item start in the page's visual text
+  // (same order & joining as buildSelectionText uses for the whole page) so
+  // the hint — which is a char offset — can be compared.
+  const sorted = [...items].sort((a, b) => {
+    const sameLine = Math.abs(a.y - b.y) < Math.max(3, Math.min(a.h, b.h) * 0.5);
+    return sameLine ? a.x - b.x : a.y - b.y;
+  });
+  const itemCharOffset = new Map<TextItemData, number>();
+  let acc = 0;
+  let prev: TextItemData | null = null;
+  for (const it of sorted) {
+    if (prev) acc += 1 + prev.str.length;
+    itemCharOffset.set(it, acc);
+    // Note: sorted order char offset, but slice below uses original items
+    // order.  For the hint we approximate via sorted offset; candidates are
+    // enumerated in original items order.  We map candidate start's sorted
+    // offset for distance.
+    prev = it;
+  }
+  // Enumerate candidates in original items order (preserves reading order
+  // for non-reordered PDFs where items are already sorted).
+  for (let s = 0; s < items.length; s++) {
+    if (!items[s].str.toLowerCase().includes(first)) continue;
+    for (let e = s; e < items.length; e++) {
+      if (!items[e].str.toLowerCase().includes(last)) continue;
+      // Ensure words are in order: check that every word between first/last
+      // is covered by the slice's text (approximate: slice covers at least
+      // the word count).  For simplicity accept any s<=e where first/last
+      // match — the picker already validated the full phrase.
+      candidates.push({
+        start: s,
+        end: e,
+        charOffset: itemCharOffset.get(items[s]) ?? s * 10,
+      });
       break;
     }
   }
-  if (!items[end].str.toLowerCase().includes(last)) return null;
-  return items.slice(start, end + 1);
+  if (candidates.length === 0) return null;
+  if (hint == null) return items.slice(candidates[0].start, candidates[0].end + 1);
+  let best = candidates[0];
+  let bestDist = Math.abs(best.charOffset - hint);
+  for (const c of candidates.slice(1)) {
+    const d = Math.abs(c.charOffset - hint);
+    if (d < bestDist) {
+      bestDist = d;
+      best = c;
+    }
+  }
+  return items.slice(best.start, best.end + 1);
+}
+
+/** Approximate character offset of the selection within its page's pdf.js
+ *  text (same sorting/joining as buildSelectionText). Used as the `hint`
+ *  sent to pdf-text-locate so duplicate phrases snap to the dragged copy
+ *  instead of the first occurrence on the page. */
+function hintOffsetForSelection(
+  allItems: TextItemData[],
+  covered: TextItemData[],
+): number | null {
+  if (covered.length === 0 || allItems.length === 0) return null;
+  const sortedAll = [...allItems].sort((a, b) => {
+    const sameLine = Math.abs(a.y - b.y) < Math.max(3, Math.min(a.h, b.h) * 0.5);
+    return sameLine ? a.x - b.x : a.y - b.y;
+  });
+  const coveredSet = new Set(covered);
+  // Find the earliest covered item in sortedAll order.
+  let firstCoveredSortedIdx = -1;
+  for (let i = 0; i < sortedAll.length; i++) {
+    if (coveredSet.has(sortedAll[i])) {
+      firstCoveredSortedIdx = i;
+      break;
+    }
+  }
+  if (firstCoveredSortedIdx < 0) return null;
+  let offset = 0;
+  let prev: TextItemData | null = null;
+  for (let i = 0; i < sortedAll.length; i++) {
+    if (i === firstCoveredSortedIdx) break;
+    if (prev) offset += 1; // separator
+    offset += sortedAll[i].str.length;
+    prev = sortedAll[i];
+  }
+  return offset;
 }
 
 /** Reconstruct the selected text from the covered pdf.js items: words on
@@ -721,15 +803,60 @@ export function PdfCoder({ source }: { source: Source }) {
   );
 
   /** Text codings mapped back onto their pages' pdf.js items (best-effort
-   *  word matching) so they show as overlays in the rendered view. */
+   *  word matching) so they show as overlays in the rendered view.  Uses the
+   *  coding's stored pos0 to pick the correct occurrence when the same
+   *  phrase appears twice on one page — without the hint the first copy was
+   *  always highlighted. */
   const textOverlays = useMemo(() => {
     const out = new Map<
       number,
       { items: TextItemData[]; color: string; ctid: number }[]
     >();
     for (const coding of textCodings) {
-      for (const [page, items] of textItems) {
-        const matched = matchCodingItems(items, coding.seltext ?? "");
+      // Prefer the page that contains the coding's pos0 (from pageCharOffsets)
+      // so the hint is meaningful; fall back to scanning all pages.
+      let preferredPage: number | null = null;
+      if (coding.pos0 != null && pageCharOffsets.total > 0) {
+        for (let i = 0; i < pageCharOffsets.starts.length; i++) {
+          const s = pageCharOffsets.starts[i] ?? 0;
+          const e =
+            i + 1 < pageCharOffsets.starts.length
+              ? pageCharOffsets.starts[i + 1]
+              : pageCharOffsets.total;
+          if (coding.pos0 >= s && coding.pos0 < e) {
+            preferredPage = i + 1;
+            break;
+          }
+        }
+      }
+      const order: Array<[number, TextItemData[]]> =
+        preferredPage != null && textItems.has(preferredPage)
+          ? [[preferredPage, textItems.get(preferredPage)!], ...Array.from(textItems.entries()).filter(([p]) => p !== preferredPage)]
+          : Array.from(textItems.entries());
+      let hint =
+        preferredPage != null && coding.pos0 != null
+          ? coding.pos0 - (pageCharOffsets.starts[preferredPage - 1] ?? 0)
+          : null;
+      // hint from the backend is a fitz-page offset; convert to the visual
+      // (pdf.js) offset the overlay matcher expects.
+      if (hint != null && preferredPage != null) {
+        const itemsForHint = textItems.get(preferredPage);
+        if (itemsForHint && itemsForHint.length > 0) {
+          const pageIdx = preferredPage - 1;
+          const fitzLen =
+            pageIdx + 1 < pageCharOffsets.starts.length
+              ? (pageCharOffsets.starts[pageIdx + 1] ?? 0) - (pageCharOffsets.starts[pageIdx] ?? 0)
+              : pageCharOffsets.total - (pageCharOffsets.starts[pageIdx] ?? 0);
+          const visualLen = buildSelectionText(itemsForHint).length;
+          if (visualLen > 0 && fitzLen > 0) hint = Math.round((hint * visualLen) / fitzLen);
+        }
+      }
+      let placed = false;
+      for (const [page, items] of order) {
+        // For non-preferred pages the hint is meaningless (different page),
+        // so only use it when matching the preferred page.
+        const pageHint = page === preferredPage ? hint : null;
+        const matched = matchCodingItems(items, coding.seltext ?? "", pageHint);
         if (matched) {
           const list = out.get(page) ?? [];
           list.push({
@@ -738,12 +865,14 @@ export function PdfCoder({ source }: { source: Source }) {
             ctid: coding.ctid,
           });
           out.set(page, list);
+          placed = true;
           break;
         }
       }
+      if (placed) continue;
     }
     return out;
-  }, [textCodings, textItems, colorByCid]);
+  }, [textCodings, textItems, colorByCid, pageCharOffsets]);
 
   /** Bold/italic ranges for the plain-text pane: the pdf.js text items carry
    *  each run's font name, so a greedy scan maps them onto the (length-
@@ -1250,11 +1379,33 @@ export function PdfCoder({ source }: { source: Source }) {
       }
       const text = buildSelectionText(covered);
       if (!text.trim()) return;
+      // Char offset of the selection within the page's pdf.js text — the
+      // backend uses this hint to pick the correct occurrence when the same
+      // phrase appears twice on the page (otherwise it always snapped to
+      // the first copy, making the highlight appear on "completely different
+      // text" and "escape the position").
+      const allPageItems = textItems.get(d.pageNumber) ?? [];
+      let hint = hintOffsetForSelection(allPageItems, covered);
+      // Convert the visual-page offset (pdf.js text) to the fitz-page
+      // offset the backend expects (its page_text length differs). The
+      // ratio of the two page lengths is the best scale we have — the
+      // frontend's pageCharOffsets already estimates each fitz page's
+      // length, while the visual length is the pdf.js reconstruction.
+      if (hint != null && allPageItems.length > 0 && pageCharOffsets.total > 0) {
+        const pageIdx = d.pageNumber - 1;
+        const fitzLen =
+          pageIdx + 1 < pageCharOffsets.starts.length
+            ? (pageCharOffsets.starts[pageIdx + 1] ?? 0) - (pageCharOffsets.starts[pageIdx] ?? 0)
+            : pageCharOffsets.total - (pageCharOffsets.starts[pageIdx] ?? 0);
+        const visualLen = buildSelectionText(allPageItems).length;
+        if (visualLen > 0 && fitzLen > 0) hint = Math.round((hint * fitzLen) / visualLen);
+      }
       void (async () => {
         try {
           const loc = await api.pdfTextLocate(source.id, {
             page: d.pageNumber,
             text,
+            hint,
           });
           pendingActionRef.current = {
             kind: "text",
@@ -1284,7 +1435,7 @@ export function PdfCoder({ source }: { source: Source }) {
         setPickerOpen(true);
       }
     }
-  }, [activeCodeId, codePendingRect, codePendingText, source.id, t, scale, textItems, textOverlays]);
+  }, [activeCodeId, codePendingRect, codePendingText, source.id, t, scale, textItems, textOverlays, pageCharOffsets]);
 
   // Clicking a code in the left sidebar assigns it to the pending action.
   useAssignCode((cid) => {

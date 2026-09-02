@@ -410,7 +410,7 @@ async def pdf_text_locate(
             raise HTTPException(status_code=422, detail=_MSG_BLANK_PAGE)
         fulltext = "".join(page_texts)
         expected = sum(len(t) for t in page_texts[: req.page - 1])
-        found = _locate(page_text, req.text, fulltext, expected)
+        found = _locate(page_text, req.text, fulltext, expected, req.hint)
         if found is None:
             raise HTTPException(status_code=422, detail=_MSG_UNANCHORABLE)
         pos0, pos1, confidence = found

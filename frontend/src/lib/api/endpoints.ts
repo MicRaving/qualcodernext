@@ -325,7 +325,7 @@ export const api = {
   imageCodings: (sourceId: number) => request<ImageCoding[]>(`/codings/image/${sourceId}`),
   /** Map a selection made over a rendered PDF page to plain-text offsets
    *  (the same text the plain-text mode codes against). */
-  pdfTextLocate: (fid: number, body: { page: number; text: string }) =>
+  pdfTextLocate: (fid: number, body: { page: number; text: string; hint?: number | null }) =>
     request<{ pos0: number; pos1: number; seltext: string }>(
       `/sources/${fid}/pdf-text-locate`,
       { method: "POST", body: JSON.stringify(body) },

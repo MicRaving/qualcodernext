@@ -16,6 +16,12 @@ from pydantic import BaseModel
 class PdfTextLocateRequest(BaseModel):
     page: int
     text: str
+    # Approximate character offset of the selection start within the page's
+    # extracted text (from the frontend's pdf.js item order). When supplied
+    # the engine picks the occurrence of the selection nearest this hint
+    # instead of the first occurrence on the page — this disambiguates
+    # duplicate phrases that otherwise always mapped to the first match.
+    hint: int | None = None
 
 
 class PdfTextLocateResponse(BaseModel):
@@ -92,32 +98,59 @@ def _normalize_text(text: str) -> str:
     return norm
 
 
-def _word_seq_span(page_text: str, sel: str) -> tuple[int, int] | None:
+def _word_seq_span(
+    page_text: str, sel: str, hint: int | None = None
+) -> tuple[int, int] | None:
     """Whitespace-insensitive word-sequence match (the historical fallback):
     the selection's words must appear verbatim, in order, in the page text.
-    Returns the raw page-text span of the first to last matched word."""
+    When ``hint`` (approx. start offset within the page) is given the
+    occurrence nearest the hint is returned; otherwise the first match wins."""
     words = re.findall(r"\S+", sel)
     if not words:
         return None
     page_words = list(re.finditer(r"\S+", page_text))
+    candidates: list[tuple[int, int]] = []
     for i in range(len(page_words) - len(words) + 1):
         if [m.group(0) for m in page_words[i : i + len(words)]] == words:
-            return page_words[i].start(), page_words[i + len(words) - 1].end()
-    return None
+            candidates.append(
+                (page_words[i].start(), page_words[i + len(words) - 1].end())
+            )
+    if not candidates:
+        return None
+    if hint is None:
+        return candidates[0]
+    # Pick the span whose start is closest to the hint (disambiguates
+    # duplicate phrases — e.g. the same sentence appearing twice on one
+    # page — so dragging the second copy no longer snaps to the first).
+    return min(candidates, key=lambda s: abs(s[0] - hint))
 
 
-def _normalized_match(page_text: str, sel: str) -> tuple[int, int] | None:
+def _normalized_match(
+    page_text: str, sel: str, hint: int | None = None
+) -> tuple[int, int] | None:
     """Locate the selection in the page text after normalization (case,
     whitespace, ligatures, soft hyphens, line-break hyphens), returning the
-    RAW page-text span of the match."""
+    RAW page-text span of the match.  With ``hint`` the occurrence nearest
+    the hint is returned instead of the first occurrence."""
     norm_page, spans = _normalize_with_spans(page_text)
     norm_sel = _normalize_text(sel)
     if not norm_sel:
         return None
-    idx = norm_page.find(norm_sel)
-    if idx < 0:
+    # Gather every occurrence of the normalized selection in the normalized
+    # page so duplicates can be disambiguated by the hint.
+    candidates: list[tuple[int, int]] = []
+    start = 0
+    while True:
+        idx = norm_page.find(norm_sel, start)
+        if idx < 0:
+            break
+        candidates.append((spans[idx][0], spans[idx + len(norm_sel) - 1][1]))
+        start = idx + 1
+    if not candidates:
         return None
-    return spans[idx][0], spans[idx + len(norm_sel) - 1][1]
+    if hint is None:
+        return candidates[0]
+    return min(candidates, key=lambda s: abs(s[0] - hint))
 
 
 def _fuzzy_span(text: str, sel: str, max_mismatch: int) -> tuple[int, int] | None:
@@ -390,31 +423,40 @@ def _fuzzy_locate(
 
 
 def _locate(
-    page_text: str, sel: str, fulltext: str, expected: int
+    page_text: str,
+    sel: str,
+    fulltext: str,
+    expected: int,
+    hint: int | None = None,
 ) -> tuple[int, int, str] | None:
     """Map a pdf.js selection to ``(pos0, pos1, confidence)`` offsets in the
-    fulltext.
+    fulltext.  ``hint`` is the approximate start offset of the selection
+    within ``page_text`` (from the frontend's item order) — when supplied
+    the occurrence nearest the hint is returned instead of the first match,
+    so duplicate phrases no longer snap to the wrong copy."""
 
-    Fallback chain:
-    1. exact substring in the page text;
-    2. word-sequence match (whitespace-insensitive);
-    3. normalized match (case, whitespace, ligatures, soft hyphens,
-       line-break hyphens);
-    4. run-based anchor: the longest run of the selection's words found
-       directly in the fulltext (tolerates reordered or dropped leading
-       text);
-    5. positional fuzzy estimate anchored on the page's first word.
-
-    Only returns None when nothing can be anchored at all (e.g. the page
-    has no extractable text).
-    """
-    idx = page_text.find(sel)
-    if idx >= 0:
-        return expected + idx, expected + idx + len(sel), "exact"
-    seq = _word_seq_span(page_text, sel)
+    # Exact matches: collect every occurrence, pick the one nearest the hint
+    # so the second copy of a repeated sentence does not snap to the first.
+    if hint is not None:
+        candidates: list[int] = []
+        start = 0
+        while True:
+            idx = page_text.find(sel, start)
+            if idx < 0:
+                break
+            candidates.append(idx)
+            start = idx + 1
+        if candidates:
+            best = min(candidates, key=lambda i: abs(i - hint))
+            return expected + best, expected + best + len(sel), "exact"
+    else:
+        idx = page_text.find(sel)
+        if idx >= 0:
+            return expected + idx, expected + idx + len(sel), "exact"
+    seq = _word_seq_span(page_text, sel, hint)
     if seq is not None:
         return expected + seq[0], expected + seq[1], "normalized"
-    norm = _normalized_match(page_text, sel)
+    norm = _normalized_match(page_text, sel, hint)
     if norm is not None:
         return expected + norm[0], expected + norm[1], "normalized"
     return _fuzzy_locate(page_text, sel, fulltext, expected)

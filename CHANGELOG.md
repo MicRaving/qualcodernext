@@ -7,6 +7,12 @@
      include. Add a section like "## 0.1.1 (2026-08-31)" at the TOP of the
      file. -->
 
+## 0.1.5 (2026-09-02)
+
+- Fixed PDF text marking hitting the wrong occurrence when the same phrase repeats.
+
+**Full Changelog**: https://github.com/MicRaving/qualcodernext/compare/v0.1.4...v0.1.5
+
 ## 0.1.4 (2026-09-02)
 
 - Header labels hide only when cut off (order: label → count → icon).
