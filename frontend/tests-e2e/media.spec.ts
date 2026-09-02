@@ -169,8 +169,10 @@ function toneAudioRow(page: Page) {
 
 /** Files view → open tone.wav in the AV coder. */
 async function openToneInCoder(page: Page) {
+  await expect(page.getByRole("button", { name: "Coding", exact: true })).toBeEnabled({ timeout: 30_000 });
   await page.getByRole("button", { name: "Coding", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Coding" }).first()).toBeVisible();
+  await expect(toneAudioRow(page)).toBeVisible({ timeout: 20_000 });
   await toneAudioRow(page).click();
 }
 
@@ -185,10 +187,11 @@ test("create project and import the audio file", async ({ page }) => {
   await expect(dialog).toBeVisible();
   await dialog.locator("#create-path").fill(PROJECT_PATH);
   await dialog.getByRole("button", { name: "Create project" }).click();
-  await expect(page.getByRole("button", { name: "Cases" })).toBeVisible({
+  await expect(page.getByRole("button", { name: "Cases" })).toBeEnabled({
     timeout: 30_000,
   });
 
+  await expect(page.getByRole("button", { name: "Coding", exact: true })).toBeEnabled({ timeout: 30_000 });
   await page.getByRole("button", { name: "Coding", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Coding" }).first()).toBeVisible();
 
