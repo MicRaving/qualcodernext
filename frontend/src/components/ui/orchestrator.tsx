@@ -160,20 +160,31 @@ export function BarHeader({ title, count, actions, children, ...rest }: BarHeade
   );
 }
 
-/** Responsive bar title: icon + label, hides label when the bar is too narrow
- *  (shows icon + counter via BarHeader's count prop, or icon only for right bars). */
+/** Responsive bar title: icon + label, hides label when the bar is too narrow.
+ *  For most bars the icon is retained (icon + counter stay), but the Coding
+ *  leftbar treats the icon as part of the label — when the label hides the
+ *  icon hides as well. */
 export function BarTitle({
   icon: Icon,
   label,
+  retainIcon = true,
 }: {
   icon: React.ComponentType<{ size?: number; className?: string; "aria-hidden"?: boolean }>;
   label: string;
+  retainIcon?: boolean;
 }) {
   const isCompact = useIsCompactBar();
+  if (isCompact) {
+    return retainIcon ? (
+      <span className="flex min-w-0 items-center gap-1.5">
+        <Icon size={15} className="shrink-0" aria-hidden />
+      </span>
+    ) : null;
+  }
   return (
     <span className="flex min-w-0 items-center gap-1.5">
       <Icon size={15} className="shrink-0" aria-hidden />
-      {!isCompact && <span className="shrink-0">{label}</span>}
+      <span className="shrink-0">{label}</span>
     </span>
   );
 }
