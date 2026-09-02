@@ -42,7 +42,7 @@ import {
   Select,
   Textarea,
 } from "@/components/ui/orchestrator";
-import { useIsCompactBar } from "@/components/ui/barWidth";
+
 import { useI18n } from "@/lib/i18n";
 import { useCoderStore } from "@/stores/coder";
 import { useInspectorStore } from "@/stores/inspector";
@@ -871,7 +871,6 @@ function FileDetailsPanel({ details }: { details: SourceDetails }) {
 
 export function Inspector() {
   const { t } = useI18n();
-  const isCompact = useIsCompactBar();
   const selection = useInspectorStore((s) => s.inspectorSelection);
   const details = useInspectorStore((s) => s.inspectorDetails);
   const loading = useInspectorStore((s) => s.inspectorLoading);
@@ -941,13 +940,11 @@ export function Inspector() {
             selection ? (
               <span className="flex min-w-0 items-center gap-1.5">
                 {selection.kind === "code" ? (
-                  <Hash size={13} className="shrink-0 text-text-secondary" aria-hidden />
+                  <Hash size={13} className="qc-bar-icon shrink-0 text-text-secondary" aria-hidden />
                 ) : (
-                  <FileText size={13} className="shrink-0 text-text-secondary" aria-hidden />
+                  <FileText size={13} className="qc-bar-icon shrink-0 text-text-secondary" aria-hidden />
                 )}
-                {!isCompact && (
-                  <span className="truncate">{itemName ?? t("inspector.details")}</span>
-                )}
+                <span className="qc-bar-label truncate">{itemName ?? t("inspector.details")}</span>
               </span>
             ) : (
               <BarTitle icon={Info} label={t("inspector.details")} />

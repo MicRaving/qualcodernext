@@ -147,6 +147,7 @@ export function TextCoder({
   onExitPlainText,
   bare = false,
   textOverride,
+  rich,
   codings: codingsProp,
   annotations: annotationsProp,
   codes: codesProp,
@@ -167,6 +168,9 @@ export function TextCoder({
    *  stored fulltext so a cleaned variant (e.g. empty lines collapsed for
    *  website text) can be shown consistently with the other panes. */
   textOverride?: string;
+  /** Bold/italic ranges over the displayed text (PDF plain-text pane keeps
+   *  the document's emphasis). Ranges must align with the displayed text. */
+  rich?: { start: number; end: number; bold: boolean; italic: boolean }[];
   /** Controlled mode: the parent owns the codings/annotations/codes state and
    *  is notified of every change, so all panes render from the same arrays. */
   codings?: Coding[];
@@ -882,11 +886,38 @@ export function TextCoder({
     );
   }
 
+  /** Render a plain (uncoded) [start, end) slice with any bold/italic ranges
+   *  applied (PDF plain-text pane). */
+  function renderStyledSlice(slice: string, startInDoc: number): ReactNode {
+    if (!rich || rich.length === 0) return slice;
+    const endInDoc = startInDoc + slice.length;
+    const parts: ReactNode[] = [];
+    let cursor = 0;
+    for (const r of rich) {
+      if (r.end <= startInDoc || r.start >= endInDoc) continue;
+      const s = Math.max(r.start, startInDoc);
+      const e = Math.min(r.end, endInDoc);
+      if (s > startInDoc + cursor) parts.push(slice.slice(cursor, s - startInDoc));
+      const frag = slice.slice(s - startInDoc, e - startInDoc);
+      parts.push(
+        <span
+          key={s}
+          className={`${r.bold ? "font-bold" : ""} ${r.italic ? "italic" : ""}`}
+        >
+          {frag}
+        </span>,
+      );
+      cursor = e - startInDoc;
+    }
+    if (cursor < slice.length) parts.push(slice.slice(cursor));
+    return parts.length > 0 ? parts : slice;
+  }
+
   function renderCodedText(): ReactNode[] {
     const out: ReactNode[] = [];
     let pos = 0;
     segments.forEach((seg, i) => {
-      if (seg.start > pos) out.push(text.slice(pos, seg.start));
+      if (seg.start > pos) out.push(renderStyledSlice(text.slice(pos, seg.start), pos));
       const rows = seg.ctids
         .map((ctid) => codings.find((c) => c.ctid === ctid))
         .filter((c): c is Coding => Boolean(c));
@@ -951,7 +982,7 @@ export function TextCoder({
       }
       pos = seg.end;
     });
-    if (pos < text.length) out.push(text.slice(pos));
+    if (pos < text.length) out.push(renderStyledSlice(text.slice(pos), pos));
     return out;
   }
 

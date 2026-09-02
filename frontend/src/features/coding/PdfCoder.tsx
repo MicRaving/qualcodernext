@@ -108,13 +108,86 @@ interface PageSize {
 }
 
 /** One pdf.js text item in PDF (unscaled) units — used to hit-test and
- *  select text over the rendered page. */
+ *  select text over the rendered page, and to reconstruct the plain-text
+ *  pane with bold/italic preserved. */
 interface TextItemData {
   x: number;
   y: number;
   w: number;
   h: number;
   str: string;
+  fontName?: string;
+}
+
+/** Whether a pdf.js font name denotes a bold face (e.g. "Arial-Bold"). */
+function isBoldFont(name?: string): boolean {
+  return /bold|black|heavy|semibold/i.test(name ?? "");
+}
+
+/** Whether a pdf.js font name denotes an italic/oblique face. */
+function isItalicFont(name?: string): boolean {
+  return /italic|oblique/i.test(name ?? "");
+}
+
+/** A [start, end) character range in the plain-text display with styling. */
+export interface RichRange {
+  start: number;
+  end: number;
+  bold: boolean;
+  italic: boolean;
+}
+
+/** Collapse the artificial line breaks a PDF's text extraction inserts at
+ *  every visual line end WITHOUT merging real paragraphs. A single `\n`
+ *  becomes a space only when the previous line is a "full" wrapped line that
+ *  continues the paragraph; it is kept as a paragraph break when the line is
+ *  short (paragraph/heading end) or ends a sentence followed by a new
+ *  capitalised line. Blank lines (`\n\n`) are always preserved, and hyphen
+ *  splits (`word-\nnext`) join as two spaces. Every mapping is
+ *  length-preserving (1 char -> 1 char) so existing coding positions stay
+ *  aligned with the display text. */
+function normalizePdfBreaks(text: string): string {
+  const lines = text.split("\n");
+  let maxLen = 1;
+  for (const l of lines) {
+    const len = l.trim().length;
+    if (len > maxLen) maxLen = len;
+  }
+  let out = "";
+  let prevBlank = true;
+  let prevFull = false;
+  let prevEndsSentence = false;
+  let prevEndsHyphen = false;
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (i === 0) {
+      out = line;
+      const pt = line.trimEnd();
+      prevBlank = pt === "";
+      prevFull = pt.length >= maxLen * 0.55;
+      prevEndsSentence = /[.?!:;]$/.test(pt);
+      prevEndsHyphen = pt.endsWith("-");
+      continue;
+    }
+    const nextStartsCap = /^[A-Z0-9"'([]/.test(line.trimStart());
+    const wrap = !prevBlank && prevFull && !(prevEndsSentence && nextStartsCap);
+    if (wrap) {
+      if (prevEndsHyphen) {
+        // "word-\nnext" -> "word  next": drop the hyphen, keep the 2 chars.
+        out = out.slice(0, -1) + "  " + line;
+      } else {
+        out += " " + line;
+      }
+    } else {
+      out += "\n" + line;
+    }
+    const pt = line.trimEnd();
+    prevBlank = pt === "";
+    prevFull = pt.length >= maxLen * 0.55;
+    prevEndsSentence = /[.?!:;]$/.test(pt);
+    prevEndsHyphen = pt.endsWith("-");
+  }
+  return out;
 }
 
 /** Pending coding action after a drag: a picture region or a text span. */
@@ -534,6 +607,7 @@ export function PdfCoder({ source }: { source: Source }) {
             w: item.width,
             h: item.height,
             str: item.str,
+            fontName: "fontName" in item ? (item as { fontName?: string }).fontName : undefined,
           });
         }
         items.set(p, list);
@@ -670,6 +744,40 @@ export function PdfCoder({ source }: { source: Source }) {
     }
     return out;
   }, [textCodings, textItems, colorByCid]);
+
+  /** Bold/italic ranges for the plain-text pane: the pdf.js text items carry
+   *  each run's font name, so a greedy scan maps them onto the (length-
+   *  preserving) normalized fulltext and adjacent runs with the same style
+   *  merge. Best-effort — runs that cannot be aligned are simply unstyled. */
+  const richRanges = useMemo<RichRange[]>(() => {
+    const full = source.fulltext ?? "";
+    if (!full) return [];
+    const disp = normalizePdfBreaks(full);
+    const dispLower = disp.toLowerCase();
+    const ranges: RichRange[] = [];
+    let scan = 0;
+    for (let p = 1; p <= (pdf?.numPages ?? 0); p++) {
+      for (const it of textItems.get(p) ?? []) {
+        const str = it.str?.trim();
+        if (!str) continue;
+        const key = str.replace(/\s+/g, " ").toLowerCase();
+        const idx = dispLower.indexOf(key, scan);
+        if (idx < 0) continue; // alignment drift — leave this run unstyled
+        scan = idx + key.length;
+        ranges.push({ start: idx, end: idx + key.length, bold: isBoldFont(it.fontName), italic: isItalicFont(it.fontName) });
+      }
+    }
+    const merged: RichRange[] = [];
+    for (const r of ranges) {
+      const last = merged[merged.length - 1];
+      if (last && last.end === r.start && last.bold === r.bold && last.italic === r.italic) {
+        last.end = r.end;
+      } else {
+        merged.push({ start: r.start, end: r.end, bold: r.bold, italic: r.italic });
+      }
+    }
+    return merged;
+  }, [textItems, source.fulltext, pdf]);
 
   /* ------------------------------------------------------------- actions */
 
@@ -1482,11 +1590,13 @@ export function PdfCoder({ source }: { source: Source }) {
           )}
           style={plainVisible && pdfVisible ? { width: textW } : undefined}
         >
-          {plainMounted && (
+{plainMounted && (
           <TextCoder
             sourceId={source.id}
             forceText
             bare
+            textOverride={normalizePdfBreaks(source.fulltext ?? "")}
+            rich={richRanges}
             codings={textCodings}
             annotations={annotations}
             codes={codes}

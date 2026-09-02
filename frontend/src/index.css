@@ -87,10 +87,12 @@ html.a11y-high-contrast .qc-pdf-canvas {
 }
 
 /* OLED webpage dark mode — the captured snapshot is rendered in an <iframe>
-   with a white paper background that is painful on pure-black OLED. Same
-   invert + hue-rotate filter as PDF, scoped to the iframe element only. */
+   with a white paper background that is painful on pure-black OLED. A full
+   invert makes every white background EXACTLY black (OLED pixels off) while
+   dark page text becomes light and stays readable; the hue-rotate keeps
+   hues recognizable. Scoped to the iframe element only. */
 html.dark.oled:not(.a11y-high-contrast) .qc-webpage-frame {
-  filter: invert(0.92) hue-rotate(180deg) brightness(1.05) contrast(0.92);
+  filter: invert(1) hue-rotate(180deg);
 }
 html.a11y-high-contrast .qc-webpage-frame {
   filter: none !important;
@@ -164,6 +166,14 @@ footer,
 .qc-no-select {
   user-select: none;
   -webkit-user-select: none;
+}
+
+/* Bar header responsive label: BarHeader measures the header and adds
+   `qc-bar-label-hidden` to the title when the label would be cut off by the
+   count/action buttons — the label fully disappears (display:none, freeing
+   its space) while the icon and count stay. Order is Label → Count → Icon. */
+.qc-bar-label-hidden .qc-bar-label {
+  display: none;
 }
 
 /* Active-toggle indicator: an orange accent glow for toolbar buttons that

@@ -1432,7 +1432,7 @@ export function Sidebar() {
           />
         ) : (
           <BarHeader
-            title={<BarTitle icon={Hash} label={t("nav.codes")} retainIcon={false} />}
+            title={<BarTitle icon={Hash} label={t("nav.codes")} />}
             count={codeTree.filter((c) => c.kind === "code").length}
             actions={
               <>

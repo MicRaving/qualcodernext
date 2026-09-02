@@ -24,7 +24,7 @@ import {
 import { ArrowLeft, CircleAlert, LoaderCircle, X } from "lucide-react";
 import { ViewBackButton } from "@/components/shell/ViewBackButton";
 import { cls } from "@/components/ui/tokens";
-import { BarWidthContext, useIsCompactBar } from "@/components/ui/barWidth";
+import { BarWidthContext } from "@/components/ui/barWidth";
 import { useI18n } from "@/lib/i18n";
 
 /* ------------------------------------------------------------------ */
@@ -148,43 +148,112 @@ export interface BarHeaderProps extends Omit<HTMLAttributes<HTMLElement>, "title
 }
 
 /** Left/right bar header (h-10, same height as the center header):
- *  [title] [count] … [actions]. Never part of the scrollable area. */
+ *  [title] [count] … [actions]. Never part of the scrollable area.
+ *
+ *  The label is only hidden when it would actually be cut off by the count
+ *  or action buttons (never cautiously by a pixel threshold). Hiding order is
+ *  Label → Count → Icon: the label goes first (the icon stays), then the
+ *  count, and the icon is retained last. No half-shown label is ever visible.
+ */
 export function BarHeader({ title, count, actions, children, ...rest }: BarHeaderProps) {
+  const headerRef = useRef<HTMLElement | null>(null);
+  const titleRef = useRef<HTMLHeadingElement | null>(null);
+  const countRef = useRef<HTMLSpanElement | null>(null);
+  const actionsRef = useRef<HTMLDivElement | null>(null);
+  const [hideLabel, setHideLabel] = useState(false);
+  const [hideCount, setHideCount] = useState(false);
+  // Frozen natural widths: once the label is hidden (display:none) its
+  // scrollWidth collapses to 0, so re-measuring would oscillate. Capture
+  // the natural widths while everything is visible.
+  const naturalRef = useRef({ title: 0, label: 0, count: 0 });
+  const hiddenRef = useRef({ label: false, count: false });
+
+  useEffect(() => {
+    const header = headerRef.current;
+    const titleEl = titleRef.current;
+    if (!header || !titleEl) return;
+    let raf = 0;
+    const measure = () => {
+      cancelAnimationFrame(raf);
+      raf = requestAnimationFrame(() => {
+        const labelEl = titleEl.querySelector<HTMLElement>(".qc-bar-label");
+        const iconEl = titleEl.querySelector<HTMLElement>(".qc-bar-icon");
+        if (!header || !labelEl || !iconEl) return;
+        const gap = 8; // gap-2
+        const gaps = Math.max(0, header.children.length - 1) * gap;
+        const actionW = actionsRef.current?.offsetWidth ?? 0;
+        const countW = countRef.current?.offsetWidth ?? 0;
+        const headerW = header.clientWidth;
+
+        // Capture natural widths only while their target is visible.
+        if (!hiddenRef.current.label) {
+          naturalRef.current.title = titleEl.scrollWidth;
+          naturalRef.current.label = labelEl.scrollWidth;
+        }
+        if (!hiddenRef.current.count && countRef.current) {
+          naturalRef.current.count = countRef.current.scrollWidth;
+        }
+
+        const { title: titleNatural, count: countNatural } = naturalRef.current;
+        // The label must vanish when the whole title no longer fits before
+        // the count + actions (the spacer absorbs the leftover).
+        const hideLabel = titleNatural > headerW - countW - actionW - gaps;
+        // With the label gone the title is just the icon — hide the count
+        // when even the icon + count + actions cannot fit.
+        const hideCount = hideLabel && countNatural > headerW - iconEl.offsetWidth - actionW - gaps;
+
+        hiddenRef.current = { label: hideLabel, count: hideCount };
+        setHideLabel(hideLabel);
+        setHideCount(hideCount);
+      });
+    };
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(header);
+    window.addEventListener("resize", measure);
+    return () => {
+      cancelAnimationFrame(raf);
+      ro.disconnect();
+      window.removeEventListener("resize", measure);
+    };
+  }, []);
+
   return (
-    <header className={cls.bar} {...rest}>
-      <h1 className="min-w-0 truncate text-sm font-semibold text-text-primary">{title}</h1>
-      {count !== undefined && <CountBadge value={count} />}
+    <header ref={headerRef} className={cls.bar} {...rest}>
+      <h1
+        ref={titleRef}
+        className={`min-w-0 text-sm font-semibold text-text-primary ${hideLabel ? "qc-bar-label-hidden" : ""}`}
+      >
+        {title}
+      </h1>
+      {count !== undefined && (
+        <span ref={countRef} className={hideCount ? "invisible" : undefined}>
+          <CountBadge value={count} />
+        </span>
+      )}
       <div className="flex-1" />
-      {children ?? actions}
+      <div ref={actionsRef} className="flex shrink-0 items-center gap-2">
+        {children ?? actions}
+      </div>
     </header>
   );
 }
 
-/** Responsive bar title: icon + label, hides label when the bar is too narrow.
- *  For most bars the icon is retained (icon + counter stay), but the Coding
- *  leftbar treats the icon as part of the label — when the label hides the
- *  icon hides as well. */
+/** Responsive bar title: icon + label. The icon is ALWAYS retained (it hides
+ *  last); the label is hidden by BarHeader only when it would be cut off by
+ *  the count/action buttons (the `.qc-bar-label` class is the measurement +
+ *  hide hook). */
 export function BarTitle({
   icon: Icon,
   label,
-  retainIcon = true,
 }: {
   icon: React.ComponentType<{ size?: number; className?: string; "aria-hidden"?: boolean }>;
   label: string;
-  retainIcon?: boolean;
 }) {
-  const isCompact = useIsCompactBar();
-  if (isCompact) {
-    return retainIcon ? (
-      <span className="flex min-w-0 items-center gap-1.5">
-        <Icon size={15} className="shrink-0" aria-hidden />
-      </span>
-    ) : null;
-  }
   return (
     <span className="flex min-w-0 items-center gap-1.5">
-      <Icon size={15} className="shrink-0" aria-hidden />
-      <span className="shrink-0">{label}</span>
+      <Icon size={15} className="qc-bar-icon shrink-0" aria-hidden />
+      <span className="qc-bar-label truncate">{label}</span>
     </span>
   );
 }
