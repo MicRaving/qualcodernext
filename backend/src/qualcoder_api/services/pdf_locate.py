@@ -109,12 +109,11 @@ def _word_seq_span(
     if not words:
         return None
     page_words = list(re.finditer(r"\S+", page_text))
-    candidates: list[tuple[int, int]] = []
-    for i in range(len(page_words) - len(words) + 1):
-        if [m.group(0) for m in page_words[i : i + len(words)]] == words:
-            candidates.append(
-                (page_words[i].start(), page_words[i + len(words) - 1].end())
-            )
+    candidates: list[tuple[int, int]] = [
+        (page_words[i].start(), page_words[i + len(words) - 1].end())
+        for i in range(len(page_words) - len(words) + 1)
+        if [m.group(0) for m in page_words[i : i + len(words)]] == words
+    ]
     if not candidates:
         return None
     if hint is None:

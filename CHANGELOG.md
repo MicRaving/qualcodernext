@@ -10,6 +10,7 @@
 ## 0.1.5 (2026-09-02)
 
 - Fixed PDF text marking hitting the wrong occurrence when the same phrase repeats.
+- Restored memo gutter in multimedia (transcript and AV) as dedicated stripe.
 
 **Full Changelog**: https://github.com/MicRaving/qualcodernext/compare/v0.1.4...v0.1.5
 

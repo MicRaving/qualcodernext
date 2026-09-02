@@ -38,6 +38,7 @@ import {
   type Source,
 } from "@/lib/api";
 import {
+  patchCodingRowMeta,
   patchCodingWeight,
   useCodeIndex,
   useCodeMaps,
@@ -1172,11 +1173,29 @@ export function AvCoder({ source }: { source: Source }) {
     }
   }
 
-  /* ------------------------------- memo gutter / bubble (transcript) */
+  /* ------------------------------- memo gutter / bubble (transcript + AV) */
 
-  const gutterRows = useMemo(
-    () =>
-      transcriptCodings.map((c) =>
+  const gutterRows = useMemo(() => {
+    const rows: ReturnType<typeof toGutterRow>[] = [];
+    for (const c of codings) {
+      rows.push(
+        toGutterRow(
+          {
+            id: c.avid,
+            kind: "av" as const,
+            memo: c.memo,
+            weight: (c as AVCoding & { weight?: number }).weight,
+            important: c.important,
+            date: c.date,
+            seltext: `${formatTime(c.pos0)} – ${formatTime(c.pos1)}`,
+          },
+          codeById.get(c.cid),
+          t("coder.fallbackCode", { id: c.cid }),
+        ),
+      );
+    }
+    for (const c of transcriptCodings) {
+      rows.push(
         toGutterRow(
           {
             id: c.ctid,
@@ -1190,29 +1209,40 @@ export function AvCoder({ source }: { source: Source }) {
           codeById.get(c.cid),
           t("coder.fallbackCode", { id: c.cid }),
         ),
-      ),
-    [transcriptCodings, codeById, t],
-  );
+      );
+    }
+    return rows;
+  }, [codings, transcriptCodings, codeById, t]);
 
-  const selectedBubbleRows = useMemo(
-    () => (selectedText ? gutterRows.filter((r) => r.id === selectedText.ctid) : []),
-    [gutterRows, selectedText],
-  );
+  const selectedBubbleRows = useMemo(() => {
+    if (selectedText) return gutterRows.filter((r) => r.id === selectedText.ctid);
+    if (selected) return gutterRows.filter((r) => r.id === selected.avid);
+    return [];
+  }, [gutterRows, selectedText, selected]);
 
   const anchorOf = useCallback(
-    (ctid: number) => transcriptTextRef.current?.querySelector<HTMLElement>(`[data-ctid="${ctid}"]`) ?? null,
+    (id: number) =>
+      transcriptTextRef.current?.querySelector<HTMLElement>(`[data-ctid="${id}"]`) ??
+      timelineRef.current?.querySelector<HTMLElement>(`[data-ctid="${id}"]`) ??
+      null,
     [],
   );
 
   const handleGutterSelect = useCallback(
-    (ctid: number) => {
-      const coding = transcriptCodings.find((c) => c.ctid === ctid);
-      if (coding) {
+    (id: number) => {
+      const av = codings.find((c) => c.avid === id);
+      if (av) {
+        setSelected(av);
+        setSelectedText(null);
+        return;
+      }
+      const txt = transcriptCodings.find((c) => c.ctid === id);
+      if (txt) {
         setSelected(null);
-        setSelectedText(coding);
+        setSelectedText(txt);
       }
     },
-    [transcriptCodings],
+    [codings, transcriptCodings],
   );
 
   // Shared mutation actions for the transcript's text codings (memo/
@@ -1229,9 +1259,87 @@ export function AvCoder({ source }: { source: Source }) {
   });
   const { undo: tUndo } = tActions;
 
-  const gutterUpdateMemo = tActions.updateMemo;
-  const gutterUpdateWeight = tActions.updateWeight;
-  const gutterToggleImportant = tActions.toggleImportant;
+  const isAvGutterId = useCallback((id: number) => codings.some((c) => c.avid === id), [codings]);
+
+  const gutterUpdateMemo = useCallback(
+    (id: number, memo: string) => {
+      if (isAvGutterId(id)) {
+        void (async () => {
+          try {
+            await patchCodingRowMeta("av", id, { memo });
+            await reload();
+          } catch (e) {
+            setTError(errorMessage(e, t("coder.memoUpdateError")));
+          }
+        })();
+        return;
+      }
+      tActions.updateMemo(id, memo);
+    },
+    [isAvGutterId, tActions, reload, t],
+  );
+  const gutterUpdateWeight = useCallback(
+    (id: number, weight: number) => {
+      if (isAvGutterId(id)) {
+        void (async () => {
+          try {
+            await patchCodingWeight("av", id, weight);
+            await reload();
+          } catch (e) {
+            setTError(errorMessage(e, t("coder.memoUpdateError")));
+          }
+        })();
+        return;
+      }
+      tActions.updateWeight(id, weight);
+    },
+    [isAvGutterId, tActions, reload, t],
+  );
+  const gutterToggleImportant = useCallback(
+    (id: number) => {
+      if (isAvGutterId(id)) {
+        const row = codings.find((c) => c.avid === id);
+        const next = row?.important ? 0 : 1;
+        void (async () => {
+          try {
+            await patchCodingRowMeta("av", id, { important: next });
+            await reload();
+          } catch (e) {
+            setTError(errorMessage(e, t("coder.memoUpdateError")));
+          }
+        })();
+        return;
+      }
+      tActions.toggleImportant(id);
+    },
+    [isAvGutterId, codings, tActions, reload, t],
+  );
+
+  const handleGutterDelete = useCallback(
+    (id: number) => {
+      if (isAvGutterId(id)) {
+        const row = codings.find((c) => c.avid === id);
+        if (!row) return;
+        if (!window.confirm(t("avCoder.deleteConfirm", { name: nameByCid.get(row.cid) ?? t("coder.plainCode") }))) return;
+        void (async () => {
+          try {
+            await api.deleteAvCoding(id);
+            setSelected(null);
+            await reload();
+          } catch (e) {
+            setTError(errorMessage(e, t("coder.removeError")));
+          }
+        })();
+        return;
+      }
+      handleTranscriptDelete(id);
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [codings, nameByCid, t],
+  );
+  const handleGutterImportantToggle = gutterToggleImportant;
+  const handleGutterMemoUpdate = gutterUpdateMemo;
+  const handleGutterWeightUpdate = gutterUpdateWeight;
 
   /** Delete a transcript text coding (the timeline/AV codings are removed
    *  via handleDelete). */
@@ -1337,6 +1445,15 @@ export function AvCoder({ source }: { source: Source }) {
                 {t("avCoder.video")}
               </Button>
             )}
+            <Button
+              variant="toolbar"
+              icon={<MessageSquareText size={12} aria-hidden />}
+              onClick={toggleGutter}
+              className={cn(gutterVisible && "border-accent text-accent")}
+              title={gutterVisible ? t("coder.hideMemos") : t("coder.showMemos")}
+            >
+              {t("coder.memos")}
+            </Button>
             <div className="flex-1" />
             <IconButton
               label={t("avCoder.bookmarkSet")}
@@ -1421,6 +1538,7 @@ export function AvCoder({ source }: { source: Source }) {
               {codings.map((coding) => (
                 <div
                   key={coding.avid}
+                  data-ctid={coding.avid}
                   onClick={(e) => {
                     e.stopPropagation();
                     seekToMs(coding.pos0);
@@ -1587,15 +1705,15 @@ export function AvCoder({ source }: { source: Source }) {
                 className="qc-scroll min-h-0 w-full flex-1 resize-none bg-transparent px-4 py-3 font-mono text-sm leading-6 text-text-primary outline-none"
               />
             ) : (
-            <div
-              ref={transcriptTextRef}
-              onMouseUp={onTranscriptMouseUp}
-              className="qc-selectable qc-scroll min-h-0 flex-1 overflow-y-auto px-4 py-3 text-sm leading-6 text-text-primary"
-              role="log"
-              aria-live="off"
-            >
-            <div className="flex">
-            <div className="flex-1">
+            <div className="flex min-h-0 flex-1 overflow-hidden">
+              <div
+                ref={transcriptTextRef}
+                onMouseUp={onTranscriptMouseUp}
+                className="qc-selectable qc-scroll min-h-0 flex-1 overflow-y-auto px-4 py-3 text-sm leading-6 text-text-primary"
+                role="log"
+                aria-live="off"
+              >
+              <div className="flex-1">
               {subtitleSegments.length === 0 ? (
                 jobPending ? (
                   <p className="py-6 text-center text-sm text-text-secondary" role="status">
@@ -1648,22 +1766,25 @@ export function AvCoder({ source }: { source: Source }) {
                   });
                 })()
               )}
-            </div>
+              </div>
+              </div>
               <MemoGutter
                 rows={gutterRows}
-                selectedIds={selectedText ? [selectedText.ctid] : []}
+                selectedIds={selectedText ? [selectedText.ctid] : (selected ? [selected.avid] : [])}
                 scrollRef={transcriptTextRef}
                 anchorOf={anchorOf}
                 onSelect={handleGutterSelect}
-                onDeselect={() => setSelectedText(null)}
-                onUpdateMemo={gutterUpdateMemo}
-                onUpdateWeight={gutterUpdateWeight}
-                onDelete={handleTranscriptDelete}
-                onToggleImportant={gutterToggleImportant}
+                onDeselect={() => {
+                  setSelectedText(null);
+                  setSelected(null);
+                }}
+                onUpdateMemo={handleGutterMemoUpdate}
+                onUpdateWeight={handleGutterWeightUpdate}
+                onDelete={handleGutterDelete}
+                onToggleImportant={handleGutterImportantToggle}
                 visible={gutterVisible}
                 measureSignal={gutterTick}
               />
-            </div>
             </div>
             )}
             {/* Floating selection toolbar (code / annotate) */}
