@@ -7,6 +7,15 @@
      include. Add a section like "## 0.1.1 (2026-08-31)" at the TOP of the
      file. -->
 
+## 0.1.4 (2026-09-02)
+
+- Header labels hide only when cut off (order: label → count → icon).
+- OLED webpage view uses a pure-black background.
+- PDF plain text keeps paragraphs and preserves bold/italic.
+- Stabilized the PDF plain-text pane and flaky project-open tests.
+
+**Full Changelog**: https://github.com/MicRaving/qualcodernext/compare/v0.1.3...v0.1.4
+
 ## 0.1.3 (2026-08-31)
 
 - Fixed memo gutter animations and text coder header.
