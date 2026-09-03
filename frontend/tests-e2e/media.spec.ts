@@ -270,9 +270,15 @@ test("seek via segment click and delete the segment", async ({ page }) => {
     timeout: 10_000,
   });
   await expect(page.getByText(/0:0\d – 0:0\d/).first()).toBeVisible({ timeout: 10_000 });
-  // Two "Delete" buttons exist now: the transcript header's and the segment
-  // details footer's. The footer comes later in the DOM → .last().
-  const deleteBtn = page.getByRole("button", { name: "Delete", exact: true }).last();
+  // "Delete" matches the transcript header's text button, the details
+  // footer's text button, AND the memo bubble's icon-only button
+  // (aria-label, no text — rendered after the footer, often off-viewport).
+  // Filter to buttons with visible text so the bubble never wins; the
+  // footer comes later in the DOM than the header → .last().
+  const deleteBtn = page
+    .getByRole("button", { name: "Delete", exact: true })
+    .filter({ hasText: "Delete" })
+    .last();
   await expect(deleteBtn).toBeVisible();
 
   // Deletion asks via window.confirm; accept it.
