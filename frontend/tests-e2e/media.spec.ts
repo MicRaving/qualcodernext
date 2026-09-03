@@ -266,10 +266,10 @@ test("seek via segment click and delete the segment", async ({ page }) => {
   await expect(segment).toBeVisible({ timeout: 20_000 });
   await segment.click();
 
-  await expect(page.getByRole("main").getByText("AvCode", { exact: true })).toBeVisible({
+  await expect(page.getByRole("main").getByText("AvCode", { exact: true }).first()).toBeVisible({
     timeout: 10_000,
   });
-  await expect(page.getByText(/0:0\d – 0:0\d/)).toBeVisible({ timeout: 10_000 });
+  await expect(page.getByText(/0:0\d – 0:0\d/).first()).toBeVisible({ timeout: 10_000 });
   // Two "Delete" buttons exist now: the transcript header's and the segment
   // details footer's. The footer comes later in the DOM → .last().
   const deleteBtn = page.getByRole("button", { name: "Delete", exact: true }).last();
