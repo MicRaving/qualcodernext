@@ -106,8 +106,10 @@ jobs:
           VERSION: ${{ steps.version.outputs.version }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          # Attribute the version-bump commit to the repo owner so the
+          # automation identity never shows up in the contributors graph.
+          git config user.name "Marvin Fendt"
+          git config user.email "marvin.fendt@gmail.com"
           if ! git diff --quiet frontend/src-tauri/tauri.conf.json frontend/package.json; then
             git add frontend/src-tauri/tauri.conf.json frontend/package.json
             git commit -m "chore(release): v$VERSION"
@@ -382,7 +384,7 @@ jobs:
           }
           $manifest = @{
             version   = $version
-            notes     = "QualCoder v$version"
+            notes     = "v$version"
             pub_date  = (Get-Date).ToUniversalTime().ToString("o")
             platforms = $platforms
           }
