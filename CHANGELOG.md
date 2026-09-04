@@ -4,8 +4,19 @@
      Keep the section SHORT — one-line bullets ("Improved animations.") that
      briefly describe the changes. The detail lives behind the **Full
      Changelog** compare link below the bullets, which every section must
-     include. Add a section like "## 0.1.1 (2026-08-31)" at the TOP of the
-     file. -->
+     include (first releases have no base tag, so no link). Add a section
+     like "## 0.1.1 (2026-08-31)" at the TOP of the file. -->
+
+## 0.1.0 (2026-09-04)
+
+- Complete rewrite on FastAPI, React 19, and Tauri 2 with a typed HTTP API.
+- Simplified three-column UI with ribbon, inline rename, and status bar.
+- Simultaneous collaboration via shared-folder change-log sync and presence.
+- Extended AI assistant: agentic chat, semantic search, autocode, prompt library.
+- New analysis surface: statistics, reliability, sentiment, summary tables, Smart Publisher.
+- New importers/exporters: REFI-QDA, ATLAS.ti, NVivo, XLSX/SPSS, Zotero/RIS, URL import.
+- Productivity: global search flyout, undo/redo, task queue, drag & drop.
+- New workspaces: help browser, Crafter, graph editor, R console, SQL reports, notes.
 
 ## 0.1.5 (2026-09-02)
 
