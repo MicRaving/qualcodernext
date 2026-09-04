@@ -5,8 +5,8 @@ from __future__ import annotations
 
 import re
 
-from fastapi import APIRouter, HTTPException, Query, Request
-from pydantic import BaseModel
+from fastapi import APIRouter, Header, HTTPException, Query, Request
+from pydantic import BaseModel, Field
 
 from qualcoder_api.api.v1.deps import DbDep, OpenProjectDep, ServiceDep
 from qualcoder_api.services import user_settings
@@ -18,10 +18,10 @@ router = APIRouter(prefix="/ai", tags=["ai"])
 
 class AiSettingsRequest(BaseModel):
     enabled: bool
-    provider: str = "custom"
-    api_base: str
-    model: str
-    api_key: str = ""
+    provider: str = Field(default="custom", max_length=64)
+    api_base: str = Field(default="", max_length=2048)
+    model: str = Field(default="", max_length=256)
+    api_key: str = Field(default="", max_length=4096)
     # Actively start LM Studio + load the model when unreachable. None =
     # keep the stored value.
     auto_start_backend: bool | None = None
@@ -31,11 +31,11 @@ class AiSettingsRequest(BaseModel):
     # The AI-chat wrapping prompt. None = keep the stored value (the settings
     # tab auto-save must not clobber a custom wrapping prompt set in the
     # template creator); an empty string resets to the built-in default.
-    wrapping_prompt: str | None = None
+    wrapping_prompt: str | None = Field(default=None, max_length=8000)
     # MCP mode: "internal" (QCnext's own tools) or "external" (stdio server).
     mcp_mode: str | None = None
     # External MCP server connection (stdio).
-    mcp_server_command: str | None = None
+    mcp_server_command: str | None = Field(default=None, max_length=512)
     mcp_server_args: list[str] | None = None
     mcp_server_env: dict[str, str] | None = None
 
@@ -274,9 +274,10 @@ def _models_urls(
 
 @router.get("/models")
 async def ai_models(
-    provider: str | None = Query(None),
-    api_base: str | None = Query(None),
-    api_key: str | None = Query(None),
+    provider: str | None = Query(None, max_length=64),
+    api_base: str | None = Query(None, max_length=2048),
+    api_key: str | None = Query(None, max_length=4096, include_in_schema=False),
+    x_api_key: str | None = Header(None, alias="X-Api-Key"),
 ) -> dict:
     """List the models the configured provider advertises (per-provider
     ``/models`` endpoints). Local providers (ollama/lmstudio/opencode-go)
@@ -285,9 +286,11 @@ async def ai_models(
     sanitized ``error`` (the last exception, key-redacted; 401/403 map to a
     "rejected the API key" message).
 
-    Query params (``provider``/``api_base``/``api_key``), when provided,
-    override the saved settings for this fetch only — they are never saved.
-    An empty-string api_key is treated the same as None.
+    ``provider``/``api_base`` query params, when provided, override the saved
+    settings for this fetch only — they are never saved. The API key prefers
+    the ``X-Api-Key`` header (query ``api_key`` remains as a deprecated
+    fallback to avoid breaking older clients, but header use avoids leaking
+    the key into logs/history).
 
     The list is FILTERED per provider: chat models only, newest generations —
     Gemini/GPT video, TTS, embedding and image models are dropped — and
@@ -301,7 +304,8 @@ async def ai_models(
     api_base = (api_base or ai.get("api_base") or "").rstrip("/")
     if not api_base:
         return {"models": []}
-    api_key = api_key or ai.get("api_key") or ""
+    # Header preferred; query fallback deprecated (leaks into logs/URLs).
+    api_key = (x_api_key or api_key) or ai.get("api_key") or ""
     if _provider_requires_key(provider) and not api_key.strip():
         return {
             "models": [],
@@ -430,7 +434,33 @@ async def ai_status(probe: bool = False) -> dict:
 
 
 @router.put("/settings")
-async def save_ai_settings(req: AiSettingsRequest) -> dict:
+async def save_ai_settings(req: AiSettingsRequest, request: Request) -> dict:
+    from qualcoder_api.core.security import validate_mcp_command
+    from qualcoder_api.core.server_config import is_server_mode
+
+    try:
+        validate_mcp_command(req.mcp_server_command, req.mcp_server_args)
+    except ValueError as err:
+        raise HTTPException(status_code=422, detail=str(err)) from err
+    if req.mcp_server_args is not None and len(req.mcp_server_args) > 64:
+        raise HTTPException(status_code=422, detail="too many mcp server args")
+    if req.mcp_server_env is not None:
+        if len(req.mcp_server_env) > 64:
+            raise HTTPException(status_code=422, detail="too many mcp env vars")
+        for k, v in req.mcp_server_env.items():
+            if len(k) > 256 or len(v) > 4096 or "\x00" in k or "\x00" in v:
+                raise HTTPException(status_code=422, detail="invalid mcp env var") from None
+    # Server mode: configuring an external stdio command is privileged —
+    # it spawns a local binary during agentic chat. Require admin.
+    if is_server_mode() and (req.mcp_mode == "external" or (req.mcp_server_command or "").strip()):
+        from fastapi import Depends  # noqa: F401 - keep import local to avoid cycle
+
+        from qualcoder_api.api.v1.auth_deps import get_current_user
+
+        auth = request.headers.get("authorization", "")
+        user = await get_current_user(auth)
+        if user.get("role") != "admin":
+            raise HTTPException(status_code=403, detail="admin role required for external MCP")
     return user_settings.save_ai_settings(req.model_dump())
 
 

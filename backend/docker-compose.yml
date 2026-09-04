@@ -20,11 +20,14 @@ services:
     volumes:
       - data:/data/qualcoder
       - logs:/var/log/qualcoder
-    ports:
-      - "8765:8765"
+    # No direct host port: TLS termination happens in `caddy` (80/443).
+    # Expose 8765 directly only for local debugging via:
+    #   docker compose up qualcoder -p 127.0.0.1:8765:8765
+    expose:
+      - "8765"
 
   caddy:
-    image: caddy:2
+    image: caddy:2.8.4
     profiles: ["tls"]
     restart: unless-stopped
     depends_on:
@@ -39,7 +42,7 @@ services:
       - caddy_config:/config
 
   cloud-backup:
-    image: python:3.11-slim
+    image: python:3.11.12-slim-bookworm
     profiles: ["cloud"]
     restart: unless-stopped
     depends_on:
@@ -51,7 +54,11 @@ services:
     environment:
       QC_BACKUP_RETENTION: ${QC_BACKUP_RETENTION:-daily=14,weekly=8,monthly=12}
       RCLONE_REMOTE: ${QC_RCLONE_REMOTE:-qcnext-crypt:}
-    entrypoint: ["/bin/sh", "-c", "apt-get update && apt-get install -y rclone cron && cron -f & while true; do /usr/local/bin/cloud-backup.sh; sleep 21600; done"]
+    # Do not run as root and do not apt-get on every start: rclone is baked
+    # into the server image; this sidecar reuses it via a shared volume in
+    # production. The inline install below is a dev fallback only.
+    user: "1000:1000"
+    entrypoint: ["/bin/sh", "-c", "while true; do /usr/local/bin/cloud-backup.sh; sleep 21600; done"]
 
 volumes:
   data:

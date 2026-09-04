@@ -163,7 +163,11 @@ async def import_dictionary(
 ) -> dict:
     """Import a dictionary from a text/CSV upload (``code,term1,term2,...``
     per line; ``#`` comments and blank lines are ignored)."""
-    tmp = svc.project_path + "/_dict_import_" + (file.filename or "dictionary.txt")
+    from qualcoder_api.core.security import sanitize_filename
+
+    tmp = os.path.join(
+        svc.project_path, f"_dict_import_{sanitize_filename(file.filename, 'dictionary.txt')}"
+    )
     with open(tmp, "wb") as out:  # noqa: ASYNC230 - small local temp write
         while chunk := await file.read(1 << 20):
             out.write(chunk)

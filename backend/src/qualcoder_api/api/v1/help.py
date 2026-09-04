@@ -26,11 +26,13 @@ async def help_topic(topic_id: str) -> dict:
 
 @router.get("/search")
 async def help_search(
-    q: str = Query(default=""),
+    q: str = Query(default="", max_length=500),
     regex: bool = Query(default=False),
 ) -> dict:
     if not q.strip():
         raise HTTPException(status_code=422, detail="query is empty")
+    if len(q.strip()) > 500:
+        raise HTTPException(status_code=422, detail="query too long")
     try:
         results = help_service.search_topics(q.strip(), regex=regex)
     except re.error as err:

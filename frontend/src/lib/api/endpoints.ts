@@ -5,7 +5,7 @@
  * transport.ts) and references types from types.ts.
  */
 
-import { request, apiBaseSync, handleJson } from "./transport";
+import { apiBaseSync, request, uploadRequest } from "./transport";
 import { AI_CHAT_TIMEOUT_MS } from "@/lib/config";
 import type {
   Annotation,
@@ -100,32 +100,101 @@ import type {
   WordFrequencyRow,
 } from "./types";
 
-// --- GitHub bug-report settings (mirrored to localStorage) -------------
+// --- GitHub bug-report settings (repo in localStorage, token session-only) ---
+// The PAT is never persisted to disk: it lives in memory + sessionStorage so a
+// persistent XSS payload cannot steal it from localStorage. The repo slug is
+// non-sensitive and stays in localStorage for convenience.
 
 const GITHUB_SETTINGS_KEY = "qc-github-settings";
+const GITHUB_TOKEN_KEY = "qc-github-token";
+
+let memoryGithubToken: string | null = null;
 
 function githubLocalSettings(): { github_token: string; github_repo: string } {
   if (typeof window === "undefined") return { github_token: "", github_repo: "" };
+  let repo = "";
   try {
     const raw = window.localStorage.getItem(GITHUB_SETTINGS_KEY);
-    if (!raw) return { github_token: "", github_repo: "" };
-    const data = JSON.parse(raw) as { github_token?: unknown; github_repo?: unknown };
-    return {
-      github_token: typeof data.github_token === "string" ? data.github_token : "",
-      github_repo: typeof data.github_repo === "string" ? data.github_repo : "",
-    };
+    if (raw) {
+      const data = JSON.parse(raw) as { github_repo?: unknown };
+      repo = typeof data.github_repo === "string" ? data.github_repo : "";
+    }
   } catch {
-    return { github_token: "", github_repo: "" };
+    repo = "";
   }
+  let token = memoryGithubToken ?? "";
+  if (!token) {
+    try {
+      token = window.sessionStorage.getItem(GITHUB_TOKEN_KEY) ?? "";
+      if (token) memoryGithubToken = token;
+    } catch {
+      token = "";
+    }
+    // One-time migration: move a legacy localStorage token to session scope.
+    if (!token) {
+      try {
+        const raw = window.localStorage.getItem(GITHUB_SETTINGS_KEY);
+        if (raw) {
+          const data = JSON.parse(raw) as { github_token?: unknown };
+          if (typeof data.github_token === "string" && data.github_token) {
+            token = data.github_token;
+            memoryGithubToken = token;
+            try {
+              window.sessionStorage.setItem(GITHUB_TOKEN_KEY, token);
+            } catch {
+              /* ignore */
+            }
+          }
+        }
+      } catch {
+        /* ignore */
+      }
+    }
+  }
+  return { github_token: token, github_repo: repo };
 }
 
 function storeGithubLocalSettings(patch: { github_token?: string; github_repo?: string }): void {
   if (typeof window === "undefined") return;
-  const next = { ...githubLocalSettings(), ...patch };
-  try {
-    window.localStorage.setItem(GITHUB_SETTINGS_KEY, JSON.stringify(next));
-  } catch {
-    /* storage unavailable — the GitHub fields just stay session-only */
+  if (patch.github_repo !== undefined) {
+    try {
+      const raw = window.localStorage.getItem(GITHUB_SETTINGS_KEY);
+      let repo = "";
+      try {
+        repo = (JSON.parse(raw ?? "{}") as { github_repo?: unknown }).github_repo as string ?? "";
+      } catch {
+        repo = "";
+      }
+      const nextRepo = patch.github_repo;
+      window.localStorage.setItem(GITHUB_SETTINGS_KEY, JSON.stringify({ github_repo: nextRepo }));
+      void repo;
+    } catch {
+      /* storage unavailable */
+    }
+  }
+  if (patch.github_token !== undefined) {
+    memoryGithubToken = patch.github_token;
+    try {
+      if (patch.github_token) window.sessionStorage.setItem(GITHUB_TOKEN_KEY, patch.github_token);
+      else window.sessionStorage.removeItem(GITHUB_TOKEN_KEY);
+    } catch {
+      /* session-only fallback */
+    }
+    // Scrub any legacy persistent copy.
+    try {
+      const raw = window.localStorage.getItem(GITHUB_SETTINGS_KEY);
+      if (raw && raw.includes("github_token")) {
+        let repo = "";
+        try {
+          repo = (JSON.parse(raw) as { github_repo?: unknown }).github_repo as string ?? "";
+        } catch {
+          repo = "";
+        }
+        window.localStorage.setItem(GITHUB_SETTINGS_KEY, JSON.stringify({ github_repo: repo }));
+      }
+    } catch {
+      /* ignore */
+    }
   }
 }
 
@@ -199,9 +268,7 @@ export const api = {
     const form = new FormData();
     form.append("file", file);
     form.append("owner", owner ?? "");
-    return fetch(`${apiBaseSync()}/sources/import`, { method: "POST", body: form }).then(
-      handleJson<Source>,
-    );
+    return uploadRequest<Source>("/sources/import", form);
   },
   deleteSource: (id: number) => request<void>(`/sources/${id}`, { method: "DELETE" }),
   patchSource: (id: number, body: { name?: string; memo?: string; owner?: string }) =>
@@ -475,10 +542,7 @@ export const api = {
   replaceSource: (sourceId: number, file: File) => {
     const form = new FormData();
     form.append("file", file);
-    return fetch(`${apiBaseSync()}/sources/${sourceId}/replace`, {
-      method: "POST",
-      body: form,
-    }).then(handleJson<{ ok: boolean; message: string }>);
+    return uploadRequest<{ ok: boolean; message: string }>(`/sources/${sourceId}/replace`, form);
   },
 
   // --- Saved file filters ----------------------------------------------------
@@ -581,14 +645,16 @@ export const api = {
   aiStatus: (probe = false) =>
     request<AiStatus>(`/ai/status${probe ? "?probe=1" : ""}`),
   aiModels: (opts?: { provider?: string; api_base?: string; api_key?: string }) => {
+    const { api_key, ...queryOpts } = opts ?? {};
     const qs = new URLSearchParams(
       Object.fromEntries(
-        Object.entries(opts ?? {}).filter(([, v]) => v !== undefined && v !== ""),
+        Object.entries(queryOpts).filter(([, v]) => v !== undefined && v !== ""),
       ) as Record<string, string>,
     ).toString();
-    return request<{ models: string[]; error?: string }>(
-      `/ai/models${qs ? `?${qs}` : ""}`,
-    );
+    // API key via header (never in the URL/query — avoids logs/history).
+    return request<{ models: string[]; error?: string }>(`/ai/models${qs ? `?${qs}` : ""}`, {
+      headers: api_key ? { "X-Api-Key": api_key } : undefined,
+    });
   },
   aiSaveSettings: (body: {
     enabled: boolean;
@@ -926,10 +992,10 @@ export const api = {
   attachReferenceFile: (risid: number, file: File) => {
     const form = new FormData();
     form.append("file", file);
-    return fetch(`${apiBaseSync()}/references/${risid}/attach`, {
-      method: "POST",
-      body: form,
-    }).then(handleJson<{ ok: boolean; source_id: number; name: string; risid: number }>);
+    return uploadRequest<{ ok: boolean; source_id: number; name: string; risid: number }>(
+      `/references/${risid}/attach`,
+      form,
+    );
   },
   detachReferenceFile: (risid: number, sourceId: number) =>
     request<void>(`/references/${risid}/attach/${sourceId}`, { method: "DELETE" }),

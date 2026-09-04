@@ -30,10 +30,11 @@
 #   1. Preflight (clean tree, gh auth unless -NoRelease)
 #   2. Compute the next version (semver bump or explicit)
 #   3. Build a changelog from git log since the last tag
-#   4. Bump version in tauri.conf.json + append the CHANGELOG.md section
+#   4. Bump version in tauri.conf.json + package.json + Cargo.toml +
+#      pyproject.toml + core/__init__.py, prepend the CHANGELOG.md section
 #   5. Commit "chore(release): vX.Y.Z"
 #   6. Compile (unless -ReleaseOnly or -DryRun)
-#   7. Tag + force push main + the tag
+#   7. Tag + push main (never --force) + the tag
 #   8. `gh release create` with the changelog as release notes and the
 #      GENERATED ARTIFACTS attached: portable qcnext.exe, NSIS setup + .sig,
 #      and the update manifest (qcnext-latest.json). The MSI is never uploaded.
@@ -153,14 +154,11 @@ if ($doCompile) {
             $updaterKey = Join-Path $root "updater.key"
             $disableArtifacts = $false
             if (Test-Path $updaterKey) {
+                # Prefer the file-path variable so the secret never lands in the
+                # process environment / shell history; fall back to inline only
+                # when the CLI requires it.
                 $env:TAURI_SIGNING_PRIVATE_KEY_PATH = $updaterKey
                 $env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD = ""
-                try {
-                    $keyContent = (Get-Content $updaterKey -Raw).Trim()
-                    if ($keyContent) { $env:TAURI_SIGNING_PRIVATE_KEY = $keyContent }
-                } catch {
-                    Warn "could not read updater.key - signing may fail."
-                }
                 Write-Host "Updater signing key found - updater artifacts will be created." -ForegroundColor DarkGray
             } elseif ((Get-Content $confPath -Raw) -match '"createUpdaterArtifacts"\s*:\s*true') {
                 Warn "updater.key not found - building WITHOUT updater artifacts."
@@ -375,34 +373,58 @@ if ($doRelease) {
     if ($lastTag) { Ok "Changelog ready: $commitCount commits since $lastTag (brief section)" }
     else { Ok "Changelog ready: $commitCount commits (no previous tag, brief section)" }
 
-    # --- B4. Bump version + append the CHANGELOG section ---------------------
+    # --- B4. Bump version + prepend the CHANGELOG section --------------------
     Step "B4/6  Bump version + record changelog"
 
     if ($NoBump) {
         Ok "NoBump: version + changelog already set - skipping the bump"
     } else {
         Invoke-OrDryRun {
-            $raw = Get-Content $confPath -Raw
-            $pattern = '"version"\s*:\s*"' + [regex]::Escape($currentVersion) + '"'
-            $replacement = '"version": "' + $newVersion + '"'
-            $patched = $raw -replace $pattern, $replacement
-            if ($patched -eq $raw) { Fail "Version pattern not found in $confPath" }
-            Set-Content $confPath $patched -Encoding utf8 -NoNewline
-            Ok "tauri.conf.json version set to $newVersion"
-        } "Would set tauri.conf.json version to $newVersion"
+            # Single source of truth: tauri.conf.json drives the bump, but every
+            # version file must follow (package.json feeds __APP_VERSION__,
+            # Cargo.toml + pyproject.toml + APP_VERSION must not drift).
+            $versionFiles = @(
+                @{ Path = $confPath; Pattern = '"version"\s*:\s*"' + [regex]::Escape($currentVersion) + '"'; Replacement = '"version": "' + $newVersion + '"' },
+                @{ Path = (Join-Path $frontendDir "package.json"); Pattern = '"version"\s*:\s*"' + [regex]::Escape($currentVersion) + '"'; Replacement = '"version": "' + $newVersion + '"' },
+                @{ Path = (Join-Path $frontendDir "src-tauri\Cargo.toml"); Pattern = '^version\s*=\s*"' + [regex]::Escape($currentVersion) + '"' ; Replacement = 'version = "' + $newVersion + '"' },
+                @{ Path = (Join-Path $backendDir "pyproject.toml"); Pattern = '^version\s*=\s*"' + [regex]::Escape($currentVersion) + '"' ; Replacement = 'version = "' + $newVersion + '"' }
+            )
+            foreach ($vf in $versionFiles) {
+                if (Test-Path $vf.Path) {
+                    $raw = Get-Content $vf.Path -Raw
+                    $patched = $raw -replace $vf.Pattern, $vf.Replacement
+                    if ($patched -ne $raw) {
+                        Set-Content $vf.Path $patched -Encoding utf8 -NoNewline
+                        Ok "$($vf.Path | Split-Path -Leaf) version set to $newVersion"
+                    } else {
+                        Warn "Version pattern not found in $($vf.Path) - skipped"
+                    }
+                }
+            }
+            $appVerPath = Join-Path $backendDir "src\qualcoder_api\core\__init__.py"
+            if (Test-Path $appVerPath) {
+                $raw = Get-Content $appVerPath -Raw
+                $patched = $raw -replace 'APP_VERSION\s*=\s*"[^"]+"', ('APP_VERSION = "' + $newVersion + '"')
+                if ($patched -ne $raw) {
+                    Set-Content $appVerPath $patched -Encoding utf8 -NoNewline
+                    Ok "__init__.py APP_VERSION set to $newVersion"
+                }
+            }
+        } "Would set version to $newVersion in tauri.conf.json + package.json + Cargo.toml + pyproject.toml + APP_VERSION"
 
         Invoke-OrDryRun {
             if (Test-Path $changelogPath) {
-                # Append the release section at the END of CHANGELOG.md so the
-                # manual "Summary" + "Full changelog" stay on top.
+                # Prepend at the TOP per CHANGELOG.md header convention:
+                # "## X.Y.Z (yyyy-mm-dd)" (no `v` prefix), newest first.
                 $today = (Get-Date).ToString("yyyy-MM-dd")
-                $section = "`n---`n## v$newVersion ($today)`n`n$body`n"
-                Add-Content $changelogPath $section -Encoding UTF8
-                Ok "CHANGELOG.md appended with v$newVersion section"
+                $section = "## $newVersion ($today)`n`n$body`n`n"
+                $existing = Get-Content $changelogPath -Raw
+                Set-Content $changelogPath ($section + $existing) -Encoding UTF8
+                Ok "CHANGELOG.md prepended with $newVersion section"
             } else {
                 Warn "CHANGELOG.md not found - skipped"
             }
-        } "Would append the v$newVersion changelog to CHANGELOG.md"
+        } "Would prepend the $newVersion changelog to CHANGELOG.md"
     }
 
     # --- B5. Commit + tag ----------------------------------------------------
@@ -429,18 +451,18 @@ if ($doRelease) {
         Ok "Created annotated tag v$newVersion"
     } "Would create annotated tag v$newVersion"
 
-    # --- B6. Force push + GitHub release -------------------------------------
-    Step "B6/6  Force push to origin + create GitHub Release"
+    # --- B6. Push + GitHub release -----------------------------------------
+    Step "B6/6  Push to origin + create GitHub Release"
 
     Invoke-OrDryRun {
-        git push --force origin main | Out-Null
+        git push origin main | Out-Null
         if ($tagExists) {
-            # A replaced tag needs the old remote one deleted first.
+            # A replaced tag needs the old remote one deleted first (requires -ForceTag).
             git push origin ":refs/tags/v$newVersion" | Out-Null
         }
         git push origin "v$newVersion" | Out-Null
         Ok "Pushed main + tag v$newVersion to origin"
-    } "Would force-push main and push tag v$newVersion"
+    } "Would push main and push tag v$newVersion"
 
     if (-not $NoRelease) {
         $nsisDir = Join-Path $frontendDir "src-tauri\target\release\bundle\nsis"
@@ -478,12 +500,12 @@ if ($doRelease) {
         }
 
         $changelogFile = Join-Path $env:TEMP "qcnext-changelog-$newVersion.md"
-        # Prefer the curated CHANGELOG.md section (Summary-first layout keeps
-        # it at the bottom of the file); fall back to the generated body.
+        # Prefer the curated CHANGELOG.md section (newest-first at the top);
+        # fall back to the generated body. Handles both "## X.Y.Z" and legacy "## vX.Y.Z".
         $releaseNotes = $body
         if (Test-Path $changelogPath) {
             $clContent = Get-Content $changelogPath -Raw
-            $sectionMatch = [regex]::Match($clContent, "(?ms)## v$([regex]::Escape($newVersion)).*?(?=\n## |\Z)")
+            $sectionMatch = [regex]::Match($clContent, "(?ms)## v?$([regex]::Escape($newVersion)).*?(?=\n## |\Z)")
             if ($sectionMatch.Success) { $releaseNotes = $sectionMatch.Value }
         }
         $releaseNotes | Set-Content $changelogFile -Encoding utf8

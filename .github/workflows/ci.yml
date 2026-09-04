@@ -26,6 +26,9 @@ jobs:
         run: python -m ruff check src tests
       - name: Test
         run: python -m pytest tests/ -q
+      - name: Dependency audit (non-blocking)
+        continue-on-error: true
+        run: pip install pip-audit -q && pip-audit --desc || echo "pip-audit found issues or is unavailable"
 
   frontend:
     name: Frontend (vitest + lint + build)
@@ -46,6 +49,9 @@ jobs:
         run: npm test
       - name: Lint
         run: npm run lint
+      - name: Dependency audit (non-blocking)
+        continue-on-error: true
+        run: npm audit --audit-level=high || echo "npm audit found issues"
       - name: Build
         run: npm run build
 

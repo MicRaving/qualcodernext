@@ -428,6 +428,12 @@ export function FileManager() {
   const importFiles = useCallback(
     async (list: File[]) => {
       if (list.length === 0) return;
+      const MAX_BATCH = 200;
+      const MAX_FILE_BYTES = 2 * 1024 * 1024 * 1024;
+      if (list.length > MAX_BATCH) {
+        setActionError(t("files.importTooMany", { max: MAX_BATCH } as never) as string);
+        return;
+      }
       setSkipped([]);
       setActionError(null);
       useProjectStore.getState().setImportState({ done: 0, total: list.length });
@@ -435,11 +441,26 @@ export function FileManager() {
       let failed: string | null = null;
       for (let i = 0; i < list.length; i++) {
         const file = list[i];
+        if (file.size > MAX_FILE_BYTES) {
+          failed = errorMessage(
+            new Error(`File too large (max 2GB): ${file.name}`),
+            t("files.importFailed", { name: file.name }),
+          );
+          useProjectStore.getState().setImportState({ done: i + 1, total: list.length });
+          continue;
+        }
         try {
-          const src = await api.importSource(file);
-          useProjectStore.setState((s) => ({
-            sources: [...s.sources.filter((x) => x.name !== src.name), src],
-          }));
+          const controller = new AbortController();
+          const timeout = window.setTimeout(() => controller.abort(), 120_000);
+          try {
+            const src = await api.importSource(file);
+            useProjectStore.setState((s) => ({
+              sources: [...s.sources.filter((x) => x.name !== src.name), src],
+            }));
+          } finally {
+            window.clearTimeout(timeout);
+          }
+          void controller;
         } catch (e) {
           if (e instanceof ApiError && e.status === 409) {
             dupes.push(file.name);

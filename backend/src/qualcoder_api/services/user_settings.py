@@ -311,6 +311,8 @@ def load_settings() -> dict:
 
 
 def save_settings(settings: dict) -> None:
+    import contextlib as _contextlib
+
     try:
         with _SETTINGS_LOCK:
             QUALCODER_HOME.mkdir(parents=True, exist_ok=True)
@@ -323,7 +325,11 @@ def save_settings(settings: dict) -> None:
             tmp.write_text(
                 json.dumps(settings, indent=2, ensure_ascii=False), encoding="utf-8"
             )
+            with _contextlib.suppress(OSError):
+                os.chmod(tmp, 0o600)
             os.replace(tmp, SETTINGS_FILE)
+            with _contextlib.suppress(OSError):
+                os.chmod(SETTINGS_FILE, 0o600)
     except OSError as err:
         logger.warning("Failed to save user settings: %s", err)
 
@@ -437,6 +443,15 @@ def save_ai_settings(ai: dict, settings: dict | None = None) -> dict:
         wrapping_prompt = str(stored_ai.get("wrapping_prompt") or "")
     else:
         wrapping_prompt = str(wrapping_prompt).strip()
+    from qualcoder_api.core.security import validate_mcp_command as _validate_mcp
+
+    try:
+        _validate_mcp(
+            str(ai.get("mcp_server_command") or "") if ai.get("mcp_server_command") is not None else None,
+            ai.get("mcp_server_args") if isinstance(ai.get("mcp_server_args"), list) else None,
+        )
+    except ValueError as err:
+        raise ValueError(str(err)) from err
     clean = {
         "enabled": bool(ai.get("enabled", False)),
         "provider": provider,

@@ -218,13 +218,20 @@ async def source_details(source_id: int, db: DbDep) -> SourceDetails:
 @router.get("/{source_id}/file")
 async def source_file(source_id: int, db: DbDep, svc: ServiceDep) -> FileResponse:
     """Serve the raw bytes of a source file (internal or external link)."""
-    from qualcoder_api.services.source_files import content_type_for, resolve_source_path
+    from qualcoder_api.core.server_config import is_server_mode
+    from qualcoder_api.services.source_files import (
+        content_type_for,
+        is_path_under_project,
+        resolve_source_path,
+    )
 
     source = await SourceRepository(db).get_source(source_id)
     if source is None:
         raise HTTPException(status_code=404, detail="source not found")
     path = resolve_source_path(svc.project_path, source.mediapath, source.name)
     if path is None or not os.path.exists(path):
+        raise HTTPException(status_code=404, detail="file not found")
+    if is_server_mode() and not is_path_under_project(svc.project_path, path):
         raise HTTPException(status_code=404, detail="file not found")
     return FileResponse(path, media_type=content_type_for(source.name), filename=source.name)
 
@@ -432,11 +439,13 @@ async def import_source(
     owner: str | None = Form(None),
 ) -> Source:
     """Upload a file; copies it into the project folder and registers it."""
+    from qualcoder_api.core.security import sanitize_filename
     from qualcoder_api.services.import_service import ImportService
 
     session_factory = svc.session_factory
     assert session_factory is not None
-    tmp = svc.project_path + "/_upload_" + (file.filename or "upload")
+    safe_name = sanitize_filename(file.filename, "upload")
+    tmp = os.path.join(svc.project_path, f"_upload_{safe_name}")
 
     with open(tmp, "wb") as out:  # noqa: ASYNC230 - small local temp write
         while chunk := await file.read(1 << 20):
@@ -460,8 +469,13 @@ async def import_source(
 @router.post("/link", response_model=Source)
 async def link_source(req: LinkRequest, db: DbDep, svc: OpenProjectDep) -> Source:
     """Register an external file by path (no copy)."""
+    from qualcoder_api.core.server_config import is_server_mode
     from qualcoder_api.services.import_service import ImportService
 
+    if is_server_mode():
+        raise HTTPException(status_code=422, detail="external file links are disabled on the server")
+    if not req.path or len(req.path) > 4096 or "\x00" in req.path:
+        raise HTTPException(status_code=422, detail="invalid path")
     session_factory = svc.session_factory
     assert session_factory is not None
     service = ImportService(svc.project_path, session_factory)

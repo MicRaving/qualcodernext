@@ -50,15 +50,25 @@ function resolveBase(): Promise<string> {
   return basePromise;
 }
 
-/** Dev/testing affordance: per-browser-context backend override. In the
- *  plain-browser shell (no Tauri), `localStorage["qc-dev-api-base"]` wins
- *  over VITE_API_BASE — this is how two local instances against two
- *  backends share one dev server (collaboration live tests). */
+/** Dev/testing affordance: per-browser-context backend override. Only honored
+ *  in dev builds (`import.meta.env.DEV`) and only for loopback hosts, so a
+ *  stored XSS payload cannot redirect the API base (and its bearer token) to
+ *  an attacker host in production. This is how two local instances against
+ *  two backends share one dev server (collaboration live tests). */
 function localStorageOverride(): string | null {
   try {
     if (typeof window === "undefined") return null;
+    if (!import.meta.env.DEV) return null;
     const v = window.localStorage.getItem("qc-dev-api-base");
-    return v && /^https?:\/\//.test(v) ? v : null;
+    if (!v || !/^https?:\/\//.test(v)) return null;
+    let host = "";
+    try {
+      host = new URL(v).hostname.toLowerCase();
+    } catch {
+      return null;
+    }
+    if (host !== "127.0.0.1" && host !== "localhost" && host !== "::1") return null;
+    return v;
   } catch {
     return null;
   }
@@ -206,9 +216,16 @@ export async function request<T>(path: string, init?: RequestInit, timeoutMs = R
     resolvedBase = base;
     // Server mode: bearer token + active project on every request.
     const { authHeaders } = await import("@/lib/session");
+    const mergedHeaders = {
+      "Content-Type": "application/json",
+      ...authHeaders(),
+      ...((init?.headers as Record<string, string> | undefined) ?? {}),
+    };
+    const { headers: _dropped, ...restInit } = init ?? {};
+    void _dropped;
     const res = await fetchWithTimeout(`${base}${path}`, {
-      headers: { "Content-Type": "application/json", ...authHeaders() },
-      ...init,
+      headers: mergedHeaders,
+      ...restInit,
     }, timeoutMs);
     return parse(res);
   };
@@ -281,9 +298,57 @@ export async function localRequest<T>(
     return await doFetch();
   } catch (err) {
     if (err instanceof ApiError) throw err;
-    // Network-level failure (the packaged backend restarted): retry once so
-    // the base URL is resolved afresh.
-    return doFetch();
+    // Network-level failure (the packaged backend restarted): drop the cached
+    // base so the retry re-resolves it afresh (mirrors request()).
+    basePromise = null;
+    resolvedBase = null;
+    try {
+      return await doFetch();
+    } catch (retryErr) {
+      if (retryErr instanceof ApiError) throw retryErr;
+      if (isNetworkError(retryErr)) {
+        throw new ApiError(
+          0,
+          `Backend unreachable — ${retryErr instanceof Error ? retryErr.message : "network error"}`,
+        );
+      }
+      throw retryErr;
+    }
+  }
+}
+
+/** FormData upload with auth + timeout + base retry (imports/replace/attach).
+ *  Replaces the hand-rolled `fetch(apiBaseSync()+...)` calls that skipped
+ *  authHeaders, timeouts and port-change retries. */
+export async function uploadRequest<T>(path: string, form: FormData, timeoutMs = REQUEST_TIMEOUT_MS): Promise<T> {
+  const doFetch = async (): Promise<T> => {
+    const base = await initApiBase();
+    const { authHeaders } = await import("@/lib/session");
+    const res = await fetchWithTimeout(
+      `${base}${path}`,
+      { method: "POST", body: form, headers: { ...authHeaders() } },
+      timeoutMs,
+    );
+    return handleJson<T>(res);
+  };
+  try {
+    return await doFetch();
+  } catch (err) {
+    if (err instanceof ApiError) throw err;
+    basePromise = null;
+    resolvedBase = null;
+    try {
+      return await doFetch();
+    } catch (retryErr) {
+      if (retryErr instanceof ApiError) throw retryErr;
+      if (isNetworkError(retryErr)) {
+        throw new ApiError(
+          0,
+          `Backend unreachable — ${retryErr instanceof Error ? retryErr.message : "network error"}`,
+        );
+      }
+      throw retryErr;
+    }
   }
 }
 
@@ -317,7 +382,20 @@ export async function localRequestBlob(
     return await doFetch();
   } catch (err) {
     if (err instanceof ApiError) throw err;
-    return doFetch();
+    basePromise = null;
+    resolvedBase = null;
+    try {
+      return await doFetch();
+    } catch (retryErr) {
+      if (retryErr instanceof ApiError) throw retryErr;
+      if (isNetworkError(retryErr)) {
+        throw new ApiError(
+          0,
+          `Backend unreachable — ${retryErr instanceof Error ? retryErr.message : "network error"}`,
+        );
+      }
+      throw retryErr;
+    }
   }
 }
 

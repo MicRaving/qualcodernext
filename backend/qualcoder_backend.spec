@@ -62,7 +62,15 @@ hiddenimports += collect_submodules("sqlalchemy.dialects.sqlite")
 hiddenimports += ["multipart"]
 
 # --- PyMuPDF data files (fonts, libs) --------------------------------------------
-datas += collect_data_files("pymupdf")
+# Filtered: the wheel ships mupdf-devel headers/*.lib (~6 MB) that are only
+# needed to compile against libmupdf — never at runtime.
+_mupdf_datas = collect_data_files("pymupdf")
+_mupdf_datas = [
+    (src, dest)
+    for src, dest in _mupdf_datas
+    if not src.lower().endswith((".lib", ".h", ".cmake", ".cc", ".cpp"))
+]
+datas += _mupdf_datas
 
 # --- AI prompt library (markdown package data) ------------------------------------
 datas += collect_data_files("qualcoder_api.ai_prompts")
@@ -82,7 +90,8 @@ datas += collect_data_files("tokenizers")
 datas += collect_data_files("faster_whisper")
 
 # --- Roadmap importers/AI (lazy function-local imports) -------------------------
-hiddenimports += ["openpyxl", "pyreadstat", "pandas", "vaderSentiment"]
+# NOTE: no "pandas" — the SPSS importer uses pyreadstat output_format="dict".
+hiddenimports += ["openpyxl", "pyreadstat", "vaderSentiment"]
 hiddenimports += collect_submodules("yt_dlp")
 hiddenimports += collect_submodules("trafilatura")
 hiddenimports += ["docx", "pptx"]
@@ -100,8 +109,34 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[os.path.join(HERE, "runtime_hook.py")],
-    excludes=[],
+    excludes=[
+        # Dev-only packages from the build venv — never imported by src/.
+        "mypy",
+        "mypyc",
+        "pytest",
+        "_pytest",
+        "ruff",
+        # Hot-reload watcher (uvicorn[standard] extra). The packaged app
+        # runs uvicorn without reload, so this is never used at runtime.
+        "watchfiles",
+        # SPSS reads use pyreadstat output_format="dict" (see sav.py).
+        "pandas",
+        # huggingface_hub fast-transfer backend; falls back to plain HTTP.
+        "hf_xet",
+        # lxml.html/justext use etree (+sax); objectify is unused
+        # (verified: nothing in the venv imports it).
+        "lxml.objectify",
+        # AVIF image support (.avif is not in IMAGE_EXTENSIONS, so the app
+        # never routes AVIF files to PIL; PNG/JPG/WebP/TIFF unaffected).
+        "PIL._avif",
+        # Unused stdlib (PyInstaller often pulls these via hooks).
+        "tkinter",
+        "unittest",
+        "pydoc",
+        "doctest",
+    ],
     noarchive=False,
+    optimize=2,
 )
 
 pyz = PYZ(a.pure)

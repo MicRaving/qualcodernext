@@ -273,25 +273,32 @@ async def rename_coder(name: str, req: RenameCoderRequest, svc: ServiceDep) -> C
     if svc.engine is not None:
         _, factory = svc._ensure_engine()
         async with factory() as session:
-            for table, column in OWNER_TABLES:
+            try:
+                for table, column in OWNER_TABLES:
+                    await session.execute(
+                        text(f'UPDATE "{table}" SET "{column}" = :to WHERE "{column}" = :from'),
+                        {"to": new_name, "from": name},
+                    )
                 await session.execute(
-                    text(f'UPDATE "{table}" SET "{column}" = :to WHERE "{column}" = :from'),
+                    text("UPDATE coder_names SET name = :to WHERE name = :from"),
                     {"to": new_name, "from": name},
                 )
-            await session.execute(
-                text("UPDATE coder_names SET name = :to WHERE name = :from"),
-                {"to": new_name, "from": name},
-            )
-            # Propagate the roster rename: the old name is gone, the new name
-            # appears.  Owner columns on other instances keep the old owner
-            # (their rows remain visible — the old coder_names row no longer
-            # exists to hide them), and the rename converges on the next cycle.
-            await _capture_coder(session, "delete", name, {"name": name, "visibility": 0})
-            await _capture_coder(
-                session, "insert", new_name,
-                {"name": new_name, "visibility": 1},
-            )
-            await session.commit()
+                # Propagate the roster rename: the old name is gone, the new name
+                # appears.  Owner columns on other instances keep the old owner
+                # (their rows remain visible — the old coder_names row no longer
+                # exists to hide them), and the rename converges on the next cycle.
+                await _capture_coder(session, "delete", name, {"name": name, "visibility": 0})
+                await _capture_coder(
+                    session, "insert", new_name,
+                    {"name": new_name, "visibility": 1},
+                )
+                await session.commit()
+            except Exception:
+                import contextlib as _ctx
+
+                with _ctx.suppress(Exception):
+                    await session.rollback()
+                raise
         # Rename the coder's sync sidecar folder so future exports land in
         # the new name (other raters import them unchanged).
         from qualcoder_api.services.sync import SYNC_DIR_NAME, load_state, save_state
@@ -387,22 +394,36 @@ async def delete_coder(
             raise HTTPException(status_code=404, detail=f'target coder "{reassign_to}" does not exist')
         _, factory = svc._ensure_engine()
         async with factory() as session:
-            for table, column in OWNER_TABLES:
-                await session.execute(
-                    text(f'UPDATE "{table}" SET "{column}" = :to WHERE "{column}" = :from'),
-                    {"to": reassign_to, "from": name},
-                )
-            await session.commit()
+            try:
+                for table, column in OWNER_TABLES:
+                    await session.execute(
+                        text(f'UPDATE "{table}" SET "{column}" = :to WHERE "{column}" = :from'),
+                        {"to": reassign_to, "from": name},
+                    )
+                await session.commit()
+            except Exception:
+                import contextlib as _ctx2
+
+                with _ctx2.suppress(Exception):
+                    await session.rollback()
+                raise
 
     # Remove the coder from the coder_names table too (visibility registry).
     if svc.engine is not None:
         _, factory = svc._ensure_engine()
         async with factory() as session:
-            await session.execute(
-                text("DELETE FROM coder_names WHERE name = :n"), {"n": name}
-            )
-            await _capture_coder(session, "delete", name, {"name": name, "visibility": 0})
-            await session.commit()
+            try:
+                await session.execute(
+                    text("DELETE FROM coder_names WHERE name = :n"), {"n": name}
+                )
+                await _capture_coder(session, "delete", name, {"name": name, "visibility": 0})
+                await session.commit()
+            except Exception:
+                import contextlib as _ctx3
+
+                with _ctx3.suppress(Exception):
+                    await session.rollback()
+                raise
 
     set_coders([n for n in names if n != name])
     await _record_audit(

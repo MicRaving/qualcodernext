@@ -38,8 +38,22 @@ def _state_path(project_path: str) -> Path:
     return Path(project_path) / PRESENCE_DIR_NAME
 
 
-def instance_file(project_path: str) -> Path:
-    """The presence file owned by THIS backend process."""
+def instance_file(project_path: str, instance_id: str = "") -> Path:
+    """The presence file owned by THIS backend process.
+
+    Namespaced by hostname + pid + instance id so two hosts (or two app
+    instances on one host) with the same PID never collide.
+    """
+    host = socket.gethostname().replace("/", "_").replace("\\", "_")[:64]
+    pid = os.getpid()
+    if instance_id:
+        safe = "".join(c for c in instance_id if c.isalnum() or c in ("-", "_", "."))[:32]
+        return _state_path(project_path) / f"{host}-{pid}-{safe}.json"
+    return _state_path(project_path) / f"{host}-{pid}.json"
+
+
+def _legacy_instance_file(project_path: str) -> Path:
+    """Pre-namespace presence file (``<pid>.json``) for migration cleanup."""
     return _state_path(project_path) / f"{os.getpid()}.json"
 
 
@@ -83,7 +97,7 @@ def touch(
     if not project_path or not coder:
         return False
     now = time.time()
-    path = instance_file(project_path)
+    path = instance_file(project_path, instance_id)
     if path.exists():
         try:
             existing = json.loads(path.read_text(encoding="utf-8"))
@@ -122,12 +136,16 @@ def touch(
         return False
 
 
-def clear(project_path: str) -> None:
+def clear(project_path: str, instance_id: str = "") -> None:
     """Remove THIS instance's presence file (project close)."""
     try:
-        path = instance_file(project_path)
-        if path.exists():
-            path.unlink()
+        for path in (
+            instance_file(project_path, instance_id),
+            _legacy_instance_file(project_path),
+        ):
+            if path.exists():
+                with contextlib.suppress(OSError):
+                    path.unlink()
     except OSError:  # pragma: no cover - defensive
         pass
 
@@ -160,9 +178,21 @@ def read(project_path: str, exclude_pid: int | None = None) -> list[dict]:
             with contextlib.suppress(OSError):
                 path.unlink(missing_ok=True)
             continue
-        pid = int(entry.get("pid", 0))
-        ts = float(entry.get("ts", 0))
-        if pid == exclude:
+        try:
+            pid = int(entry.get("pid", 0))
+        except (TypeError, ValueError):
+            with contextlib.suppress(OSError):
+                path.unlink(missing_ok=True)
+            continue
+        try:
+            ts = float(entry.get("ts", 0))
+        except (TypeError, ValueError):
+            with contextlib.suppress(OSError):
+                path.unlink(missing_ok=True)
+            continue
+        # Only skip our own entry: same pid on the SAME host. A remote rater
+        # with the same PID must stay visible (previous code hid it).
+        if pid == exclude and entry.get("host", this_host) == this_host:
             continue
         local = entry.get("host") == this_host
         stale = now - ts > PRESENCE_TTL_SECS or ts - now > PRESENCE_TTL_SECS

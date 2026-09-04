@@ -47,9 +47,12 @@ def _detect_kind(tmp: str) -> str:
 
 async def _run_import(svc, file: UploadFile, codername: str | None, importer, kind: str) -> dict:
     """Save the upload next to the project, run ``importer``, delete the temp file."""
+    from qualcoder_api.core.security import sanitize_filename
+
     if svc.project_path == "":
         raise HTTPException(status_code=409, detail="no project is open")
-    tmp = svc.project_path + "/_import_" + (file.filename or "import")
+    safe_name = sanitize_filename(file.filename, "import")
+    tmp = os.path.join(svc.project_path, f"_import_{safe_name}")
     with open(tmp, "wb") as out:  # noqa: ASYNC230 - small local temp write
         while chunk := await file.read(1 << 20):
             out.write(chunk)
@@ -75,17 +78,24 @@ async def _merge_archive(svc, archive_path: str, codername: str | None) -> dict:
     import asyncio
     import zipfile
 
+    from qualcoder_api.core.security import assert_safe_zip_names
+
     if svc.project_path == "" or svc.session_factory is None:
         raise HTTPException(status_code=409, detail="no project is open")
     extracted = archive_path + "_dir"
     try:
         try:
+            def _safe_extract() -> None:
+                with zipfile.ZipFile(archive_path) as zf:
+                    assert_safe_zip_names(zf.namelist())
+                    zf.extractall(extracted)
+
             # Zip extraction is CPU/IO heavy — keep it off the event loop.
-            await asyncio.to_thread(
-                lambda: zipfile.ZipFile(archive_path).extractall(extracted)
-            )
+            await asyncio.to_thread(_safe_extract)
         except zipfile.BadZipFile as err:
             raise HTTPException(status_code=422, detail="not a zip archive") from err
+        except ValueError as err:
+            raise HTTPException(status_code=422, detail=str(err)) from err
         candidates = [extracted]
         for entry in os.listdir(extracted):
             full = os.path.join(extracted, entry)
@@ -121,9 +131,13 @@ async def _merge_archive(svc, archive_path: str, codername: str | None) -> dict:
 
 async def _save_upload(file: UploadFile, svc, prefix: str) -> str:
     """Write the upload next to the project; return the temp path."""
+    from qualcoder_api.core.security import sanitize_filename
+
     if svc.project_path == "":
         raise HTTPException(status_code=409, detail="no project is open")
-    tmp = svc.project_path + "/_" + prefix + "_" + (file.filename or "import")
+    safe_name = sanitize_filename(file.filename, "import")
+    safe_prefix = "".join(c for c in prefix if c.isalnum() or c in ("-", "_"))[:32] or "import"
+    tmp = os.path.join(svc.project_path, f"_{safe_prefix}_{safe_name}")
     with open(tmp, "wb") as out:  # noqa: ASYNC230 - small local temp write
         while chunk := await file.read(1 << 20):
             out.write(chunk)

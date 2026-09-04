@@ -218,9 +218,16 @@ class McpService:
         pattern = str(args.get("pattern") or "")
         if not pattern:
             raise McpError(-32602, "pattern is required")
+        if len(pattern) > 500:
+            raise McpError(-32602, "pattern too long")
         use_regex = bool(args.get("regex", False))
         try:
-            compiled = re.compile(pattern) if use_regex else re.compile(re.escape(pattern))
+            if use_regex:
+                from qualcoder_api.core.pattern import compile_user_pattern
+
+                compiled = compile_user_pattern(pattern)
+            else:
+                compiled = re.compile(re.escape(pattern))
         except re.error as err:
             raise McpError(-32602, f"invalid regex: {err}") from err
         rows = await session.execute(

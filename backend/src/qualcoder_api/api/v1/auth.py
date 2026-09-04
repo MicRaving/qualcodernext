@@ -26,6 +26,42 @@ logger = logging.getLogger(__name__)
 
 _USERNAME_RE = r"^[a-zA-Z0-9_.-]{3,32}$"
 
+# Simple in-memory login rate limiter: (failures, window_start) per key.
+_LOGIN_ATTEMPTS: dict[str, tuple[int, float]] = {}
+_LOGIN_MAX_ATTEMPTS = 5
+_LOGIN_WINDOW_SECS = 60.0
+
+
+def _rate_limit_key(username: str) -> str:
+    return (username or "").strip().lower() or "unknown"
+
+
+def _check_rate_limit(key: str) -> None:
+    import time
+
+    now = time.monotonic()
+    failures, start = _LOGIN_ATTEMPTS.get(key, (0, now))
+    if now - start > _LOGIN_WINDOW_SECS:
+        _LOGIN_ATTEMPTS.pop(key, None)
+        return
+    if failures >= _LOGIN_MAX_ATTEMPTS:
+        raise HTTPException(status_code=429, detail="too many login attempts — try again later")
+
+
+def _record_login_failure(key: str) -> None:
+    import time
+
+    now = time.monotonic()
+    failures, start = _LOGIN_ATTEMPTS.get(key, (0, now))
+    if now - start > _LOGIN_WINDOW_SECS:
+        _LOGIN_ATTEMPTS[key] = (1, now)
+    else:
+        _LOGIN_ATTEMPTS[key] = (failures + 1, start)
+
+
+def _record_login_success(key: str) -> None:
+    _LOGIN_ATTEMPTS.pop(key, None)
+
 
 class RegisterRequest(BaseModel):
     username: str = Field(min_length=3, max_length=32, pattern=_USERNAME_RE)
@@ -61,6 +97,10 @@ async def register(
 ) -> dict:
     """Create a user. Bootstrap: the FIRST registered user becomes admin;
     afterwards registration is admin-only."""
+    from sqlalchemy.exc import IntegrityError
+
+    if not req.password or len(req.password) < 8:
+        raise HTTPException(status_code=422, detail="password must be at least 8 characters")
     users_exist = await metadata_db.count_users() > 0
     role = "user"
     if users_exist:
@@ -70,31 +110,58 @@ async def register(
         role = "user"
     else:
         role = "admin"
-    if not req.password:
-        raise HTTPException(status_code=422, detail="password required (passkeys come in addition)")
     if await metadata_db.get_user_by_username(req.username) is not None:
         raise HTTPException(status_code=409, detail="username already taken")
-    created = await metadata_db.insert_user(
-        req.username,
-        password_svc.hash_password(req.password),
-        role=role,
-        display_name=req.display_name,
-        email=req.email,
-    )
+    try:
+        created = await metadata_db.insert_user(
+            req.username,
+            password_svc.hash_password(req.password),
+            role=role,
+            display_name=req.display_name,
+            email=req.email,
+        )
+    except IntegrityError as err:
+        # Concurrent bootstrap: two first-registers raced past count_users().
+        # Only the lowest user id keeps admin; the loser becomes a plain user
+        # (or 409 when the username itself collided).
+        existing = await metadata_db.get_user_by_username(req.username)
+        if existing is not None:
+            raise HTTPException(status_code=409, detail="username already taken") from err
+        raise HTTPException(status_code=409, detail="registration conflict — retry") from err
+    if role == "admin" and int(created.get("id", 1)) != 1:
+        # A second concurrent bootstrap slipped through: demote to user.
+        try:
+            from sqlalchemy import text as _text
+
+            factory = metadata_db.metadata_factory()
+            async with factory() as session:
+                await session.execute(
+                    _text("UPDATE users SET role = 'user' WHERE id = :id AND id != 1"),
+                    {"id": created["id"]},
+                )
+                await session.commit()
+            created["role"] = "user"
+        except Exception:
+            pass
     return {"user": _public_user(created)}
 
 
 @router.post("/login")
 async def login(req: LoginRequest) -> dict:
+    key = _rate_limit_key(req.username)
+    _check_rate_limit(key)
     user = await metadata_db.get_user_by_username(req.username)
     # Constant-time-ish: always run a verify to avoid trivially timing
     # account existence.
     stored = user["password_hash"] if user else ""
     ok = password_svc.verify_password(req.password, stored)
     if user is None or not ok:
+        _record_login_failure(key)
         raise HTTPException(status_code=401, detail="invalid credentials")
     if user["disabled"]:
+        _record_login_failure(key)
         raise HTTPException(status_code=401, detail="account disabled")
+    _record_login_success(key)
     return await _issue(user)
 
 

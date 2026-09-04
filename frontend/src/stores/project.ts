@@ -273,9 +273,16 @@ export const useProjectStore = create<ProjectLifecycleState>((set, get) => ({
       set((s) => ({ tasks: s.tasks.filter((j) => j.id !== id) }));
       return;
     }
-    if (task.kind === "transcribe") void api.transcribeJobDelete(id);
-    else if (task.kind === "r") void api.rJobDelete(id);
-    else void api.autocodeJobDelete(id);
+    const report = (e: unknown) => {
+      try {
+        useProjectStore.getState().setLastError(errorMessage(e, "Failed to cancel task"));
+      } catch {
+        /* ignore */
+      }
+    };
+    if (task.kind === "transcribe") void api.transcribeJobDelete(id).catch(report);
+    else if (task.kind === "r") void api.rJobDelete(id).catch(report);
+    else void api.autocodeJobDelete(id).catch(report);
     set((s) => ({ tasks: s.tasks.filter((j) => j.id !== id) }));
   },
   moveTask: (id, targetId) =>
@@ -295,11 +302,18 @@ export const useProjectStore = create<ProjectLifecycleState>((set, get) => ({
     })),
   startAllTasks: () => set({ tasksPaused: false }),
   clearAllTasks: () => {
+    const report = (e: unknown) => {
+      try {
+        useProjectStore.getState().setLastError(errorMessage(e, "Failed to cancel task"));
+      } catch {
+        /* ignore */
+      }
+    };
     for (const job of useProjectStore.getState().tasks) {
       if (job.kind === "import") continue; // local-only task
-      if (job.kind === "transcribe") void api.transcribeJobDelete(job.id);
-      else if (job.kind === "r") void api.rJobDelete(job.id);
-      else void api.autocodeJobDelete(job.id);
+      if (job.kind === "transcribe") void api.transcribeJobDelete(job.id).catch(report);
+      else if (job.kind === "r") void api.rJobDelete(job.id).catch(report);
+      else void api.autocodeJobDelete(job.id).catch(report);
     }
     set({ tasks: [] });
   },

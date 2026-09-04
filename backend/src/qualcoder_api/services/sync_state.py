@@ -5,9 +5,15 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import threading as _threading
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
+
+# Serializes load→mutate→save sequences within this process (e.g. concurrent
+# sync enables). Cross-process races are benign: the file is per-machine and
+# writers are the local sync loop + manual triggers only.
+_STATE_LOCK = _threading.Lock()
 
 
 # ── State (per-machine, outside the synced folder) ──────────────────────
@@ -27,10 +33,11 @@ def load_state(project_path: str) -> dict:
 def save_state(project_path: str, state: dict) -> None:
     path = _state_path(project_path)
     try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = path.with_suffix(".tmp")
-        tmp.write_text(json.dumps(state, indent=2), encoding="utf-8")
-        tmp.replace(path)
+        with _STATE_LOCK:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = path.with_suffix(".tmp")
+            tmp.write_text(json.dumps(state, indent=2), encoding="utf-8")
+            tmp.replace(path)
     except OSError as err:  # pragma: no cover
         logger.warning("sync state save failed: %s", err)
 

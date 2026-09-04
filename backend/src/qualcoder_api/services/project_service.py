@@ -145,13 +145,22 @@ class ProjectService:
     ) -> bool:
         """Create the project directory structure, schema and initial row."""
         async with self._lifecycle_lock:
+            if not project_path or len(project_path) > 4096 or "\x00" in project_path:
+                logger.warning("Project creation rejected: invalid path")
+                return False
             if not project_path.endswith(".qda"):
                 project_path += ".qda"
 
             counter = 0
             extension = ""
+            # TOCTOU note: existence check + mkdir race is benign here —
+            # mkdir(parents=True) without exist_ok raises if a concurrent
+            # create won, which we treat as failure below.
             while os.path.exists(project_path + extension):
                 counter += 1
+                if counter > 999:
+                    logger.warning("Project creation rejected: too many collisions")
+                    return False
                 extension = f"_{counter}"
 
             final_path = project_path + extension
@@ -212,6 +221,8 @@ class ProjectService:
     ) -> OpenResult:
         """Open body — caller holds ``_lifecycle_lock``."""
         # Parse recent-projects format: "date|path"
+        if not proj_path or len(proj_path) > 4096 or "\x00" in proj_path:
+            return OpenResult(ok=False, error="not a .qda project path")
         actual_path = proj_path.split("|")[-1]
         if not (len(actual_path) > 3 and actual_path[-4:] == ".qda"):
             return OpenResult(ok=False, error="not a .qda project path")

@@ -18,6 +18,16 @@ interface LoginSuccess {
   token: string;
 }
 
+function parseLoginSuccess(res: unknown): LoginSuccess {
+  if (res && typeof res === "object" && "token" in res) {
+    const token = (res as { token?: unknown }).token;
+    if (typeof token === "string" && token.length > 0 && token.length <= 8192) {
+      return { token };
+    }
+  }
+  throw new Error("Invalid login response");
+}
+
 export function LoginScreen({ onAuthed }: { onAuthed: () => void }) {
   const { t } = useI18n();
   const [username, setUsername] = useState("");
@@ -36,7 +46,7 @@ export function LoginScreen({ onAuthed }: { onAuthed: () => void }) {
     setError(null);
     try {
       const res = await api.authLogin({ username, password });
-      await finishLogin(res as unknown as LoginSuccess);
+      await finishLogin(parseLoginSuccess(res));
     } catch (e) {
       setError(errorMessage(e, t("auth.loginError")));
     } finally {
@@ -49,21 +59,31 @@ export function LoginScreen({ onAuthed }: { onAuthed: () => void }) {
     setBusy(true);
     setError(null);
     try {
-      const { options } = await api.authPasskeyLoginBegin(username);
+      const begin = (await api.authPasskeyLoginBegin(username)) as { options?: unknown };
+      const options = (begin?.options ?? {}) as Record<string, unknown>;
+      if (!options || typeof options.challenge !== "string" || !options.challenge) {
+        throw new Error("Invalid passkey options");
+      }
+      const rp = options.rp as { id?: unknown } | undefined;
+      const authSel = options.authenticatorSelection as { userVerification?: unknown } | undefined;
+      const allowList = Array.isArray(options.allowCredentials)
+        ? (options.allowCredentials as Array<Record<string, unknown>>)
+        : [];
       const pub = {
         challenge: b64uToBytes(String(options.challenge)),
-        rpId: (options.rp as { id?: string }).id,
-        timeout: Number(options.timeout ?? 60_000),
-        userVerification: (
-          (options.authenticatorSelection as { userVerification?: string } | undefined)
-            ?.userVerification ?? "preferred"
-        ) as UserVerificationRequirement,
-        allowCredentials: ((options.allowCredentials as Array<Record<string, unknown>>) ?? []).map(
-          (d) => ({
-            id: b64uToBytes(String(d.id)),
-            type: "public-key" as PublicKeyCredentialType,
-          }),
+        rpId: typeof rp?.id === "string" ? rp.id : undefined,
+        timeout: Number(
+          typeof options.timeout === "number" || typeof options.timeout === "string"
+            ? options.timeout
+            : 60_000,
         ),
+        userVerification: (typeof authSel?.userVerification === "string"
+          ? authSel.userVerification
+          : "preferred") as UserVerificationRequirement,
+        allowCredentials: allowList.map((d) => ({
+          id: b64uToBytes(String(d.id)),
+          type: "public-key" as PublicKeyCredentialType,
+        })),
       };
       const assertion = (await navigator.credentials.get({ publicKey: pub })) as PublicKeyCredential | null;
       if (!assertion) throw new Error(t("auth.passkeyCancelled"));
@@ -82,7 +102,7 @@ export function LoginScreen({ onAuthed }: { onAuthed: () => void }) {
           },
         },
       });
-      await finishLogin(done as unknown as LoginSuccess);
+      await finishLogin(parseLoginSuccess(done));
     } catch (e) {
       setError(errorMessage(e, t("auth.loginError")));
     } finally {

@@ -63,13 +63,14 @@ async def get_sync_settings() -> dict:
 async def put_sync_settings(req: SyncSettingsRequest, svc: ServiceDep) -> dict:
     """Turn the background sync cycle on/off for this machine (and/or change
     its cadence). Enabling runs an immediate cycle when a project is open."""
+    import asyncio
+    import logging as _logging
+
     before = user_settings.get_sync_settings().get("enabled", False)
     saved = user_settings.save_sync_settings(
         req.enabled, interval_secs=req.interval_secs
     )
     if req.enabled and svc.project_path and svc.session_factory:
-        import asyncio
-
         # First-sync baseline for NEW collaborators: a fresh instance must
         # adopt the shared project's current state as already-seen instead
         # of replaying the entire sidecar backlog (offline-backup freeze).
@@ -81,12 +82,19 @@ async def put_sync_settings(req: SyncSettingsRequest, svc: ServiceDep) -> dict:
             await sync_engine.baseline_first_sync(
                 session, svc.project_path, user_settings.get_instance_id()
             )
-        asyncio.get_running_loop().create_task(
-            sync_engine.run_sync_cycle(
-                svc.session_factory, svc.project_path,
-                _sync_id(svc),
-            )
-        )
+        # Tracked background cycle: exceptions are logged (not silently
+        # dropped) and overlap with the periodic loop is serialized by
+        # SYNC_LOCK inside run_sync_cycle.
+        async def _immediate() -> None:
+            try:
+                await sync_engine.run_sync_cycle(
+                    svc.session_factory, svc.project_path,
+                    _sync_id(svc),
+                )
+            except Exception as err:
+                _logging.getLogger(__name__).exception("immediate sync cycle failed: %s", err)
+
+        asyncio.get_running_loop().create_task(_immediate())
     # Record the toggle in the open project's history (best effort).
     if svc.engine is not None:
         from qualcoder_api.services import audit
@@ -157,6 +165,12 @@ async def sync_presence_activity(req: PresenceActivityRequest, svc: ServiceDep) 
 async def sync_auto_detect(project_path: str) -> dict:
     """Report whether a project path looks like a shared/synced folder
     (marker file, UNC path or change sidecars from other instances)."""
+    from qualcoder_api.core.server_config import is_server_mode
+
+    if is_server_mode():
+        return {"shared": False, "reason": "local-folder detection disabled on server"}
+    if not project_path or len(project_path) > 4096 or "\x00" in project_path:
+        return {"shared": False, "reason": "invalid path"}
     return sync.detect_shared(
         project_path,
         user=user_settings.get_codername(),

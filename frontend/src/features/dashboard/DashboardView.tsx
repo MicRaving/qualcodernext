@@ -31,9 +31,11 @@ async function pickDirectory(): Promise<string | null> {
   }
 }
 
-/** Join a picked directory with a filename using the platform separator. */
+/** Join a picked directory with a filename, preserving the platform separator. */
 function joinPath(dir: string, name: string): string {
-  return dir.endsWith("\\") || dir.endsWith("/") ? `${dir}${name}` : `${dir}\\${name}`;
+  if (dir.endsWith("\\") || dir.endsWith("/")) return `${dir}${name}`;
+  const sep = dir.includes("\\") && !dir.includes("/") ? "\\" : "/";
+  return `${dir}${sep}${name}`;
 }
 
 function Stat({ icon, label, value }: { icon: React.ReactNode; label: string; value: number | string }) {

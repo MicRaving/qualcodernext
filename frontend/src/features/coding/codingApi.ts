@@ -9,7 +9,6 @@
 
 import { useMemo } from "react";
 import type { CodeTreeItem } from "@/lib/api";
-import { ApiError, fetchWithTimeout, initApiBase } from "@/lib/api";
 
 /** Build color-by-id and name-by-id maps from a flat code tree. */
 export function useCodeMaps(codes: CodeTreeItem[]) {
@@ -60,38 +59,14 @@ export interface CodingRowPatch {
 
 /**
  * PATCH a segment row's memo/weight/important (text, image or AV) and return
- * the row. Mirrors the weight helper below — same local-fetch + single retry
- * pattern (the packaged backend may have restarted on a new port).
+ * the row via the shared localRequest client (auth + timeout + base retry).
  */
 async function patchCodingRow(kind: CodingKind, id: number, body: CodingRowPatch): Promise<unknown> {
-  const path = PATCH_PATHS[kind](id);
-  const doFetch = async (): Promise<unknown> => {
-    const base = await initApiBase();
-    const res = await fetchWithTimeout(`${base}${path}`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    });
-    if (!res.ok) {
-      let detail: unknown;
-      try {
-        detail = (await res.json()).detail;
-      } catch {
-        /* non-JSON error body */
-      }
-      const suffix = typeof detail === "string" && detail ? `: ${detail}` : "";
-      throw new ApiError(res.status, `API error ${res.status} on ${path}${suffix}`, detail);
-    }
-    return (await res.json()) as unknown;
-  };
-  try {
-    return await doFetch();
-  } catch (err) {
-    if (err instanceof ApiError) throw err;
-    // Network-level failure (packaged backend restarted): retry once so the
-    // base URL is resolved afresh.
-    return doFetch();
-  }
+  const { localRequest } = await import("@/lib/api/transport");
+  return localRequest<unknown>(PATCH_PATHS[kind](id), {
+    method: "PATCH",
+    body: JSON.stringify(body),
+  });
 }
 
 /** PATCH a segment's memo (text/image/AV) and return the row. */

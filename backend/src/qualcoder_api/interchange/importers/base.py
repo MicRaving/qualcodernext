@@ -44,8 +44,20 @@ async def _table_names(db: aiosqlite.Connection) -> set[str]:
 
 
 async def _columns(db: aiosqlite.Connection, table: str) -> set[str]:
-    """Column names of ``table`` in the source database (empty when absent)."""
-    cur = await db.execute(f'PRAGMA table_info("{table}")')
+    """Column names of ``table`` in the source database (empty when absent).
+
+    Matching is case-insensitive (Transana uses CamelCase while callers probe
+    lowercase names; SQLite identifiers are case-insensitive too).
+    """
+    # ``table`` may come from the attacker-supplied file's sqlite_master —
+    # never interpolate it unchecked. Resolve against the real table list
+    # (case-insensitive), then quote by doubling embedded double-quotes.
+    tables = await _table_names(db)
+    actual = next((t for t in tables if t.lower() == table.lower()), None)
+    if actual is None:
+        return set()
+    safe = actual.replace('"', '""')
+    cur = await db.execute(f'PRAGMA table_info("{safe}")')
     rows = await cur.fetchall()
     return {row[1] for row in rows}
 

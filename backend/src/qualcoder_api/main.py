@@ -52,14 +52,10 @@ def _cors_headers(request: Request) -> dict[str, str]:
 def _unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
     """Catch-all for any unhandled exception: a readable JSON 500 instead
     of the plain-text default — with CORS headers so the packaged webview
-    can actually read it (see ``_cors_headers``). The exception type and a
-    sanitized (truncated, single-line) message keep the body debuggable
-    without leaking full tracebacks to the client."""
+    can actually read it (see ``_cors_headers``). Only the exception type is
+    returned; the message (which may contain paths/SQL) stays server-side."""
     logger.exception("unhandled exception on %s %s", request.method, request.url.path)
-    message = str(exc).strip().replace("\n", " ")[:500]
     detail = f"internal error: {type(exc).__name__}"
-    if message:
-        detail += f": {message}"
     return JSONResponse(status_code=500, content={"detail": detail}, headers=_cors_headers(request))
 
 
@@ -198,9 +194,11 @@ async def lifespan(_app: FastAPI):
 
 
 def create_app() -> FastAPI:
+    from qualcoder_api.core import APP_VERSION
+
     app = FastAPI(
         title="QualCoder v4 API",
-        version="4.0.0",
+        version=APP_VERSION,
         description="Backend for the QualCoder qualitative data analysis app.",
         lifespan=lifespan,
     )

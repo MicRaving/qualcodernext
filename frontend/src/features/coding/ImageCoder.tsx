@@ -98,7 +98,16 @@ export function ImageCoder({ source }: { source: Source }) {
   // helper (the raw URL builders are the sync dev fallback until the App
   // boot gate settles) and hand it to <img> as a blob URL. A transport
   // failure re-resolves the base and retries once inside the helper.
+  // Stale fetches (rapid source.id churn) are ignored so they cannot orphan
+  // object URLs or overwrite the current image.
+  const requestIdRef = useRef(0);
+  const objectUrlRef = useRef<string | null>(null);
   useAsyncEffect(async (signal) => {
+    const requestId = ++requestIdRef.current;
+    if (objectUrlRef.current) {
+      URL.revokeObjectURL(objectUrlRef.current);
+      objectUrlRef.current = null;
+    }
     setImgSrc(null);
     setImageLoaded(false);
     try {
@@ -106,21 +115,27 @@ export function ImageCoder({ source }: { source: Source }) {
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const blob = await res.blob();
       signal.throwIfAborted();
-      setImgSrc(URL.createObjectURL(blob));
+      if (requestId !== requestIdRef.current) return;
+      const url = URL.createObjectURL(blob);
+      objectUrlRef.current = url;
+      setImgSrc(url);
     } catch (e) {
+      if (requestId !== requestIdRef.current) return;
       signal.throwIfAborted();
       setError(errorMessage(e, t("imageCoder.loadFileError")));
     }
   }, [source.id, t, setError]);
 
-  // Revoke the previous blob URL when it is replaced or on unmount.
-  // useAsyncEffect discards returned cleanups, so this companion effect
-  // owns the object-URL lifecycle.
+  // Revoke the blob URL on unmount.
   useEffect(() => {
     return () => {
-      if (imgSrc) URL.revokeObjectURL(imgSrc);
+      requestIdRef.current += 1;
+      if (objectUrlRef.current) {
+        URL.revokeObjectURL(objectUrlRef.current);
+        objectUrlRef.current = null;
+      }
     };
-  }, [imgSrc]);
+  }, []);
 
   const codeColor = (coding: ImageCoding) => colorByCid.get(coding.cid) ?? "rgba(0,0,0,0.15)";
 

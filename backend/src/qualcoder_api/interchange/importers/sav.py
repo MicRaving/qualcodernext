@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import datetime
 import math
 from pathlib import Path
@@ -17,9 +18,22 @@ def _sav_cell(value) -> str:
 
     Missing values (``nan``/``None``) become empty strings, whole floats
     drop the trailing ``.0`` and dates are rendered ISO-style.
+
+    ``pyreadstat`` is used with ``output_format="dict"`` (no pandas), so
+    values are plain Python scalars — but numpy scalars are unwrapped
+    defensively via ``.item()`` in case a future pyreadstat version
+    returns numpy arrays instead of lists.
     """
     if value is None:
         return ""
+    item = getattr(value, "item", None)
+    if callable(item):
+        with contextlib.suppress(ValueError, AttributeError):
+            value = item()
+        if value is None:
+            return ""
+    if isinstance(value, bool):
+        return str(value)
     if isinstance(value, float):
         if math.isnan(value) or math.isinf(value):
             return ""
@@ -48,7 +62,12 @@ async def import_sav(
     try:
         import pyreadstat
 
-        df, meta = await asyncio.to_thread(pyreadstat.read_sav, sav_path)
+        def _read():
+            # Dict output (plain Python scalars) — avoids the pandas
+            # dependency entirely; metadata is identical either way.
+            return pyreadstat.read_sav(sav_path, output_format="dict")
+
+        data, meta = await asyncio.to_thread(_read)
     except Exception as err:  # pyreadstat raises ReadstatError on unreadable files
         raise ValueError(f"Invalid SPSS .sav file: {err}") from err
 
@@ -66,12 +85,13 @@ async def import_sav(
         for col in columns
     }
     rows: list[list[str]] = []
-    for index in range(len(df)):
-        record = df.iloc[index]
-        name = _sav_cell(record[columns[0]])
+    cols = {col: list(data.get(col, [])) for col in columns}
+    n_rows = len(cols[columns[0]]) if columns else 0
+    for index in range(n_rows):
+        name = _sav_cell(cols[columns[0]][index])
         if not name:
             name = f"Case {index + 1}"
-        rows.append([name] + [_sav_cell(record[col]) for col in columns[1:]])
+        rows.append([name] + [_sav_cell(cols[col][index]) for col in columns[1:]])
 
     if not rows:
         return {

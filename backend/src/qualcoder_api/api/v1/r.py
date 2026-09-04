@@ -8,9 +8,9 @@ served under ``/r/artifacts``.
 
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse, Response
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from qualcoder_api.api.v1.deps import DbDep, OpenProjectDep
 from qualcoder_api.services import r_service
@@ -22,21 +22,43 @@ R_NOT_FOUND = "R not found — install R (r-project.org)"
 
 @router.get("/status")
 async def status() -> dict:
-    return r_service.get_status()
+    import asyncio
+
+    return await asyncio.to_thread(r_service.get_status)
 
 
 class RunRRequest(BaseModel):
-    script: str
+    script: str = Field(max_length=200_000)
 
 
 @router.post("/run", status_code=202, response_model=None)
-async def run_r(req: RunRRequest, svc: OpenProjectDep, db: DbDep) -> dict | JSONResponse:
+async def run_r(req: RunRRequest, svc: OpenProjectDep, db: DbDep, request: Request) -> dict | JSONResponse:
     """Start an R job; returns its id for polling."""
+    from qualcoder_api.core.server_config import is_server_mode
     from qualcoder_api.services import audit
     from qualcoder_api.services.user_settings import get_codername
 
     if not req.script.strip():
         raise HTTPException(status_code=422, detail="script is empty")
+    if len(req.script) > 200_000:
+        raise HTTPException(status_code=422, detail="script too large (max 200KB)")
+    if is_server_mode():
+        # Arbitrary R code is remote code execution: only admins may run it
+        # on a shared server. Viewers are already blocked by the project
+        # gate; editors are blocked here.
+        from qualcoder_api.api.v1.auth_deps import get_current_user as _get_user
+
+        # Resolve the bearer token from the request headers when available.
+        auth = ""
+        try:
+            # ``request`` is injected by FastAPI when present; fall back to
+            # empty (401) when the signature injection failed.
+            auth = request.headers.get("authorization", "") if request is not None else ""
+        except Exception:
+            auth = ""
+        user = await _get_user(auth)
+        if user.get("role") != "admin":
+            raise HTTPException(status_code=403, detail="admin role required for R execution")
     rscript = r_service.find_rscript()
     if rscript is None:
         return JSONResponse(status_code=503, content={"error": R_NOT_FOUND})

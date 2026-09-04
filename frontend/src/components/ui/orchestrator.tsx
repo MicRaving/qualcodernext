@@ -9,6 +9,7 @@
  * Classes are centralized here so a design change lands in ONE place.
  */
 import {
+  Component,
   useContext,
   useEffect,
   useRef,
@@ -380,8 +381,51 @@ export interface ModalProps {
   children?: ReactNode;
 }
 
+/** App-wide crash boundary: a render throw shows a recoverable fallback
+ *  instead of unmounting the whole app (previously any throw blanked QCnext
+ *  because no boundary existed). */
+export class ErrorBoundary extends Component<
+  { children: ReactNode; fallback?: ReactNode },
+  { error: Error | null }
+> {
+  state = { error: null as Error | null };
+  static getDerivedStateFromError(error: Error) {
+    return { error };
+  }
+  componentDidCatch(error: Error, info: unknown) {
+    try {
+      console.error("QCnext render error", error, info);
+    } catch {
+      /* ignore */
+    }
+  }
+  render() {
+    if (this.state.error) {
+      if (this.props.fallback) return this.props.fallback;
+      return (
+        <div className="flex h-full flex-col items-center justify-center gap-3 p-8 text-center" role="alert">
+          <p className="text-sm font-semibold text-text-primary">Something went wrong rendering this view.</p>
+          <p className="max-w-md text-xs text-text-secondary">
+            {this.state.error.message || "Unknown render error"}
+          </p>
+          <button
+            type="button"
+            className="rounded border border-border px-3 py-1.5 text-xs"
+            onClick={() => this.setState({ error: null })}
+          >
+            Dismiss and retry
+          </button>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
 /** The uniform modal: overlay + panel (+ optional header). Handles Escape
- *  and backdrop-click dismissal itself — views never re-implement it. */
+ *  and backdrop-click dismissal itself — views never re-implement it.
+ *  Traps focus while open, moves initial focus into the panel, and restores
+ *  focus to the previously focused element on close. */
 export function Modal({
   open,
   onClose,
@@ -395,14 +439,70 @@ export function Modal({
   headerActions,
   children,
 }: ModalProps) {
+  const panelRef = useRef<HTMLDivElement | null>(null);
+  const prevFocusRef = useRef<Element | null>(null);
   useEffect(() => {
     if (!open || !onClose) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape" && !closeDisabled) onClose();
+      if (e.key === "Tab") {
+        // Focus trap: keep Tab cycling inside the panel.
+        const panel = panelRef.current;
+        if (!panel) return;
+        const focusables = panel.querySelectorAll<HTMLElement>(
+          'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])',
+        );
+        const items = Array.from(focusables).filter(
+          (el) => !el.hasAttribute("disabled") && el.getAttribute("aria-hidden") !== "true",
+        );
+        if (items.length === 0) {
+          e.preventDefault();
+          panel.focus();
+          return;
+        }
+        const first = items[0];
+        const last = items[items.length - 1];
+        if (e.shiftKey && document.activeElement === first) {
+          e.preventDefault();
+          last.focus();
+        } else if (!e.shiftKey && document.activeElement === last) {
+          e.preventDefault();
+          first.focus();
+        }
+      }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [open, onClose, closeDisabled]);
+
+  useEffect(() => {
+    if (!open) return;
+    prevFocusRef.current = document.activeElement;
+    const t = window.setTimeout(() => {
+      const panel = panelRef.current;
+      if (!panel) return;
+      const target =
+        panel.querySelector<HTMLElement>("button, [href], input, select, textarea, [tabindex]") ?? panel;
+      try {
+        target.focus({ preventScroll: true } as FocusOptions);
+      } catch {
+        try {
+          (target as HTMLElement).focus();
+        } catch {
+          /* ignore */
+        }
+      }
+    }, 0);
+    return () => {
+      window.clearTimeout(t);
+      const prev = prevFocusRef.current as HTMLElement | null;
+      try {
+        prev?.focus?.();
+      } catch {
+        /* ignore */
+      }
+    };
+  }, [open]);
 
   if (!open) return null;
   return (
@@ -415,7 +515,11 @@ export function Modal({
       aria-modal="true"
       aria-label={typeof title === "string" ? title : ariaLabel}
     >
-      <div className={`${cls.modalPanel} qc-modal-panel ${panelClassName ?? MODAL_SIZES[size]}`}>
+      <div
+        ref={panelRef}
+        tabIndex={-1}
+        className={`${cls.modalPanel} qc-modal-panel ${panelClassName ?? MODAL_SIZES[size]}`}
+      >
         {title !== undefined && (
           <div className={cls.modalHeader}>
             {icon}
@@ -605,8 +709,9 @@ export function ErrorBanner({
       : tone === "success"
         ? "flex shrink-0 items-center gap-2 border-b border-border bg-surface px-3 py-1.5 text-sm text-success"
         : "flex shrink-0 items-center gap-2 border-b border-danger bg-danger/10 px-3 py-1.5 text-sm text-danger";
+  const role = tone === "danger" ? "alert" : "status";
   return (
-    <div className={`${bannerCls} qc-enter-fade`} role="status">
+    <div className={`${bannerCls} qc-enter-fade`} role={role}>
       <span className="min-w-0 flex-1 truncate">{children}</span>
       {onClose && (
         <IconButton label="Dismiss" size="sm" onClick={onClose} className="text-danger hover:text-danger">

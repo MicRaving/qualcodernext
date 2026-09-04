@@ -847,6 +847,8 @@ export function HtmlCoder({ source }: { source: Source }) {
     const onMessage = (e: MessageEvent) => {
       if (e.data?.type !== "qc:highlight-ready") return;
       if (e.source !== iframeRef.current?.contentWindow) return;
+      // Opaque-origin frame only (sandbox without allow-same-origin).
+      if (e.origin !== "null" && e.origin !== window.origin) return;
       liveReadyRef.current = true;
     };
     window.addEventListener("message", onMessage);
@@ -1065,6 +1067,7 @@ export function HtmlCoder({ source }: { source: Source }) {
   useEffect(() => {
     const onMessage = (e: MessageEvent) => {
       if (e.source !== iframeRef.current?.contentWindow) return;
+      if (e.origin !== "null" && e.origin !== window.origin) return;
       // A click on a highlight mark inside the frame: select the coding for
       // the bottom details bar. The message is validated inline (it is not
       // part of the shared frame protocol) and the footer renders ONLY from
@@ -1496,7 +1499,12 @@ export function HtmlCoder({ source }: { source: Source }) {
                 ref={iframeRef}
                 title={t("htmlCoder.webpage")}
                 srcDoc={srcDoc ?? undefined}
-                sandbox="allow-same-origin allow-scripts"
+                // allow-scripts WITHOUT allow-same-origin: the frame gets an
+                // opaque origin so page scripts (from scraped HTML) cannot
+                // reach the parent DOM / localStorage even if sanitization
+                // misses something. Parent↔frame still communicate via
+                // postMessage with source + shape validation.
+                sandbox="allow-scripts"
                 onLoad={() => {
                   iframeDocRef.current = iframeRef.current?.contentDocument ?? null;
                   setFrameTick((v) => v + 1);

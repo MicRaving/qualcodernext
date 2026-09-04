@@ -21,8 +21,15 @@ export function useAsyncEffect(
         if (cancelled) throw new DOMException("Aborted", "AbortError");
       },
     };
-    void effect(signal).catch(() => {
-      /* errors should be handled inside the effect */
+    void effect(signal).catch((err) => {
+      // Effects should handle their own errors; log anything that escapes so
+      // failures are never silently swallowed (ignore aborts from unmount).
+      if (err instanceof DOMException && err.name === "AbortError") return;
+      try {
+        console.error("useAsyncEffect error", err);
+      } catch {
+        /* ignore */
+      }
     });
     return () => {
       cancelled = true;

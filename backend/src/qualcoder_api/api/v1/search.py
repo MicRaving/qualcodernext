@@ -26,6 +26,20 @@ class SearchRequest(BaseModel):
     limit: int = 20
     offset: int = 0
 
+    from pydantic import field_validator
+
+    @field_validator("query")
+    @classmethod
+    def _check_query(cls, v: str) -> str:
+        if len(v) > 500:
+            raise ValueError("query too long")
+        return v
+
+    @field_validator("offset")
+    @classmethod
+    def _check_offset(cls, v: int) -> int:
+        return max(0, min(100000, v))
+
 
 class SearchHit(BaseModel):
     pos0: int

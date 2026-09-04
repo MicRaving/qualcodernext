@@ -41,11 +41,24 @@ def get_service() -> ProjectService:
 
 
 async def get_db(svc: Annotated[ProjectService, Depends(get_service)]) -> AsyncIterator[AsyncSession]:
-    """Yield an AsyncSession for the open project; 409 when none is open."""
+    """Yield an AsyncSession for the open project; 409 when none is open.
+
+    Rolls back any uncommitted work when the endpoint raises, so a failed
+    request never leaves a dirty transaction on the pooled connection.
+    Mutations + their audit row commit together via ``audit.record`` (the
+    single commit point); endpoints must not do fallible work after it.
+    """
     if svc.session_factory is None:
         raise HTTPException(status_code=409, detail="no project is open")
+    import contextlib as _contextlib
+
     async with svc.session_factory() as session:
-        yield session
+        try:
+            yield session
+        except Exception:
+            with _contextlib.suppress(Exception):
+                await session.rollback()
+            raise
 
 
 ServiceDep = Annotated[ProjectService, Depends(get_service)]

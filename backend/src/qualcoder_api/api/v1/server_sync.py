@@ -41,14 +41,14 @@ MAX_PULL_ENTRIES = 20_000
 
 
 class SyncPushRequest(BaseModel):
-    instance_id: str = Field(min_length=1, max_length=64)
-    entries: list[dict]
+    instance_id: str = Field(min_length=1, max_length=64, pattern=r"^[A-Za-z0-9_.-]{1,64}$")
+    entries: list[dict] = Field(max_length=20000)
 
 
 class SyncPresenceRequest(BaseModel):
-    instance_id: str = ""
+    instance_id: str = Field(default="", max_length=64, pattern=r"^[A-Za-z0-9_.-]*$")
     file_id: int | None = None
-    file_name: str = ""
+    file_name: str = Field(default="", max_length=512)
 
 
 def _project_path(svc: ServiceDep) -> str:
@@ -73,25 +73,35 @@ async def sync_push(
 
     Returns the per-instance replay report ({applied, conflicts, retries})
     plus how many server-side edits were flushed for other clients."""
+    from qualcoder_api.core.security import validate_instance_id
+    from qualcoder_api.services.sync_schema import SYNC_LOCK
+
     _ = user  # membership + viewer gating handled by the router dependency
+    try:
+        validate_instance_id(req.instance_id)
+    except ValueError as err:
+        raise HTTPException(status_code=422, detail=str(err)) from err
+    if req.instance_id == SERVER_INSTANCE:
+        raise HTTPException(status_code=422, detail="reserved instance id")
     path = _project_path(svc)
     applied: dict = {}
-    if req.entries:
-        lines = "\n".join(json.dumps(e, ensure_ascii=False) for e in req.entries) + "\n"
-        sidecar = _sidecar_path(path, req.instance_id)
-        # The engine's append helper expects an existing instance dir
-        # (shared-folder semantics); the hub creates it on first push.
-        Path(sidecar).parent.mkdir(parents=True, exist_ok=True)
-        await asyncio.to_thread(_append_sidecar, sidecar, lines)
-        async with _factory(svc)() as session:
-            applied = await import_pending(session, path, SERVER_INSTANCE)
-            await session.commit()
+    async with SYNC_LOCK:
+        if req.entries:
+            lines = "\n".join(json.dumps(e, ensure_ascii=False) for e in req.entries) + "\n"
+            sidecar = _sidecar_path(path, req.instance_id)
+            # The engine's append helper expects an existing instance dir
+            # (shared-folder semantics); the hub creates it on first push.
+            Path(sidecar).parent.mkdir(parents=True, exist_ok=True)
+            await asyncio.to_thread(_append_sidecar, sidecar, lines)
+            async with _factory(svc)() as session:
+                applied = await import_pending(session, path, SERVER_INSTANCE)
+                await session.commit()
 
-    # Flush SERVER-side API edits (sync_log rows) so other clients can
-    # pull them. No-op when everything is already exported.
-    async with _factory(svc)() as session:
-        exported = await export_pending(session, path, SERVER_INSTANCE)
-        await session.commit()
+        # Flush SERVER-side API edits (sync_log rows) so other clients can
+        # pull them. No-op when everything is already exported.
+        async with _factory(svc)() as session:
+            exported = await export_pending(session, path, SERVER_INSTANCE)
+            await session.commit()
 
     total_applied = sum(int(v.get("applied", 0)) for v in applied.values())
     return {"ok": True, "applied": applied, "total_applied": total_applied, "exported": exported}

@@ -148,7 +148,11 @@ async def open_session(project_id: str, user: Annotated[dict, Depends(get_curren
 async def close_session(project_id: str, user: Annotated[dict, Depends(get_current_user)]) -> dict:
     if await _member_role(project_id, user) is None:
         raise HTTPException(status_code=403, detail="not a member of this project")
-    await manager.close(project_id)
+    # The session service is shared by all members of the project: closing
+    # it here would evict everyone (DoS). A per-user close is a no-op — the
+    # shared session is reaped after QC_SESSION_IDLE_SECS via release_idle.
+    # Owners/admins can force-close via DELETE (project delete) or the idle
+    # reaper; explicit eviction is intentionally not exposed per-member.
     return {"ok": True}
 
 

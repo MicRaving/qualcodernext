@@ -43,7 +43,8 @@ def resolve_source_path(project_path: str, mediapath: str | None, name: str) -> 
     Internal prefixes map to project subfolders: /docs/ -> documents,
     /images/ -> images, /audio/ -> audio, /video/ -> video.
     External link prefixes (docs:, images:, audio:, video:) resolve to the
-    path after the colon.
+    path after the colon in local (desktop) mode only — server mode never
+    serves arbitrary filesystem paths (see plan invariant #5).
     Returns None when the path cannot be resolved safely.
     """
     if not mediapath:
@@ -55,12 +56,31 @@ def resolve_source_path(project_path: str, mediapath: str | None, name: str) -> 
                 return None
             project_root = Path(project_path).resolve()
             candidate = (project_root / folder / basename).resolve()
-            if candidate.is_relative_to(project_root):
-                return str(candidate)
+            try:
+                if candidate.is_relative_to(project_root):
+                    return str(candidate)
+            except ValueError:
+                return None
             return None
     if mediapath.startswith(_EXTERNAL_PREFIXES):
+        from qualcoder_api.core.server_config import is_server_mode
+
+        if is_server_mode():
+            return None
         return mediapath.split(":", 1)[1]
     return None
+
+
+def is_path_under_project(project_path: str, path: str | None) -> bool:
+    """True when an already-resolved path stays inside the project folder."""
+    if not path:
+        return False
+    try:
+        root = Path(project_path).resolve()
+        candidate = Path(path).resolve()
+        return candidate == root or candidate.is_relative_to(root)
+    except (OSError, ValueError):
+        return False
 
 
 def content_type_for(filename: str) -> str:

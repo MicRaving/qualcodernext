@@ -7,7 +7,7 @@
      include (first releases have no base tag, so no link). Add a section
      like "## 0.1.1 (2026-08-31)" at the TOP of the file. -->
 
-## 0.1.0 (2026-09-04)
+## 0.1.6 (2026-09-04)
 
 - Complete rewrite on FastAPI, React 19, and Tauri 2 with a typed HTTP API.
 - Simplified three-column UI with ribbon, inline rename, and status bar.
@@ -17,6 +17,9 @@
 - New importers/exporters: REFI-QDA, ATLAS.ti, NVivo, XLSX/SPSS, Zotero/RIS, URL import.
 - Productivity: global search flyout, undo/redo, task queue, drag & drop.
 - New workspaces: help browser, Crafter, graph editor, R console, SQL reports, notes.
+- Security hardening across backend, frontend, and packaging.
+
+**Full Changelog**: https://github.com/MicRaving/qualcodernext/compare/v0.1.5...v0.1.6
 
 ## 0.1.5 (2026-09-02)
 

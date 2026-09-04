@@ -4,7 +4,7 @@
  * one the dashboard empty state provides New/Open project (the app always
  * starts on the dashboard).
  */
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   AudioLines,
   BarChart3,
@@ -75,7 +75,11 @@ function TaskIndicator({ progress }: { progress: number }) {
       height="18"
       viewBox="0 0 18 18"
       className="-rotate-90"
-      aria-hidden
+      role="progressbar"
+      aria-valuemin={0}
+      aria-valuemax={100}
+      aria-valuenow={Math.round(filled)}
+      aria-label={`Background tasks ${Math.round(filled)} percent complete`}
     >
       <circle cx="9" cy="9" r={r} fill="none" stroke="var(--qc-border)" strokeWidth="2.5" />
       <circle
@@ -145,9 +149,12 @@ function StatusBar() {
   const annotations = useInspectorStore((s) => s.annotationsAll);
   const sources = useProjectStore((s) => s.sources);
   const codeTree = useProjectStore((s) => s.codeTree);
-  const memoCount =
-    sources.filter((s) => (s.memo ?? "").trim() !== "").length +
-    codeTree.filter((c) => (c.memo ?? "").trim() !== "").length;
+  const memoCount = useMemo(
+    () =>
+      sources.filter((s) => (s.memo ?? "").trim() !== "").length +
+      codeTree.filter((c) => (c.memo ?? "").trim() !== "").length,
+    [sources, codeTree],
+  );
   return (
     <footer className="flex h-6 shrink-0 items-center gap-4 border-t border-border bg-surface px-3 text-xs text-text-secondary">
       <span className="font-medium text-text-primary">{projectName}</span>

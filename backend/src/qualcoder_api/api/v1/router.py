@@ -109,13 +109,13 @@ class HealthResponse(BaseModel):
 
 
 class CreateProjectRequest(BaseModel):
-    project_path: str
-    codername: str | None = None
+    project_path: str = Field(min_length=1, max_length=4096)
+    codername: str | None = Field(default=None, max_length=64)
 
 
 class OpenProjectRequest(BaseModel):
-    project_path: str
-    codername: str | None = None
+    project_path: str = Field(min_length=1, max_length=4096)
+    codername: str | None = Field(default=None, max_length=64)
     backup_on_open: bool = False
 
 

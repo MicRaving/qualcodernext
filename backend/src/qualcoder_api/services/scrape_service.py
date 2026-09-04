@@ -115,15 +115,21 @@ class ScrapedContent:
 
 
 def validate_url(url: str) -> None:
-    """Reject anything that is not an http(s) URL."""
+    """Reject anything that is not an http(s) URL, plus SSRF targets."""
+    from qualcoder_api.core.security import is_ssrf_blocked_url
+
     if not url.strip():
         raise ScrapeError("URL is empty")
+    if len(url.strip()) > 4096:
+        raise ScrapeError("URL too long")
     try:
         scheme = urlparse(url.strip()).scheme.lower()
     except ValueError as err:
         raise ScrapeError("invalid URL") from err
     if scheme not in ("http", "https"):
         raise ScrapeError("only http and https URLs are supported")
+    if is_ssrf_blocked_url(url):
+        raise ScrapeError("URL targets a private or local host")
 
 
 def detect_mode(url: str, mode: str = "auto") -> str:
@@ -140,6 +146,18 @@ def detect_mode(url: str, mode: str = "auto") -> str:
     return "article"
 
 
+class _SsrfRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Reject redirects to private/local hosts (SSRF guard)."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        from qualcoder_api.core.security import is_ssrf_blocked_url
+
+        target = urllib.parse.urljoin(req.full_url, newurl or "")
+        if is_ssrf_blocked_url(target):
+            raise ScrapeError("redirect targets a private or local host")
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
 def fetch_url(
     url: str,
     timeout: int = FETCH_TIMEOUT,
@@ -149,13 +167,14 @@ def fetch_url(
     method: str | None = None,
     data: bytes | None = None,
 ) -> bytes:
-    """Fetch a URL (redirects followed), mapping HTTP/network failures to
+    """Fetch a URL (redirects followed unless SSRF), mapping HTTP/network failures to
     ``ScrapeError`` (with the status ``code`` and response ``headers``).
 
     ``user_agent`` overrides the default browser-like UA;
     ``extra_headers`` are merged over the defaults; ``method``/``data``
     build custom requests.
     """
+    validate_url(url)
     headers = {
         "User-Agent": user_agent,
         "Accept": "text/html,application/xhtml+xml,application/json,*/*;q=0.8",
@@ -163,8 +182,9 @@ def fetch_url(
     if extra_headers:
         headers.update(extra_headers)
     request = urllib.request.Request(url, headers=headers, method=method, data=data)
+    opener = urllib.request.build_opener(_SsrfRedirectHandler)
     try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
+        with opener.open(request, timeout=timeout) as response:
             return response.read()
     except urllib.error.HTTPError as err:
         raise ScrapeError(

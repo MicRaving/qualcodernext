@@ -137,20 +137,47 @@ export function AvCoder({ source }: { source: Source }) {
   const seekAtRef = useRef(0);
   const [playing, setPlaying] = useState(false);
   const [mediaError, setMediaError] = useState<string | null>(null);
-  // The media element needs a streaming URL (a fetched blob would load the
-  // whole file and lose Range support), so the src is built from
-  // sourceFileUrl() — correct because the App boot gate holds the whole UI
-  // until initApiBase() settles. If the element still errors (backend
-  // restarted on a new ephemeral port) the base is invalidated and
-  // re-resolved once before the real error surfaces.
+  // Local mode: the media element needs a streaming URL (a fetched blob
+  // would load the whole file and lose Range support), so the src is built
+  // from sourceFileUrl() — correct because the App boot gate holds the whole
+  // UI until initApiBase() settles. Server mode: media must carry the bearer
+  // header (a raw <video src> cannot), so fetch an authenticated blob URL
+  // instead (Range seeking is sacrificed for auth correctness).
   const [mediaSrc, setMediaSrc] = useState(() => sourceFileUrl(source.id));
   const mediaRetriedRef = useRef(false);
+  const mediaObjectUrlRef = useRef<string | null>(null);
   // A new file must start with a fresh retry budget and a freshly built src —
   // the mount-time initialization above only covers the first source.
   useEffect(() => {
+    let cancelled = false;
     mediaRetriedRef.current = false;
     setMediaError(null);
-    setMediaSrc(sourceFileUrl(source.id));
+    const load = async () => {
+      try {
+        const { SERVER_MODE } = await import("@/lib/config");
+        if (!SERVER_MODE) {
+          setMediaSrc(sourceFileUrl(source.id));
+          return;
+        }
+        const { localRequestBlob } = await import("@/lib/api/transport");
+        const blob = await localRequestBlob(`/sources/${source.id}/file`);
+        if (cancelled) return;
+        if (mediaObjectUrlRef.current) URL.revokeObjectURL(mediaObjectUrlRef.current);
+        const url = URL.createObjectURL(blob);
+        mediaObjectUrlRef.current = url;
+        setMediaSrc(url);
+      } catch {
+        if (!cancelled) setMediaSrc(sourceFileUrl(source.id));
+      }
+    };
+    void load();
+    return () => {
+      cancelled = true;
+      if (mediaObjectUrlRef.current) {
+        URL.revokeObjectURL(mediaObjectUrlRef.current);
+        mediaObjectUrlRef.current = null;
+      }
+    };
   }, [source.id]);
 
   const [startMark, setStartMark] = useState<number | null>(null);
@@ -947,11 +974,20 @@ export function AvCoder({ source }: { source: Source }) {
   flushTranscribeSaveRef.current = flushTranscribeSave;
 
   // Persist anything still unsaved when the view unmounts mid-typing.
+  // Also clear transient UI timers so they never fire after unmount.
   useEffect(() => {
     return () => {
       if (transcribeSaveTimer.current) {
         clearTimeout(transcribeSaveTimer.current);
         transcribeSaveTimer.current = null;
+      }
+      if (linkCopiedTimer.current) {
+        clearTimeout(linkCopiedTimer.current);
+        linkCopiedTimer.current = null;
+      }
+      if (mediaObjectUrlRef.current) {
+        URL.revokeObjectURL(mediaObjectUrlRef.current);
+        mediaObjectUrlRef.current = null;
       }
       void flushTranscribeSaveRef.current();
     };

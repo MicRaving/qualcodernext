@@ -22,7 +22,7 @@ from qualcoder_api.persistence import tables
 router = APIRouter(prefix="/sql", tags=["sql"])
 
 MAX_ROWS = 5000
-READ_ONLY_KEYWORDS = {"SELECT", "WITH", "EXPLAIN", "PRAGMA", "VALUES"}
+READ_ONLY_KEYWORDS = {"SELECT", "WITH", "EXPLAIN", "VALUES"}
 
 
 class RunSqlRequest(BaseModel):
@@ -36,14 +36,14 @@ class SavedQueryCreate(BaseModel):
     ssql: str
 
 
-def _validate_read_only(sql: str) -> None:
-    """Reject anything that is not a single read-only statement."""
-    stmt = sql.strip().rstrip(";").strip()
-    parts = stmt.split(None, 1)
-    if not parts or parts[0].upper() not in READ_ONLY_KEYWORDS:
-        raise HTTPException(status_code=422, detail="Only read-only queries are allowed")
-    if ";" in stmt or "--" in stmt or "/*" in stmt:
-        raise HTTPException(status_code=422, detail="Multiple statements are not allowed")
+def _validate_read_only(sql: str) -> str:
+    """Reject anything that is not a single read-only statement; return stripped stmt."""
+    from qualcoder_api.core.security import validate_read_only_sql
+
+    try:
+        return validate_read_only_sql(sql)
+    except ValueError as err:
+        raise HTTPException(status_code=422, detail=str(err)) from err
 
 
 def _json_safe(value):
@@ -62,11 +62,13 @@ def _json_safe(value):
 @router.post("/run")
 async def run_sql(req: RunSqlRequest, db: DbDep) -> dict:
     """Execute a read-only statement and return columns/rows as JSON."""
-    _validate_read_only(req.sql)
+    from qualcoder_api.core.security import append_limit
+
+    stmt = _validate_read_only(req.sql)
     # Cap the rows the database materializes, not just the response: the
     # client only ever shows MAX_ROWS, so fetching a million-row table is
     # pure waste (and blocks the request handler).
-    limited_sql = f"{req.sql.rstrip().rstrip(';').rstrip()} LIMIT {MAX_ROWS + 1}"
+    limited_sql = append_limit(stmt, MAX_ROWS)
     try:
         result = await db.execute(text(limited_sql))
     except (OperationalError, sqlite3.OperationalError) as err:

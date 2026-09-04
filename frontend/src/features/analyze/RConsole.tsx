@@ -28,13 +28,12 @@ import {
 } from "lucide-react";
 import {
   api,
-  fetchWithTimeout,
-  rArtifactUrl,
   type RArtifact,
   type RJob,
   type RScript,
   type RStatus,
 } from "@/lib/api";
+import { localRequestBlob } from "@/lib/api/transport";
 import { cn, errorMessage } from "@/lib/utils";
 import { useAsyncEffect } from "@/lib/useAsync";
 import { useI18n } from "@/lib/i18n";
@@ -293,11 +292,11 @@ export function RConsoleView() {
         const artifact = targets.find((a) => a.name === name);
         if (!artifact) continue;
         try {
-          const res = await fetchWithTimeout(rArtifactUrl(name));
-          if (!res.ok || cancelled) continue;
+          // Authenticated fetch (server mode needs the bearer header — a raw
+          // <img src> URL cannot send it).
+          const blob = await localRequestBlob(`/r/artifacts/${encodeURIComponent(name)}`);
+          if (cancelled) continue;
           if (artifact.kind === "png") {
-            const blob = await res.blob();
-            if (cancelled) continue;
             const url = URL.createObjectURL(blob);
             createdUrlsRef.current.push(url);
             setPngUrls((prev) => {
@@ -305,7 +304,7 @@ export function RConsoleView() {
               return { ...prev, [name]: url };
             });
           } else {
-            const text = await res.text();
+            const text = await blob.text();
             if (cancelled) continue;
             setCsvPreview((prev) => ({ ...prev, [name]: parseCsv(text, 50) }));
           }

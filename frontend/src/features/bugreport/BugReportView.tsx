@@ -403,7 +403,14 @@ export function BugReportView() {
           }
         }
         if (!attached && dataUrl) {
-          finalBody += `\n\n**${t("bugReport.screenshotSection")}:**\n![screenshot](${dataUrl})`;
+          // Never embed multi-MB data-URLs into the issue body (they bloat the
+          // issue and exfiltrate the full screenshot text). Only inline small
+          // screenshots; otherwise point at the manual download button.
+          if (dataUrl.length <= 1_000_000) {
+            finalBody += `\n\n**${t("bugReport.screenshotSection")}:**\n![screenshot](${dataUrl})`;
+          } else {
+            finalBody += `\n\n**${t("bugReport.screenshotSection")}:**\n_(screenshot too large to inline — attach the downloaded PNG manually)_`;
+          }
         }
         const issue = await createGitHubIssue(
           st.githubRepo,

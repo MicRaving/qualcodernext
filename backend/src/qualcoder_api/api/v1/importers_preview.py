@@ -99,13 +99,23 @@ async def _preview_tabular(path: str, kind: str) -> dict:
             import pyreadstat
 
             def _read_sav():
-                sample_df, sample_meta = pyreadstat.read_sav(path, row_limit=16)
-                total = getattr(
-                    pyreadstat.read_sav(path, metadataonly=True)[1], "number_rows", None
+                sample_data, sample_meta = pyreadstat.read_sav(
+                    path, row_limit=16, output_format="dict"
                 )
-                return sample_df, sample_meta, int(total) if total else len(sample_df)
+                total = getattr(
+                    pyreadstat.read_sav(path, metadataonly=True, output_format="dict")[1],
+                    "number_rows",
+                    None,
+                )
+                if total:
+                    n_rows = int(total)
+                elif sample_meta.column_names:
+                    n_rows = len(sample_data.get(sample_meta.column_names[0], []))
+                else:
+                    n_rows = 0
+                return sample_data, sample_meta, n_rows
 
-            df, meta, total_rows = await asyncio.to_thread(_read_sav)
+            data, meta, total_rows = await asyncio.to_thread(_read_sav)
         except Exception as err:  # pyreadstat raises ReadstatError on unreadable files
             raise ValueError(f"Invalid SPSS .sav file: {err}") from err
         columns = list(meta.column_names)
@@ -115,7 +125,8 @@ async def _preview_tabular(path: str, kind: str) -> dict:
                 col for col in columns[1:] if var_types.get(col) not in ("double", "integer")
             ]
             sample = [
-                [importers._sav_cell(record[col]) for col in columns] for _, record in df.iterrows()
+                [importers._sav_cell(data.get(col, [])[i]) for col in columns]
+                for i in range(len(data.get(columns[0], [])))
             ]
             cases = total_rows
         counts = _empty_destination_counts()
@@ -167,10 +178,17 @@ def _destination(kind: str, counts: dict[str, int], note: str | None = None) -> 
     return {"kind": kind, "counts": counts, "note": note}
 
 
+def _quote_ident(name: str) -> str:
+    """Quote a SQLite identifier (table/column) safely."""
+    return '"' + name.replace('"', '""') + '"'
+
+
 def _table_row_count(conn: sqlite3.Connection, table: str) -> int:
     """Row count of ``table`` (0 when the table is absent or unreadable)."""
+    if not table.replace("_", "").replace("2", "").isalnum():
+        return 0
     try:
-        row = conn.execute(f'SELECT COUNT(*) FROM "{table}"').fetchone()
+        row = conn.execute(f"SELECT COUNT(*) FROM {_quote_ident(table)}").fetchone()
         return int(row[0]) if row else 0
     except sqlite3.Error:
         return 0
@@ -180,11 +198,17 @@ def _distinct_column_values(
     conn: sqlite3.Connection, table: str, *candidates: str
 ) -> set[str]:
     """Distinct non-null values of the first present column among ``candidates``."""
+    if not table.replace("_", "").isalnum():
+        return set()
     for column in candidates:
+        if not column.replace("_", "").isalnum():
+            continue
         try:
             return {
                 str(row[0])
-                for row in conn.execute(f"SELECT DISTINCT {column} FROM {table}")
+                for row in conn.execute(
+                    f"SELECT DISTINCT {_quote_ident(column)} FROM {_quote_ident(table)}"
+                )
                 if row[0]
             }
         except sqlite3.Error:

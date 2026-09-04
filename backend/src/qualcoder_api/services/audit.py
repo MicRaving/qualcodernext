@@ -25,7 +25,12 @@ async def record(
     source_id: int | None = None,
     detail: dict | None = None,
 ) -> None:
-    """Insert one audit row and commit (callers have varying commit habits)."""
+    """Insert one audit row and commit (the single commit point).
+
+    Callers must stage ALL mutation work on ``session`` before calling this
+    (no prior commit): the one commit persists the mutation + audit row
+    atomically. Do no fallible work after this call.
+    """
     ts = now()
     await session.execute(
         text(

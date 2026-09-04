@@ -7,7 +7,6 @@
 import { errorMessage } from "@/lib/utils";
 import { useRef, useState, type FormEvent } from "react";
 import { Globe, LoaderCircle } from "lucide-react";
-import { ApiError, fetchWithTimeout, initApiBase } from "@/lib/api";
 import { Button, ErrorBanner, Field, Input, Modal, Select } from "@/components/ui/orchestrator";
 import { useI18n } from "@/lib/i18n";
 import { useToast } from "@/lib/toast";
@@ -34,35 +33,20 @@ const MODE_OPTIONS: { value: ScrapeMode; labelKey: string }[] = [
 let lastMode: ScrapeMode = "article";
 
 /**
- * Local-fetch POST (the /scrape endpoints are not in lib/api.ts yet) —
- * same pattern as features/analyze/statsApi.ts. The timeout is well above
- * the backend's own scrape budget: a YouTube extraction may legitimately
- * run for minutes (90s per attempt + a comments retry + captions), and a
- * short client-side abort here surfaces as Chromium's "signal is aborted
- * without reason" in the toast.
+ * Scrape import via the shared localRequest client (auth + timeout + retry).
+ * The timeout is well above the backend's own scrape budget: a YouTube
+ * extraction may legitimately run for minutes (90s per attempt + a comments
+ * retry + captions), and a short client-side abort here surfaces as
+ * Chromium's "signal is aborted without reason" in the toast.
  */
 async function scrapeImport(url: string, mode: ScrapeMode): Promise<ScrapeResult> {
-  const base = await initApiBase();
-  const res = await fetchWithTimeout(
-    `${base}/scrape/import`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ url, mode }),
-    },
+  const { localRequest } = await import("@/lib/api/transport");
+  if (!url || url.length > 4096) throw new Error("Invalid URL");
+  return localRequest<ScrapeResult>(
+    "/scrape/import",
+    { method: "POST", body: JSON.stringify({ url, mode }) },
     240_000,
   );
-  if (!res.ok) {
-    let detail: unknown;
-    try {
-      detail = (await res.json()).detail;
-    } catch {
-      // non-JSON error body
-    }
-    const suffix = typeof detail === "string" && detail ? `: ${detail}` : "";
-    throw new ApiError(res.status, `API error ${res.status} on /scrape/import${suffix}`, detail);
-  }
-  return (await res.json()) as ScrapeResult;
 }
 
 interface Props {

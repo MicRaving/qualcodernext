@@ -84,14 +84,24 @@ async def transcribe(req: TranscribeRequest, svc: OpenProjectDep, db: DbDep) -> 
     ).first()
     if row is None:
         raise HTTPException(status_code=404, detail="source not found")
+    from qualcoder_api.core.server_config import is_server_mode
+    from qualcoder_api.services.source_files import is_path_under_project, resolve_source_path
+
     mediapath = row.mediapath or ""
-    if mediapath.startswith(("/audio/", "/video/")):
-        source_path = os.path.join(svc.project_path, mediapath.lstrip("/"))
-    elif mediapath.startswith(("audio:", "video:")):
-        # Linked (external) source: the path is stored verbatim.
-        source_path = mediapath.split(":", 1)[1]
-    else:
+    source_path = resolve_source_path(svc.project_path, mediapath, row[1] or "")
+    # Legacy internal layout fallback (mediapath stored as /audio/... without
+    # the project prefix mapping above).
+    if source_path is None and mediapath.startswith(("/audio/", "/video/")):
+        candidate = os.path.join(svc.project_path, mediapath.lstrip("/"))
+        # Contain the legacy join inside the project folder.
+        if is_path_under_project(svc.project_path, candidate):
+            source_path = candidate
+    if source_path is None:
+        if mediapath.startswith(("audio:", "video:")) and is_server_mode():
+            raise HTTPException(status_code=404, detail="media file missing on disk")
         raise HTTPException(status_code=422, detail="source is not audio/video")
+    if is_server_mode() and not is_path_under_project(svc.project_path, source_path):
+        raise HTTPException(status_code=404, detail="media file missing on disk")
     if not os.path.exists(source_path):
         raise HTTPException(status_code=404, detail="media file missing on disk")
 

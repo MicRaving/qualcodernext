@@ -54,7 +54,9 @@ async def scrape_import(
     except ScrapeError as err:
         raise HTTPException(status_code=422, detail=str(err)) from err
 
-    tmp = svc.project_path + "/_scrape_" + scraped.filename
+    from qualcoder_api.core.security import sanitize_filename
+
+    tmp = os.path.join(svc.project_path, f"_scrape_{sanitize_filename(scraped.filename, 'scrape')}")
     with open(tmp, "wb") as out:  # noqa: ASYNC230 - small local temp write
         out.write(scraped.data)
     try:

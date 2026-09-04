@@ -30,11 +30,17 @@ def _facade():
 
 def _sidecar_path(project_path: str, instance_id: str) -> Path:
     """Legacy per-instance sidecar path (kept for migration)."""
+    from qualcoder_api.core.security import validate_instance_id
+
+    validate_instance_id(instance_id)
     return Path(project_path) / SYNC_DIR_NAME / instance_id / "changes.jsonl"
 
 
 def _replay_path(project_path: str, session_id: str) -> Path:
     """Per-session replay file (new spec 2a)."""
+    from qualcoder_api.core.security import validate_session_id
+
+    validate_session_id(session_id)
     return Path(project_path) / "replays" / f"{session_id}.jsonl"
 
 

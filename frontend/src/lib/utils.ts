@@ -8,7 +8,14 @@ export function cn(...inputs: ClassValue[]): string {
 
 /** Extract a displayable error message from an unknown caught value. */
 export function errorMessage(e: unknown, fallback = "Operation failed"): string {
-  return e instanceof Error ? e.message : fallback;
+  if (e instanceof Error) {
+    // ApiError carries the backend's `detail` separately — prefer it when the
+    // generic message is bare (it contains the status + path + detail).
+    const detail = (e as { detail?: unknown }).detail;
+    if (typeof detail === "string" && detail.trim()) return detail.trim();
+    return e.message || fallback;
+  }
+  return fallback;
 }
 
 /** Normalize an uncaught error (event reason, Error, string…) to text. */

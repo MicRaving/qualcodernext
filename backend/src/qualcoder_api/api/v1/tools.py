@@ -355,7 +355,9 @@ async def replace_source_file(
     ):
         rows = (await db.execute(select(table).where(col == source_id))).all()
         segments[table.name] = [dict(r._mapping) for r in rows]
-    tmp = svc.project_path + "/_replace_" + (file.filename or "replace")
+    from qualcoder_api.core.security import sanitize_filename
+
+    tmp = os.path.join(svc.project_path, f"_replace_{sanitize_filename(file.filename, 'replace')}")
     with open(tmp, "wb") as out:  # noqa: ASYNC230 - small local temp write
         while chunk := await file.read(1 << 20):
             out.write(chunk)
@@ -473,7 +475,9 @@ async def attach_reference_file(
     from qualcoder_api.services.references import attach_file
 
     assert svc.session_factory is not None
-    tmp = svc.project_path + "/_attach_" + (file.filename or "attach")
+    from qualcoder_api.core.security import sanitize_filename as _sanitize
+
+    tmp = os.path.join(svc.project_path, f"_attach_{_sanitize(file.filename, 'attach')}")
     with open(tmp, "wb") as out:  # noqa: ASYNC230 - small local temp write
         while chunk := await file.read(1 << 20):
             out.write(chunk)
