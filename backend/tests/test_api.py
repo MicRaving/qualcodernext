@@ -49,8 +49,9 @@ async def test_unhandled_exception_500_has_cors_headers_and_json_body():
         assert res.headers["vary"] == "Origin"
         body = res.json()
         assert "detail" in body
-        assert body["detail"].startswith("internal error: RuntimeError")
-        assert "boom-test" in body["detail"]
+        # Hardened contract: only the exception type is returned — the
+        # message stays server-side (it may contain paths/SQL).
+        assert body["detail"] == "internal error: RuntimeError"
 
         # Dev origin works too.
         res = await c.get(

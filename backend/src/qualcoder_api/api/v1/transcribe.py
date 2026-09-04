@@ -84,10 +84,17 @@ async def transcribe(req: TranscribeRequest, svc: OpenProjectDep, db: DbDep) -> 
     ).first()
     if row is None:
         raise HTTPException(status_code=404, detail="source not found")
+    from qualcoder_api.core.enums import MediaType
     from qualcoder_api.core.server_config import is_server_mode
     from qualcoder_api.services.source_files import is_path_under_project, resolve_source_path
 
     mediapath = row.mediapath or ""
+    # Media gate (extension/prefix based, same source of truth as the
+    # import pipeline): only audio/video sources can be transcribed. This
+    # must come before path resolution — resolve_source_path also resolves
+    # text/image paths, which would otherwise start doomed jobs.
+    if MediaType.from_mediapath(mediapath) not in (MediaType.AUDIO, MediaType.VIDEO):
+        raise HTTPException(status_code=422, detail="source is not audio/video")
     source_path = resolve_source_path(svc.project_path, mediapath, row[1] or "")
     # Legacy internal layout fallback (mediapath stored as /audio/... without
     # the project prefix mapping above).

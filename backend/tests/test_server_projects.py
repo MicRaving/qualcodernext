@@ -174,10 +174,16 @@ async def test_session_isolation_two_projects(client, admin_headers):
     assert s1 is not s2
     assert s1.project_path != s2.project_path
 
-    # Closing one leaves the other usable.
-    await client.post(f"/api/v1/server/projects/{id1}/close", headers=admin_headers)
-    assert id1 not in manager.sessions
-    assert manager.sessions[id2].service is not None
+    # Close is per-user and must NOT evict the shared session (that would
+    # disconnect every other member of the project): both sessions stay live
+    # and the other project keeps working on its own independent service.
+    c1 = await client.post(f"/api/v1/server/projects/{id1}/close", headers=admin_headers)
+    assert c1.status_code == 200
+    assert manager.sessions[id1].service is s1
+    assert manager.sessions[id2].service is s2
+    o2_again = await client.post(f"/api/v1/server/projects/{id2}/open", headers=admin_headers)
+    assert o2_again.status_code == 200
+    assert manager.sessions[id2].service is s2
 
 
 async def test_upload_download_roundtrip(client, admin_headers, tmp_path):
