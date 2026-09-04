@@ -105,6 +105,13 @@ jobs:
         env:
           VERSION: ${{ steps.version.outputs.version }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Belt-and-suspenders: git config below sets the identity, but these
+          # env vars win over ANY config, so the automation identity
+          # (github-actions[bot]) can never leak into the contributors graph.
+          GIT_AUTHOR_NAME: Marvin Fendt
+          GIT_AUTHOR_EMAIL: marvin.fendt@gmail.com
+          GIT_COMMITTER_NAME: Marvin Fendt
+          GIT_COMMITTER_EMAIL: marvin.fendt@gmail.com
         run: |
           # Attribute the version-bump commit to the repo owner so the
           # automation identity never shows up in the contributors graph.
