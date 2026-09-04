@@ -17,7 +17,7 @@ QCnext uses a single-window **Workspace Layout** organized into
 This rework is loosely based on the QualCoder 4.0 beta source code (\~2% copied, \~12% adapted) with the following major goals (full [changelog](Changelog.md)):
 
 * **Simplified UI**: The rework tries to simplify and reorganize the UI as much as possible while retaining full functionality.
-* **Simultaneous collaboration**: Simultaneous collaboration is now possible by saving the project in a shared folder and enabling collaboration in the coder flyout.
+* **Simultaneous collaboration** (experimental): Simultaneous collaboration is now possible by saving the project in a shared folder and enabling collaboration in the coder flyout.
 * **Reduce architectural debt**: The rework tried to make the codebase more modular and sleaker to eliminate the old, monolithic scripts to reduce redundancy and make maintaining easier.
 * **Increase responsiveness**: The startup time is reduced from \~30s to to \~2s, the memory footprint is roughly cut in half (from 450mb to 200mb)
 * **Full compatibility**: All of these changes do not break compatibility with your existing projects.
@@ -42,7 +42,7 @@ You can find the documentation here:
 * [**Qualitative Coders Guide**](docs/coders.md) — Text, PDF, Image, CSV/Table, Webpage, and Audio/Video coders with Whisper auto-transcription.
 * [**Cases \& Attributes Guide**](docs/cases.md) — Study units, participant metadata, and mixed-methods attributes.
 * [**Notes, Worksheets \& Synthesis Guide**](docs/notes.md) — Journal, annotations, code memos, Crafter (QTT), and Creative Coding.
-* [**Analysis, Reports \& Graphs Guide**](docs/analysis.md) — 11 analytical reports, interrater agreement, publishing (Word/Excel/PPT), SQL/R console \& visual code maps.
+* [**Analysis, Reports \& Graphs Guide**](docs/reports.md) — Analytical reports, interrater agreement, publishing (Word/Excel/PPT), SQL/R console \& visual code maps.
 * [**AI Assistant \& Settings Guide**](docs/ai.md) — Local/Cloud LLM config, semantic vector search, MCP endpoints, and app preferences.
 
 The typical workflow will look similar to this:
@@ -64,7 +64,7 @@ This is a non-exhaustive, unsorted list of planned features:
 * Working web app and server
 * Further improvements for collaboration and AI (particularly MCP)
 * Further refine the UI
-* Support other languages than EN/DE
+* Support other languages than EN/DE (every other language is machine translated)
 * Bug-fixing - You tell me!
 
 ## License
