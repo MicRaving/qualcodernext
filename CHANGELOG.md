@@ -7,6 +7,13 @@
      include (first releases have no base tag, so no link). Add a section
      like "## 0.1.1 (2026-08-31)" at the TOP of the file. -->
 
+## 0.1.7 (2026-09-04)
+
+- Smaller download and installed app size with no feature changes.
+- SPSS .sav import and preview keep full fidelity on the leaner backend.
+
+**Full Changelog**: https://github.com/MicRaving/qualcodernext/compare/v0.1.6...v0.1.7
+
 ## 0.1.6 (2026-09-04)
 
 - Complete rewrite on FastAPI, React 19, and Tauri 2 with a typed HTTP API.
