@@ -109,12 +109,14 @@ async function openTextFile(page: Page, fileName: string, firstLine: string) {
       await expect(page.getByRole("heading", { name: "Coding" }).first()).toBeVisible({
         timeout: 15_000,
       });
-      await row.click({ timeout: 20_000 });
+      await expect(row).toBeVisible({ timeout: 20_000 });
+      await row.click();
       await expect(page.getByText(firstLine, { exact: false })).toBeVisible({ timeout: 20_000 });
       return;
     } catch {
       if (attempt === 2) throw new Error(`Could not open ${fileName} in the coder`);
       await page.reload();
+      await ensureProjectOpen(page);
     }
   }
 }
