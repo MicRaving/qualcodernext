@@ -32,6 +32,26 @@ _TOKEN_RE = re.compile(r"[^\W\d_]+(?:[''-][^\W\d_]+)*")
 # ---------------------------------------------------------------------------
 
 
+async def _capture_dict(
+    session: AsyncSession, entity: str, action: str, pk_name: str, pk_value
+) -> None:
+    """Journal a dictionary/dictionary_entry mutation for collaboration sync
+    (replays carry these entities; without capture they never leave this
+    instance, including deletes)."""
+    from qualcoder_api.persistence.repositories import _capture, _rowdict
+
+    table = getattr(tables, entity, None)
+    if table is None:  # pragma: no cover - defensive
+        return
+    row = (
+        await session.execute(
+            select(table).where(table.c[pk_name] == pk_value)
+        )
+    ).first()
+    if row is not None:
+        await _capture(session, entity, action, pk_name, pk_value, _rowdict(row))
+
+
 async def list_dictionaries(session: AsyncSession) -> list[dict]:
     """All dictionaries with their entries (id, name, owner, created)."""
     dict_rows = (
@@ -90,7 +110,10 @@ async def create_dictionary(session: AsyncSession, name: str, owner: str) -> dic
         await session.rollback()
         return None
     await session.commit()
-    item = await get_dictionary(session, _inserted_pk(result))
+    new_id = _inserted_pk(result)
+    await _capture_dict(session, "dictionary", "insert", "id", new_id)
+    await session.commit()
+    item = await get_dictionary(session, new_id)
     assert item is not None
     return item
 
@@ -118,22 +141,40 @@ async def rename_dictionary(session: AsyncSession, dict_id: int, name: str) -> d
         await session.rollback()
         return None
     await session.commit()
+    await _capture_dict(session, "dictionary", "update", "id", dict_id)
+    await session.commit()
     return await get_dictionary(session, dict_id)
 
 
 async def delete_dictionary(session: AsyncSession, dict_id: int) -> bool:
     """Delete a dictionary and all its entries; False when it does not exist."""
+    from qualcoder_api.persistence.repositories import _capture, _rowdict
+
     existing = (
         await session.execute(
-            select(tables.dictionary.c.id).where(tables.dictionary.c.id == dict_id)
+            select(tables.dictionary).where(tables.dictionary.c.id == dict_id)
         )
     ).first()
     if existing is None:
         return False
+    dict_data = _rowdict(existing)
+    entry_rows = (
+        await session.execute(
+            select(tables.dictionary_entry).where(
+                tables.dictionary_entry.c.dict_id == dict_id
+            )
+        )
+    ).all()
+    entry_data = [_rowdict(r) for r in entry_rows]
     await session.execute(
         delete(tables.dictionary_entry).where(tables.dictionary_entry.c.dict_id == dict_id)
     )
+    for data in entry_data:
+        await _capture(
+            session, "dictionary_entry", "delete", "id", data.get("id"), data
+        )
     await session.execute(delete(tables.dictionary).where(tables.dictionary.c.id == dict_id))
+    await _capture(session, "dictionary", "delete", "id", dict_id, dict_data)
     await session.commit()
     return True
 
@@ -167,10 +208,13 @@ async def add_entry(
         await session.rollback()
         return "duplicate"
     await session.commit()
+    new_id = _inserted_pk(result)
+    await _capture_dict(session, "dictionary_entry", "insert", "id", new_id)
+    await session.commit()
     row = (
         await session.execute(
             select(tables.dictionary_entry).where(
-                tables.dictionary_entry.c.id == _inserted_pk(result)
+                tables.dictionary_entry.c.id == new_id
             )
         )
     ).first()
@@ -179,14 +223,18 @@ async def add_entry(
 
 
 async def remove_entry(session: AsyncSession, entry_id: int) -> bool:
+    from qualcoder_api.persistence.repositories import _capture, _rowdict
+
     existing = (
         await session.execute(
-            select(tables.dictionary_entry.c.id).where(tables.dictionary_entry.c.id == entry_id)
+            select(tables.dictionary_entry).where(tables.dictionary_entry.c.id == entry_id)
         )
     ).first()
     if existing is None:
         return False
+    data = _rowdict(existing)
     await session.execute(delete(tables.dictionary_entry).where(tables.dictionary_entry.c.id == entry_id))
+    await _capture(session, "dictionary_entry", "delete", "id", entry_id, data)
     await session.commit()
     return True
 

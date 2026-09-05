@@ -7,6 +7,13 @@
      include (first releases have no base tag, so no link). Add a section
      like "## 0.1.1 (2026-08-31)" at the TOP of the file. -->
 
+## 0.1.11 (2026-09-05)
+
+- Collaboration replay now covers every deletion: dictionaries, code sets, file replacement, and reference links.
+- New Repair sync replays everything when instances disagree, automatically after opening.
+
+**Full Changelog**: https://github.com/MicRaving/qualcodernext/compare/v0.1.10...v0.1.11
+
 ## 0.1.10 (2026-09-05)
 
 - Fixed joiners seeded from a stale archive keeping resurrected files instead of reconciling.

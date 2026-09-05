@@ -124,6 +124,9 @@ interface PrefsState {
    *  the shared-folder auto-enable passes remember: false. */
   setSyncEnabled: (enabled: boolean, opts?: { remember?: boolean }) => Promise<boolean>;
   runSyncNow: () => Promise<boolean>;
+  /** Full repair sync: forget import watermarks and replay every sidecar,
+   *  then repaint. Idempotent — heals rows incremental cycles missed. */
+  runRepairSync: () => Promise<boolean>;
   /** Background pull: run one cycle and, when it imported new rows, refresh
    *  the project data + the open coder's segments so other raters' changes
    *  appear automatically (no manual "Sync now" needed). */
@@ -263,6 +266,19 @@ export const usePrefsStore = create<PrefsState>((set) => ({
       set({ syncStatus: status });
       // Manual "Sync now" must show what arrived: repaint project data AND
       // the coder roster (pulled coder_names/owner rows change the counts).
+      await useProjectStore.getState().refreshProject();
+      await useCoderStore.getState().loadCoders();
+      return true;
+    } catch {
+      return false;
+    }
+  },
+  runRepairSync: async () => {
+    try {
+      const res = await api.syncRepair();
+      if (!res.ok) return false;
+      const status = await api.syncStatus();
+      set({ syncStatus: status });
       await useProjectStore.getState().refreshProject();
       await useCoderStore.getState().loadCoders();
       return true;

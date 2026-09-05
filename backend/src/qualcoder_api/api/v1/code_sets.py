@@ -20,7 +20,7 @@ from qualcoder_api.api.v1.deps import DbDep
 from qualcoder_api.core.timeutil import now as _now
 from qualcoder_api.persistence import tables
 from qualcoder_api.persistence.repo.base import _inserted_pk
-from qualcoder_api.services import audit
+from qualcoder_api.services import audit, sync
 from qualcoder_api.services.user_settings import get_codername, resolve_owner
 
 router = APIRouter(prefix="/code-sets", tags=["code-sets"])
@@ -116,6 +116,11 @@ async def create_code_set(req: CodeSetCreate, db: DbDep) -> dict:
     set_id = _inserted_pk(result)
     row = (await db.execute(select(tables.code_set).where(tables.code_set.c.id == set_id))).first()
     assert row is not None
+    await sync.capture_insert(
+        db, entity="code_set", pk_name="id", pk_value=set_id,
+        row={k: v for k, v in dict(row._mapping).items() if not k.startswith("_")},
+    )
+    await db.commit()
     await audit.record(
         db, user=owner, action="code_set.create", entity="code_set",
         entity_id=set_id, detail={"name": name, "row": dict(row._mapping)},
@@ -143,6 +148,11 @@ async def rename_code_set(set_id: int, req: CodeSetRename, db: DbDep) -> dict:
     )
     row = (await db.execute(select(tables.code_set).where(tables.code_set.c.id == set_id))).first()
     assert row is not None
+    await sync.capture_update(
+        db, entity="code_set", pk_name="id", pk_value=set_id,
+        row={k: v for k, v in dict(row._mapping).items() if not k.startswith("_")},
+    )
+    await db.commit()
     return dict(row._mapping)
 
 
@@ -166,7 +176,15 @@ async def delete_code_set(set_id: int, db: DbDep) -> None:
     await db.execute(
         delete(tables.code_set_member).where(tables.code_set_member.c.set_id == set_id)
     )
+    for member in members:
+        await sync.capture_delete(
+            db, entity="code_set_member", pk_name="set_id,cid",
+            pk_value=f"{member.get('set_id')}:{member.get('cid')}", row=member,
+        )
     await db.execute(delete(tables.code_set).where(tables.code_set.c.id == set_id))
+    await sync.capture_delete(
+        db, entity="code_set", pk_name="id", pk_value=set_id, row=data,
+    )
     await db.commit()
     await audit.record(
         db, user=get_codername(), action="code_set.delete", entity="code_set",
@@ -214,6 +232,11 @@ async def add_code_set_members(set_id: int, req: CodeSetMembers, db: DbDep) -> d
             insert(tables.code_set_member),
             [{"set_id": set_id, "cid": cid} for cid in to_add],
         )
+        for cid in to_add:
+            await sync.capture_insert(
+                db, entity="code_set_member", pk_name="set_id,cid",
+                pk_value=f"{set_id}:{cid}", row={"set_id": set_id, "cid": cid},
+            )
         await db.commit()
     await audit.record(
         db, user=get_codername(), action="code_set.members_add", entity="code_set",
@@ -250,6 +273,11 @@ async def remove_code_set_members(set_id: int, req: CodeSetMembers, db: DbDep) -
             )
         )
         removed = cast(CursorResult[Any], result).rowcount or 0
+        for cid in removed_cids:
+            await sync.capture_delete(
+                db, entity="code_set_member", pk_name="set_id,cid",
+                pk_value=f"{set_id}:{cid}", row={"set_id": set_id, "cid": cid},
+            )
         await db.commit()
     await audit.record(
         db, user=get_codername(), action="code_set.members_remove", entity="code_set",

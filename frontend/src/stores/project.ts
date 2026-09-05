@@ -409,7 +409,21 @@ export const useProjectStore = create<ProjectLifecycleState>((set, get) => ({
       if (res.sync_auto_enabled) {
         usePrefsStore.setState({ syncAutoNotice: true });
       }
-      void usePrefsStore.getState().loadProjectMode();
+      void usePrefsStore.getState().loadProjectMode().then(() => {
+        // Heal-on-open: replay every sidecar once so rows missed by
+        // watermark-based cycles (crashes, stale seeds) converge, then
+        // repaint. Fire-and-forget; idempotent and safe to skip on error.
+        if (usePrefsStore.getState().collabMode === "collaboration") {
+          api
+            .syncRepair()
+            .then((res) => {
+              if (!res?.ok) return;
+              void get().refreshProject();
+              void useCoderStore.getState().loadCoders();
+            })
+            .catch(() => {});
+        }
+      });
       return true;
     } catch (e) {
       set({ busy: false, error: errorMessage(e, "Could not open project")});

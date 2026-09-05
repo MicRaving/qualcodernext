@@ -277,6 +277,15 @@ async def update_mediapath(source_id: int, req: MediapathUpdate, db: DbDep) -> d
         ),
         {"mp": f"{kind}:{new_path}", "id": source_id},
     )
+    from qualcoder_api.persistence.repositories import _capture, _rowdict
+
+    _updated = (
+        await db.execute(select(tables.source).where(tables.source.c.id == source_id))
+    ).first()
+    if _updated is not None:
+        await _capture(
+            db, "source", "update", "id", source_id, _rowdict(_updated)
+        )
     await db.commit()
     await audit.record(
         db, user=get_codername(), action="source.link_fix", entity="source",
@@ -318,6 +327,14 @@ async def bulk_rename_path(req: BulkRenameRequest, db: DbDep) -> dict:
             updated += 1
         elif instances > 1:
             skipped += 1
+    from qualcoder_api.persistence.repositories import _capture, _rowdict
+
+    for sid, _old, _new in updated_rows:
+        _row = (
+            await db.execute(select(tables.source).where(tables.source.c.id == sid))
+        ).first()
+        if _row is not None:
+            await _capture(db, "source", "update", "id", sid, _rowdict(_row))
     await db.commit()
     await audit.record(
         db, user=get_codername(), action="source.link_fix", entity="source",

@@ -87,24 +87,33 @@ async def replace_text_file(
 
     old_fulltext = source.get("fulltext") or ""
 
+    from qualcoder_api.persistence.repositories import _capture
+
+    def _clean(data: dict) -> dict:
+        return {k: v for k, v in data.items() if not k.startswith("_")}
+
     # --- codings ---------------------------------------------------------
     code_rows = (
         await session.execute(
-            select(
-                tables.code_text.c.ctid,
-                tables.code_text.c.pos0,
-                tables.code_text.c.pos1,
-            ).where(tables.code_text.c.fid == fid)
+            select(tables.code_text).where(tables.code_text.c.fid == fid)
         )
     ).all()
-    codes = await _segment_snippets(session, fid, tables.code_text, code_rows, 0, 1, 2)
+    code_by_id = {dict(r._mapping)["ctid"]: dict(r._mapping) for r in code_rows}
+    codes = await _segment_snippets(
+        session, fid, tables.code_text,
+        [(m["ctid"], m["pos0"], m["pos1"]) for m in code_by_id.values()], 0, 1, 2,
+    )
     deleted_codes = 0
     ambiguous = 0
     for segment in codes:
         count = new_text.count(segment["seltext"])
         if count == 0:
+            data = code_by_id.pop(segment["id"])
             await session.execute(
                 delete(tables.code_text).where(tables.code_text.c.ctid == segment["id"])
+            )
+            await _capture(
+                session, "code_text", "delete", "ctid", segment["id"], _clean(data)
             )
             deleted_codes += 1
             continue
@@ -117,24 +126,34 @@ async def replace_text_file(
             .where(tables.code_text.c.ctid == segment["id"])
             .values(pos0=pos, pos1=pos + length)
         )
+        data = dict(code_by_id[segment["id"]])
+        data["pos0"] = pos
+        data["pos1"] = pos + length
+        await _capture(
+            session, "code_text", "update", "ctid", segment["id"], _clean(data)
+        )
 
     # --- annotations ------------------------------------------------------
     ann_rows = (
         await session.execute(
-            select(
-                tables.annotation.c.anid,
-                tables.annotation.c.pos0,
-                tables.annotation.c.pos1,
-            ).where(tables.annotation.c.fid == fid)
+            select(tables.annotation).where(tables.annotation.c.fid == fid)
         )
     ).all()
-    anns = await _segment_snippets(session, fid, tables.annotation, ann_rows, 0, 1, 2)
+    ann_by_id = {dict(r._mapping)["anid"]: dict(r._mapping) for r in ann_rows}
+    anns = await _segment_snippets(
+        session, fid, tables.annotation,
+        [(m["anid"], m["pos0"], m["pos1"]) for m in ann_by_id.values()], 0, 1, 2,
+    )
     deleted_anns = 0
     for segment in anns:
         count = new_text.count(segment["seltext"])
         if count == 0:
+            data = ann_by_id.pop(segment["id"])
             await session.execute(
                 delete(tables.annotation).where(tables.annotation.c.anid == segment["id"])
+            )
+            await _capture(
+                session, "annotation", "delete", "anid", segment["id"], _clean(data)
             )
             deleted_anns += 1
             continue
@@ -145,18 +164,24 @@ async def replace_text_file(
             .where(tables.annotation.c.anid == segment["id"])
             .values(pos0=pos, pos1=pos + length)
         )
+        data = dict(ann_by_id[segment["id"]])
+        data["pos0"] = pos
+        data["pos1"] = pos + length
+        await _capture(
+            session, "annotation", "update", "anid", segment["id"], _clean(data)
+        )
 
     # --- case links -------------------------------------------------------
     case_rows = (
         await session.execute(
-            select(
-                tables.case_text.c.id,
-                tables.case_text.c.pos0,
-                tables.case_text.c.pos1,
-            ).where(tables.case_text.c.fid == fid)
+            select(tables.case_text).where(tables.case_text.c.fid == fid)
         )
     ).all()
-    cases = await _segment_snippets(session, fid, tables.case_text, case_rows, 0, 1, 2)
+    case_by_id = {dict(r._mapping)["id"]: dict(r._mapping) for r in case_rows}
+    cases = await _segment_snippets(
+        session, fid, tables.case_text,
+        [(m["id"], m["pos0"], m["pos1"]) for m in case_by_id.values()], 0, 1, 2,
+    )
     # Whole-file assignment: pos0=0 and pos1 covers the whole old text.
     full_file_caseids = [
         c["id"]
@@ -169,14 +194,23 @@ async def replace_text_file(
             .where(tables.case_text.c.id == cid)
             .values(pos1=max(0, len(new_text) - 1))
         )
+        data = dict(case_by_id[cid])
+        data["pos1"] = max(0, len(new_text) - 1)
+        await _capture(
+            session, "case_text", "update", "id", cid, _clean(data)
+        )
     deleted_cases = 0
     for segment in cases:
         if segment["id"] in full_file_caseids:
             continue
         count = new_text.count(segment["seltext"])
         if count == 0:
+            data = case_by_id.pop(segment["id"])
             await session.execute(
                 delete(tables.case_text).where(tables.case_text.c.id == segment["id"])
+            )
+            await _capture(
+                session, "case_text", "delete", "id", segment["id"], _clean(data)
             )
             deleted_cases += 1
             continue
@@ -186,6 +220,12 @@ async def replace_text_file(
             update(tables.case_text)
             .where(tables.case_text.c.id == segment["id"])
             .values(pos0=pos, pos1=pos + length)
+        )
+        data = dict(case_by_id[segment["id"]])
+        data["pos0"] = pos
+        data["pos1"] = pos + length
+        await _capture(
+            session, "case_text", "update", "id", segment["id"], _clean(data)
         )
 
     # --- file copy + source row ------------------------------------------
@@ -214,6 +254,14 @@ async def replace_text_file(
             date=_now(),
         )
     )
+    updated = (
+        await session.execute(select(tables.source).where(tables.source.c.id == fid))
+    ).first()
+    if updated is not None:
+        await _capture(
+            session, "source", "update", "id", fid,
+            _clean(dict(updated._mapping)),
+        )
     await session.commit()
     return {
         "ok": True,

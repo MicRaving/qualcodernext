@@ -1013,6 +1013,8 @@ export const api = {
       body: JSON.stringify({ file_id: fileId, file_name: fileName }),
     }),
   syncNow: () => request<SyncResult>("/sync/now", { method: "POST" }),
+  /** Full repair sync: forget import watermarks and replay every sidecar. */
+  syncRepair: () => request<SyncResult>("/sync/repair", { method: "POST" }),
   /** Current sync switch state + cadence. */
   syncSettings: () => request<SyncSettings>("/sync/settings"),
   setSyncEnabled: (enabled: boolean, intervalSecs?: number) =>

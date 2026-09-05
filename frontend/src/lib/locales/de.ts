@@ -1777,6 +1777,8 @@ export const de: Record<string, string> = {
   "sync.pendingExport": "{n} zu senden",
   "sync.pendingImport": "{n} zu empfangen",
   "sync.now": "Jetzt synchronisieren",
+  "sync.repair": "Sync reparieren",
+  "sync.repairHint": "Alle Änderungen erneut einspielen (behebt abweichende Zähler zwischen Instanzen).",
   "sync.lastSyncShort": "vor {when}",
   "sync.never": "Nie",
   "sync.error": "Sync-Fehler",

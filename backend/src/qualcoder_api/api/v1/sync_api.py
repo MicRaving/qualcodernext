@@ -198,6 +198,19 @@ async def sync_now(svc: OpenProjectDep) -> dict:
     )
 
 
+@router.post("/repair")
+async def sync_repair(svc: OpenProjectDep) -> dict:
+    """Full repair sync: forget import watermarks and replay every sidecar.
+
+    Idempotent (natural-key converge): heals rows missed by incremental
+    cycles without duplicating anything.  Use when instances show different
+    counts, or automatically after opening a collaboration project.
+    """
+    return await sync_engine.run_repair_cycle(
+        svc.session_factory, svc.project_path, _sync_id(svc)
+    )
+
+
 @router.get("/conflicts")
 async def list_conflicts(svc: ServiceDep) -> dict:
     """Unresolved conflicts with local + remote row snapshots."""

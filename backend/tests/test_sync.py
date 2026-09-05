@@ -447,6 +447,56 @@ async def test_delete_propagates(rater_a, rater_b):
         assert len((await session.execute(tables.code_text.select())).scalars().all()) == 0
 
 
+async def test_repair_endpoint(project_client):
+    """POST /sync/repair runs a full repair cycle and reports it."""
+    from qualcoder_api.main import service
+    from qualcoder_api.persistence.repositories import CodeRepository
+
+    client, _ = project_client
+    sync.set_current_user("tester")
+    async with service.session_factory() as session:
+        await CodeRepository(session).add_code(name="repairable", owner="tester")
+    res = await client.post("/api/v1/sync/repair")
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert body["ok"] is True
+    assert body.get("repaired") is True
+
+
+async def test_dictionary_crud_roundtrip(rater_a, rater_b):
+    """Dictionary rows travel like any other entity: create + entry on one
+    side appear on the other, and deletes propagate too (they used to never
+    leave the originating instance — no capture at all)."""
+    from qualcoder_api.services import dictionary_service
+
+    async def dict_names(svc, user):
+        sync.set_current_user(user)
+        async with svc.session_factory() as session:
+            await sync.import_pending(session, svc.project_path, user)
+            return sorted(
+                d["name"] for d in await dictionary_service.list_dictionaries(session)
+            )
+
+    sync.set_current_user("anna")
+    async with rater_a.session_factory() as session:
+        created = await dictionary_service.create_dictionary(session, "Emotions", "anna")
+        assert created is not None
+        await dictionary_service.add_entry(session, created["id"], "happy", "joy")
+    await _export(rater_a, "anna")
+    _copy_changes(rater_a.project_path, rater_b.project_path)
+    assert await dict_names(rater_b, "berta") == ["Emotions"]
+    async with rater_b.session_factory() as session:
+        bdict = await dictionary_service.get_dictionary(session, 1)
+        assert bdict is not None and len(bdict["entries"]) == 1
+
+    sync.set_current_user("anna")
+    async with rater_a.session_factory() as session:
+        assert await dictionary_service.delete_dictionary(session, created["id"]) is True
+    await _export(rater_a, "anna")
+    _copy_changes(rater_a.project_path, rater_b.project_path)
+    assert await dict_names(rater_b, "berta") == []
+
+
 async def test_natural_key_less_pk_collision_both_survive(rater_a, rater_b):
     """Tables without a natural key (case links, image/AV codings, …) collide
     on autoincrement PKs across instances: both raters link id=1 for
@@ -497,6 +547,43 @@ async def test_natural_key_less_pk_collision_both_survive(rater_a, rater_b):
     assert report_a["berta"]["conflicts"] == []
     assert report_b["anna"]["conflicts"] == []
     assert links_a == links_b == [("caseA", "a.txt"), ("caseB", "b.txt")]
+
+
+async def test_repair_cycle_heals_watermark_ahead_gap(rater_a, rater_b):
+    """A watermark ahead of the applied state (aborted rebuild, torn backlog)
+    leaves rows missing forever under incremental sync.  run_repair_cycle
+    forgets import watermarks and replays everything idempotently, so the
+    missing file arrives exactly once."""
+    sync.set_current_user("anna")
+    async with rater_a.session_factory() as session:
+        await SourceRepository(session).add_source(
+            name="a.txt", fulltext="alpha", mediapath="/docs/a.txt", owner="anna"
+        )
+    await _export(rater_a, "anna")
+    _copy_changes(rater_a.project_path, rater_b.project_path)
+
+    # Poison B's watermark past the entry: incremental import heals nothing.
+    state = sync.load_state(rater_b.project_path)
+    state.setdefault("imports", {})["anna"] = 10**9
+    sync.save_state(rater_b.project_path, state)
+    sync.set_current_user("berta")
+    async with rater_b.session_factory() as session:
+        report = await sync.import_pending(session, rater_b.project_path, "berta")
+        assert report == {}
+        assert len((await session.execute(tables.source.select())).scalars().all()) == 0
+
+    # Full repair replays everything: the file arrives exactly once.
+    result = await sync_engine.run_repair_cycle(
+        rater_b.session_factory, rater_b.project_path, "berta"
+    )
+    assert result["ok"] is True and result.get("repaired") is True
+    async with rater_b.session_factory() as session:
+        names = (
+            await session.execute(
+                tables.source.select().with_only_columns(tables.source.c.name)
+            )
+        ).scalars().all()
+    assert list(names) == ["a.txt"]
 
 
 async def test_delete_then_reinsert_same_pk_no_ghost(rater_a, rater_b):

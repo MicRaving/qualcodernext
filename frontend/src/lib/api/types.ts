@@ -1085,4 +1085,5 @@ export interface SyncResult {
   reason?: string;
   exported?: number;
   imported?: Record<string, { applied: number; conflicts: SyncConflict[] }>;
+  repaired?: boolean;
 }

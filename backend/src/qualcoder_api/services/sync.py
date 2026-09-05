@@ -52,6 +52,7 @@ from qualcoder_api.services.sync_engine import (  # noqa: F401
     rebuild_from_sidecars,
     resolve_all_conflicts,
     resolve_conflict,
+    run_repair_cycle,
     run_sync_cycle,
     save_state,
     sync_status,

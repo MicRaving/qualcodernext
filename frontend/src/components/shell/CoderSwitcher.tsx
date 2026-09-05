@@ -81,6 +81,7 @@ export function CoderSwitcher() {
   const setSyncStatus = usePrefsStore((s) => s.setSyncStatus);
   const setSyncEnabled = usePrefsStore((s) => s.setSyncEnabled);
   const runSyncNow = usePrefsStore((s) => s.runSyncNow);
+  const runRepairSync = usePrefsStore((s) => s.runRepairSync);
   const presence = usePrefsStore((s) => s.presence);
   const collabMode = usePrefsStore((s) => s.collabMode);
   const activateCollaboration = usePrefsStore((s) => s.activateCollaboration);
@@ -307,6 +308,17 @@ export function CoderSwitcher() {
         // the user sees pulled codes/sources without a second click.
         await useProjectStore.getState().refreshProject();
       }
+    } finally {
+      setSyncBusy(false);
+    }
+  }
+
+  async function repairSync() {
+    // Full repair: forget import watermarks and replay every sidecar, for
+    // when instances show different counts. The store repaints afterwards.
+    setSyncBusy(true);
+    try {
+      await runRepairSync();
     } finally {
       setSyncBusy(false);
     }
@@ -773,6 +785,19 @@ export function CoderSwitcher() {
                   {syncStatus?.last_sync
                     ? t("sync.lastSyncShort", { when: formatSince(syncStatus.last_sync) })
                     : t("sync.never")}
+                </button>
+              )}
+              {collabMode === "collaboration" && (
+                /* Full repair: replay every sidecar (idempotent) for when
+                   instances disagree on counts. */
+                <button
+                  type="button"
+                  onClick={() => void repairSync()}
+                  disabled={syncBusy}
+                  title={t("sync.repairHint")}
+                  className="shrink-0 rounded-sm border border-border px-2 py-0.5 text-xs text-text-secondary hover:bg-surface-higher disabled:opacity-50"
+                >
+                  {t("sync.repair")}
                 </button>
               )}
               {collabMode === "collaboration" ? (

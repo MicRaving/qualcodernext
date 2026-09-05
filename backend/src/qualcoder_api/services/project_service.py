@@ -39,21 +39,23 @@ BACKUP_FOLDER = "backups"
 async def _reset_seeded_sync_bookkeeping(project_path: str, sandbox_db: str) -> None:
     """Scrub foreign sync bookkeeping from an archive-seeded sandbox.
 
-    A ``data.qda`` copy drags the merger's change journal (``sync_log`` /
-    ``sync_rev``) into the new sandbox.  Left in place, this instance would
-    re-export that foreign history as its own — stale re-exports resurrect
-    rows peers already deleted — while the import watermarks (already
-    advanced by the rebuild attempt) skip the very sidecars that would
-    reconcile the stale archive.  So: wipe the copied journal and reset the
-    import watermarks; the next sync cycle then replays everything
-    idempotently and converges.  Exports, PK remaps and baselines are left
-    untouched.  Best effort — never blocks opening.
+    A ``data.qda`` copy drags the merger's outbound journal (``sync_log``)
+    into the new sandbox.  Left in place, this instance would re-export that
+    foreign history as its own — stale re-exports resurrect rows peers
+    already deleted.  So: wipe the copied journal and reset the import
+    watermarks; the next sync cycle then replays everything idempotently
+    and converges.
+
+    ``sync_rev`` is deliberately KEPT: the copy shares the archive's PK
+    namespace, so its per-row Lamport clocks are this sandbox's correct
+    baseline — wiping them would make every later local edit lose its
+    version comparison against peers' history.  Exports, PK remaps and
+    baselines are left untouched.  Best effort — never blocks opening.
     """
     with contextlib.suppress(Exception):
         conn = await aiosqlite.connect(sandbox_db)
         try:
             await conn.execute("DELETE FROM sync_log")
-            await conn.execute("DELETE FROM sync_rev")
             await conn.commit()
         finally:
             await conn.close()

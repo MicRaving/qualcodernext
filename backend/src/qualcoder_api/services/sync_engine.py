@@ -179,6 +179,25 @@ async def baseline_first_sync(session, project_path: str, instance_id: str) -> b
     return True
 
 
+async def run_repair_cycle(session_factory, project_path: str, instance_id: str) -> dict:
+    """Full repair sync: forget import watermarks, then replay every sidecar.
+
+    Incremental cycles only read entries above per-remote watermarks.  When a
+    watermark has run ahead of the applied state (aborted rebuild, torn
+    backlog, stale seed), rows stay missing forever with no signal.
+    Resetting ``imports`` and replaying everything is idempotent
+    (natural-key converge) and bounds any divergence window.  Exports, acks,
+    remaps and baselines are left untouched.  Returns the cycle report plus
+    ``repaired: True``.
+    """
+    state = load_state(project_path)
+    state["imports"] = {}
+    save_state(project_path, state)
+    result = await run_sync_cycle(session_factory, project_path, instance_id)
+    result["repaired"] = True
+    return result
+
+
 async def run_sync_cycle(session_factory, project_path: str, instance_id: str) -> dict:
     """One export + import pass. Serialized app-wide by SYNC_LOCK."""
     _reset_health_for_project(project_path)

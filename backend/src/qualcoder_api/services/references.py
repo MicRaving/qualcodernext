@@ -91,13 +91,43 @@ async def list_references(session: AsyncSession) -> list[dict]:
     return result
 
 
+async def _capture_sources_by_ids(
+    session: AsyncSession, sids: list[int]
+) -> None:
+    """Journal ``source`` rows touched by a risid relink (the ``ris`` table
+    itself is not synced; the ``source.risid`` column is)."""
+    from qualcoder_api.persistence.repositories import _capture
+
+    if not sids:
+        return
+    rows = (
+        await session.execute(
+            select(tables.source).where(tables.source.c.id.in_(sids))
+        )
+    ).all()
+    for row in rows:
+        data = {k: v for k, v in dict(row._mapping).items() if not k.startswith("_")}
+        await _capture(
+            session, "source", "update", "id", data.get("id"), data
+        )
+
+
 async def delete_reference(session: AsyncSession, risid: int) -> None:
     """Delete one reference and unlink its sources."""
     await session.execute(delete(tables.ris).where(tables.ris.c.risid == risid))
+    sids = [
+        r[0]
+        for r in (
+            await session.execute(
+                select(tables.source.c.id).where(tables.source.c.risid == risid)
+            )
+        ).all()
+    ]
     await session.execute(
         text("UPDATE source SET risid = NULL WHERE risid = :risid"),
         {"risid": risid},
     )
+    await _capture_sources_by_ids(session, [int(i) for i in sids])
     await session.commit()
 
 
@@ -139,6 +169,7 @@ async def attach_file(
             text("UPDATE source SET risid = :risid WHERE id = :sid"),
             {"risid": risid, "sid": source.id},
         )
+        await _capture_sources_by_ids(session, [int(source.id)])
         await session.commit()
     return {"ok": True, "source_id": source.id, "name": source.name, "risid": risid}
 
@@ -149,6 +180,7 @@ async def detach_file(session: AsyncSession, risid: int, source_id: int) -> None
         text("UPDATE source SET risid = NULL WHERE id = :sid AND risid = :risid"),
         {"sid": source_id, "risid": risid},
     )
+    await _capture_sources_by_ids(session, [int(source_id)])
     await session.commit()
 
 

@@ -245,12 +245,31 @@ class SourceRepository:
         )
         # Clear any media source's transcript pointer to the deleted row so
         # re-transcription links a fresh transcript instead of folding into
-        # a missing companion.
+        # a missing companion.  Journaled: a dangling av_text_id on peers
+        # hides the wrong file from their file list.
+        pointed = (
+            await self.session.execute(
+                select(tables.source.c.id).where(
+                    tables.source.c.av_text_id == source_id
+                )
+            )
+        ).all()
         await self.session.execute(
             update(tables.source)
             .where(tables.source.c.av_text_id == source_id)
             .values(av_text_id=None)
         )
+        for (mid,) in pointed:
+            mrow = (
+                await self.session.execute(
+                    select(tables.source).where(tables.source.c.id == mid)
+                )
+            ).first()
+            if mrow is not None:
+                await audit_capture.capture_update(
+                    self.session, entity="source", pk_name="id", pk_value=mid,
+                    row=audit_capture.table_row(mrow._mapping),
+                )
         for row in src_rows:
             await audit_capture.capture_delete(
                 self.session, entity="source", pk_name="id", pk_value=source_id, row=row
