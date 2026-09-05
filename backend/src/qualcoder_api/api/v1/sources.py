@@ -515,6 +515,24 @@ async def update_source(source_id: int, req: SourceUpdate, db: DbDep) -> Source:
             .values(memo_type=req.memo_type)
         )
         await db.commit()
+        # Journal the memo_type change so collaborators receive it.
+        try:
+            from qualcoder_api.services import sync as _sync_mod
+
+            fresh = (
+                await db.execute(
+                    select(tables.source).where(tables.source.c.id == source_id)
+                )
+            ).first()
+            if fresh is not None:
+                await _sync_mod.capture(
+                    db, entity="source", action="update",
+                    pk_name="id", pk_value=source_id,
+                    row={k: v for k, v in dict(fresh._mapping).items() if not k.startswith("_")},
+                )
+                await db.commit()
+        except Exception:
+            pass
         source = await SourceRepository(db).get_source(source_id)
     if source is None:  # pragma: no cover - row vanished mid-update
         raise HTTPException(status_code=404, detail="source not found")

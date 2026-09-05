@@ -838,11 +838,21 @@ async def rebuild_from_sidecars(
 ) -> dict:
     """Rebuild a (fresh, empty) sandbox database from the sidecar change log.
 
-    Gathers every instance's sidecar, keeps the latest entry per (entity, pk)
-    across all instances, then replays them in dependency order so FK
-    translation and remap recording work.  ``_replay_one`` assigns fresh local
-    PKs and backfills ``sync_rev``.  The seeded ``project`` row (created with a
-    new schema) is replaced by the exported project row.
+    Gathers every instance's sidecar, keeps the latest entry per
+    (instance, entity, pk) — one collapsed history per originating row —
+    then replays them in dependency order so FK translation and remap
+    recording work.  ``_replay_one`` assigns fresh local PKs and backfills
+    ``sync_rev``.  The seeded ``project`` row (created with a new schema) is
+    replaced by the exported project row.
+
+    Collapsing must stay per-instance: autoincrement PKs diverge between
+    instances (every machine starts its counters at 1), so two independent
+    rows from different instances routinely share the same ``(entity,
+    pk_value)``.  A global collapse kept only the higher-seq one and silently
+    dropped the other — the rebuilt sandbox ended up with fewer files/codes
+    than the collaborators' sandboxes.  Natural-key matching during replay
+    converges true duplicates (same business key) and keeps distinct rows
+    apart via fresh PKs.
 
     The caller is expected to have created and opened a fresh sandbox and to
     pass its ``session_factory``.  Returns an outcome report.
@@ -851,7 +861,7 @@ async def rebuild_from_sidecars(
     changes_root = Path(project_path) / SYNC_DIR_NAME
     replays_root = Path(project_path) / "replays"
 
-    latest: dict[tuple[str, str], dict] = {}
+    latest: dict[tuple[str, str, str], dict] = {}
     max_seq_by_instance: dict[str, int] = {}
     # Per-session replays (new spec 2a)
     if replays_root.is_dir():
@@ -866,7 +876,7 @@ async def rebuild_from_sidecars(
                 except (TypeError, ValueError):
                     seq = 0
                 inst_max = max(inst_max, seq)
-                key = (str(e.get("entity", "")), str(e.get("pk_value", "")))
+                key = (remote_instance, str(e.get("entity", "")), str(e.get("pk_value", "")))
                 prev = latest.get(key)
                 if prev is not None and int(prev.get("seq", 0)) >= seq:
                     continue
@@ -893,7 +903,7 @@ async def rebuild_from_sidecars(
                 except (TypeError, ValueError):
                     seq = 0
                 inst_max = max(inst_max, seq)
-                key = (str(e.get("entity", "")), str(e.get("pk_value", "")))
+                key = (remote_instance, str(e.get("entity", "")), str(e.get("pk_value", "")))
                 prev = latest.get(key)
                 if prev is not None and int(prev.get("seq", 0)) >= seq:
                     continue

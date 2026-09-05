@@ -109,21 +109,67 @@ class CodeRepository:
         return [int(r[0]) for r in rows]
 
     async def _set_code_positions(self, cids: list[int]) -> None:
-        """Renumber a sibling group: positions 0..n-1 in list order."""
+        """Renumber a sibling group: positions 0..n-1 in list order.
+
+        Each changed row is journaled so collaborators converge on the same
+        order — skipping capture left peers with stale positions.
+        """
+        from qualcoder_api.persistence import audit_capture as _ac
+
         for index, cid in enumerate(cids):
+            cur = (
+                await self.session.execute(
+                    select(tables.code_name.c.position).where(
+                        tables.code_name.c.cid == cid
+                    )
+                )
+            ).first()
+            if cur is not None and int(cur[0]) == index:
+                continue
             await self.session.execute(
                 update(tables.code_name)
                 .where(tables.code_name.c.cid == cid)
                 .values(position=index)
             )
+            row = (
+                await self.session.execute(
+                    select(tables.code_name).where(tables.code_name.c.cid == cid)
+                )
+            ).first()
+            if row is not None:
+                await _ac.capture_update(
+                    self.session, entity="code_name", pk_name="cid", pk_value=cid,
+                    row=_ac.table_row(row._mapping),
+                )
 
     async def _set_category_positions(self, catids: list[int]) -> None:
+        from qualcoder_api.persistence import audit_capture as _ac
+
         for index, catid in enumerate(catids):
+            cur = (
+                await self.session.execute(
+                    select(tables.code_cat.c.position).where(
+                        tables.code_cat.c.catid == catid
+                    )
+                )
+            ).first()
+            if cur is not None and int(cur[0]) == index:
+                continue
             await self.session.execute(
                 update(tables.code_cat)
                 .where(tables.code_cat.c.catid == catid)
                 .values(position=index)
             )
+            row = (
+                await self.session.execute(
+                    select(tables.code_cat).where(tables.code_cat.c.catid == catid)
+                )
+            ).first()
+            if row is not None:
+                await _ac.capture_update(
+                    self.session, entity="code_cat", pk_name="catid", pk_value=catid,
+                    row=_ac.table_row(row._mapping),
+                )
 
     async def _merged_root(self) -> list[tuple[str, int]]:
         """The root sibling group merged across both tables, in tree order.
@@ -150,19 +196,59 @@ class CodeRepository:
         return [(entry[0], entry[1]) for entry in merged]
 
     async def _renumber_merged_root(self, merged: list[tuple[str, int]]) -> None:
+        from qualcoder_api.persistence import audit_capture as _ac
+
         for index, (kind, id_) in enumerate(merged):
             if kind == "code":
+                cur = (
+                    await self.session.execute(
+                        select(tables.code_name.c.position).where(
+                            tables.code_name.c.cid == id_
+                        )
+                    )
+                ).first()
+                if cur is not None and int(cur[0]) == index:
+                    continue
                 await self.session.execute(
                     update(tables.code_name)
                     .where(tables.code_name.c.cid == id_)
                     .values(position=index)
                 )
+                row = (
+                    await self.session.execute(
+                        select(tables.code_name).where(tables.code_name.c.cid == id_)
+                    )
+                ).first()
+                if row is not None:
+                    await _ac.capture_update(
+                        self.session, entity="code_name", pk_name="cid", pk_value=id_,
+                        row=_ac.table_row(row._mapping),
+                    )
             else:
+                cur = (
+                    await self.session.execute(
+                        select(tables.code_cat.c.position).where(
+                            tables.code_cat.c.catid == id_
+                        )
+                    )
+                ).first()
+                if cur is not None and int(cur[0]) == index:
+                    continue
                 await self.session.execute(
                     update(tables.code_cat)
                     .where(tables.code_cat.c.catid == id_)
                     .values(position=index)
                 )
+                row = (
+                    await self.session.execute(
+                        select(tables.code_cat).where(tables.code_cat.c.catid == id_)
+                    )
+                ).first()
+                if row is not None:
+                    await _ac.capture_update(
+                        self.session, entity="code_cat", pk_name="catid", pk_value=id_,
+                        row=_ac.table_row(row._mapping),
+                    )
 
     async def root_rank_of(self, kind: str, id_: int) -> int | None:
         """Visual rank of a root-level item in the merged root list (None

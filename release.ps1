@@ -219,7 +219,7 @@ if ($doCompile) {
                     platforms = @{
                         "windows-x86_64" = @{
                             signature = $signature
-                            url       = "https://github.com/$repoSlug/releases/latest/download/$name"
+                            url       = "https://github.com/$repoSlug/releases/download/v$tauriVersion/$name"
                         }
                     }
                 }

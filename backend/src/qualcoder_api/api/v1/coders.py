@@ -42,7 +42,57 @@ OWNER_TABLES = (
     ("comment", "owner"),
     ("code_set", "owner"),
     ("dictionary", "owner"),
+    ("r_script", "owner"),
 )
+
+
+async def _capture_owner_reassign(session, old: str, new: str) -> None:
+    """Move every ``owner`` reference from *old* to *new* AND journal each
+    touched row into ``sync_log`` so collaborators converge.
+
+    A bare bulk ``UPDATE owner`` without capture left peers with stale owners:
+    their coder roster (registry + live owners) kept showing the old name, so
+    two instances displayed different coder counts for the same project, and a
+    later reopen resurrected deleted coders from the stale owner rows.
+    """
+    from qualcoder_api.services.sync_schema import ENTITY_PKS
+
+    for table, column in OWNER_TABLES:
+        try:
+            rows = (
+                await session.execute(
+                    text(f'SELECT * FROM "{table}" WHERE "{column}" = :from'),
+                    {"from": old},
+                )
+            ).mappings().all()
+        except Exception:
+            continue
+        if not rows:
+            continue
+        await session.execute(
+            text(f'UPDATE "{table}" SET "{column}" = :to WHERE "{column}" = :from'),
+            {"to": new, "from": old},
+        )
+        pk_name = ENTITY_PKS.get(table, "")
+        if not pk_name or "," in pk_name:
+            continue
+        try:
+            from qualcoder_api.services import sync as _sync_mod
+        except Exception:
+            continue
+        for r in rows:
+            data = {k: v for k, v in dict(r).items() if not k.startswith("_")}
+            data[column] = new
+            pk_value = data.get(pk_name)
+            if pk_value is None:
+                continue
+            try:
+                await _sync_mod.capture(
+                    session, entity=table, action="update",
+                    pk_name=pk_name, pk_value=pk_value, row=data,
+                )
+            except Exception:
+                continue
 
 
 # Coding-segment tables (text/image/AV codings). The coder flyout shows these
@@ -274,23 +324,25 @@ async def rename_coder(name: str, req: RenameCoderRequest, svc: ServiceDep) -> C
         _, factory = svc._ensure_engine()
         async with factory() as session:
             try:
-                for table, column in OWNER_TABLES:
+                await _capture_owner_reassign(session, name, new_name)
+                old_vis = (
                     await session.execute(
-                        text(f'UPDATE "{table}" SET "{column}" = :to WHERE "{column}" = :from'),
-                        {"to": new_name, "from": name},
+                        text("SELECT visibility FROM coder_names WHERE name = :n"),
+                        {"n": name},
                     )
+                ).first()
+                visibility = int(old_vis[0]) if old_vis is not None else 1
                 await session.execute(
                     text("UPDATE coder_names SET name = :to WHERE name = :from"),
                     {"to": new_name, "from": name},
                 )
                 # Propagate the roster rename: the old name is gone, the new name
-                # appears.  Owner columns on other instances keep the old owner
-                # (their rows remain visible — the old coder_names row no longer
-                # exists to hide them), and the rename converges on the next cycle.
+                # appears (visibility preserved).  Owner rows are journaled above
+                # so peers converge instead of keeping the stale owner.
                 await _capture_coder(session, "delete", name, {"name": name, "visibility": 0})
                 await _capture_coder(
                     session, "insert", new_name,
-                    {"name": new_name, "visibility": 1},
+                    {"name": new_name, "visibility": visibility},
                 )
                 await session.commit()
             except Exception:
@@ -395,11 +447,7 @@ async def delete_coder(
         _, factory = svc._ensure_engine()
         async with factory() as session:
             try:
-                for table, column in OWNER_TABLES:
-                    await session.execute(
-                        text(f'UPDATE "{table}" SET "{column}" = :to WHERE "{column}" = :from'),
-                        {"to": reassign_to, "from": name},
-                    )
+                await _capture_owner_reassign(session, name, reassign_to)
                 await session.commit()
             except Exception:
                 import contextlib as _ctx2

@@ -310,10 +310,14 @@ jobs:
           if (-not $file) { throw "No updater bundle matched $glob in $dir" }
           $signature = (Get-Content "$($file.FullName).sig" -Raw).Trim()
           if (-not $signature) { throw "Missing .sig for $($file.Name)" }
+          # Versioned asset URL (immutable for this release): the manifest
+          # is fetched via /latest, but each entry must keep pointing at
+          # ITS OWN release's files after newer releases ship.
+          $version = "$env:GITHUB_REF_NAME" -replace '^v', ''
           $fragment = @{
             target    = "${{ matrix.target }}"
             signature = $signature
-            url       = "https://github.com/MicRaving/qualcodernext/releases/latest/download/$($file.Name)"
+            url       = "https://github.com/MicRaving/qualcodernext/releases/download/v$version/$($file.Name)"
           }
           $fragment | ConvertTo-Json | Set-Content "$env:RUNNER_TEMP/fragment-${{ matrix.target }}.json"
 
@@ -363,7 +367,12 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     steps:
+      # Pin the checkout to the tag being released: the manifest version
+      # must describe THIS release, not whatever main points at when the
+      # job runs.
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.ref }}
 
       - name: Download all manifest fragments
         uses: actions/download-artifact@v8
@@ -377,10 +386,15 @@ jobs:
         run: |
           $fragments = Get-ChildItem "fragments/fragment-*.json" -ErrorAction SilentlyContinue
           if (-not $fragments) {
-            Write-Host "No signed updater fragments (unsigned build) - skipping the update manifest."
+            Write-Host "::warning::No signed updater fragments (unsigned build) - skipping the update manifest. The release will ship without updater support and installed apps will report that no update information is published."
             exit 0
           }
-          $version = (Get-Content "frontend/src-tauri/tauri.conf.json" -Raw | ConvertFrom-Json).version
+          # The tag (vX.Y.Z) is the source of truth for the released
+          # version; fall back to tauri.conf.json outside tag context.
+          $version = "$env:GITHUB_REF_NAME" -replace '^v', ''
+          if (-not $version) {
+            $version = (Get-Content "frontend/src-tauri/tauri.conf.json" -Raw | ConvertFrom-Json).version
+          }
           $platforms = @{}
           foreach ($f in $fragments) {
             $frag = Get-Content $f.FullName -Raw | ConvertFrom-Json

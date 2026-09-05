@@ -7,7 +7,7 @@ import { useEffect, useState } from "react";
 import { Check, Download, LoaderCircle, RotateCw } from "lucide-react";
 import { Button, Select } from "@/components/ui/orchestrator";
 import { useI18n } from "@/lib/i18n";
-import { useUpdatesStore } from "@/stores/updates";
+import { NO_UPDATE_MANIFEST, useUpdatesStore } from "@/stores/updates";
 import type { UpdatesSettings } from "@/lib/api";
 
 export function UpdatesTab() {
@@ -118,7 +118,9 @@ export function UpdatesTab() {
         <p className="mt-2 text-xs text-danger">
           {updatesError === "desktop only"
             ? t("settings.updatesDesktopOnly")
-            : t("settings.updatesError", { detail: updatesError ?? "" })}
+            : updatesError === NO_UPDATE_MANIFEST
+              ? t("settings.updatesNoManifest")
+              : t("settings.updatesError", { detail: updatesError ?? "" })}
         </p>
       )}
     </div>

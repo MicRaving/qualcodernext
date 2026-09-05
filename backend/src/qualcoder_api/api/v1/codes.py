@@ -206,6 +206,25 @@ async def update_code(cid: int, req: CodeUpdate, db: DbDep) -> Code:
                 .values(**values)
             )
             await db.commit()
+            # Journal the field update so collaborators receive it — a bare
+            # UPDATE without capture left peers with stale memo/colour/etc.
+            try:
+                from qualcoder_api.services import sync as _sync_mod
+
+                fresh = (
+                    await db.execute(
+                        select(tables.code_name).where(tables.code_name.c.cid == cid)
+                    )
+                ).first()
+                if fresh is not None:
+                    await _sync_mod.capture(
+                        db, entity="code_name", action="update",
+                        pk_name="cid", pk_value=cid,
+                        row={k: v for k, v in dict(fresh._mapping).items() if not k.startswith("_")},
+                    )
+                    await db.commit()
+            except Exception:
+                pass
     code = await repo.get_code(cid)
     if code is None:
         raise HTTPException(status_code=404, detail="code not found")
@@ -555,6 +574,18 @@ async def rename_category(catid: int, req: CategoryRename, db: DbDep) -> Categor
     ).first()
     if row is None:
         raise HTTPException(status_code=404, detail="category not found")
+    # Journal the rename so collaborators receive it.
+    try:
+        from qualcoder_api.services import sync as _sync_mod
+
+        await _sync_mod.capture(
+            db, entity="code_cat", action="update",
+            pk_name="catid", pk_value=catid,
+            row={k: v for k, v in dict(row._mapping).items() if not k.startswith("_")},
+        )
+        await db.commit()
+    except Exception:
+        pass
     await audit.record(
         db, user=get_codername(), action="category.rename", entity="code_cat",
         entity_id=catid, detail={"old_name": old[0], "new_name": name},

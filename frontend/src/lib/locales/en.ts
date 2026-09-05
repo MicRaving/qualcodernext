@@ -149,6 +149,7 @@ export const en: Record<string, string> = {
   "settings.updatesDownloading": "Downloading {pct}%",
   "settings.updatesInstall": "Download & install",
   "settings.updatesDesktopOnly": "Updates are only available in the desktop app.",
+  "settings.updatesNoManifest": "No update information published yet — the latest release has no update manifest. Try again after the next release.",
   "settings.updatesError": "Update check failed: {detail}",
   "settings.tabGeneral": "General",
   "settings.tabAi": "AI",

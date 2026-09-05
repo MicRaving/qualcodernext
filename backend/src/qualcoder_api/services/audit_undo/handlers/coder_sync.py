@@ -24,6 +24,8 @@ async def _revert_coder(session: AsyncSession, row: dict, *, undo: bool, **kwarg
     action = row.get("action") or ""
     detail = _detail(row)
     if action == "coder.create":
+        from qualcoder_api.persistence.repositories import _capture as _cap
+
         name = detail.get("name")
         if not name:
             raise _missing_data()
@@ -36,6 +38,14 @@ async def _revert_coder(session: AsyncSession, row: dict, *, undo: bool, **kwarg
             await session.execute(
                 text("DELETE FROM coder_names WHERE name = :n"), {"n": name}
             )
+            try:
+                await _cap(
+                    session, "coder_names", "delete", "name", name,
+                    {"name": name, "visibility": 0},
+                )
+                await session.flush()
+            except Exception:
+                pass
             return f"removed coder {name!r} from the coder list"
         if name not in names:
             set_coders([*names, name])
@@ -45,6 +55,14 @@ async def _revert_coder(session: AsyncSession, row: dict, *, undo: bool, **kwarg
             ),
             {"n": name},
         )
+        try:
+            await _cap(
+                session, "coder_names", "insert", "name", name,
+                {"name": name, "visibility": 1},
+            )
+            await session.flush()
+        except Exception:
+            pass
         return f"re-added coder {name!r} to the coder list"
     if action == "coder.delete":
         name = detail.get("name")
@@ -62,6 +80,10 @@ async def _revert_coder(session: AsyncSession, row: dict, *, undo: bool, **kwarg
             set_coders([n for n in names if n != name])
         return f"removed coder {name!r} from the coder list"
     if action == "coder.rename":
+        from qualcoder_api.services.sync_schema import ENTITY_PKS
+
+        from ..base import _sync_capture
+
         old = detail.get("from")
         new = detail.get("to")
         if not old or not new:
@@ -71,16 +93,58 @@ async def _revert_coder(session: AsyncSession, row: dict, *, undo: bool, **kwarg
         renamed = [target if n == source else n for n in names]
         set_coders(renamed)
         for table in tables.OWNER_TABLES:
+            pk_name = ENTITY_PKS.get(table, "")
+            ids: list = []
+            if pk_name and "," not in pk_name:
+                try:
+                    rows = (
+                        await session.execute(
+                            text(f'SELECT "{pk_name}" FROM "{table}" WHERE owner = :from'),
+                            {"from": source},
+                        )
+                    ).all()
+                    ids = [r[0] for r in rows]
+                except Exception:
+                    ids = []
             await session.execute(
                 text(f'UPDATE "{table}" SET owner = :to WHERE owner = :from'),
                 {"to": target, "from": source},
             )
+            if pk_name and "," not in pk_name:
+                for pk_value in ids:
+                    try:
+                        await _sync_capture(session, table, "update", pk_name, pk_value)
+                    except Exception:
+                        continue
         await session.execute(
             text("UPDATE coder_names SET name = :to WHERE name = :from"),
             {"to": target, "from": source},
         )
+        try:
+            await _sync_capture(session, "coder_names", "delete", "name", source)
+        except Exception:
+            pass
+        try:
+            row = (
+                await session.execute(
+                    text("SELECT name, visibility FROM coder_names WHERE name = :n"),
+                    {"n": target},
+                )
+            ).first()
+            if row is not None:
+                from qualcoder_api.persistence.repositories import _capture
+
+                await _capture(
+                    session, "coder_names", "insert", "name", target,
+                    {"name": row[0], "visibility": row[1]},
+                )
+                await session.flush()
+        except Exception:
+            pass
         return f"coder {source!r} {'renamed back to' if undo else 'renamed to'} {target!r}"
     if action == "coder.visibility":
+        from qualcoder_api.persistence.repositories import _capture as _cap2
+
         name = detail.get("name")
         if not name:
             raise _missing_data()
@@ -91,6 +155,14 @@ async def _revert_coder(session: AsyncSession, row: dict, *, undo: bool, **kwarg
                 await session.execute(
                     text("DELETE FROM coder_names WHERE name = :n"), {"n": name}
                 )
+                try:
+                    await _cap2(
+                        session, "coder_names", "delete", "name", name,
+                        {"name": name, "visibility": 0},
+                    )
+                    await session.flush()
+                except Exception:
+                    pass
             else:
                 await session.execute(
                     text(
@@ -99,6 +171,14 @@ async def _revert_coder(session: AsyncSession, row: dict, *, undo: bool, **kwarg
                     ),
                     {"n": name, "v": 1 if before else 0},
                 )
+                try:
+                    await _cap2(
+                        session, "coder_names", "update", "name", name,
+                        {"name": name, "visibility": 1 if before else 0},
+                    )
+                    await session.flush()
+                except Exception:
+                    pass
             return f"coder {name!r} visibility restored"
         await session.execute(
             text(
@@ -107,6 +187,14 @@ async def _revert_coder(session: AsyncSession, row: dict, *, undo: bool, **kwarg
             ),
             {"n": name, "v": applied},
         )
+        try:
+            await _cap2(
+                session, "coder_names", "update", "name", name,
+                {"name": name, "visibility": applied},
+            )
+            await session.flush()
+        except Exception:
+            pass
         return f"coder {name!r} visibility re-applied"
     raise UnsupportedAction(f"no undo for {action}")
 

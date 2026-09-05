@@ -42,6 +42,27 @@ export function updaterAvailable(): boolean {
   return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 }
 
+/**
+ * Sentinel stored in `error` when the update check fails because the
+ * release manifest is missing on the remote (no `qcnext-latest.json`
+ * asset on the latest GitHub release — e.g. the release was published
+ * without signing, so no updater artifacts exist). The Settings tab
+ * renders a dedicated, non-alarming message for it instead of the raw
+ * plugin error ("Could not fetch a valid release JSON from the remote").
+ */
+export const NO_UPDATE_MANIFEST = "no-manifest";
+
+/**
+ * Map a raw update-check failure to the missing-manifest sentinel when
+ * the Tauri updater plugin reports that the remote release JSON is
+ * absent or invalid. Returns null for every other failure (the raw
+ * message is shown then).
+ */
+export function classifyUpdateCheckError(raw: unknown): typeof NO_UPDATE_MANIFEST | null {
+  const msg = errorMessage(raw, String(raw));
+  return /valid release JSON/i.test(msg) ? NO_UPDATE_MANIFEST : null;
+}
+
 export const useUpdatesStore = create<UpdatesState>((set, get) => ({
   status: "idle",
   info: null,
@@ -93,7 +114,7 @@ export const useUpdatesStore = create<UpdatesState>((set, get) => ({
     } catch (e) {
       set({
         status: "error",
-        error: errorMessage(e, String(e)),
+        error: classifyUpdateCheckError(e) ?? errorMessage(e, String(e)),
         lastCheckedAt: Date.now(),
       });
     }

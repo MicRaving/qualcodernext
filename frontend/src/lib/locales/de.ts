@@ -150,6 +150,7 @@ export const de: Record<string, string> = {
   "settings.updatesDownloading": "Lade {pct} % herunter",
   "settings.updatesInstall": "Herunterladen und installieren",
   "settings.updatesDesktopOnly": "Updates sind nur in der Desktop-App verfügbar.",
+  "settings.updatesNoManifest": "Noch keine Update-Informationen veröffentlicht — das neueste Release enthält kein Update-Manifest. Nach dem nächsten Release erneut versuchen.",
   "settings.updatesError": "Update-Check fehlgeschlagen: {detail}",
   "settings.tabGeneral": "Allgemein",
   "settings.tabAi": "KI",

@@ -7,6 +7,14 @@
      include (first releases have no base tag, so no link). Add a section
      like "## 0.1.1 (2026-08-31)" at the TOP of the file. -->
 
+## 0.1.8 (2026-09-05)
+
+- Fixed collaboration showing different coder, file, and code counts between instances.
+- Second collaborators joining a shared project now rebuild the full file and code set.
+- Update check no longer alarms when a release ships without an update manifest.
+
+**Full Changelog**: https://github.com/MicRaving/qualcodernext/compare/v0.1.7...v0.1.8
+
 ## 0.1.7 (2026-09-04)
 
 - Smaller download and installed app size with no feature changes.
