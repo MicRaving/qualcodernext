@@ -586,6 +586,44 @@ async def test_repair_cycle_heals_watermark_ahead_gap(rater_a, rater_b):
     assert list(names) == ["a.txt"]
 
 
+async def test_repair_cycle_publishes_local_only_rows(rater_a, rater_b):
+    """Rows that never entered any journal (pre-capture legacy writes) are
+    invisible to incremental sync.  Repair's trailing snapshot publishes
+    them, so the peer receives genuinely local-only rows."""
+    from sqlalchemy import text as sa_text
+
+    sync.set_current_user("anna")
+    async with rater_a.session_factory() as session:
+        # Direct write with no capture — stands in for any uncaptured path.
+        await session.execute(
+            sa_text(
+                "INSERT INTO source (name, fulltext, mediapath, owner, date) "
+                "VALUES ('legacy.txt', 'old', '/docs/legacy.txt', 'anna', 't')"
+            )
+        )
+        await session.commit()
+    await _export(rater_a, "anna")  # exports nothing (journal is empty)
+    _copy_changes(rater_a.project_path, rater_b.project_path)
+    sync.set_current_user("berta")
+    async with rater_b.session_factory() as session:
+        report = await sync.import_pending(session, rater_b.project_path, "berta")
+        assert report == {}
+    result = await sync_engine.run_repair_cycle(
+        rater_a.session_factory, rater_a.project_path, "anna"
+    )
+    assert result["ok"] is True and int(result.get("snapshot_exported", 0)) > 0
+    _copy_changes(rater_a.project_path, rater_b.project_path)
+    sync.set_current_user("berta")
+    async with rater_b.session_factory() as session:
+        await sync.import_pending(session, rater_b.project_path, "berta")
+        names = (
+            await session.execute(
+                tables.source.select().with_only_columns(tables.source.c.name)
+            )
+        ).scalars().all()
+    assert list(names) == ["legacy.txt"]
+
+
 async def test_delete_then_reinsert_same_pk_no_ghost(rater_a, rater_b):
     """Deleting the max-id row and re-adding reuses its PK (plain INTEGER
     PRIMARY KEY); the peer must apply the delete AND the insert. Collapsing

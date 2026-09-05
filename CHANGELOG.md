@@ -7,6 +7,13 @@
      include (first releases have no base tag, so no link). Add a section
      like "## 0.1.1 (2026-08-31)" at the TOP of the file. -->
 
+## 0.1.12 (2026-09-05)
+
+- Imported codebooks and RQDA projects now sync their codes and categories.
+- Repair sync also publishes rows that never entered the change journal.
+
+**Full Changelog**: https://github.com/MicRaving/qualcodernext/compare/v0.1.11...v0.1.12
+
 ## 0.1.11 (2026-09-05)
 
 - Collaboration replay now covers every deletion: dictionaries, code sets, file replacement, and reference links.

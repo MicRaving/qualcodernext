@@ -5,7 +5,7 @@ from __future__ import annotations
 import sqlite3
 
 import aiosqlite
-from sqlalchemy import update
+from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
@@ -73,6 +73,16 @@ async def _import_rqda(src: aiosqlite.Connection, session_factory, codername: st
             if rows and rows[0][0]:
                 await session.execute(update(tables.project).values(memo=rows[0][0]))
                 await session.commit()
+                from qualcoder_api.persistence.repositories import _capture, _rowdict
+
+                prow = (
+                    await session.execute(select(tables.project))
+                ).first()
+                if prow is not None:
+                    await _capture(
+                        session, "project", "update", "rowid", 1, _rowdict(prow)
+                    )
+                    await session.commit()
 
         # -- sources -----------------------------------------------------
         fid_map: dict[int, int] = {}
@@ -122,6 +132,8 @@ async def _import_rqda(src: aiosqlite.Connection, session_factory, codername: st
                         existing.add(name)
                         counts["categories"] += 1
                 if parent_col:
+                    from qualcoder_api.persistence.repositories import _capture, _rowdict
+
                     for rqda_id, parent_id in await _fetch(
                         src, f"SELECT {id_col}, {parent_col} FROM codecat"
                     ):
@@ -137,6 +149,18 @@ async def _import_rqda(src: aiosqlite.Connection, session_factory, codername: st
                                 .where(tables.code_cat.c.catid == new_catid)
                                 .values(supercatid=parent_catid)
                             )
+                            linked = (
+                                await session.execute(
+                                    select(tables.code_cat).where(
+                                        tables.code_cat.c.catid == new_catid
+                                    )
+                                )
+                            ).first()
+                            if linked is not None:
+                                await _capture(
+                                    session, "code_cat", "update", "catid",
+                                    new_catid, _rowdict(linked),
+                                )
                     await session.commit()
 
         # -- codes -------------------------------------------------------

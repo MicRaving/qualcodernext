@@ -13,11 +13,12 @@ import io
 import logging
 from pathlib import Path
 
-from sqlalchemy import text
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from qualcoder_api.core.palette import random_code_color
 from qualcoder_api.core.timeutil import now as _now
+from qualcoder_api.persistence import tables
 
 logger = logging.getLogger(__name__)
 
@@ -52,6 +53,7 @@ async def import_codebook(
     async with session_factory() as session:
         # --- categories (in path order so parents exist first) ----------
         category_paths: list[str] = []
+        imported_cat_leaves: list[str] = []
         for row in rows:
             if not row or not row[0]:
                 continue
@@ -98,13 +100,32 @@ async def import_codebook(
                     },
                 )
                 category_paths.append(full)
+                imported_cat_leaves.append(part)
                 imported_categories += 1
+        await session.commit()
+        # Journal every imported category so collaborators receive them
+        # (category names are unique — re-read for the assigned ids; only
+        # newly inserted leaves, never pre-existing duplicates).
+        from qualcoder_api.persistence.repositories import _capture, _rowdict
+
+        for leaf in dict.fromkeys(imported_cat_leaves):
+            cat_row = (
+                await session.execute(
+                    select(tables.code_cat).where(tables.code_cat.c.name == leaf)
+                )
+            ).first()
+            if cat_row is not None:
+                await _capture(
+                    session, "code_cat", "insert", "catid",
+                    cat_row._mapping["catid"], _rowdict(cat_row),
+                )
         await session.commit()
 
         # --- codes -------------------------------------------------------
         rows_cat = await session.execute(text("SELECT name, catid FROM code_cat"))
         name_to_catid = {name: catid for name, catid in rows_cat}  # noqa: C416 - cursor rows
 
+        imported_code_names: list[str] = []
         for row in rows:
             if not row or not row[0]:
                 continue
@@ -116,12 +137,13 @@ async def import_codebook(
                 continue
             exists = (
                 await session.execute(
-                    text("SELECT cid FROM code_name WHERE name = :n"), {"n": code_name}
+                    select(tables.code_name.c.cid).where(tables.code_name.c.name == code_name)
                 )
             ).first()
             if exists is not None:
                 duplicates += 1
                 continue
+            imported_code_names.append(code_name)
             catid = name_to_catid.get(category_name)
             await session.execute(
                 text(
@@ -138,6 +160,22 @@ async def import_codebook(
                 },
             )
             imported_codes += 1
+        await session.commit()
+        # Journal every imported code (code names are unique).
+        from qualcoder_api.persistence.repositories import _capture as _capture_code
+        from qualcoder_api.persistence.repositories import _rowdict as _rowdict_code
+
+        for name in dict.fromkeys(imported_code_names):
+            code_row = (
+                await session.execute(
+                    select(tables.code_name).where(tables.code_name.c.name == name)
+                )
+            ).first()
+            if code_row is not None:
+                await _capture_code(
+                    session, "code_name", "insert", "cid",
+                    code_row._mapping["cid"], _rowdict_code(code_row),
+                )
         await session.commit()
 
     message = (

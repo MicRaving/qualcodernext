@@ -180,21 +180,32 @@ async def baseline_first_sync(session, project_path: str, instance_id: str) -> b
 
 
 async def run_repair_cycle(session_factory, project_path: str, instance_id: str) -> dict:
-    """Full repair sync: forget import watermarks, then replay every sidecar.
+    """Full repair sync: export pending, forget import watermarks, replay
+    every sidecar, then publish a full-state snapshot.
 
     Incremental cycles only read entries above per-remote watermarks.  When a
     watermark has run ahead of the applied state (aborted rebuild, torn
     backlog, stale seed), rows stay missing forever with no signal.
     Resetting ``imports`` and replaying everything is idempotent
-    (natural-key converge) and bounds any divergence window.  Exports, acks,
-    remaps and baselines are left untouched.  Returns the cycle report plus
-    ``repaired: True``.
+    (natural-key converge) and bounds any divergence window; the trailing
+    snapshot additionally publishes rows that never entered any journal
+    (pre-capture legacy writes), so peers receive genuinely local-only rows
+    too.  The snapshot runs AFTER converging, so it reflects merged state
+    and cannot resurrect peer-deleted rows.  Acks, remaps and baselines are
+    left untouched.  Returns the cycle report plus ``repaired: True``.
     """
     state = load_state(project_path)
     state["imports"] = {}
     save_state(project_path, state)
     result = await run_sync_cycle(session_factory, project_path, instance_id)
+    try:
+        async with session_factory() as session:
+            snap = await export_full_state(session, project_path, instance_id)
+    except Exception as err:  # pragma: no cover - defensive
+        logger.warning("repair snapshot failed: %s", err)
+        snap = {"exported": 0}
     result["repaired"] = True
+    result["snapshot_exported"] = int(snap.get("exported", 0) or 0)
     return result
 
 
