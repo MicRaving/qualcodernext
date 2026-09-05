@@ -195,6 +195,119 @@ async def test_two_instances_converge_and_conflict(client):
     assert "bob" in coders
 
 
+async def _bootstrap_hub(client):
+    """Register owner + two editors, create + open project; return headers."""
+    r = await client.post(
+        "/api/v1/auth/register", json={"username": "owner2", "password": "owner-pw-1"}
+    )
+    assert r.status_code == 200
+    owner_login = await client.post(
+        "/api/v1/auth/login", json={"username": "owner2", "password": "owner-pw-1"}
+    )
+    owner = {"Authorization": f"Bearer {owner_login.json()['token']}"}
+    created = await client.post(
+        "/api/v1/server/projects", json={"name": "Hub2"}, headers=owner
+    )
+    assert created.status_code == 200, created.text
+    pid = created.json()["id"]
+    headers = {"owner": owner}
+    for name in ("carol", "dave"):
+        reg = await client.post(
+            "/api/v1/auth/register",
+            json={"username": name, "password": f"{name}-pw-123"},
+            headers=owner,
+        )
+        assert reg.status_code == 200, reg.text
+        share = await client.put(
+            f"/api/v1/server/projects/{pid}/members/{reg.json()['user']['id']}",
+            json={"role": "editor"},
+            headers=owner,
+        )
+        assert share.status_code == 200
+        login = await client.post(
+            "/api/v1/auth/login", json={"username": name, "password": f"{name}-pw-123"}
+        )
+        headers[name] = {
+            "Authorization": f"Bearer {login.json()['token']}",
+            "X-Project-Id": pid,
+        }
+    opened = await client.post(f"/api/v1/server/projects/{pid}/open", headers=owner)
+    assert opened.status_code == 200
+    return headers
+
+
+def _hub_entry(pk: int, name: str) -> dict:
+    return {
+        # NOTE: no seq — the hub assigns global seqs on ingest, because each
+        # client's own counter overlaps the others'.
+        "instance": "test",
+        "coder": "tester",
+        "entity": "code_name",
+        "action": "insert",
+        "pk_name": "cid",
+        "pk_value": pk,
+        "rev": 1,
+        "mtime": "2026-01-01T00:00:00.000",
+        "row": {
+            "cid": pk,
+            "name": name,
+            "catid": None,
+            "supercid": None,
+            "memo": "",
+            "color": "#ffffff",
+            "owner": "tester",
+            "date": "2026-01-01",
+            "memo_type": "",
+            "position": 0,
+        },
+    }
+
+
+async def test_pull_cursor_survives_overlapping_client_seqs(client):
+    """Clients number entries from their own counters, so seq ranges overlap
+    across sidecars.  The hub re-sequences pushes into one global space, so a
+    single ``since`` cursor never skips later entries from another instance.
+    """
+    headers = await _bootstrap_hub(client)
+    carol, dave = headers["carol"], headers["dave"]
+
+    for inst, head, names in (
+        ("inst-carol", carol, ["C1", "C2"]),
+        ("inst-dave", dave, ["D1"]),
+    ):
+        pushed = await client.post(
+            "/api/v1/sync/push",
+            json={
+                "instance_id": inst,
+                "entries": [_hub_entry(7000 + i, n) for i, n in enumerate(names)],
+            },
+            headers=head,
+        )
+        assert pushed.status_code == 200, pushed.text
+
+    first = await client.get(
+        "/api/v1/sync/pull", params={"instance_id": "inst-erin", "since": 0}, headers=carol
+    )
+    assert first.status_code == 200
+    assert len(first.json()["entries"]) == 3
+    cursor = first.json()["server_seq"]
+
+    # Dave's own counter restarts low — without hub re-sequencing this entry
+    # would sit at/below the cursor and never be pulled.
+    pushed = await client.post(
+        "/api/v1/sync/push",
+        json={"instance_id": "inst-dave", "entries": [_hub_entry(7999, "D2")]},
+        headers=dave,
+    )
+    assert pushed.status_code == 200, pushed.text
+    second = await client.get(
+        "/api/v1/sync/pull", params={"instance_id": "inst-erin", "since": cursor}, headers=carol
+    )
+    assert second.status_code == 200
+    names = [e["row"]["name"] for e in second.json()["entries"] if e.get("row")]
+    assert names == ["D2"]
+
+
 async def test_push_requires_editor_role(client):
     r = await client.post(
         "/api/v1/auth/register", json={"username": "admin", "password": "admin-pw-123"}

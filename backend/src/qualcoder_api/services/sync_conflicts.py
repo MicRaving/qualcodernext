@@ -148,8 +148,15 @@ async def _resolve_conflict_locked(
             return {"ok": False, "reason": f"unknown resolution: {resolution}"}
 
         # Update sync_rev for the resolved row (tombstone when deleted).
+        # Upsert, not bare UPDATE: rows that predate versioned sync have no
+        # sync_rev entry, and a bare UPDATE would silently keep it that way.
         await session.execute(
-            text("UPDATE sync_rev SET rev = :rev, mtime = :ts, origin = :origin, deleted = :del WHERE entity = :e AND pk = :pk"),
+            text(
+                "INSERT INTO sync_rev (entity, pk, rev, mtime, origin, deleted) "
+                "VALUES (:e, :pk, :rev, :ts, :origin, :del) "
+                "ON CONFLICT(entity, pk) DO UPDATE SET rev = :rev, mtime = :ts, "
+                "origin = :origin, deleted = :del"
+            ),
             {"rev": new_rev, "ts": ts, "origin": instance_id, "del": 1 if resolved_deleted else 0, "e": entity, "pk": pk},
         )
 

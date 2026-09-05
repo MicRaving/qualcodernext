@@ -7,6 +7,7 @@
  */
 import { create } from "zustand";
 import { api, type PresenceEntry, type SyncStatus, type SyncConflictV2 } from "@/lib/api";
+import { useCoderStore } from "./coder";
 import { useProjectStore } from "./project";
 
 export type ThemeMode = "light" | "dark" | "oled";
@@ -260,6 +261,10 @@ export const usePrefsStore = create<PrefsState>((set) => ({
       if (!res.ok) return false;
       const status = await api.syncStatus();
       set({ syncStatus: status });
+      // Manual "Sync now" must show what arrived: repaint project data AND
+      // the coder roster (pulled coder_names/owner rows change the counts).
+      await useProjectStore.getState().refreshProject();
+      await useCoderStore.getState().loadCoders();
       return true;
     } catch {
       return false;
@@ -277,9 +282,11 @@ export const usePrefsStore = create<PrefsState>((set) => ({
         0,
       );
       if (imported > 0) {
-        // New rows landed in the local sandbox — repaint project data and the
-        // open coder's segments (coders listen for qc:codings-changed).
+        // New rows landed in the local sandbox — repaint project data, the
+        // coder roster (counts!), and the open coder's segments (coders
+        // listen for qc:codings-changed).
         await useProjectStore.getState().refreshProject().catch(() => {});
+        await useCoderStore.getState().loadCoders().catch(() => {});
         if (typeof window !== "undefined") {
           window.dispatchEvent(new Event("qc:codings-changed"));
         }

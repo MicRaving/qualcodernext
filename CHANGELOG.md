@@ -7,6 +7,16 @@
      include (first releases have no base tag, so no link). Add a section
      like "## 0.1.1 (2026-08-31)" at the TOP of the file. -->
 
+## 0.1.10 (2026-09-05)
+
+- Fixed joiners seeded from a stale archive keeping resurrected files instead of reconciling.
+- Sync-now and background sync now refresh the coder roster along with files and codes.
+- Fixed last-closer merging over a failed sync, which permanently deleted peers' work.
+- Case links and similar rows no longer overwrite each other across instances.
+- Server sync no longer skips entries when clients' change numbers overlap.
+
+**Full Changelog**: https://github.com/MicRaving/qualcodernext/compare/v0.1.9...v0.1.10
+
 ## 0.1.9 (2026-09-05)
 
 - Fixed collaboration counts diverging: deleted files/codings no longer resurrect as ghosts on peers.

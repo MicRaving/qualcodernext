@@ -87,7 +87,20 @@ async def sync_push(
     applied: dict = {}
     async with SYNC_LOCK:
         if req.entries:
-            lines = "\n".join(json.dumps(e, ensure_ascii=False) for e in req.entries) + "\n"
+            # Re-sequence pushed entries into the hub's global seq space.
+            # Clients number their own entries from their own counters, so
+            # two clients' seq ranges overlap; the pull cursor (``since``)
+            # is global, and overlapping seqs would make later entries
+            # invisible to it forever.  Monotonic global seqs keep every
+            # pull complete and ordered.  Client payloads are not mutated.
+            base = await asyncio.to_thread(_max_sidecar_seq, path)
+            renumbered = []
+            for i, entry in enumerate(req.entries, start=1):
+                if isinstance(entry, dict):
+                    entry = dict(entry)
+                    entry["seq"] = base + i
+                renumbered.append(entry)
+            lines = "\n".join(json.dumps(e, ensure_ascii=False) for e in renumbered) + "\n"
             sidecar = _sidecar_path(path, req.instance_id)
             # The engine's append helper expects an existing instance dir
             # (shared-folder semantics); the hub creates it on first push.
@@ -114,7 +127,11 @@ async def sync_pull(
     instance_id: str = "",
     since: int = 0,
 ) -> dict:
-    """Every OTHER sidecar's entries past ``since``, seq-ascending."""
+    """Every OTHER sidecar's entries past ``since``, seq-ascending.
+
+    ``since`` is a GLOBAL cursor: pushed entries are re-sequenced into the
+    hub's seq space on ingest, so any entry appended after the client's last
+    pull carries a higher seq no matter which instance wrote it."""
     _ = user
     path = _project_path(svc)
     root = Path(path) / "changes"

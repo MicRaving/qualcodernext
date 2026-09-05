@@ -75,10 +75,19 @@ async def _sync_loop() -> None:
                 # Prefer per-session replay files when in a session (new spec 2a),
                 # fall back to legacy per-instance sidecars for old projects.
                 sync_id = getattr(service, "current_session_id", "") or user_settings.get_instance_id()
-                await sync_engine.run_sync_cycle(
+                cycle_result = await sync_engine.run_sync_cycle(
                     service.session_factory, service.project_path,
                     sync_id,
                 )
+                # The admin merge below must only run on a clean cycle: with
+                # failed imports it would snapshot an incomplete sandbox while
+                # deleting the unimported replays (unrecoverable shared loss).
+                cycle_clean = bool(cycle_result.get("ok")) and not cycle_result.get("deferred")
+                if cycle_clean:
+                    for report in (cycle_result.get("imported") or {}).values():
+                        if isinstance(report, dict) and report.get("retries"):
+                            cycle_clean = False
+                            break
                 # After a successful sync, ack any newly imported replays (spec 2e)
                 # and heartbeat the session.
                 if getattr(service, "current_session_id", ""):
@@ -101,9 +110,11 @@ async def _sync_loop() -> None:
                     # Admin merge (spec 2c): when every other session is closed or
                     # stale, snapshot the sandbox into the master archive so a
                     # crashed instance's changes still land.  No-op while another
-                    # session is active.
+                    # session is active or the cycle above did not complete.
                     with _contextlib.suppress(Exception):
-                        await service._maybe_merge_master(service.current_session_id)
+                        await service._maybe_merge_master(
+                            service.current_session_id, cycle_clean
+                        )
                     with _contextlib.suppress(Exception):
                         service.heartbeat_session()
             except Exception as err:  # pragma: no cover - defensive

@@ -36,6 +36,35 @@ LOCK_FILE_NAME = "project_in_use.lock"
 BACKUP_FOLDER = "backups"
 
 
+async def _reset_seeded_sync_bookkeeping(project_path: str, sandbox_db: str) -> None:
+    """Scrub foreign sync bookkeeping from an archive-seeded sandbox.
+
+    A ``data.qda`` copy drags the merger's change journal (``sync_log`` /
+    ``sync_rev``) into the new sandbox.  Left in place, this instance would
+    re-export that foreign history as its own — stale re-exports resurrect
+    rows peers already deleted — while the import watermarks (already
+    advanced by the rebuild attempt) skip the very sidecars that would
+    reconcile the stale archive.  So: wipe the copied journal and reset the
+    import watermarks; the next sync cycle then replays everything
+    idempotently and converges.  Exports, PK remaps and baselines are left
+    untouched.  Best effort — never blocks opening.
+    """
+    with contextlib.suppress(Exception):
+        conn = await aiosqlite.connect(sandbox_db)
+        try:
+            await conn.execute("DELETE FROM sync_log")
+            await conn.execute("DELETE FROM sync_rev")
+            await conn.commit()
+        finally:
+            await conn.close()
+    with contextlib.suppress(Exception):
+        from qualcoder_api.services import sync as _sync
+
+        state = _sync.load_state(project_path)
+        state["imports"] = {}
+        _sync.save_state(project_path, state)
+
+
 @dataclass
 class OpenResult:
     """Outcome of opening a project."""
@@ -418,17 +447,39 @@ class ProjectService:
         self.current_source_name = ""
         self.current_session_id = ""
 
-    async def _converge(self, session_id: str) -> None:
+    async def _converge(self, session_id: str) -> bool:
         """Export THIS session's pending rows to its replay, then import every
         other session's replays into the local sandbox (so the sandbox holds
-        the merged latest state before any master snapshot)."""
+        the merged latest state before any master snapshot).
+
+        Returns True only when both halves completed cleanly (no exception,
+        no deferred export, no replay retries).  A failed import must block
+        the admin merge below: merging would snapshot an incomplete sandbox
+        while the watermark still records (and the cleanup still deletes)
+        the unimported replays — destroying shared evidence peers can never
+        re-send (their journals were already trimmed on export).
+        """
         from qualcoder_api.services import sync
 
-        _, factory = self._ensure_engine()
-        async with factory() as session:
-            await sync.export_pending(session, self.project_path, session_id)
-        async with factory() as session:
-            await sync.import_pending(session, self.project_path, session_id)
+        try:
+            _, factory = self._ensure_engine()
+            async with factory() as session:
+                exported = await sync.export_pending(session, self.project_path, session_id)
+            if exported.get("deferred"):
+                logger.warning("final export on close deferred: %s rows", exported.get("deferred"))
+                return False
+            async with factory() as session:
+                imported = await sync.import_pending(session, self.project_path, session_id)
+            for remote, report in (imported or {}).items():
+                if report.get("retries"):
+                    logger.warning(
+                        "final import on close retrying for %s: %s", remote, report.get("retries")
+                    )
+                    return False
+            return True
+        except Exception as err:
+            logger.warning("final sync on close failed: %s", err)
+            return False
 
     async def _snapshot_master(self) -> bool:
         """Refresh the cold ``data.qda`` archive from the live sandbox.
@@ -471,7 +522,7 @@ class ProjectService:
             logger.warning("master snapshot failed: %s", err)
             return False
 
-    async def _maybe_merge_master(self, session_id: str) -> bool:
+    async def _maybe_merge_master(self, session_id: str, converged_clean: bool = True) -> bool:
         """Admin merge (spec 2c): when every OTHER session is closed or stale,
         snapshot the local sandbox into the master ``data.qda``, record the
         merged replays in ``replays/merged.json``, ack them, and clean up the
@@ -480,6 +531,12 @@ class ProjectService:
         Also called from the background sync loop so a crashed instance's
         replay is still merged once its session goes stale — not only on the
         next explicit close.
+
+        ``converged_clean`` must be False when the preceding converge did not
+        complete (failed export/import or replay retries): merging then would
+        snapshot an incomplete sandbox while the watermark records — and the
+        cleanup deletes — replays whose rows would be lost from shared state
+        forever.  Skipping leaves the evidence for the next close/cycle.
         """
         from qualcoder_api.core.timeutil import now
         from qualcoder_api.services import (
@@ -490,6 +547,9 @@ class ProjectService:
         )
 
         if not session_id:
+            return False
+        if not converged_clean:
+            logger.debug("not merging master for %s: converge did not complete", session_id)
             return False
         try:
             if not session_service.is_all_other_closed(self.project_path, session_id):
@@ -543,17 +603,14 @@ class ProjectService:
         from qualcoder_api.services.user_settings import get_instance_id
 
         session_id = getattr(self, "current_session_id", "") or ""
-        try:
-            if session_id:
-                await self._converge(session_id)
-            else:
-                # Legacy per-instance path (pre-session projects, e.g. LSTeach).
-                await self._converge(get_instance_id())
-        except Exception as err:
-            logger.warning("final sync on close failed: %s", err)
+        if session_id:
+            converged_clean = await self._converge(session_id)
+        else:
+            # Legacy per-instance path (pre-session projects, e.g. LSTeach).
+            converged_clean = await self._converge(get_instance_id())
 
         if session_id:
-            await self._maybe_merge_master(session_id)
+            await self._maybe_merge_master(session_id, converged_clean)
         else:
             await self._snapshot_master()
         await self._dispose_engine_if_any()
@@ -1094,6 +1151,10 @@ class ProjectService:
 
             await checkpoint(str(archive))
             sandbox.create_sandbox_from(str(archive), self.uuid, self._sandbox_instance())
+            await _reset_seeded_sync_bookkeeping(
+                project_path,
+                str(sandbox.sandbox_path(self.uuid, self._sandbox_instance())),
+            )
             return
 
         # Sidecars exist: rebuild the full database from them. If the rebuild
@@ -1193,3 +1254,7 @@ class ProjectService:
             with contextlib.suppress(Exception):
                 await checkpoint(str(archive))
             sandbox.create_sandbox_from(str(archive), self.uuid, self._sandbox_instance())
+            await _reset_seeded_sync_bookkeeping(
+                project_path,
+                str(sandbox.sandbox_path(self.uuid, self._sandbox_instance())),
+            )

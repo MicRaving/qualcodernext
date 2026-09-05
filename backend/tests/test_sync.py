@@ -447,6 +447,58 @@ async def test_delete_propagates(rater_a, rater_b):
         assert len((await session.execute(tables.code_text.select())).scalars().all()) == 0
 
 
+async def test_natural_key_less_pk_collision_both_survive(rater_a, rater_b):
+    """Tables without a natural key (case links, image/AV codings, …) collide
+    on autoincrement PKs across instances: both raters link id=1 for
+    DIFFERENT files.  The incoming insert must land under a fresh local PK —
+    a blind PK lookup would overwrite the unrelated occupant (or fake a
+    "concurrent edit") instead of adding the genuinely new row."""
+    from sqlalchemy import text as sa_text
+
+    sync.set_current_user("anna")
+    async with rater_a.session_factory() as session:
+        source_a = await SourceRepository(session).add_source(
+            name="a.txt", fulltext="alpha", mediapath="/docs/a.txt", owner="anna"
+        )
+        case_a = await CaseRepository(session).add_case(name="caseA", owner="anna")
+        await CaseRepository(session).link_file(
+            caseid=case_a.caseid, fid=source_a.id, owner="anna"
+        )
+    sync.set_current_user("berta")
+    async with rater_b.session_factory() as session:
+        source_b = await SourceRepository(session).add_source(
+            name="b.txt", fulltext="beta", mediapath="/docs/b.txt", owner="berta"
+        )
+        case_b = await CaseRepository(session).add_case(name="caseB", owner="berta")
+        await CaseRepository(session).link_file(
+            caseid=case_b.caseid, fid=source_b.id, owner="berta"
+        )
+
+    await _export(rater_a, "anna")
+    await _export(rater_b, "berta")
+    _copy_changes(rater_a.project_path, rater_b.project_path)
+    _copy_changes(rater_b.project_path, rater_a.project_path)
+
+    async def links_of(svc, user):
+        sync.set_current_user(user)
+        async with svc.session_factory() as session:
+            report = await sync.import_pending(session, svc.project_path, user)
+            rows = await session.execute(
+                sa_text(
+                    "SELECT c.name, s.name FROM case_text t "
+                    "JOIN cases c ON c.caseid = t.caseid "
+                    "JOIN source s ON s.id = t.fid ORDER BY c.name"
+                )
+            )
+            return report, sorted((r[0], r[1]) for r in rows)
+
+    report_a, links_a = await links_of(rater_a, "anna")
+    report_b, links_b = await links_of(rater_b, "berta")
+    assert report_a["berta"]["conflicts"] == []
+    assert report_b["anna"]["conflicts"] == []
+    assert links_a == links_b == [("caseA", "a.txt"), ("caseB", "b.txt")]
+
+
 async def test_delete_then_reinsert_same_pk_no_ghost(rater_a, rater_b):
     """Deleting the max-id row and re-adding reuses its PK (plain INTEGER
     PRIMARY KEY); the peer must apply the delete AND the insert. Collapsing

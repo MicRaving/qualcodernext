@@ -341,11 +341,27 @@ async def _replay_one(
     # genuinely new — a PK lookup would wrongly latch onto an unrelated row
     # that happens to share the autoincrement PK.
     if not matched_nk and (not natural_keys or action in ("update", "delete")):
+        remapped = False
         if remaps and remote_instance:
             mapped = remaps.get((entity, str(pk_value)))
             if mapped is not None:
                 local_pk = _as_pk(mapped)
-        local_row = await _read_row(session, entity, pk_name, local_pk)
+                remapped = True
+        # Without a recorded remap, an integer PK on a natural-key-less table
+        # (case links, image/AV codings, comments, …) names NO local row: the
+        # counters diverge per instance, so a blind lookup latches onto an
+        # unrelated occupant — overwriting it on update, deleting it on
+        # delete, or faking a "concurrent edit" on insert instead of adding
+        # the genuinely new row.  Leave it unset (delete→tombstone,
+        # update/insert→fresh row).  Text PKs double as natural keys and the
+        # singleton ``project`` row is shared by all instances, so both keep
+        # the lookup.
+        if remapped or not (
+            not natural_keys
+            and entity != "project"
+            and isinstance(_as_pk(pk_value), int)
+        ):
+            local_row = await _read_row(session, entity, pk_name, local_pk)
 
     pk_str = str(local_pk) if local_pk is not None else str(pk_value)
 
