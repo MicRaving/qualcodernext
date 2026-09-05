@@ -88,6 +88,7 @@ async def create_fresh_sandbox(
     app_version: str = "QualCoder 4.0",
     codername: str = "default",
     instance_id: str = "",
+    seed_coder: bool = True,
 ) -> Path:
     """Create an empty sandbox database with the current schema.
 
@@ -102,7 +103,9 @@ async def create_fresh_sandbox(
     target.unlink(missing_ok=True)
     conn = await aiosqlite.connect(str(target))
     try:
-        await create_new_project_schema(conn, app_version=app_version, codername=codername)
+        await create_new_project_schema(
+            conn, app_version=app_version, codername=codername, seed_coder=seed_coder
+        )
     finally:
         await conn.close()
     return target

@@ -65,6 +65,8 @@ async def _revert_coder(session: AsyncSession, row: dict, *, undo: bool, **kwarg
             pass
         return f"re-added coder {name!r} to the coder list"
     if action == "coder.delete":
+        from qualcoder_api.persistence.repositories import _capture as _cap3
+
         name = detail.get("name")
         if not name:
             raise _missing_data()
@@ -72,12 +74,41 @@ async def _revert_coder(session: AsyncSession, row: dict, *, undo: bool, **kwarg
         if undo:
             if name not in names:
                 set_coders([*names, name])
+            # The roster is project-canonical now: restoring settings alone
+            # no longer surfaces the coder — re-add the registry row too
+            # (captured, so the restore reaches collaborators).
+            await session.execute(
+                text(
+                    "INSERT OR IGNORE INTO coder_names (name, visibility) VALUES (:n, 1)"
+                ),
+                {"n": name},
+            )
+            try:
+                await _cap3(
+                    session, "coder_names", "insert", "name", name,
+                    {"name": name, "visibility": 1},
+                )
+                await session.flush()
+            except Exception:
+                pass
             message = f"restored coder {name!r} to the coder list"
             if detail.get("reassign_to"):
                 message += " (their records stay reassigned)"
             return message
         if name in names:
             set_coders([n for n in names if n != name])
+        # Redo re-applies the full delete (settings + registry row).
+        await session.execute(
+            text("DELETE FROM coder_names WHERE name = :n"), {"n": name}
+        )
+        try:
+            await _cap3(
+                session, "coder_names", "delete", "name", name,
+                {"name": name, "visibility": 0},
+            )
+            await session.flush()
+        except Exception:
+            pass
         return f"removed coder {name!r} from the coder list"
     if action == "coder.rename":
         from qualcoder_api.services.sync_schema import ENTITY_PKS

@@ -447,6 +447,44 @@ async def test_delete_propagates(rater_a, rater_b):
         assert len((await session.execute(tables.code_text.select())).scalars().all()) == 0
 
 
+async def test_delete_then_reinsert_same_pk_no_ghost(rater_a, rater_b):
+    """Deleting the max-id row and re-adding reuses its PK (plain INTEGER
+    PRIMARY KEY); the peer must apply the delete AND the insert. Collapsing
+    the pair to the insert alone resurrects the deleted file as a ghost and
+    the file/coding counts diverge permanently (the watermark advances past
+    the dropped delete, so it never heals)."""
+    sync.set_current_user("anna")
+    async with rater_a.session_factory() as session:
+        source = await SourceRepository(session).add_source(
+            name="old.txt", fulltext="old text here", mediapath="/docs/old.txt", owner="anna"
+        )
+        assert source.id == 1
+    await _export(rater_a, "anna")
+    _copy_changes(rater_a.project_path, rater_b.project_path)
+    sync.set_current_user("berta")
+    async with rater_b.session_factory() as session:
+        await sync.import_pending(session, rater_b.project_path, "berta")
+
+    # Anna deletes old.txt, then imports new.txt — SQLite reuses id=1.
+    sync.set_current_user("anna")
+    async with rater_a.session_factory() as session:
+        await SourceRepository(session).delete_source(source.id)
+        new_source = await SourceRepository(session).add_source(
+            name="new.txt", fulltext="new text here", mediapath="/docs/new.txt", owner="anna"
+        )
+        assert new_source.id == source.id
+    await _export(rater_a, "anna")
+    _copy_changes(rater_a.project_path, rater_b.project_path)
+    sync.set_current_user("berta")
+    async with rater_b.session_factory() as session:
+        report = await sync.import_pending(session, rater_b.project_path, "berta")
+        assert report["anna"]["applied"] >= 2
+        names = (
+            await session.execute(tables.source.select().with_only_columns(tables.source.c.name))
+        ).scalars().all()
+    assert list(names) == ["new.txt"]
+
+
 async def test_pk_collision_remaps_and_updates_follow(rater_a, rater_b):
     """Both raters create a coding with ctid=1; the second import remaps the
     colliding row and later updates/deletes of that row still land on it —
@@ -1197,6 +1235,28 @@ async def test_sidecar_compaction_keeps_latest_per_row(tmp_path):
     by_pk = {str(e["pk_value"]): e for e in entries}
     assert by_pk["1"]["row"]["name"] == "new"
     assert by_pk["2"]["row"]["name"] == "other"
+    monkeypatch.undo()
+
+
+async def test_sidecar_compaction_keeps_delete_before_reinsert(tmp_path):
+    """A delete→insert cycle for one PK is a reused key (different logical
+    rows): compaction must keep both, or peers resurrect the deleted row."""
+    sidecar = tmp_path / "changes.jsonl"
+    lines = [
+        {"seq": 1, "entity": "source", "action": "insert", "pk_value": "1", "rev": 1,
+         "row": {"name": "old.txt"}},
+        {"seq": 2, "entity": "source", "action": "delete", "pk_value": "1", "rev": 2,
+         "row": {"name": "old.txt"}},
+        {"seq": 3, "entity": "source", "action": "insert", "pk_value": "1", "rev": 3,
+         "row": {"name": "new.txt"}},
+    ]
+    sidecar.write_text("\n".join(json.dumps(e) for e in lines) + "\n", encoding="utf-8")
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr(sync_engine, "SIDECAR_COMPACT_THRESHOLD_ENTRIES", 1)
+    kept = sync_engine._compact_sidecar(sidecar)
+    assert kept == 2
+    entries = sync_engine._parse_sidecar(sidecar)
+    assert [(e["seq"], e["action"]) for e in entries] == [(2, "delete"), (3, "insert")]
     monkeypatch.undo()
 
 

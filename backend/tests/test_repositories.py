@@ -76,7 +76,11 @@ async def test_coder_names_updated_from_owners(session):
     cur = await session.execute(text("SELECT name FROM coder_names ORDER BY name"))
     names = [r[0] for r in cur.fetchall()]
     assert "alice" in names
-    assert "tester" in names
+    # The opener's own identity is NOT auto-registered: that was a local,
+    # uncaptured write that permanently diverged joiners' rosters (a fresh
+    # install opening as "default", or a rename victim reopening stale).
+    # Joining the registry is explicit (create/switch coder, both captured).
+    assert "tester" not in names
 
 
 async def test_source_media_type_derivation(session):

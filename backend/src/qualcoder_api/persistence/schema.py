@@ -163,8 +163,15 @@ async def create_new_project_schema(
     conn: aiosqlite.Connection,
     app_version: str,
     codername: str,
+    seed_coder: bool = True,
 ) -> None:
-    """Create all v14 tables and insert the initial project row."""
+    """Create all v14 tables and insert the initial project row.
+
+    ``seed_coder=False`` skips seeding the opener into ``coder_names`` —
+    used for collaboration-join rebuilds, where the registry must reflect
+    exactly the synced sidecars: seeding the joiner's own name would plant
+    a local-only roster row no sync event ever removes.
+    """
     if conn is None:
         return
 
@@ -177,10 +184,11 @@ async def create_new_project_schema(
     # Seed the registry with the creating coder — the collaboration gate
     # counts this table, and an empty row set would make even the first
     # coder invisible to it.
-    await cur.execute(
-        "INSERT INTO coder_names(name, visibility) VALUES(:n, 1)",
-        {"n": codername},
-    )
+    if seed_coder:
+        await cur.execute(
+            "INSERT INTO coder_names(name, visibility) VALUES(:n, 1)",
+            {"n": codername},
+        )
     for view_name in tables.VISIBILITY_VIEWS:
         await cur.execute(_visibility_view_sql(view_name))
 

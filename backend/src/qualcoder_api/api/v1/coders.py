@@ -163,30 +163,54 @@ async def _record_audit(svc, action: str, detail: dict) -> None:
         )
 
 
+async def _canonical_coders(svc, counts: dict[str, int]) -> list[str]:
+    """The PROJECT-authoritative roster: ``coder_names`` registry plus every
+    owner found in the open project.
+
+    Registry rows and owner columns both travel through sync, so this list is
+    identical on every instance for the same project.  Machine-local settings
+    names are deliberately excluded: settings differ per machine (a stale
+    ``default`` placeholder on a fresh joiner would otherwise inflate that
+    side's coder count forever, with no sync event to ever heal it).
+    """
+    if svc.engine is None:
+        return list(get_coders())
+    names: list[str] = []
+    try:
+        _, factory = svc._ensure_engine()
+        async with factory() as session:
+            rows = await session.execute(
+                text("SELECT name FROM coder_names WHERE name != :sys ORDER BY name"),
+                {"sys": "system"},
+            )
+            for (name,) in rows:
+                if name not in names:
+                    names.append(name)
+    except Exception:  # pragma: no cover - pre-registry projects
+        # Legacy fallback (no registry table): local settings + owners,
+        # i.e. the historical behaviour.  Inlined (not via _all_coders)
+        # to avoid mutual recursion.
+        names = list(get_coders())
+    for owner in sorted(counts):
+        if owner not in names:
+            names.append(owner)
+    return names
+
+
 async def _all_coders(svc, counts: dict[str, int]) -> list[str]:
-    """The coder list: per-machine coders (settings) merged with the project's
-    ``coder_names`` registry and every owner found in the open project.
+    """Union of the project roster and machine-local settings names.
+
+    Validation helper: switch/create/delete accept a local-only name so it
+    can JOIN the project (which registers it).  DISPLAY endpoints use
+    ``_canonical_coders`` so every instance reports identical counts.
     Projects keep their own coder set (upstream ``coder_names``), so analysis
     and the coder switcher must show the project's coders even when they were
     never created on this machine — and a coder created on ANOTHER machine must
     appear here once its ``coder_names`` row has been synced in."""
-    names = list(get_coders())
-    if svc.engine is not None:
-        try:
-            _, factory = svc._ensure_engine()
-            async with factory() as session:
-                rows = await session.execute(
-                    text("SELECT name FROM coder_names WHERE name != :sys ORDER BY name"),
-                    {"sys": "system"},
-                )
-                for (name,) in rows:
-                    if name not in names:
-                        names.append(name)
-        except Exception:  # pragma: no cover - pre-registry projects
-            pass
-    for owner in sorted(counts):
-        if owner not in names:
-            names.append(owner)
+    names = await _canonical_coders(svc, counts)
+    for local in get_coders():
+        if local not in names:
+            names.append(local)
     return names
 
 
@@ -204,20 +228,25 @@ async def _ensure_project_coder(svc, name: str) -> None:
     try:
         _, factory = svc._ensure_engine()
         async with factory() as session:
-            await session.execute(
+            result = await session.execute(
                 text("INSERT OR IGNORE INTO coder_names(name, visibility) VALUES(:n, 1)"),
                 {"n": name},
             )
-            row = (
-                await session.execute(
-                    text("SELECT name, visibility FROM coder_names WHERE name = :n"),
-                    {"n": name},
-                )
-            ).first()
-            if row is not None:
-                await _capture_coder(
-                    session, "insert", row[0], {"name": row[0], "visibility": row[1]}
-                )
+            # Capture only a real insert: re-capturing an existing row on
+            # every switch would spam peers with no-op revisions.  (A
+            # driver reporting None/-1 means "unknown" — capture then,
+            # matching the historical behaviour.)
+            if getattr(result, "rowcount", 1) != 0:
+                row = (
+                    await session.execute(
+                        text("SELECT name, visibility FROM coder_names WHERE name = :n"),
+                        {"n": name},
+                    )
+                ).first()
+                if row is not None:
+                    await _capture_coder(
+                        session, "insert", row[0], {"name": row[0], "visibility": row[1]}
+                    )
             await session.commit()
     except Exception as err:  # pragma: no cover - pre-registry projects
         logging.getLogger(__name__).warning("coder_names registration failed: %s", err)
@@ -246,6 +275,10 @@ async def _segment_counts(svc) -> dict[str, int]:
 
 
 def _response(current: str, names: list[str], seg_counts: dict[str, int]) -> CodersResponse:
+    # NOTE: the current coder is intentionally NOT forced into the list —
+    # the roster must stay project-canonical (identical on every instance).
+    # Identity travels in ``current``; a stale local login simply has no
+    # entry until it acts (its rows then surface it via the owners union).
     return CodersResponse(
         current=current,
         coders=[CoderInfo(name=n, coding_count=seg_counts.get(n, 0)) for n in names],
@@ -274,7 +307,13 @@ async def _capture_coder(
 @router.get("", response_model=CodersResponse)
 async def list_coders(svc: ServiceDep) -> CodersResponse:
     counts = await _coding_counts(svc)
-    return _response(get_codername(), await _all_coders(svc, counts), await _segment_counts(svc))
+    return _response(get_codername(), await _canonical_coders(svc, counts), await _segment_counts(svc))
+
+
+async def _canonical_response(svc) -> CodersResponse:
+    """Fresh canonical roster response (identical on every instance)."""
+    counts = await _coding_counts(svc)
+    return _response(get_codername(), await _canonical_coders(svc, counts), await _segment_counts(svc))
 
 
 @router.post("", response_model=CodersResponse, status_code=201)
@@ -283,12 +322,16 @@ async def create_coder(req: CoderRequest, svc: ServiceDep) -> CodersResponse:
     if not name:
         raise HTTPException(status_code=422, detail="coder name must not be empty")
     names = get_coders()
-    if name in names:
+    counts = await _coding_counts(svc)
+    if name in await _canonical_coders(svc, counts):
         raise HTTPException(status_code=409, detail=f'coder "{name}" already exists')
-    set_coders([*names, name])
+    if name not in names:
+        set_coders([*names, name])
+    # Known locally but new to the project (or brand new): register it so it
+    # joins the synced roster instead of lingering as a settings-only stray.
     await _ensure_project_coder(svc, name)
     await _record_audit(svc, action="coder.create", detail={"name": name})
-    return _response(get_codername(), get_coders(), {})
+    return await _canonical_response(svc)
 
 @router.put("/current", response_model=CodersResponse)
 async def switch_coder(req: CurrentCoderRequest, svc: ServiceDep) -> CodersResponse:
@@ -302,7 +345,8 @@ async def switch_coder(req: CurrentCoderRequest, svc: ServiceDep) -> CodersRespo
     # Switching to a coder that exists only in settings (e.g. created on
     # another machine before this project was opened) registers it here.
     await _ensure_project_coder(svc, name)
-    return _response(name, await _all_coders(svc, counts), await _segment_counts(svc))
+    counts = await _coding_counts(svc)
+    return _response(name, await _canonical_coders(svc, counts), await _segment_counts(svc))
 
 
 @router.patch("/{name}", response_model=CodersResponse)
@@ -312,12 +356,14 @@ async def rename_coder(name: str, req: RenameCoderRequest, svc: ServiceDep) -> C
     new_name = req.new_name.strip()
     if not new_name:
         raise HTTPException(status_code=422, detail="coder name must not be empty")
+    counts = await _coding_counts(svc)
+    known = await _all_coders(svc, counts)
     if new_name == name:
-        return _response(get_codername(), get_coders(), {})
+        return _response(get_codername(), await _canonical_coders(svc, counts), await _segment_counts(svc))
     names = get_coders()
-    if name not in names:
+    if name not in known:
         raise HTTPException(status_code=404, detail=f'coder "{name}" does not exist')
-    if new_name in names:
+    if new_name in known:
         raise HTTPException(status_code=409, detail=f'coder "{new_name}" already exists')
 
     if svc.engine is not None:
@@ -372,12 +418,13 @@ async def rename_coder(name: str, req: RenameCoderRequest, svc: ServiceDep) -> C
                     state[bucket][new_name] = state[bucket].pop(name)
             save_state(svc.project_path, state)
 
-    renamed = [new_name if n == name else n for n in names]
-    set_coders(renamed)
+    if name in names:
+        renamed = [new_name if n == name else n for n in names]
+        set_coders(renamed)
     if get_codername() == name:
         set_codername(new_name)
     await _record_audit(svc, action="coder.rename", detail={"from": name, "to": new_name})
-    return _response(get_codername(), renamed, await _segment_counts(svc))
+    return await _canonical_response(svc)
 
 
 @router.get("/{name}/stats")
@@ -425,14 +472,15 @@ async def delete_coder(
     req: DeleteCoderRequest | None = None,
 ) -> CodersResponse:
     names = get_coders()
-    if name not in names:
+    counts = await _coding_counts(svc)
+    known = await _all_coders(svc, counts)
+    if name not in known:
         raise HTTPException(status_code=404, detail=f'coder "{name}" does not exist')
     if name == get_codername():
         raise HTTPException(status_code=409, detail="cannot delete the current coder — switch first")
     if len(names) <= 1:
         raise HTTPException(status_code=409, detail="cannot delete the last coder")
 
-    counts = await _coding_counts(svc)
     count = counts.get(name, 0)
     reassign_to = (req.reassign_to if req else None) or None
     if count > 0 and not reassign_to:
@@ -442,7 +490,7 @@ async def delete_coder(
         )
 
     if reassign_to:
-        if reassign_to not in names:
+        if reassign_to not in known:
             raise HTTPException(status_code=404, detail=f'target coder "{reassign_to}" does not exist')
         _, factory = svc._ensure_engine()
         async with factory() as session:
@@ -477,7 +525,7 @@ async def delete_coder(
     await _record_audit(
         svc, action="coder.delete", detail={"name": name, "reassign_to": reassign_to}
     )
-    return _response(get_codername(), get_coders(), await _segment_counts(svc))
+    return await _canonical_response(svc)
 
 
 @router.get("/visibility")

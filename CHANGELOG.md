@@ -7,6 +7,13 @@
      include (first releases have no base tag, so no link). Add a section
      like "## 0.1.1 (2026-08-31)" at the TOP of the file. -->
 
+## 0.1.9 (2026-09-05)
+
+- Fixed collaboration counts diverging: deleted files/codings no longer resurrect as ghosts on peers.
+- Collaborators now see identical coder rosters, including fresh joiners and renames.
+
+**Full Changelog**: https://github.com/MicRaving/qualcodernext/compare/v0.1.8...v0.1.9
+
 ## 0.1.8 (2026-09-05)
 
 - Fixed collaboration showing different coder, file, and code counts between instances.

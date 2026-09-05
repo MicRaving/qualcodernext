@@ -649,25 +649,44 @@ async def import_pending(session: AsyncSession, project_path: str, instance_id: 
     for sidecar, remote_instance in replay_sources:
 
         # Replay rows newer than the watermark, keeping only the LATEST entry
-        # per (entity, pk) above it.  Append-only sidecars accumulate
-        # delete→insert cycles for the same row; replaying the whole history
-        # would churn the local DB (delete the row, re-insert it under a new
-        # PK).  Keeping the newest entry per row collapses that churn to the
-        # row's final state, which is idempotent under natural-key matching.
-        pending: dict[int, dict] = {}
-        latest_seq: dict[tuple[str, str], int] = {}
+        # per (entity, pk) above it — PLUS the latest delete below it.
+        # Append-only sidecars accumulate update churn for the same row;
+        # replaying the whole history would waste work, so intermediate
+        # states collapse to the row's final state (idempotent under
+        # natural-key matching).  But a delete→insert cycle for one PK must
+        # NOT collapse to the insert alone: SQLite reuses freed INTEGER
+        # PRIMARY KEYs, so the two entries are DIFFERENT logical rows.
+        # Dropping the delete resurrects the old row on peers that still
+        # hold it (ghost files/codings whose counts then diverge forever,
+        # since the watermark advances past the dropped delete).
+        by_seq: dict[int, dict] = {}
+        latest: dict[tuple[str, str], int] = {}
+        latest_delete: dict[tuple[str, str], int] = {}
         for e in _parse_sidecar(sidecar):
-            seq = int(e.get("seq", 0))
+            try:
+                seq = int(e.get("seq", 0))
+            except (TypeError, ValueError):
+                continue
             if seq <= _imported_seq(state, remote_instance):
                 continue
+            if seq in by_seq:
+                continue  # pathological duplicate seq within one file
             key = (str(e.get("entity", "")), str(e.get("pk_value", "")))
-            prev = latest_seq.get(key)
-            if prev is not None and prev >= seq:
-                continue
-            if prev is not None:
-                pending.pop(prev, None)
-            latest_seq[key] = seq
-            pending[seq] = e
+            by_seq[seq] = e
+            prev = latest.get(key)
+            if prev is None or seq > prev:
+                latest[key] = seq
+            if str(e.get("action", "")) == "delete":
+                prevd = latest_delete.get(key)
+                if prevd is None or seq > prevd:
+                    latest_delete[key] = seq
+        if not by_seq:
+            continue
+        keep: set[int] = set(latest.values())
+        for key, dseq in latest_delete.items():
+            if dseq != latest.get(key):
+                keep.add(dseq)
+        pending = {seq: by_seq[seq] for seq in sorted(keep)}
         if not pending:
             continue
 

@@ -150,7 +150,18 @@ class ProjectRepository:
         return await self.get_bookmarks()
 
     async def update_coder_names(self, current_coder: str) -> None:
-        """Refresh the ``coder_names`` table from all owner columns."""
+        """Refresh the ``coder_names`` table from all owner columns.
+
+        Only derives rows from SYNCED content (owner columns) plus the
+        constant ``system`` entry, so every instance computes the same
+        registry.  The opener's own identity (``current_coder`` / last
+        opener) is deliberately NOT inserted here: that used to be a local,
+        uncaptured write, so a fresh joiner opening as ``default`` — or a
+        rename victim reopening under its stale name — permanently diverged
+        its roster from peers with no sync event to ever heal it.  Joining
+        the registry is an explicit, captured act (create/switch coder).
+        """
+        _ = current_coder
         union_sql = "\nUNION ".join(
             f"SELECT owner AS name FROM {t} WHERE owner IS NOT NULL"
             for t in tables.OWNER_TABLES
@@ -158,20 +169,6 @@ class ProjectRepository:
         await self.session.execute(
             text(f"INSERT OR IGNORE INTO coder_names (name) {union_sql}")
         )
-        await self.session.execute(
-            text(
-                "INSERT INTO coder_names (name, visibility) VALUES (:name, 1) "
-                "ON CONFLICT(name) DO UPDATE SET visibility = 1 "
-                "WHERE coder_names.visibility <> 1"
-            ),
-            {"name": current_coder},
-        )
-        last_coder = await self.get_last_coder()
-        if last_coder:
-            await self.session.execute(
-                text("INSERT OR IGNORE INTO coder_names (name) VALUES (:name)"),
-                {"name": last_coder},
-            )
         await self.session.execute(
             text("INSERT OR IGNORE INTO coder_names (name) VALUES (:name)"),
             {"name": tables.SYSTEM_CODER_NAME},

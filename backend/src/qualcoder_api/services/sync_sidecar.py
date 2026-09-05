@@ -132,17 +132,37 @@ def _compact_sidecar(sidecar: Path) -> int:
     if len(entries) < _facade().SIDECAR_COMPACT_THRESHOLD_ENTRIES and size < _facade().SIDECAR_COMPACT_THRESHOLD_BYTES:
         return 0
     # Keep the latest entry per (entity, pk) — later entries win (they carry
-    # a higher seq and rev).  Preserve the original order of first appearance
-    # so the file stays a valid, ordered change log.
+    # a higher seq and rev) — PLUS the latest delete below it.  A
+    # delete→insert cycle for one PK means the key was reused for a
+    # different logical row (SQLite reuses freed ids); dropping the delete
+    # would resurrect the old row on peers that still hold it, so the pair
+    # must survive compaction.  Kept entries are emitted in seq order so the
+    # file stays a valid, ordered change log.
+    def _seq(e: dict) -> int:
+        try:
+            return int(e.get("seq", 0))
+        except (TypeError, ValueError):
+            return 0
+
     latest: dict[tuple[str, str], dict] = {}
-    order: list[tuple[str, str]] = []
+    latest_delete: dict[tuple[str, str], dict] = {}
     for e in entries:
         key = (str(e.get("entity", "")), str(e.get("pk_value", "")))
-        if key not in latest:
-            order.append(key)
-        latest[key] = e
+        prev = latest.get(key)
+        if prev is None or _seq(e) >= _seq(prev):
+            latest[key] = e
+        if str(e.get("action", "")) == "delete":
+            prevd = latest_delete.get(key)
+            if prevd is None or _seq(e) >= _seq(prevd):
+                latest_delete[key] = e
+    kept: dict[int, dict] = {}
+    for key, e in latest.items():
+        kept[id(e)] = e
+    for key, e in latest_delete.items():
+        kept[id(e)] = e
+    ordered = sorted(kept.values(), key=_seq)
     lines = "\n".join(
-        json.dumps(latest[k], ensure_ascii=False) for k in order
+        json.dumps(e, ensure_ascii=False) for e in ordered
     ) + "\n"
     tmp = sidecar.with_suffix(".tmp")
     try:
@@ -151,7 +171,7 @@ def _compact_sidecar(sidecar: Path) -> int:
     except OSError as err:  # pragma: no cover - defensive
         logger.warning("sidecar compaction failed: %s", err)
         return 0
-    return len(order)
+    return len(ordered)
 
 
 async def _trim_sync_log(session: AsyncSession, exported_seq: int) -> int:

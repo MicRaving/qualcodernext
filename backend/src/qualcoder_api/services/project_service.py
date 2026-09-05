@@ -1101,7 +1101,13 @@ class ProjectService:
         # open) but the cold archive carries data, fall back to seeding from
         # the archive — an empty project is worse than a slightly stale one,
         # and the next sync cycle reconciles the difference.
-        await sandbox.create_fresh_sandbox(self.uuid, codername=codername, instance_id=self._sandbox_instance())
+        # seed_coder=False: the registry must mirror exactly the synced
+        # sidecars — seeding the joiner's own name would plant a local-only
+        # roster row that diverges coder counts with no sync event to heal it.
+        await sandbox.create_fresh_sandbox(
+            self.uuid, codername=codername, instance_id=self._sandbox_instance(),
+            seed_coder=False,
+        )
         engine = create_project_engine(str(sandbox.sandbox_path(self.uuid, self._sandbox_instance())))
         try:
             factory = create_session_factory(engine)
