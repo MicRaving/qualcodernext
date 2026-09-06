@@ -141,20 +141,85 @@ async def wait_for_job(client, job_id: str, states: set[str], seconds: float = 5
 async def test_status_when_r_available(monkeypatch):
     monkeypatch.setattr(r_service_module, "find_rscript", lambda: FAKE_SCRIPT)
     monkeypatch.setattr(r_service_module, "r_version", lambda path: "4.3.1")
+    monkeypatch.setattr(
+        "qualcoder_api.services.user_settings.get_rscript_path", lambda: ""
+    )
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as c:
         res = await c.get("/api/v1/r/status")
     assert res.status_code == 200, res.text
-    assert res.json() == {"available": True, "path": FAKE_SCRIPT, "version": "4.3.1"}
+    assert res.json() == {
+        "available": True,
+        "path": FAKE_SCRIPT,
+        "version": "4.3.1",
+        "custom": None,
+    }
 
 
 async def test_status_when_r_missing(monkeypatch):
     monkeypatch.setattr(r_service_module, "find_rscript", lambda: None)
+    monkeypatch.setattr(
+        "qualcoder_api.services.user_settings.get_rscript_path", lambda: ""
+    )
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as c:
         res = await c.get("/api/v1/r/status")
     assert res.status_code == 200, res.text
-    assert res.json() == {"available": False, "path": None, "version": None}
+    assert res.json() == {"available": False, "path": None, "version": None, "custom": None}
+
+
+async def test_put_r_path_sets_custom_rscript(monkeypatch, tmp_path):
+    from qualcoder_api.services import user_settings
+
+    monkeypatch.setattr(user_settings, "SETTINGS_FILE", tmp_path / "settings.json")
+    fake = tmp_path / "Rscript.exe"
+    fake.write_text("", encoding="utf-8")
+    monkeypatch.setattr(r_service_module, "r_version", lambda path: "4.3.1")
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as c:
+        res = await c.put("/api/v1/r/path", json={"path": str(fake)})
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert body["custom"] == str(fake)
+    assert body["path"] == str(fake)
+    assert body["available"] is True
+    assert user_settings.get_rscript_path() == str(fake)
+    # Clearing restores auto-detect.
+    async with AsyncClient(transport=transport, base_url="http://test") as c:
+        res = await c.put("/api/v1/r/path", json={"path": ""})
+    assert res.status_code == 200, res.text
+    assert res.json()["custom"] is None
+
+
+async def test_put_r_path_rejects_missing_and_broken(monkeypatch, tmp_path):
+    from qualcoder_api.services import user_settings
+
+    monkeypatch.setattr(user_settings, "SETTINGS_FILE", tmp_path / "settings.json")
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as c:
+        res = await c.put("/api/v1/r/path", json={"path": str(tmp_path / "ghost.exe")})
+        assert res.status_code == 400
+        broken = tmp_path / "Rscript.exe"
+        broken.write_text("", encoding="utf-8")
+        monkeypatch.setattr(r_service_module, "r_version", lambda path: None)
+        res = await c.put("/api/v1/r/path", json={"path": str(broken)})
+        assert res.status_code == 400
+    assert user_settings.get_rscript_path() == ""
+
+
+def test_custom_rscript_wins_over_auto_detect(monkeypatch, tmp_path):
+    from qualcoder_api.services import user_settings
+
+    monkeypatch.setattr(user_settings, "SETTINGS_FILE", tmp_path / "settings.json")
+    custom = tmp_path / "custom" / "Rscript.exe"
+    custom.parent.mkdir()
+    custom.write_text("", encoding="utf-8")
+    user_settings.save_rscript_path(str(custom))
+    monkeypatch.setattr(r_service_module, "which", lambda name: "/usr/bin/Rscript")
+    assert r_service_module.find_rscript() == str(custom)
+    # A stale custom path (file gone) falls through to auto-detect.
+    custom.unlink()
+    assert r_service_module.find_rscript() == "/usr/bin/Rscript"
 
 
 def test_find_rscript_probes_standard_dirs(monkeypatch, tmp_path):

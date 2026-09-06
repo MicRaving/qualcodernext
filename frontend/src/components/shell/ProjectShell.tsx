@@ -118,7 +118,7 @@ function UpdateStatusRow() {
         <Button
           variant="primary"
           icon={<Download size={11} aria-hidden />}
-          onClick={() => void useUpdatesStore.getState().install({ manual: true })}
+          onClick={() => void useUpdatesStore.getState().install()}
         >
           {t("settings.updatesInstall")}
         </Button>

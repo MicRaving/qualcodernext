@@ -166,10 +166,6 @@ class UpdatesSettingsRequest(BaseModel):
     #: ``user_settings.save_updates_settings`` so unknown values fall back
     #: to ``stable`` instead of 422-ing older clients.
     channel: str = "stable"
-    #: Auto-install updates larger than 25 MB (full installers always count
-    #: as large). When off, large updates stay offered until installed
-    #: manually from Settings.
-    auto_large_updates: bool = True
 
 
 class HotpatchVersionResponse(BaseModel):

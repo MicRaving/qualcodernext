@@ -200,7 +200,7 @@ export function RConsoleView() {
       setStatus(s);
     } catch {
       signal.throwIfAborted();
-      setStatus({ available: false, path: null, version: null, error: null });
+      setStatus({ available: false, path: null, version: null, error: null, custom: null });
     } finally {
       signal.throwIfAborted();
       setStatusLoading(false);

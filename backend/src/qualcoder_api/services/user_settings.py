@@ -80,6 +80,10 @@ MAINTENANCE_DEFAULTS: dict = {
     "last_compact": "",
 }
 
+#: R integration: optional manual Rscript path ("" = auto-detect via PATH,
+#: R_HOME and the standard install dirs).
+R_DEFAULTS: dict = {"rscript_path": ""}
+
 DEFAULT_SETTINGS: dict = {
     "codername": "default",
     "coders": ["default"],
@@ -87,8 +91,9 @@ DEFAULT_SETTINGS: dict = {
     "recent_projects": [],
     "ai": dict(AI_DEFAULTS),
     "transcription": dict(TRANSCRIPTION_DEFAULTS),
+    "r": dict(R_DEFAULTS),
     "sync": {"enabled": False},
-    "updates": {"check_interval": "daily", "auto_update": True, "channel": "stable", "auto_large_updates": True},
+    "updates": {"check_interval": "daily", "auto_update": True, "channel": "stable"},
     "maintenance": dict(MAINTENANCE_DEFAULTS),
     "auto_open_project": True,
 }
@@ -101,7 +106,6 @@ UPDATES_DEFAULTS: dict = {
     "check_interval": "daily",
     "auto_update": True,
     "channel": "stable",
-    "auto_large_updates": True,
 }
 
 #: Update channels: ``stable`` (full Tauri releases only) vs ``nightly``
@@ -125,9 +129,6 @@ def get_updates_settings(settings: dict | None = None) -> dict:
         "check_interval": interval,
         "auto_update": bool(updates.get("auto_update", UPDATES_DEFAULTS["auto_update"])),
         "channel": channel,
-        "auto_large_updates": bool(
-            updates.get("auto_large_updates", UPDATES_DEFAULTS["auto_large_updates"])
-        ),
     }
 
 
@@ -146,9 +147,6 @@ def save_updates_settings(updates: dict, settings: dict | None = None) -> dict:
         "check_interval": interval,
         "auto_update": bool(updates.get("auto_update", UPDATES_DEFAULTS["auto_update"])),
         "channel": channel,
-        "auto_large_updates": bool(
-            updates.get("auto_large_updates", UPDATES_DEFAULTS["auto_large_updates"])
-        ),
     }
     settings["updates"] = clean
     save_settings(settings)
@@ -693,6 +691,25 @@ def save_transcription_settings(tr: dict, settings: dict | None = None) -> dict:
     settings["transcription"] = clean
     save_settings(settings)
     return dict(clean)
+
+
+def get_rscript_path(settings: dict | None = None) -> str:
+    """Manually configured Rscript path ("" = auto-detect)."""
+    settings = settings or load_settings()
+    r = settings.get("r")
+    if not isinstance(r, dict):
+        return ""
+    path = r.get("rscript_path", "")
+    return path if isinstance(path, str) else ""
+
+
+def save_rscript_path(path: str, settings: dict | None = None) -> str:
+    """Persist the manual Rscript path ("" clears back to auto-detect)."""
+    settings = settings or load_settings()
+    path = (path or "").strip()
+    settings["r"] = {"rscript_path": path}
+    save_settings(settings)
+    return path
 
 
 def get_coders(settings: dict | None = None) -> list[str]:

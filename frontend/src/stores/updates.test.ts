@@ -12,7 +12,6 @@ const mocks = vi.hoisted(() => ({ check: vi.fn() }));
 vi.mock("@tauri-apps/plugin-updater", () => ({ check: mocks.check }));
 
 import {
-  LARGE_UPDATE_BYTES,
   NO_UPDATE_MANIFEST,
   NATIVE_DELTA_MAX_BYTES,
   classifyUpdateCheckError,
@@ -166,7 +165,7 @@ describe("nightly versions (X.Y.Z_NNN)", () => {
     enableTauri();
     mocks.check.mockResolvedValue(null);
     useUpdatesStore.setState({
-      settings: { check_interval: "daily", auto_update: true, channel: "nightly", auto_large_updates: true },
+      settings: { check_interval: "daily", auto_update: true, channel: "nightly" },
       hotpatch: null,
     });
     const proxy = vi.spyOn(api, "nightlyManifest").mockResolvedValue(proxyManifest("9.9.9_002"));
@@ -184,7 +183,7 @@ describe("nightly versions (X.Y.Z_NNN)", () => {
     enableTauri();
     mocks.check.mockResolvedValue(null);
     useUpdatesStore.setState({
-      settings: { check_interval: "daily", auto_update: true, channel: "nightly", auto_large_updates: true },
+      settings: { check_interval: "daily", auto_update: true, channel: "nightly" },
       hotpatch: null,
     });
     const proxy = vi.spyOn(api, "nightlyManifest").mockRejectedValue(new Error("proxy down"));
@@ -200,7 +199,7 @@ describe("nightly versions (X.Y.Z_NNN)", () => {
     enableTauri();
     mocks.check.mockResolvedValue(null);
     useUpdatesStore.setState({
-      settings: { check_interval: "daily", auto_update: true, channel: "nightly", auto_large_updates: true },
+      settings: { check_interval: "daily", auto_update: true, channel: "nightly" },
       hotpatch: null,
     });
     stubNightlyManifest("9.9.9_001");
@@ -215,7 +214,7 @@ describe("nightly versions (X.Y.Z_NNN)", () => {
     enableTauri();
     mocks.check.mockResolvedValue(null);
     useUpdatesStore.setState({
-      settings: { check_interval: "daily", auto_update: true, channel: "stable", auto_large_updates: true },
+      settings: { check_interval: "daily", auto_update: true, channel: "stable" },
       hotpatch: null,
     });
     stubNightlyManifest("9.9.9_001");
@@ -238,7 +237,6 @@ describe("nightly install + rollback", () => {
     check_interval: "daily" as const,
     auto_update: true,
     channel: "nightly" as const,
-    auto_large_updates: true,
   };
 
   it("rejects manifests without an installable section", () => {
@@ -406,7 +404,6 @@ describe("native deltas", () => {
     check_interval: "daily" as const,
     auto_update: true,
     channel: "nightly" as const,
-    auto_large_updates: true,
   };
   const nativeState = {
     staged: null,
@@ -563,58 +560,40 @@ describe("native deltas", () => {
   });
 });
 
-describe("large-update bandwidth control", () => {
-  const bigNightly = {
-    version: "9.9.9_001",
-    kind: "nightly" as const,
-    url: "https://example.test/f.zip",
-    sha256: "f",
-    signature: "fs",
-    size: LARGE_UPDATE_BYTES + 1,
-  };
-
-  it("formats byte counts", () => {
+describe("download size display", () => {
+  it("formats byte counts and totals update sections", () => {
     expect(formatBytes(0)).toBe("0 B");
     expect(formatBytes(12)).toBe("12 B");
     expect(formatBytes(1500)).toBe("1.5 KB");
     expect(formatBytes(900 * 1024)).toBe("900 KB");
     expect(formatBytes(3 * 1024 * 1024)).toBe("3.0 MB");
     expect(updateDownloadSize({ version: "1", kind: "full" })).toBe(Number.POSITIVE_INFINITY);
-    expect(updateDownloadSize(bigNightly)).toBe(LARGE_UPDATE_BYTES + 1);
+    expect(
+      updateDownloadSize({
+        version: "9.9.9_001",
+        kind: "nightly",
+        size: 100,
+        backend: { url: "u", sha256: "s", signature: "g", size: 200 },
+      }),
+    ).toBe(300);
   });
 
-  it("auto-install skips large updates unless opted in", async () => {
+  it("installs large updates without asking (no size gate)", async () => {
     enableTauri();
     useUpdatesStore.setState({
       status: "available",
-      info: bigNightly,
-      settings: {
-        check_interval: "daily",
-        auto_update: true,
-        channel: "nightly",
-        auto_large_updates: false,
+      info: {
+        version: "9.9.9_001",
+        kind: "nightly",
+        url: "https://example.test/f.zip",
+        sha256: "f",
+        signature: "fs",
+        size: 100 * 1024 * 1024,
       },
-      hotpatch: null,
-      overlay: null,
-      native: null,
-    });
-    const applyHotpatch = vi.spyOn(api, "applyHotpatch");
-    await useUpdatesStore.getState().install();
-    expect(applyHotpatch).not.toHaveBeenCalled();
-    expect(useUpdatesStore.getState().status).toBe("available");
-    applyHotpatch.mockRestore();
-  });
-
-  it("manual install proceeds for large updates", async () => {
-    enableTauri();
-    useUpdatesStore.setState({
-      status: "available",
-      info: bigNightly,
       settings: {
         check_interval: "daily",
         auto_update: true,
         channel: "nightly",
-        auto_large_updates: false,
       },
       hotpatch: null,
       overlay: null,
@@ -626,7 +605,7 @@ describe("large-update bandwidth control", () => {
       previous_version: null,
       channel: "nightly",
     });
-    await useUpdatesStore.getState().install({ manual: true });
+    await useUpdatesStore.getState().install();
     expect(applyHotpatch).toHaveBeenCalled();
     expect(patchHooks.reload).toHaveBeenCalled();
     applyHotpatch.mockRestore();

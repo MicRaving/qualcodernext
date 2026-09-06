@@ -1,18 +1,17 @@
 /**
- * UpdatesTab — Settings "Updates" tab: the auto-update toggle with the
- * check-interval select right beside it, the stable/nightly channel
- * opt-in, plus Check now / Install and the live update status.
+ * UpdatesTab — Settings "Updates" tab: check cadence, the stable/nightly
+ * channel opt-in, plus Install and the live update status.
  *
  * Nightlies (`X.Y.Z_NNN`) are opt-in delta patches: small downloads that
  * hotpatch without a full installer. The channel persists in the backend
- * (`~/.qualcoder/settings.json` → `updates.channel`).
+ * (`~/.qualcoder/settings.json` → `updates.channel`). Every available
+ * update auto-installs (including large ones) — there is no size gate.
  */
 import { useEffect, useState } from "react";
 import { Check, Download, LoaderCircle, RotateCw, Undo2 } from "lucide-react";
-import { Button, Select, Toggle } from "@/components/ui/orchestrator";
+import { Button, Select } from "@/components/ui/orchestrator";
 import { useI18n } from "@/lib/i18n";
 import {
-  LARGE_UPDATE_BYTES,
   NIGHTLY_MANIFEST_URL,
   formatBytes,
   updateDownloadSize,
@@ -34,7 +33,6 @@ export function UpdatesTab() {
   const nativeState = useUpdatesStore((s) => s.native);
   const [checkInterval, setCheckInterval] = useState<UpdatesSettings["check_interval"]>("daily");
   const [channel, setChannel] = useState<UpdatesSettings["channel"]>("stable");
-  const [autoLarge, setAutoLarge] = useState(true);
 
   useEffect(() => {
     const store = useUpdatesStore.getState();
@@ -46,18 +44,15 @@ export function UpdatesTab() {
     if (updatesSettings) {
       setCheckInterval(updatesSettings.check_interval);
       setChannel(updatesSettings.channel ?? "stable");
-      setAutoLarge(updatesSettings.auto_large_updates ?? true);
     }
   }, [updatesSettings]);
 
   async function persist(patch: Partial<UpdatesSettings>) {
-    const current = useUpdatesStore.getState().settings;
     try {
       await useUpdatesStore.getState().saveSettings({
         check_interval: patch.check_interval ?? checkInterval,
-        auto_update: patch.auto_update ?? (current?.auto_update ?? true),
+        auto_update: useUpdatesStore.getState().settings?.auto_update ?? true,
         channel: patch.channel ?? channel,
-        auto_large_updates: patch.auto_large_updates ?? autoLarge,
       });
     } catch {
       /* the backend error surfaces on the next load */
@@ -74,12 +69,11 @@ export function UpdatesTab() {
     await persist({ channel: next });
   }
 
-  async function setAutoLargeAndSave(next: boolean) {
-    setAutoLarge(next);
-    await persist({ auto_large_updates: next });
-  }
-
   const isNightly = updatesInfo?.kind === "nightly";
+  const checking =
+    updatesStatus === "checking" ||
+    updatesStatus === "downloading" ||
+    updatesStatus === "patching";
   const offerSize = updatesInfo ? updateDownloadSize(updatesInfo) : 0;
   const offerSizeLabel =
     updatesInfo && Number.isFinite(offerSize) && offerSize > 0
@@ -88,9 +82,23 @@ export function UpdatesTab() {
 
   return (
     <div className="p-3">
-      {/* Header */}
+      {/* Header with the icon-only check button on the right. */}
       <div className="flex items-center justify-between gap-2">
         <h2 className="text-sm font-semibold text-text-primary">{t("settings.updatesSection")}</h2>
+        <Button
+          variant="secondary"
+          icon={
+            updatesStatus === "checking" || updatesStatus === "patching" ? (
+              <LoaderCircle size={12} className="animate-spin" aria-hidden />
+            ) : (
+              <RotateCw size={12} aria-hidden />
+            )
+          }
+          disabled={checking}
+          onClick={() => void useUpdatesStore.getState().checkNow()}
+          title={t("settings.updatesCheckNow")}
+          aria-label={t("settings.updatesCheckNow")}
+        />
       </div>
 
       {hotpatch?.frontend_version && (
@@ -109,7 +117,7 @@ export function UpdatesTab() {
         </p>
       )}
 
-      {/* Interval (left) | Check now (right) */}
+      {/* Interval (left) | Install + Undo (right) */}
       <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
         <label className="flex items-center gap-1.5 text-[11px] text-text-secondary">
           <span>{t("settings.updatesInterval")}</span>
@@ -124,29 +132,11 @@ export function UpdatesTab() {
           </Select>
         </label>
         <div className="flex flex-wrap items-center gap-2">
-          <Button
-            variant="secondary"
-            icon={
-              updatesStatus === "checking" || updatesStatus === "patching" ? (
-                <LoaderCircle size={12} className="animate-spin" aria-hidden />
-              ) : (
-                <RotateCw size={12} aria-hidden />
-              )
-            }
-            disabled={
-              updatesStatus === "checking" ||
-              updatesStatus === "downloading" ||
-              updatesStatus === "patching"
-            }
-            onClick={() => void useUpdatesStore.getState().checkNow()}
-          >
-            {t("settings.updatesCheckNow")}
-          </Button>
           {updatesStatus === "available" && updatesInfo && (
             <Button
               variant="primary"
               icon={<Download size={12} aria-hidden />}
-              onClick={() => void useUpdatesStore.getState().install({ manual: true })}
+              onClick={() => void useUpdatesStore.getState().install()}
             >
               {isNightly ? t("settings.updatesNightlyInstall") : t("settings.updatesInstall")}
             </Button>
@@ -186,21 +176,6 @@ export function UpdatesTab() {
         </Select>
       </label>
       <p className="mt-1 text-[11px] text-text-secondary">{t("settings.updatesChannelHint")}</p>
-
-      {/* Large-update bandwidth control */}
-      <div className="mt-3">
-        <Toggle
-          checked={autoLarge}
-          onChange={() => void setAutoLargeAndSave(!autoLarge)}
-          label={<span className="text-[11px]">{t("settings.updatesAutoLarge")}</span>}
-          ariaLabel={t("settings.updatesAutoLarge")}
-          hint={
-            <span className="text-[11px]">
-              {t("settings.updatesAutoLargeHint", { size: formatBytes(LARGE_UPDATE_BYTES) })}
-            </span>
-          }
-        />
-      </div>
 
       {updatesStatus === "checking" && (
         <p className="mt-2 text-xs text-text-secondary">{t("settings.updatesChecking")}</p>

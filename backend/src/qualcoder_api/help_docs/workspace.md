@@ -88,7 +88,7 @@ Stable releases arrive as full installers. The opt-in **Nightly** channel (Setti
 * **Backend Python** (~1 MB): activates on a ~2 s backend restart.
 * **Backend native files** (only what changed): stages while you work and applies on the next app start (one relaunch, combined with the layers above).
 
-Every patch is checksum- and signature-verified before anything is touched, the previous state is kept for one-step **Undo patch**, and oversized deltas are refused in favor of the full release. **Auto-install large updates** (on by default; 25 MB boundary) — when off, big downloads stay offered until you install them manually.
+Every patch is checksum- and signature-verified before anything is touched, the previous state is kept for one-step **Undo patch**, and oversized deltas are refused in favor of the full release. Every available update installs automatically — there is no size gate.
 
 \---
 

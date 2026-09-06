@@ -1,10 +1,11 @@
 /**
  * Settings (right-bar pane) — one scrollable pane with headline-separated
- * sections: General | AI | Updates | Maintenance, then R integration and
- * About ALWAYS at the very bottom (R directly above About). Each section
- * is its own component (features/settings/*Tab.tsx) so new settings can be
- * added by editing one section; the shell below only owns the scroll
- * container and the fixed R/About footer order.
+ * sections: General | AI | Updates | Maintenance, then About ALWAYS at the
+ * very bottom. The R installation line lives inside About (the detected
+ * path is clickable and opens a file selector for a manual Rscript pick).
+ * Each section is its own component (features/settings/*Tab.tsx) so new
+ * settings can be added by editing one section; the shell below only owns
+ * the scroll container and the fixed About footer.
  */
 import { useState } from "react";
 import { useAsyncEffect } from "@/lib/useAsync";
@@ -29,6 +30,29 @@ export function SettingsView() {
     signal.throwIfAborted();
     setRStatus(s);
   }, []);
+
+  // Manual Rscript pick: a file dialog (desktop only) whose result is
+  // validated backend-side (must exist + answer `--version`).
+  async function chooseRscript() {
+    try {
+      const { open } = await import("@tauri-apps/plugin-dialog");
+      const currentDir = rStatus?.path?.replace(/[/\\][^/\\]*$/, "");
+      const selected = await open({
+        multiple: false,
+        directory: false,
+        title: t("settings.rChooseTitle"),
+        ...(currentDir ? { defaultPath: currentDir } : {}),
+        ...(/win/i.test(navigator.platform ?? "")
+          ? { filters: [{ name: "Rscript", extensions: ["exe"] }] }
+          : {}),
+      });
+      if (typeof selected !== "string" || !selected) return;
+      const s = await api.setRscriptPath(selected);
+      setRStatus(s);
+    } catch {
+      /* dialog cancelled, non-desktop browser, or invalid pick — keep prior status */
+    }
+  }
 
   return (
     <LeftBar
@@ -56,9 +80,10 @@ export function SettingsView() {
         <UpdatesTab />
         <MaintenanceTab />
 
-        {/* R integration — fixed position: directly above About. */}
+        {/* About — ALWAYS the very last section (R line merged in). */}
         <section className="p-3">
-          <h2 className="text-sm font-semibold text-text-primary">{t("r.statusTitle")}</h2>
+          <h2 className="text-sm font-semibold text-text-primary">{t("settings.about")}</h2>
+          <p className="mt-1 text-xs text-text-secondary">{t("settings.aboutText")}</p>
           {rStatus === null ? (
             <p className="mt-2 flex items-center gap-1.5 text-xs text-text-secondary">
               <LoaderCircle size={12} className="animate-spin" aria-hidden />
@@ -67,13 +92,37 @@ export function SettingsView() {
           ) : rStatus.available ? (
             <p className="mt-2 flex items-center gap-1.5 text-xs text-success">
               <CircleCheck size={13} aria-hidden />
-              {t("r.detected", { version: rStatus.version ?? "?", path: rStatus.path ?? "?" })}
+              <span>
+                {t("settings.rDetectedAt", { version: rStatus.version ?? "?" })}
+              </span>
+              <button
+                type="button"
+                onClick={() => void chooseRscript()}
+                title={t("settings.rChooseTitle")}
+                aria-label={t("settings.rChooseTitle")}
+                className="min-w-0 cursor-pointer truncate text-left underline decoration-dotted underline-offset-2"
+              >
+                {rStatus.path ?? "?"}
+              </button>
+              {rStatus.custom ? (
+                <span className="shrink-0 text-text-secondary">· {t("settings.rManual")}</span>
+              ) : null}
             </p>
           ) : (
             <div className="mt-2">
               <p className="flex items-center gap-1.5 text-xs text-warning">
                 <CircleAlert size={13} aria-hidden />
                 {t("r.notFound")}
+                {" · "}
+                <button
+                  type="button"
+                  onClick={() => void chooseRscript()}
+                  title={t("settings.rChooseTitle")}
+                  aria-label={t("settings.rChooseTitle")}
+                  className="cursor-pointer underline decoration-dotted underline-offset-2"
+                >
+                  {t("settings.rChoose")}
+                </button>
               </p>
               <a
                 href="https://www.r-project.org/"
@@ -85,12 +134,6 @@ export function SettingsView() {
               </a>
             </div>
           )}
-        </section>
-
-        {/* About — ALWAYS the very last section. */}
-        <section className="p-3">
-          <h2 className="text-sm font-semibold text-text-primary">{t("settings.about")}</h2>
-          <p className="mt-1 text-xs text-text-secondary">{t("settings.aboutText")}</p>
         </section>
       </div>
     </LeftBar>

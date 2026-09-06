@@ -76,7 +76,16 @@ def _r_install_version(path: Path) -> tuple[int, int, int]:
 
 
 def find_rscript() -> str | None:
-    """Locate an ``Rscript`` executable, or None when R is not installed."""
+    """Locate an ``Rscript`` executable, or None when R is not installed.
+
+    A manually configured path (Settings → About → R path) wins; a stale
+    one (file gone) falls through to auto-detect.
+    """
+    from qualcoder_api.services.user_settings import get_rscript_path
+
+    custom = get_rscript_path()
+    if custom and Path(custom).is_file():
+        return custom
     found = which("Rscript")
     if found:
         return found
@@ -111,12 +120,20 @@ def r_version(path: str) -> str | None:
 
 
 def get_status() -> dict:
-    """``{available, path, version}`` for the machine's R install."""
+    """``{available, path, version, custom}`` for the machine's R install.
+
+    ``custom`` is the manually configured path (or None); ``path`` is the
+    effective Rscript (custom when set and present, else auto-detected).
+    """
+    from qualcoder_api.services.user_settings import get_rscript_path
+
+    custom = get_rscript_path() or None
     path = find_rscript()
     return {
         "available": path is not None,
         "path": path,
         "version": r_version(path) if path else None,
+        "custom": custom,
     }
 
 

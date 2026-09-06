@@ -38,10 +38,6 @@ import { APP_VERSION } from "@/lib/version";
  *  Mirrored in `backend/.../services/native.py` — keep in sync. */
 export const NATIVE_DELTA_MAX_BYTES = 60 * 1024 * 1024;
 
-/** Auto-installs stop asking below this; above needs `auto_large_updates`
- *  (or a manual install from Settings). Full installers always count. */
-export const LARGE_UPDATE_BYTES = 25 * 1024 * 1024;
-
 /** Human download size ("1.4 MB", "900 KB", "12 B"). */
 export function formatBytes(bytes: number): string {
   if (!Number.isFinite(bytes) || bytes < 0) return "0 B";
@@ -144,7 +140,7 @@ interface UpdatesState {
   saveSettings: (settings: UpdatesSettings) => Promise<void>;
   loadHotpatch: () => Promise<void>;
   checkNow: () => Promise<void>;
-  install: (opts?: { manual?: boolean }) => Promise<void>;
+  install: () => Promise<void>;
   rollback: () => Promise<void>;
 }
 
@@ -391,22 +387,9 @@ export const useUpdatesStore = create<UpdatesState>((set, get) => ({
     }
   },
 
-  install: async (opts) => {
+  install: async () => {
     const info = get().info;
     if (!info || !updaterAvailable()) return;
-    // Bandwidth control: automatic installs skip large updates unless the
-    // user opted into them — the offer stays for a manual install from
-    // Settings. Manual installs always proceed.
-    const manual = opts?.manual ?? false;
-    if (
-      !manual &&
-      get().settings &&
-      !get().settings!.auto_large_updates &&
-      updateDownloadSize(info) > LARGE_UPDATE_BYTES
-    ) {
-      set({ lastCheckedAt: Date.now() });
-      return;
-    }
     if (info.kind === "nightly") {
       // Delta patch, applied bottom-up so one relaunch activates everything:
       // backend-source overlay (staged), frontend files (staged), native

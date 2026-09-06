@@ -27,6 +27,35 @@ async def status() -> dict:
     return await asyncio.to_thread(r_service.get_status)
 
 
+class RPathRequest(BaseModel):
+    path: str = ""
+
+
+@router.put("/path")
+async def set_rscript_path(req: RPathRequest) -> dict:
+    """Manually set the Rscript executable ("" clears back to auto-detect).
+
+    The file must exist and respond to ``--version``; anything else is a
+    400 so a bad pick can never silently break the R console.
+    """
+    import asyncio
+    from pathlib import Path
+
+    from qualcoder_api.services import user_settings
+
+    candidate = (req.path or "").strip()
+    if candidate:
+        if not Path(candidate).is_file():
+            raise HTTPException(status_code=400, detail="not a file")
+        version = await asyncio.to_thread(r_service.r_version, candidate)
+        if version is None:
+            raise HTTPException(
+                status_code=400, detail="that file does not respond as Rscript"
+            )
+    user_settings.save_rscript_path(candidate)
+    return await asyncio.to_thread(r_service.get_status)
+
+
 class RunRRequest(BaseModel):
     script: str = Field(max_length=200_000)
 

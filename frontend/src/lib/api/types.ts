@@ -782,6 +782,8 @@ export interface RStatus {
   path: string | null;
   version: string | null;
   error: string | null;
+  /** Manually configured Rscript path (null = auto-detect). */
+  custom?: string | null;
 }
 
 /** A background R-script job (runs through the same queue as the others). */
@@ -1068,8 +1070,6 @@ export interface UpdatesSettings {
   auto_update: boolean;
   /** Update channel: `stable` (full releases) or `nightly` (`X.Y.Z_NNN` deltas). */
   channel: "stable" | "nightly";
-  /** Auto-install updates over 25 MB (full installers always count as large). */
-  auto_large_updates: boolean;
 }
 
 export interface HotpatchVersion {

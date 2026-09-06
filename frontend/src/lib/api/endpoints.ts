@@ -884,6 +884,12 @@ export const api = {
   // --- R integration (Rscript bridge) ----------------------------------
 
   rStatus: () => request<RStatus>("/r/status"),
+  /** Manually set the Rscript executable ("" clears back to auto-detect). */
+  setRscriptPath: (path: string) =>
+    request<RStatus>("/r/path", {
+      method: "PUT",
+      body: JSON.stringify({ path }),
+    }),
   rRun: (script: string, name?: string) =>
     request<{ job_id: string }>("/r/run", {
       method: "POST",
