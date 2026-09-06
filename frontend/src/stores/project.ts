@@ -17,7 +17,6 @@ import {
   type Source,
   type Journal,
 } from "@/lib/api";
-import { blankScreenshot, captureAppScreenshot } from "@/features/bugreport/capture";
 import { DEFAULT_GITHUB_REPO } from "@/features/bugreport/github";
 import { useCoderStore } from "./coder";
 import { useGraphStore } from "./graph";
@@ -554,15 +553,19 @@ export const useProjectStore = create<ProjectLifecycleState>((set, get) => ({
     // 4. Screenshot of the app view (BEFORE the modal opens — the composer
     //    must never appear in its own picture). A failed capture (tainted
     //    canvas, html2canvas crash) falls back to a blank canvas with a note.
+    //    capture.ts (html2canvas, ~200KB) is imported lazily so it stays out
+    //    of the main chunk — the user only pays for it when filing a bug.
     let rawScreenshot: string | null = null;
     let captureFailed = false;
     try {
+      const { captureAppScreenshot } = await import("@/features/bugreport/capture");
       const shot = await captureAppScreenshot();
       rawScreenshot = shot.dataUrl;
     } catch (e) {
       console.warn("bugreport capture failed:", e instanceof Error ? `${e.message}\n${e.stack}` : e);
       captureFailed = true;
       try {
+        const { blankScreenshot } = await import("@/features/bugreport/capture");
         const shot = await blankScreenshot("Screenshot unavailable");
         rawScreenshot = shot.dataUrl;
       } catch {

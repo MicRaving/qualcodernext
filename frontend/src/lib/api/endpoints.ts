@@ -97,6 +97,12 @@ import type {
   TranscribeStatus,
   UndoCodingsResponse,
   UpdatesSettings,
+  HotpatchVersion,
+  HotpatchApplyRequest,
+  OverlayVersion,
+  OverlayApplyRequest,
+  NativeVersion,
+  NativeApplyRequest,
   WordFrequencyRow,
 } from "./types";
 
@@ -1173,6 +1179,30 @@ export const api = {
       method: "PUT",
       body: JSON.stringify(body),
     }),
+  hotpatchVersion: () => request<HotpatchVersion>("/hotpatch/version"),
+  applyHotpatch: (body: HotpatchApplyRequest) =>
+    request<HotpatchVersion>("/hotpatch/apply", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  rollbackHotpatch: () =>
+    request<HotpatchVersion>("/hotpatch/rollback", { method: "POST" }),
+  patchesVersion: () => request<OverlayVersion>("/patches/version"),
+  applyOverlay: (body: OverlayApplyRequest) =>
+    request<OverlayVersion>("/patches/apply", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  rollbackOverlay: () =>
+    request<OverlayVersion>("/patches/rollback", { method: "POST" }),
+  nativeVersion: () => request<NativeVersion>("/native/version"),
+  applyNative: (body: NativeApplyRequest) =>
+    request<NativeVersion>("/native/apply", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  rollbackNative: () =>
+    request<NativeVersion>("/native/rollback", { method: "POST" }),
 
   // --- Maintenance -----------------------------------------------------
 

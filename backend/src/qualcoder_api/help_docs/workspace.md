@@ -76,9 +76,19 @@ You can also toggles between the following panes:
   * **Language**: Select UI display language.
   * **Accessibility**: Toggle specialized display modes (High Contrast, Screenreader, Large Text, Reduced Motion, Colorblind Friendly).
   * **Pseudonymization**: Define original-to-replacement pseudonym pairs (e.g., `John Doe → Participant\\\\\\\\\\\\\\\_A`, `Springfield High → School\\\\\\\\\\\\\\\_1`) for automated quote anonymization when exporting reports.
-  * **Auto-Updates**: Configure update checks (Daily, Weekly, Never) and single-click update installation.
+  * **Auto-Updates**: Configure update checks (Daily, Weekly, Never) and single-click update installation. Opt into the Nightly channel for small delta patches (0.1.13_001) that verify, install, and activate on reload — with one-step undo.
   * **Project Maintenance**: Toggle automatic database compaction upon project closure.
   * **R Environment**: Displays R installation status, version, and binary path for statistical scripts.
+
+### Delta & nightly patches
+
+Stable releases arrive as full installers. The opt-in **Nightly** channel (Settings → Updates) additionally offers small signed patches numbered `X.Y.Z_001`:
+
+* **Frontend** (~1 MB): activates on reload, no restart.
+* **Backend Python** (~1 MB): activates on a ~2 s backend restart.
+* **Backend native files** (only what changed): stages while you work and applies on the next app start (one relaunch, combined with the layers above).
+
+Every patch is checksum- and signature-verified before anything is touched, the previous state is kept for one-step **Undo patch**, and oversized deltas are refused in favor of the full release. **Auto-install large updates** (on by default; 25 MB boundary) — when off, big downloads stay offered until you install them manually.
 
 \---
 

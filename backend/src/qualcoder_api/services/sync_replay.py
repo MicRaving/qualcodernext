@@ -129,6 +129,19 @@ async def _record_tombstone_content(
         pass
 
 
+def _tombstone_superseded(trev: Any, tmtime: Any, rev: Any, mtime: Any) -> bool:
+    """Whether a (rev, mtime) version is strictly newer than a tombstone.
+
+    Shared ordering for tombstone checks: a higher rev wins outright; on a
+    rev tie the newer wall time wins (which also lets a reseeded instance's
+    genuine re-creation through despite its restarted counter).  Ties on
+    both stay blocked (conservative — never resurrect on ambiguity).
+    """
+    if int(rev or 0) != int(trev or 0):
+        return int(rev or 0) > int(trev or 0)
+    return str(mtime or "") > str(tmtime or "")
+
+
 async def _tombstone_blocks(
     session: AsyncSession,
     entity: str,
@@ -166,10 +179,8 @@ async def _tombstone_blocks(
             continue
         if not _rows_equal(row, old, pk_name):
             continue
-        if int(incoming_rev or 0) > int(trev or 0):
-            continue  # genuinely newer by rev: re-created after the delete
-        if str(incoming_mtime or "") > str(tmtime or ""):
-            continue  # genuinely newer by wall time despite restarted counter
+        if _tombstone_superseded(trev, tmtime, incoming_rev, incoming_mtime):
+            continue
         return True
     return False
 
@@ -857,10 +868,12 @@ async def import_pending(session: AsyncSession, project_path: str, instance_id: 
 
 # ── Master-diff reconciliation ─────────────────────────────────────────
 #
-# Entities safe to reconcile against the cold archive: matchable by a
-# foreign-key-free natural key (or a text PK), so divergent per-instance PKs
-# never confuse identity.  Everything else (codings, links, graph items,
-# …) heals through the sidecar replays, which carry proper FK remaps.
+# Entities comparable against the cold archive.  Natural-key tables match by
+# translated business key (FK columns resolved through parent names, which
+# the archive carries); tables without one match by full translated content
+# (multiset — duplicates are distinct rows).  Anything whose identity cannot
+# be established without a live FK remap (attribute parents, qtt items,
+# comments, graph details) heals through the sidecar replays instead.
 
 _RECONCILE_ENTITIES = frozenset({
     "source",
@@ -874,7 +887,44 @@ _RECONCILE_ENTITIES = frozenset({
     "stored_sql",
     "r_script",
     "attribute_type",
+    "code_text",
+    "annotation",
+    "dictionary_entry",
+    "case_text",
+    "code_image",
+    "code_av",
+    "link",
+    "creative_item",
+    "files_filter",
+    "qtt_sheet",
 })
+# NOTE: code_set_member is deliberately absent — its composite PK
+# (set_id,cid) has no single-column identity and the loop below skips
+# composite keys.  Memberships heal through the sidecar replays, which
+# carry proper FK remaps.
+
+# FK columns translated via the referenced row's unique name: entity ->
+# {column: parent table}.  Key columns (part of the entity's natural key)
+# that cannot be translated skip the row; non-key columns fall back to NULL.
+_RECONCILE_FKS: dict[str, dict[str, str]] = {
+    "code_name": {"catid": "code_cat", "supercid": "code_name"},
+    "code_cat": {"supercatid": "code_cat"},
+    "code_text": {"cid": "code_name", "fid": "source"},
+    "annotation": {"fid": "source"},
+    "dictionary_entry": {"dict_id": "dictionary"},
+    "case_text": {"caseid": "cases", "fid": "source"},
+    "code_image": {"cid": "code_name", "id": "source"},
+    "code_av": {"cid": "code_name", "id": "source"},
+    "link": {"from_fid": "source", "to_fid": "source"},
+    "creative_item": {"source_fid": "source"},
+}
+
+# Link-ish columns with no truthful local value on a healed insert: null
+# them rather than dangle (presence is what counts; links re-heal live).
+_RECONCILE_NULL_COLS: dict[str, tuple[str, ...]] = {
+    "source": ("av_text_id", "risid"),
+    "code_text": ("avid",),
+}
 
 
 async def _master_row_by_id(mconn, table_name: str, id_col: str, value: Any) -> dict | None:
@@ -908,16 +958,50 @@ async def _local_id_by_name(
         return None
 
 
-async def _translate_tree_ref(
-    mconn, session: AsyncSession, table_name: str, id_col: str, value: Any
-) -> Any:
-    """Map a merger-namespace FK id to the local id via the unique name."""
-    if value is None:
+async def _translate_reconcile_row(
+    mconn, session: AsyncSession, entity: str, row: dict
+) -> dict | None:
+    """Translate a master-archive row into local PK namespace.
+
+    Every FK column resolves through the referenced row's unique name;
+    an unresolvable KEY column (part of the natural key) means the row
+    cannot be placed — return None to skip it.  Unresolvable non-key
+    columns (and the known link columns) become NULL instead.
+    """
+    out = dict(row)
+    natural = NATURAL_KEYS.get(entity) or []
+    for col, parent in _RECONCILE_FKS.get(entity, {}).items():
+        if out.get(col) is None:
+            continue
+        parent_pk = ENTITY_PKS.get(parent) or "id"
+        ref = await _master_row_by_id(mconn, parent, parent_pk, out[col])
+        name = (ref or {}).get("name")
+        local = await _local_id_by_name(session, parent, "name", parent_pk, name)
+        if local is None:
+            if col in natural:
+                return None
+            out[col] = None
+        else:
+            out[col] = local
+    for col in _RECONCILE_NULL_COLS.get(entity, ()):
+        out[col] = None
+    return out
+
+
+def _content_sig(row: dict, pk_name: str) -> tuple | None:
+    """Hashable full-content signature (minus PK) for multiset matching."""
+    try:
+        parts = []
+        for k in sorted(row):
+            if k == pk_name or k.startswith("_"):
+                continue
+            v = row[k]
+            if not isinstance(v, (str, int, float, bool)) and v is not None:
+                v = repr(v)
+            parts.append((k, v))
+        return tuple(parts)
+    except Exception:
         return None
-    ref = await _master_row_by_id(mconn, table_name, id_col, value)
-    if not ref:
-        return None
-    return await _local_id_by_name(session, table_name, "name", id_col, ref.get("name"))
 
 
 async def reconcile_with_master(session_factory, project_path: str) -> dict:
@@ -956,16 +1040,11 @@ async def reconcile_with_master(session_factory, project_path: str) -> dict:
             return {"applied": 0, "conflicts": [], "skipped": 0}
 
         async with session_factory() as session, suspended():
-            try:
-                local_revs = {
-                    (str(e), str(p)): int(r or 0)
-                    for e, p, r in await session.execute(
-                        text("SELECT entity, pk, rev FROM sync_rev")
-                    )
-                }
-            except Exception:
-                local_revs = {}
             remaps: dict[tuple[str, str], str] = {}
+            # Content signatures / natural keys the presence pass already
+            # accounted for: a tombstone matching one of these refers to a
+            # duplicate twin the master still holds — never delete it.
+            seen: set[tuple] = set()
             for entity in EXPORT_ORDER:
                 if entity not in _RECONCILE_ENTITIES:
                     continue
@@ -980,7 +1059,9 @@ async def reconcile_with_master(session_factory, project_path: str) -> dict:
                     mrows = [dict(zip(cols, r, strict=True)) for r in await mcur.fetchall()]
                 except Exception:
                     continue
-                # Local presence + revs for this entity.
+                # Local presence + clocks for this entity.  Clocks are keyed by
+                # LOCAL pk; matching across divergent namespaces happens
+                # below (natural key, else content multiset).
                 try:
                     local_rows = (
                         await session.execute(text(f"SELECT * FROM {entity}"))
@@ -988,75 +1069,27 @@ async def reconcile_with_master(session_factory, project_path: str) -> dict:
                 except Exception:
                     continue
                 local_by_pk = {str(dict(r).get(pk_name)): dict(r) for r in local_rows}
-                # Identity across divergent PK namespaces is by natural key
-                # (a rebuilt sandbox assigns fresh PKs, so PK strings only
-                # match in the same-namespace archive-seed case).
+                local_clocks: dict[str, tuple[int, str]] = {}
+                try:
+                    for _e, _p, _r, _m in await session.execute(
+                        text("SELECT entity, pk, rev, mtime FROM sync_rev WHERE entity = :e"),
+                        {"e": entity},
+                    ):
+                        local_clocks[str(_p)] = (int(_r or 0), str(_m or ""))
+                except Exception:
+                    pass
                 natural = NATURAL_KEYS.get(entity) or []
-                local_by_nk: dict[tuple, tuple[str, dict]] = {}
-                if natural:
-                    for lpk, lrow in local_by_pk.items():
-                        try:
-                            local_by_nk.setdefault(
-                                tuple(lrow.get(k) for k in natural), (lpk, lrow)
-                            )
-                        except Exception:
-                            continue
-                for mrow in mrows:
-                    mrow = {k: v for k, v in mrow.items() if not k.startswith("_")}
-                    mpk = str(mrow.get(pk_name))
-                    rev, _deleted, mtime, _rj = master_revs.get(
-                        (entity, mpk), (0, False, "", None)
-                    )
-                    if natural:
-                        found = local_by_nk.get(tuple(mrow.get(k) for k in natural))
-                        if found is not None:
-                            _lpk, _lrow = found
-                            if rev <= local_revs.get((entity, _lpk), 0):
-                                skipped += 1
-                                continue
-                    elif (entity, mpk) in local_revs and rev <= local_revs[(entity, mpk)]:
-                        # Text-PK identity (attribute_type): the PK is the key.
-                        skipped += 1
-                        continue
-                    entry_row = dict(mrow)
-                    if entity == "source":
-                        # Transcript/reference links live in foreign PK
-                        # namespaces; null them rather than dangle (links
-                        # re-heal through live flows; presence is what counts).
-                        entry_row["av_text_id"] = None
-                        entry_row["risid"] = None
-                    elif entity == "code_name":
-                        entry_row["catid"] = await _translate_tree_ref(
-                            mconn, session, "code_cat", "catid", entry_row.get("catid")
-                        )
-                        entry_row["supercid"] = await _translate_tree_ref(
-                            mconn, session, "code_name", "cid", entry_row.get("supercid")
-                        )
-                    elif entity == "code_cat":
-                        entry_row["supercatid"] = await _translate_tree_ref(
-                            mconn, session, "code_cat", "catid",
-                            entry_row.get("supercatid"),
-                        )
-                    entry = {
-                        "entity": entity,
-                        "action": "insert",
-                        "pk_name": pk_name,
-                        "pk_value": mrow.get(pk_name),
-                        "rev": rev,
-                        "mtime": mtime,
-                        "row": entry_row,
-                        "instance": "master",
-                        "coder": "",
-                    }
+
+                async def _play(entry: dict) -> None:
+                    nonlocal applied, skipped
                     try:
                         outcome = await _replay_one(session, entry, None, remaps, "master")
                     except Exception:
                         await session.rollback()
-                        continue
-                    status = outcome.get("status")
-                    if status == "applied":
+                        return
+                    if outcome.get("status") == "applied":
                         applied += 1
-                    elif status == "conflict":
+                    elif outcome.get("status") == "conflict":
                         conflicts.append(outcome)
                     else:
                         skipped += 1
@@ -1064,58 +1097,137 @@ async def reconcile_with_master(session_factory, project_path: str) -> dict:
                         await session.commit()
                     except Exception:
                         await session.rollback()
-                # Master tombstones vs locally held rows (content-matched so
-                # divergent PKs are safe).
+
+                def _entry(
+                    action: str,
+                    pk_value: Any,
+                    rev: int,
+                    mtime: str,
+                    row: dict | None,
+                    *,
+                    entity: str = entity,  # bind loop vars per iteration (B023)
+                    pk_name: str = pk_name,
+                ) -> dict:
+                    return {
+                        "entity": entity,
+                        "action": action,
+                        "pk_name": pk_name,
+                        "pk_value": pk_value,
+                        "rev": rev,
+                        "mtime": mtime,
+                        "row": row,
+                        "instance": "master",
+                        "coder": "",
+                    }
+
+                if natural:
+                    # Exact path: match by translated business key.
+                    local_by_nk: dict[tuple, tuple[str, dict]] = {}
+                    for lpk, lrow in local_by_pk.items():
+                        try:
+                            local_by_nk.setdefault(
+                                tuple(lrow.get(k) for k in natural), (lpk, lrow)
+                            )
+                        except Exception:
+                            continue
+                    for mrow in mrows:
+                        mrow = {k: v for k, v in mrow.items() if not k.startswith("_")}
+                        trow = await _translate_reconcile_row(
+                            mconn, session, entity, mrow
+                        )
+                        if trow is None:
+                            skipped += 1
+                            continue
+                        mpk = str(mrow.get(pk_name))
+                        rev, _deleted, mtime, _rj = master_revs.get(
+                            (entity, mpk), (0, False, "", None)
+                        )
+                        found = local_by_nk.get(tuple(trow.get(k) for k in natural))
+                        if found is not None:
+                            lpk, _lrow = found
+                            if rev <= local_clocks.get(lpk, (0, ""))[0]:
+                                skipped += 1
+                                continue
+                        seen.add(("nk", entity, tuple(trow.get(k) for k in natural)))
+                        await _play(_entry("insert", mrow.get(pk_name), rev, mtime, trow))
+                else:
+                    # Multiset path (no natural key): match translated full
+                    # content; duplicates are distinct rows (FIFO consume).
+                    pool: dict[tuple, list[tuple[str, dict]]] = {}
+                    for lpk, lrow in local_by_pk.items():
+                        sig = _content_sig(lrow, pk_name)
+                        if sig is not None:
+                            pool.setdefault(sig, []).append((lpk, lrow))
+                    for mrow in mrows:
+                        mrow = {k: v for k, v in mrow.items() if not k.startswith("_")}
+                        trow = await _translate_reconcile_row(
+                            mconn, session, entity, mrow
+                        )
+                        if trow is None:
+                            skipped += 1
+                            continue
+                        mpk = str(mrow.get(pk_name))
+                        rev, _deleted, mtime, _rj = master_revs.get(
+                            (entity, mpk), (0, False, "", None)
+                        )
+                        sig = _content_sig(trow, pk_name)
+                        if sig is not None and pool.get(sig):
+                            pool[sig].pop(0)
+                            seen.add(("sig", entity, sig))
+                            skipped += 1
+                            continue
+                        if sig is not None:
+                            seen.add(("sig", entity, sig))
+                        await _play(_entry("insert", mrow.get(pk_name), rev, mtime, trow))
+                # Master tombstones vs locally held rows.  Content match
+                # first (namespace-free, translated like presence rows);
+                # rowless tombstones fall back to PK equality like the engine
+                # itself.  Rows already accounted for by this pass (seen set)
+                # are duplicate-twin survivors — keep them.  The shared
+                # supersede rule keeps genuine re-creations safe.
                 for (e, _pk), (rev, deleted, mtime, _rj) in master_revs.items():
                     if e != entity or not deleted:
                         continue
-                    for lpk, lrow in local_by_pk.items():
-                        if rev < local_revs.get((entity, lpk), 0):
-                            continue
-                        # Content match against the tombstoned row when the
-                        # master still carries it, else PK-equality fallback
-                        # (same-namespace archives).
-                        hit = lpk == _pk
-                        if not hit and _rj:
-                            try:
-                                old = json.loads(_rj)
-                            except (TypeError, ValueError):
-                                old = None
-                            hit = (
-                                isinstance(old, dict)
-                                and _rows_equal(lrow, old, pk_name)
-                                and str(mtime or "") >= str(
-                                    (await _local_mtime(session, entity, lpk)) or ""
-                                )
-                            )
-                        if not hit:
-                            continue
-                        entry = {
-                            "entity": entity,
-                            "action": "delete",
-                            "pk_name": pk_name,
-                            "pk_value": lrow.get(pk_name),
-                            "rev": rev,
-                            "mtime": mtime,
-                            "row": None,
-                            "instance": "master",
-                            "coder": "",
-                        }
+                    cands: list[tuple[str, dict]] = []
+                    if _rj:
                         try:
-                            outcome = await _replay_one(
-                                session, entry, None, remaps, "master"
+                            old = json.loads(_rj)
+                        except (TypeError, ValueError):
+                            old = None
+                        if isinstance(old, dict):
+                            told = await _translate_reconcile_row(
+                                mconn, session, entity, old
                             )
-                        except Exception:
-                            await session.rollback()
+                            if told is not None:
+                                if natural:
+                                    tkey = ("nk", entity, tuple(
+                                        told.get(k) for k in natural
+                                    ))
+                                    if tkey in seen:
+                                        continue
+                                    for lpk, lrow in local_by_pk.items():
+                                        try:
+                                            if tuple(lrow.get(k) for k in natural) == tuple(
+                                                told.get(k) for k in natural
+                                            ):
+                                                cands.append((lpk, lrow))
+                                        except Exception:
+                                            continue
+                                else:
+                                    tsig = _content_sig(told, pk_name)
+                                    if tsig is not None and ("sig", entity, tsig) in seen:
+                                        continue
+                                    if tsig is not None:
+                                        for lpk, lrow in local_by_pk.items():
+                                            if _content_sig(lrow, pk_name) == tsig:
+                                                cands.append((lpk, lrow))
+                    if not cands and _pk in local_by_pk:
+                        cands.append((_pk, local_by_pk[_pk]))
+                    for lpk, lrow in cands:
+                        lrev, lmtime = local_clocks.get(lpk, (0, ""))
+                        if _tombstone_superseded(rev, mtime, lrev, lmtime):
                             continue
-                        if outcome.get("status") == "applied":
-                            applied += 1
-                        else:
-                            skipped += 1
-                        try:
-                            await session.commit()
-                        except Exception:
-                            await session.rollback()
+                        await _play(_entry("delete", lrow.get(pk_name), rev, mtime, None))
             try:
                 await session.commit()
             except Exception:
@@ -1124,19 +1236,6 @@ async def reconcile_with_master(session_factory, project_path: str) -> dict:
         with contextlib.suppress(Exception):
             await mconn.close()
     return {"applied": applied, "conflicts": conflicts, "skipped": skipped}
-
-
-async def _local_mtime(session: AsyncSession, entity: str, pk: str) -> str:
-    """The local sync_rev mtime for a row ("" when unknown)."""
-    try:
-        row = await session.execute(
-            text("SELECT mtime FROM sync_rev WHERE entity = :e AND pk = :pk"),
-            {"e": entity, "pk": str(pk)},
-        )
-        first = row.first()
-        return str(first[0] or "") if first else ""
-    except Exception:
-        return ""
 
 
 # ── Full-state export & sandbox rebuild ─────────────────────────────────

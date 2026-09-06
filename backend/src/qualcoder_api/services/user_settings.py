@@ -88,7 +88,7 @@ DEFAULT_SETTINGS: dict = {
     "ai": dict(AI_DEFAULTS),
     "transcription": dict(TRANSCRIPTION_DEFAULTS),
     "sync": {"enabled": False},
-    "updates": {"check_interval": "daily", "auto_update": True},
+    "updates": {"check_interval": "daily", "auto_update": True, "channel": "stable", "auto_large_updates": True},
     "maintenance": dict(MAINTENANCE_DEFAULTS),
     "auto_open_project": True,
 }
@@ -100,11 +100,17 @@ SYNC_OVERRIDE_MODES: tuple[str, ...] = ("auto", "on", "off")
 UPDATES_DEFAULTS: dict = {
     "check_interval": "daily",
     "auto_update": True,
+    "channel": "stable",
+    "auto_large_updates": True,
 }
+
+#: Update channels: ``stable`` (full Tauri releases only) vs ``nightly``
+#: (also offered ``X.Y.Z_NNN`` delta patches). Opt-in via Settings → Updates.
+UPDATE_CHANNELS: tuple[str, ...] = ("stable", "nightly")
 
 
 def get_updates_settings(settings: dict | None = None) -> dict:
-    """Return the app-update preferences (check cadence + auto-install)."""
+    """Return the app-update preferences (cadence + auto-install + channel)."""
     settings = settings or load_settings()
     updates = settings.get("updates")
     if not isinstance(updates, dict):
@@ -112,9 +118,16 @@ def get_updates_settings(settings: dict | None = None) -> dict:
     interval = updates.get("check_interval", UPDATES_DEFAULTS["check_interval"])
     if interval not in ("daily", "weekly", "never"):
         interval = UPDATES_DEFAULTS["check_interval"]
+    channel = updates.get("channel", UPDATES_DEFAULTS["channel"])
+    if channel not in UPDATE_CHANNELS:
+        channel = UPDATES_DEFAULTS["channel"]
     return {
         "check_interval": interval,
         "auto_update": bool(updates.get("auto_update", UPDATES_DEFAULTS["auto_update"])),
+        "channel": channel,
+        "auto_large_updates": bool(
+            updates.get("auto_large_updates", UPDATES_DEFAULTS["auto_large_updates"])
+        ),
     }
 
 
@@ -126,9 +139,16 @@ def save_updates_settings(updates: dict, settings: dict | None = None) -> dict:
     interval = updates.get("check_interval", UPDATES_DEFAULTS["check_interval"])
     if interval not in ("daily", "weekly", "never"):
         interval = UPDATES_DEFAULTS["check_interval"]
+    channel = updates.get("channel", UPDATES_DEFAULTS["channel"])
+    if channel not in UPDATE_CHANNELS:
+        channel = UPDATES_DEFAULTS["channel"]
     clean = {
         "check_interval": interval,
         "auto_update": bool(updates.get("auto_update", UPDATES_DEFAULTS["auto_update"])),
+        "channel": channel,
+        "auto_large_updates": bool(
+            updates.get("auto_large_updates", UPDATES_DEFAULTS["auto_large_updates"])
+        ),
     }
     settings["updates"] = clean
     save_settings(settings)

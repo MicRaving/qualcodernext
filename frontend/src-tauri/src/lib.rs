@@ -13,6 +13,8 @@ use std::process::{Child, Command};
 use std::sync::Mutex;
 use std::time::Duration;
 
+mod native_plan;
+
 /// Windows: spawn helper processes (python, the PyInstaller backend,
 /// taskkill) WITHOUT a flashing console window. taskkill.exe is a console
 /// program — invoked plainly at app exit it briefly popped a terminal.
@@ -180,7 +182,7 @@ fn start_backend(app: &tauri::AppHandle) {
             .unwrap_or_else(|_| "../../backend/.venv/Scripts/python.exe".to_string());
         eprintln!("[tauri] spawning dev backend: {python} -m uvicorn qualcoder_api.main:app --port 8765");
         let child = hide_console(Command::new(&python))
-            .args(["-m", "uvicorn", "qualcoder_api.main:app", "--port", "8765"])
+            .args(["-m", "uvicorn", "qualcoder_api.main:app", "--port", "8765", "--loop", "asyncio", "--http", "httptools"])
             .current_dir("../../backend")
             .spawn();
         store_child(child);
@@ -194,7 +196,7 @@ fn start_backend(app: &tauri::AppHandle) {
 }
 
 #[cfg(not(debug_assertions))]
-const BACKEND_PYTHON_ARGS: [&str; 5] = ["-m", "uvicorn", "qualcoder_api.main:app", "--port", "8765"];
+const BACKEND_PYTHON_ARGS: [&str; 9] = ["-m", "uvicorn", "qualcoder_api.main:app", "--port", "8765", "--loop", "asyncio", "--http", "httptools"];
 
 #[cfg(not(debug_assertions))]
 fn spawn_release_backend(app: &tauri::AppHandle) -> std::io::Result<Child> {
@@ -311,6 +313,45 @@ fn store_child(spawn_result: std::io::Result<Child>) {
     }
 }
 
+/// Restart the backend child process (e.g. after staging a backend-source
+/// overlay) and return the new backend's port once it answers.
+///
+/// The old child is terminated the same way as on app exit; the new child
+/// is spawned with the same resolution order (bundled onedir first). The
+/// caller re-resolves its API base (the port may change) and reopens its
+/// project — the backend shuts down cleanly (open project closed) before
+/// the old process exits.
+#[tauri::command]
+fn restart_backend(app: tauri::AppHandle) -> Result<u16, String> {
+    kill_backend();
+    // Give the OS a beat to release the port and remove the old port file
+    // (taskkill is asynchronous; the old backend deletes its own file on
+    // exit, which races us here).
+    std::thread::sleep(Duration::from_millis(1000));
+    start_backend(&app);
+
+    // The new child's pid identifies its port file
+    // (`qualcoder-port-<pid>.json`), so a lingering file from the killed
+    // backend can never be mistaken for the new one.
+    let child_pid = BACKEND_CHILD
+        .lock()
+        .map(|guard| guard.as_ref().map(|child| child.id()))
+        .unwrap_or(None);
+    let pid = child_pid.ok_or_else(|| "backend did not start".to_string())?;
+    let port_file = std::env::temp_dir().join(format!("qualcoder-port-{pid}.json"));
+    for _ in 0..150 {
+        if let Ok(text) = std::fs::read_to_string(&port_file) {
+            if let Ok(json) = serde_json::from_str::<serde_json::Value>(&text) {
+                if let Some(port) = json.get("port").and_then(|p| p.as_u64()) {
+                    return Ok(port as u16);
+                }
+            }
+        }
+        std::thread::sleep(Duration::from_millis(200));
+    }
+    Err("backend did not come back after restart".to_string())
+}
+
 /// Kill the backend child on app exit.
 fn kill_backend() {
     let mut guard = match BACKEND_CHILD.lock() {
@@ -349,6 +390,102 @@ fn kill_backend() {
     }
 }
 
+/// If a frontend delta patch is installed (``~/.qualcoder/hotpatch/
+/// frontend/current/``), navigate the main window to the backend-served
+/// SPA so the patch applies with a WebView reload — no installer, no app
+/// restart (decision 1: backend-served SPA). No-op when no hotpatch is
+/// active: the window keeps showing its embedded assets.
+///
+/// Release only: `tauri dev` loads the Vite server (HMR) and must never
+/// be rerouted. Uses a plain `TcpStream` HTTP probe (no new deps) and
+/// `eval(location.replace)` (no `url` crate dep).
+#[cfg(not(debug_assertions))]
+fn maybe_navigate_to_hotpatch(app: &tauri::AppHandle) {
+    use std::io::{Read, Write};
+
+    // 1. Wait for the backend port (the backend writes its port file
+    //    before its heavy imports, so this resolves while it boots).
+    let mut port: Option<u16> = None;
+    for _ in 0..150 {
+        port = backend_port();
+        if port.is_some() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(200));
+    }
+    let port = match port {
+        Some(p) => p,
+        None => return,
+    };
+
+    // 2. Poll the version endpoint until the backend answers, then check
+    //    for an active hotpatch. A reachable backend WITHOUT a hotpatch
+    //    (`"frontend_version":null`) returns immediately — no polling.
+    let mut hotpatched = false;
+    for _ in 0..150 {
+        let addr: SocketAddr = match format!("127.0.0.1:{port}").parse() {
+            Ok(addr) => addr,
+            Err(_) => return,
+        };
+        let probe = TcpStream::connect_timeout(&addr, Duration::from_millis(500))
+            .and_then(|mut stream| {
+                stream.set_read_timeout(Some(Duration::from_secs(2)))?;
+                stream.write_all(
+                    b"GET /api/v1/hotpatch/version HTTP/1.0\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n",
+                )?;
+                let mut body = String::new();
+                stream.read_to_string(&mut body)?;
+                Ok(body)
+            });
+        match probe {
+            Err(_) => {
+                // Backend not up yet — keep waiting.
+                std::thread::sleep(Duration::from_millis(200));
+                continue;
+            }
+            Ok(body) => {
+                if let Some(idx) = body.find("\"frontend_version\"") {
+                    // Byte-safe: a truncated body yields None, never a panic.
+                    if let Some(tail) = body.get(idx + 19..) {
+                        let tail = tail.trim_start_matches([':', ' ', '\t', '\r', '\n']);
+                        // Non-null means `"0.1.13_001"` (a quoted version);
+                        // `null` means no hotpatch is installed.
+                        hotpatched = tail.starts_with('"');
+                    }
+                }
+                break;
+            }
+        }
+    }
+    if !hotpatched {
+        return;
+    }
+
+    // 3. Reroute the window. `replace` keeps the embedded page out of the
+    //    history stack, so Back never returns to the stale bundle.
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.eval(&format!("window.location.replace('http://127.0.0.1:{port}/')"));
+    }
+}
+
+/// Relaunch the app so a staged native plan executes at boot.
+///
+/// The backend already staged verified files + `plan.json` (nothing locked
+/// in user-data). The backend child is killed first so no DLL is held when
+/// the new instance copies files; the new instance then exits this one by
+/// taking over (single app window either way after old exit).
+#[tauri::command]
+fn apply_native_plan_and_relaunch(app: tauri::AppHandle) -> Result<String, String> {
+    kill_backend();
+    std::thread::sleep(Duration::from_millis(500));
+    let exe = std::env::current_exe().map_err(|e| format!("own executable: {e}"))?;
+    hide_console(Command::new(&exe))
+        .spawn()
+        .map_err(|e| format!("relaunch: {e}"))?;
+    app.exit(0);
+    Ok("relaunching for native update".to_string())
+}
+
 /// App entry point: build the Tauri app, then run the event loop so we can
 /// observe `RunEvent::ExitRequested` and tear down the backend process.
 pub fn run() {
@@ -357,9 +494,36 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
-        .invoke_handler(tauri::generate_handler![backend_health, backend_port])
+        .invoke_handler(tauri::generate_handler![
+            backend_health,
+            backend_port,
+            restart_backend,
+            apply_native_plan_and_relaunch
+        ])
         .setup(|app| {
+            // Boot-time native delta (release only): the backend is not
+            // spawned yet, so no installed file is locked. Dev builds have
+            // no bundled backend to patch.
+            #[cfg(not(debug_assertions))]
+            if let Some(home) = native_plan::qualcoder_home() {
+                let native_dir = home.join("hotpatch").join("native");
+                match app
+                    .path()
+                    .resolve("backend", tauri::path::BaseDirectory::Resource)
+                {
+                    Ok(resource_backend) => eprintln!(
+                        "[tauri] {}",
+                        native_plan::execute_pending_plan(&native_dir, &resource_backend)
+                    ),
+                    Err(err) => eprintln!("[tauri] native plan skipped: {err}"),
+                }
+            }
             start_backend(app.handle());
+            #[cfg(not(debug_assertions))]
+            {
+                let handle = app.handle().clone();
+                std::thread::spawn(move || maybe_navigate_to_hotpatch(&handle));
+            }
             Ok(())
         })
         .build(tauri::generate_context!())

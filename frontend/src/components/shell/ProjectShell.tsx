@@ -4,7 +4,7 @@
  * one the dashboard empty state provides New/Open project (the app always
  * starts on the dashboard).
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, lazy, Suspense } from "react";
 import {
   AudioLines,
   BarChart3,
@@ -46,7 +46,11 @@ import { HistoryView } from "@/features/history/HistoryView";
 import { CreativePanel } from "@/features/creative/CreativePanel";
 import { SettingsView } from "@/features/settings/SettingsView";
 import { AiView } from "@/features/ai/AiView";
-import { BugReportView } from "@/features/bugreport/BugReportView";
+// BugReportView pulls in html2canvas (~200KB) — split it out of the main
+// chunk; it only renders when the user opens the bug reporter.
+const BugReportView = lazy(() =>
+  import("@/features/bugreport/BugReportView").then((m) => ({ default: m.BugReportView })),
+);
 import { SearchDialog } from "@/features/search/SearchDialog";
 import { HelpView } from "@/features/help/HelpView";
 import { APP_VERSION } from "@/lib/version";
@@ -114,7 +118,7 @@ function UpdateStatusRow() {
         <Button
           variant="primary"
           icon={<Download size={11} aria-hidden />}
-          onClick={() => void useUpdatesStore.getState().install()}
+          onClick={() => void useUpdatesStore.getState().install({ manual: true })}
         >
           {t("settings.updatesInstall")}
         </Button>
@@ -198,6 +202,10 @@ export function ProjectShell() {
   const rightPane = useWorkspaceStore((s) => s.rightPane);
   const setRightPane = useWorkspaceStore((s) => s.setRightPane);
   const projectOpen = useProjectStore((s) => s.projectOpen);
+  // Gated mount for the lazy BugReportView (html2canvas chunk): mounting
+  // the lazy component would fetch the chunk even though it renders null
+  // while closed — only mount once the user actually opens the reporter.
+  const bugReportOpen = useProjectStore((s) => s.bugReport.open);
   const tasks = useProjectStore((s) => s.tasks);
   const tasksPaused = useProjectStore((s) => s.tasksPaused);
   const duplicateCoder = useProjectStore((s) => s.duplicateCoder);
@@ -940,7 +948,11 @@ export function ProjectShell() {
         )}
       </div>
       </WorkspaceLayout>
-      <BugReportView />
+      {bugReportOpen && (
+        <Suspense fallback={null}>
+          <BugReportView />
+        </Suspense>
+      )}
       <SearchDialog
         open={searchOpen}
         anchor={searchRef.current}

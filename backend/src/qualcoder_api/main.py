@@ -13,7 +13,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
 
 from qualcoder_api.api.v1.router import router as v1_router
 from qualcoder_api.services import sync, sync_engine, user_settings
@@ -22,10 +22,17 @@ from qualcoder_api.services.sync_schema import SYNC_REPAIR_INTERVAL_SECS
 
 logger = logging.getLogger(__name__)
 
+#: Process boot timestamp — the lifespan handler logs time-to-ready
+#: against it so startup regressions show up in the backend log.
+BOOT_T0 = time.monotonic()
+
 service = ProjectService()
 
 #: Origins the CORSMiddleware allows. The catch-all 500 handler mirrors
 #: this list so its responses carry the same CORS headers.
+#: Note: the backend-served hotpatch SPA (see ``_mount_hotpatch_spa``) is
+#: same-origin, so it needs no CORS entry; the regex below covers dev
+#: (Vite :5173) and ephemeral backend ports (second app instance).
 ALLOWED_ORIGINS = [
     "http://localhost:5173",
     # Tauri 2 serves the bundled frontend from http://tauri.localhost
@@ -34,6 +41,11 @@ ALLOWED_ORIGINS = [
     "http://tauri.localhost",
     "tauri://localhost",
 ]
+
+#: Origins matching localhost/127.0.0.1 on any port (dev server, packaged
+#: backend on 8765 or an ephemeral fallback). CORSMiddleware matches either
+#: the list or the regex.
+ALLOWED_ORIGIN_REGEX = r"http://(localhost|127\.0\.0\.1)(:\d+)?"
 
 
 def _cors_headers(request: Request) -> dict[str, str]:
@@ -135,6 +147,44 @@ async def _sync_loop() -> None:
                 logger.exception("background sync cycle failed: %s", err)
 
 
+def _mount_hotpatch_spa(app: FastAPI) -> None:
+    """Serve the hotpatched SPA at ``/`` when a delta patch is installed.
+
+    Decision 1 (backend-served SPA): ``scripts/build-patch.py`` drops a
+    signed ``frontend/dist`` build into ``~/.qualcoder/hotpatch/frontend/
+    current/``. Once present, the Tauri shell navigates here instead of its
+    embedded assets, so frontend-only nightlies (``X.Y.Z_NNN``) apply with a
+    WebView reload — no installer, no app restart. Without a hotpatch this
+    is a no-op (dev uses Vite, packaged uses embedded assets).
+    """
+    from qualcoder_api.services import hotpatch
+
+    spa_dir = hotpatch.frontend_spa_dir()
+    if spa_dir is None:
+        return
+    index = spa_dir / "index.html"
+
+    @app.get("/{spa_path:path}", include_in_schema=False)
+    async def _serve_hotpatch_spa(spa_path: str) -> FileResponse:
+        # Never shadow the API, docs, or OpenAPI schema.
+        if spa_path.startswith(("api/", "docs", "redoc", "openapi.json")):
+            return JSONResponse(status_code=404, content={"detail": "not found"})  # type: ignore[return-value]
+        candidate = spa_dir / spa_path
+        try:
+            resolved = candidate.resolve()
+            if (
+                spa_path
+                and str(resolved).startswith(str(spa_dir.resolve()))
+                and resolved.is_file()
+            ):
+                return FileResponse(str(resolved))
+        except OSError:
+            pass
+        return FileResponse(str(index))
+
+    logger.info("serving hotpatched SPA from %s", spa_dir)
+
+
 async def _presence_loop() -> None:
     """Live coder presence: while a project is open, refresh this instance's
     presence file so other instances see it as active (independent of the sync
@@ -205,6 +255,7 @@ async def lifespan(_app: FastAPI):
     else:
         tasks.append(asyncio.create_task(_sync_loop()))
         tasks.append(asyncio.create_task(_presence_loop()))
+    logger.info("backend ready in %.2fs (server_mode=%s)", time.monotonic() - BOOT_T0, server_mode)
     try:
         yield
     finally:
@@ -230,6 +281,7 @@ def create_app() -> FastAPI:
     app.add_middleware(
         CORSMiddleware,
         allow_origins=ALLOWED_ORIGINS,
+        allow_origin_regex=ALLOWED_ORIGIN_REGEX,
         allow_methods=["*"],
         allow_headers=["*"],
     )
@@ -255,6 +307,9 @@ def create_app() -> FastAPI:
             prefix="/api/v1",
             dependencies=[Depends(gate_project_scoped)],
         )
+    # Hotpatch SPA last: the catch-all ``/{spa_path:path}`` must never win
+    # over API/docs routes registered above.
+    _mount_hotpatch_spa(app)
     return app
 
 

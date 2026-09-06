@@ -7,6 +7,14 @@
      include (first releases have no base tag, so no link). Add a section
      like "## 0.1.1 (2026-08-31)" at the TOP of the file. -->
 
+## 0.1.14 (2026-09-06)
+
+- Opt-in Nightly channel delivers small signed delta patches without a full download.
+- Frontend, backend, and native-file patches activate on reload, restart, or relaunch — with one-step undo.
+- Collaboration sync hardening plus faster dev boot and leaner bundles.
+
+**Full Changelog**: https://github.com/MicRaving/qualcodernext/compare/v0.1.13...v0.1.14
+
 ## 0.1.13 (2026-09-05)
 
 - Deleted rows stay deleted: tombstones now carry content, blocking stale resurrections.

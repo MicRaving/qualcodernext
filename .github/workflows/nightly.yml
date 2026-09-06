@@ -1,0 +1,142 @@
+name: Nightly patch
+
+# Builds a signed delta patch (X.Y.Z_NNN) and publishes it to the
+# rolling `nightly` release. The app's nightly channel polls
+# .../releases/download/nightly/qcnext-nightly.json (see
+# frontend/src/stores/updates.ts: NIGHTLY_MANIFEST_URL).
+#
+# How to cut a nightly: Actions → Nightly patch → Run workflow → version
+# (e.g. 0.1.13_001) + notes. No installers are built; flatpak/dmg and the
+# stable release pipeline are unaffected.
+#
+# Layers per run: frontend zip always; backend-source overlay with
+# `backend: true` (restart to activate); boot-applied native-file delta
+# with `native: true` (chains EXACTLY onto `native_from` — pass the
+# previous nightly version, or leave empty to publish a files baseline
+# that a later nightly diffs against).
+#
+# Signing reuses the TAURI_SIGNING_PRIVATE_KEY secret (unencrypted minisign
+# key, same keypair as the updater). Unsigned patches are refused by the
+# backend, so the job fails without the secret instead of shipping one.
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Nightly version (X.Y.Z_NNN, e.g. 0.1.13_001)"
+        required: true
+        type: string
+      notes:
+        description: "Short patch notes for the manifest"
+        required: false
+        default: ""
+        type: string
+      backend:
+        description: "Also package a backend-source overlay (restart to activate)"
+        required: false
+        default: false
+        type: boolean
+      native:
+        description: "Also build the backend onedir for a native-file delta (boot-applied)"
+        required: false
+        default: false
+        type: boolean
+      native_from:
+        description: "Previous nightly version to diff the native delta against (empty = files baseline only)"
+        required: false
+        default: ""
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: nightly-patch
+  cancel-in-progress: false
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Validate the nightly version
+        run: |
+          if ! echo "${{ inputs.version }}" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+_[0-9]{1,5}$'; then
+            echo "::error::Version must be X.Y.Z_NNN (e.g. 0.1.13_001)"
+            exit 1
+          fi
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+
+      - name: Frontend deps + build
+        working-directory: frontend
+        run: |
+          npm ci
+          npm run build
+
+      - name: Restore the signing key
+        env:
+          SIGN_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        run: |
+          if [ -z "$SIGN_KEY" ]; then
+            echo "::error::TAURI_SIGNING_PRIVATE_KEY secret is missing — patches must be signed."
+            exit 1
+          fi
+          printf '%s' "$SIGN_KEY" > "$RUNNER_TEMP/patch.key"
+          echo "PATCH_SIGN_KEY_FILE=$RUNNER_TEMP/patch.key" >> "$GITHUB_ENV"
+
+      - name: Backend deps (native deltas only)
+        if: inputs.native == true
+        working-directory: backend
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: Build backend onedir (native deltas only)
+        if: inputs.native == true
+        working-directory: backend
+        run: python -m PyInstaller --noconfirm qualcoder_backend.spec
+
+      - name: Build the signed patch
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          FLAGS=""
+          if [ "${{ inputs.backend }}" = "true" ]; then FLAGS="$FLAGS --with-backend"; fi
+          if [ "${{ inputs.native }}" = "true" ]; then
+            FLAGS="$FLAGS --backend-dist backend/dist/qualcoder-backend"
+            if [ -n "${{ inputs.native_from }}" ]; then
+              if gh release download nightly -p "backend-files-${{ inputs.native_from }}.json" -D dist-patches/; then
+                FLAGS="$FLAGS --backend-files-from dist-patches/backend-files-${{ inputs.native_from }}.json"
+              else
+                echo "::warning::backend-files-${{ inputs.native_from }}.json not found — publishing a files baseline (no native section)"
+              fi
+            fi
+          fi
+          python scripts/build-patch.py --version "${{ inputs.version }}" --notes "${{ inputs.notes }}" $FLAGS
+
+      - name: Publish to the rolling nightly release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release view nightly >/dev/null 2>&1 || gh release create nightly --prerelease \
+            --title "QCnext nightly (delta patches)" \
+            --notes "Rolling release holding the latest signed delta patch. Opt in via Settings → Updates → Channel: Nightly."
+          # Backend/native assets only exist for layered nightlies; upload
+          # whatever the build produced (unmatched globs are filtered out).
+          # backend-files-*.json accumulate per version (never clobbered by
+          # name) as future diff predecessors.
+          existing=()
+          for f in dist-patches/qcnext-frontend-*.zip dist-patches/qcnext-frontend-*.zip.sha256 dist-patches/qcnext-backend-*.zip dist-patches/qcnext-backend-*.zip.sha256 dist-patches/qcnext-native-*.zip dist-patches/qcnext-native-*.zip.sha256 dist-patches/backend-files-*.json dist-patches/qcnext-nightly.json; do
+            [ -e "$f" ] && existing+=("$f")
+          done
+          gh release upload nightly "${existing[@]}" --clobber

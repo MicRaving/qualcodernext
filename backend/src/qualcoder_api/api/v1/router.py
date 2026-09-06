@@ -160,6 +160,37 @@ class MemosResponse(BaseModel):
 class UpdatesSettingsRequest(BaseModel):
     check_interval: str = "daily"
     auto_update: bool = True
+    #: Update channel: ``stable`` (full releases) or ``nightly``
+    #: (also ``X.Y.Z_NNN`` delta patches). Validation lives in
+    #: ``user_settings.save_updates_settings`` so unknown values fall back
+    #: to ``stable`` instead of 422-ing older clients.
+    channel: str = "stable"
+    #: Auto-install updates larger than 25 MB (full installers always count
+    #: as large). When off, large updates stay offered until installed
+    #: manually from Settings.
+    auto_large_updates: bool = True
+
+
+class HotpatchVersionResponse(BaseModel):
+    #: Running backend version (``APP_VERSION``, may carry ``_NNN``).
+    app_version: str = ""
+    #: Active hotpatched frontend version, if a delta patch is installed.
+    frontend_version: str | None = None
+    #: Rollback candidate from the previously replaced patch, if kept.
+    previous_version: str | None = None
+    #: Effective update channel from the saved settings.
+    channel: str = "stable"
+
+
+class HotpatchApplyRequest(BaseModel):
+    #: Nightly version to install (``X.Y.Z_NNN`` — must match version.json).
+    version: str = ""
+    #: Patch zip download URL (https only).
+    url: str = ""
+    #: Expected hex SHA-256 of the zip (from the nightly manifest).
+    sha256: str = ""
+    #: Minisign signature line for the zip (from the nightly manifest).
+    signature: str = ""
 
 
 class AppSettingsRequest(BaseModel):
@@ -201,7 +232,7 @@ async def put_app_settings(req: AppSettingsRequest) -> AppSettingsRequest:
 
 @router.get("/updates/settings", response_model=UpdatesSettingsRequest)
 async def get_updates_settings() -> UpdatesSettingsRequest:
-    """App-update preferences (check cadence, auto-install)."""
+    """App-update preferences (check cadence, auto-install, channel)."""
     from qualcoder_api.services.user_settings import get_updates_settings
 
     return UpdatesSettingsRequest(**get_updates_settings())
@@ -212,6 +243,233 @@ async def put_updates_settings(req: UpdatesSettingsRequest) -> UpdatesSettingsRe
     from qualcoder_api.services.user_settings import save_updates_settings
 
     return UpdatesSettingsRequest(**save_updates_settings(req.model_dump()))
+
+
+@router.get("/hotpatch/version", response_model=HotpatchVersionResponse)
+async def get_hotpatch_version() -> HotpatchVersionResponse:
+    """Running versions: backend ``APP_VERSION`` + active frontend hotpatch.
+
+    The Tauri shell and Settings → Updates use this to display the
+    effective version (``0.1.13`` vs ``0.1.13_001``) and to decide whether
+    a ``nightly``-channel delta is newer than what is running.
+    """
+    from qualcoder_api.core import APP_VERSION
+    from qualcoder_api.services import hotpatch
+    from qualcoder_api.services.user_settings import get_updates_settings
+
+    return HotpatchVersionResponse(
+        app_version=APP_VERSION,
+        frontend_version=hotpatch.frontend_version(),
+        previous_version=hotpatch.previous_version(),
+        channel=str(get_updates_settings().get("channel", "stable")),
+    )
+
+
+@router.post("/hotpatch/apply", response_model=HotpatchVersionResponse)
+def apply_hotpatch(req: HotpatchApplyRequest) -> HotpatchVersionResponse:
+    """Download, verify (SHA-256 + minisign) and activate a nightly patch.
+
+    Sync endpoint (runs in the worker threadpool): the download and the
+    ~100 ms signature check must never block the async event loop. Takes
+    effect on the next WebView reload — the caller reloads itself.
+    """
+    from fastapi import HTTPException
+
+    from qualcoder_api.core import APP_VERSION
+    from qualcoder_api.services import hotpatch
+    from qualcoder_api.services.hotpatch import HotpatchError
+    from qualcoder_api.services.user_settings import get_updates_settings
+
+    try:
+        hotpatch.apply_patch(req.version, req.url, req.sha256, req.signature)
+    except HotpatchError as err:
+        raise HTTPException(status_code=400, detail=str(err)) from err
+    return HotpatchVersionResponse(
+        app_version=APP_VERSION,
+        frontend_version=hotpatch.frontend_version(),
+        previous_version=hotpatch.previous_version(),
+        channel=str(get_updates_settings().get("channel", "stable")),
+    )
+
+
+@router.post("/hotpatch/rollback", response_model=HotpatchVersionResponse)
+def rollback_hotpatch() -> HotpatchVersionResponse:
+    """Restore the previously replaced patch (404 when nothing is kept)."""
+    from fastapi import HTTPException
+
+    from qualcoder_api.core import APP_VERSION
+    from qualcoder_api.services import hotpatch
+    from qualcoder_api.services.user_settings import get_updates_settings
+
+    if hotpatch.rollback_patch() is None:
+        raise HTTPException(status_code=404, detail="no previous patch to roll back to")
+    return HotpatchVersionResponse(
+        app_version=APP_VERSION,
+        frontend_version=hotpatch.frontend_version(),
+        previous_version=hotpatch.previous_version(),
+        channel=str(get_updates_settings().get("channel", "stable")),
+    )
+
+
+class OverlayVersionResponse(BaseModel):
+    #: Backend-overlay version staged under ``patches/current`` (if any).
+    overlay_version: str | None = None
+    #: Rollback candidate from the previously replaced overlay, if kept.
+    previous_version: str | None = None
+    #: Whether this process runs overlay code (i.e. needs no restart).
+    overlay_active: bool = False
+
+
+class OverlayApplyRequest(BaseModel):
+    #: Nightly version to stage (``X.Y.Z_NNN`` — must match version.json).
+    version: str = ""
+    #: Backend-source zip download URL (https only).
+    url: str = ""
+    #: Expected hex SHA-256 of the zip (from the nightly manifest).
+    sha256: str = ""
+    #: Minisign signature line for the zip (from the nightly manifest).
+    signature: str = ""
+
+
+@router.get("/patches/version", response_model=OverlayVersionResponse)
+async def get_overlay_version() -> OverlayVersionResponse:
+    """Staged backend-overlay versions (takes effect after a restart)."""
+    from qualcoder_api.services import overlay
+
+    return OverlayVersionResponse(
+        overlay_version=overlay.overlay_version(),
+        previous_version=overlay.overlay_previous_version(),
+        overlay_active=overlay.overlay_version() is not None
+        and _overlay_module_origin() == "overlay",
+    )
+
+
+def _overlay_module_origin() -> str:
+    """Where the running ``qualcoder_api`` package was imported from.
+
+    ``"overlay"`` when this process boots patched code (the overlay dir is
+    on ``sys.path``), ``"frozen"`` otherwise. Lets the UI tell "staged,
+    restart pending" apart from "running patched code".
+    """
+    import qualcoder_api.services.overlay as overlay_module
+    from qualcoder_api.services import overlay as overlay_service
+
+    origin = getattr(overlay_module, "__file__", "") or ""
+    overlay_root = str(overlay_service.PATCHES_ROOT.resolve())
+    return "overlay" if origin and overlay_root in origin else "frozen"
+
+
+@router.post("/patches/apply", response_model=OverlayVersionResponse)
+def apply_overlay(req: OverlayApplyRequest) -> OverlayVersionResponse:
+    """Download, verify and stage a backend-source patch (restart activates).
+
+    Sync endpoint (worker threadpool): the download and signature check
+    must never block the async event loop.
+    """
+    from fastapi import HTTPException
+
+    from qualcoder_api.services import overlay
+    from qualcoder_api.services.hotpatch import HotpatchError
+
+    try:
+        overlay.apply_overlay(req.version, req.url, req.sha256, req.signature)
+    except HotpatchError as err:
+        raise HTTPException(status_code=400, detail=str(err)) from err
+    return OverlayVersionResponse(
+        overlay_version=overlay.overlay_version(),
+        previous_version=overlay.overlay_previous_version(),
+        overlay_active=_overlay_module_origin() == "overlay",
+    )
+
+
+@router.post("/patches/rollback", response_model=OverlayVersionResponse)
+def rollback_overlay() -> OverlayVersionResponse:
+    """Restore the previously replaced overlay (404 when nothing is kept)."""
+    from fastapi import HTTPException
+
+    from qualcoder_api.services import overlay
+
+    if overlay.rollback_overlay() is None:
+        raise HTTPException(status_code=404, detail="no previous overlay to roll back to")
+    return OverlayVersionResponse(
+        overlay_version=overlay.overlay_version(),
+        previous_version=overlay.overlay_previous_version(),
+        overlay_active=_overlay_module_origin() == "overlay",
+    )
+
+
+class NativeVersionResponse(BaseModel):
+    #: Staged (plan-pending) delta version, if the shell has one to apply.
+    staged: str | None = None
+    #: Active delta chain links (``applied.json``), if a delta was applied.
+    applied_from: str | None = None
+    applied_to: str | None = None
+    #: One-step undo target (the version a restore returns to).
+    previous_to: str | None = None
+    #: Base backend version of the installed bundle (chain start).
+    bundle_base: str = ""
+    #: Version a new delta must chain onto (``applied_to`` or base).
+    pointer: str = ""
+
+
+class NativeApplyRequest(BaseModel):
+    #: Nightly version to stage (``X.Y.Z_NNN`` — must match delta.json).
+    version: str = ""
+    #: Predecessor the delta chains onto (must equal the client pointer).
+    from_version: str = ""
+    #: Native delta zip download URL (https only).
+    url: str = ""
+    #: Expected hex SHA-256 of the zip (from the nightly manifest).
+    sha256: str = ""
+    #: Minisign signature line for the zip (from the nightly manifest).
+    signature: str = ""
+    #: Download size in bytes (refused above the delta ceiling).
+    size: int = 0
+
+
+def _native_status_response() -> NativeVersionResponse:
+    from qualcoder_api.services import native
+
+    return NativeVersionResponse(**native.native_status())
+
+
+@router.get("/native/version", response_model=NativeVersionResponse)
+async def get_native_version() -> NativeVersionResponse:
+    """Native-delta chain state (staged/applied/undo target/chain pointer)."""
+    return _native_status_response()
+
+
+@router.post("/native/apply", response_model=NativeVersionResponse)
+def apply_native(req: NativeApplyRequest) -> NativeVersionResponse:
+    """Download, verify and stage a native delta (shell applies at boot).
+
+    Sync endpoint (worker threadpool): the download and signature check
+    must never block the async event loop.
+    """
+    from fastapi import HTTPException
+
+    from qualcoder_api.services import native
+    from qualcoder_api.services.hotpatch import HotpatchError
+
+    try:
+        native.stage_native(
+            req.version, req.from_version, req.url, req.sha256, req.signature, req.size
+        )
+    except HotpatchError as err:
+        raise HTTPException(status_code=400, detail=str(err)) from err
+    return _native_status_response()
+
+
+@router.post("/native/rollback", response_model=NativeVersionResponse)
+def rollback_native() -> NativeVersionResponse:
+    """Queue a restore of the pre-delta backups (404 when nothing active)."""
+    from fastapi import HTTPException
+
+    from qualcoder_api.services import native
+
+    if native.rollback_native() is None:
+        raise HTTPException(status_code=404, detail="no active native delta to roll back")
+    return _native_status_response()
 
 
 @router.get("/maintenance/settings", response_model=MaintenanceSettingsResponse)

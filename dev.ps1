@@ -1,4 +1,8 @@
 # dev.ps1 - start QCnext (backend + frontend) from the development folder.
+# The backend runs WITHOUT --reload by default: the reloader boots the app
+# twice and watches the whole tree (watchfiles), which roughly doubles
+# startup time and burns CPU. Pass -Reload for hot-reload during API work.
+param([switch]$Reload)
 $ErrorActionPreference = "Stop"
 
 $root = $PSScriptRoot
@@ -20,9 +24,9 @@ $cleanup = {
 Register-EngineEvent PowerShell.Exiting -Action $cleanup
 
 Write-Host "Starting backend on http://localhost:$backendPort ..."
-$backend = Start-Process -FilePath $backendPython -ArgumentList @(
-    "-m", "uvicorn", "qualcoder_api.main:app", "--port", "$backendPort", "--reload"
-) -WorkingDirectory $root -PassThru
+$backendArgs = @("-m", "uvicorn", "qualcoder_api.main:app", "--port", "$backendPort", "--loop", "asyncio", "--http", "httptools")
+if ($Reload) { $backendArgs += @("--reload") }
+$backend = Start-Process -FilePath $backendPython -ArgumentList $backendArgs -WorkingDirectory $root -PassThru
 
 Write-Host "Starting frontend on http://localhost:$frontendPort ..."
 $npm = (Get-Command npm.cmd -ErrorAction Stop).Source

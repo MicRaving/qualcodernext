@@ -43,10 +43,11 @@ if __name__ == "__main__":
         port_file = ""
     # The heavy qualcoder_api import happens AFTER the port file is written,
     # so the Tauri shell discovers the port while Python is still booting.
+    # Loop/protocol are pinned (no auto-detection cost at server start).
     from qualcoder_api.main import app
 
     try:
-        uvicorn.run(app, host="127.0.0.1", port=port, log_level="info")
+        uvicorn.run(app, host="127.0.0.1", port=port, log_level="info", loop="asyncio", http="httptools")
     finally:
         if port_file:
             with _contextlib.suppress(OSError):

@@ -52,22 +52,58 @@ def test_updates_settings_default_to_auto_update(monkeypatch, tmp_path):
     settings = user_settings.get_updates_settings()
     assert settings["auto_update"] is True
     assert settings["check_interval"] == "daily"
+    assert settings["channel"] == "stable"
+    assert settings["auto_large_updates"] is True
 
 
 def test_updates_settings_persistence(monkeypatch, tmp_path):
     monkeypatch.setattr(user_settings, "SETTINGS_FILE", tmp_path / "settings.json")
     assert user_settings.save_updates_settings(
         {"check_interval": "weekly", "auto_update": False}
-    ) == {"check_interval": "weekly", "auto_update": False}
+    ) == {
+        "check_interval": "weekly",
+        "auto_update": False,
+        "channel": "stable",
+        "auto_large_updates": True,
+    }
     assert user_settings.get_updates_settings() == {
         "check_interval": "weekly",
         "auto_update": False,
+        "channel": "stable",
+        "auto_large_updates": True,
     }
     # Turning auto-update back on (default) sticks across reloads.
     assert user_settings.save_updates_settings(
-        {"check_interval": "never", "auto_update": True}
-    ) == {"check_interval": "never", "auto_update": True}
+        {"check_interval": "never", "auto_update": True, "auto_large_updates": False}
+    ) == {
+        "check_interval": "never",
+        "auto_update": True,
+        "channel": "stable",
+        "auto_large_updates": False,
+    }
     assert user_settings.get_updates_settings() == {
         "check_interval": "never",
         "auto_update": True,
+        "channel": "stable",
+        "auto_large_updates": False,
     }
+
+
+def test_updates_channel_opt_in_out(monkeypatch, tmp_path):
+    monkeypatch.setattr(user_settings, "SETTINGS_FILE", tmp_path / "settings.json")
+    assert user_settings.save_updates_settings(
+        {"check_interval": "daily", "auto_update": True, "channel": "nightly"}
+    )["channel"] == "nightly"
+    assert user_settings.get_updates_settings()["channel"] == "nightly"
+    assert user_settings.save_updates_settings(
+        {"check_interval": "daily", "auto_update": True, "channel": "stable"}
+    )["channel"] == "stable"
+    assert user_settings.get_updates_settings()["channel"] == "stable"
+
+
+def test_updates_channel_rejects_unknown_values(monkeypatch, tmp_path):
+    monkeypatch.setattr(user_settings, "SETTINGS_FILE", tmp_path / "settings.json")
+    assert user_settings.save_updates_settings(
+        {"check_interval": "daily", "auto_update": True, "channel": "beta"}
+    )["channel"] == "stable"
+    assert user_settings.get_updates_settings()["channel"] == "stable"

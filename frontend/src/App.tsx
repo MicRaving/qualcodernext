@@ -19,7 +19,10 @@ const API_BOOT_TIMEOUT_MS = 35_000;
  *  the configured cadence when auto-updates are enabled. An available update
  *  is installed automatically (the setting promises "install automatically");
  *  manual checks in Settings never install on their own. Runs only in the
- *  packaged (Tauri) app — plain-browser dev has no updater. */
+ *  packaged (Tauri) app — plain-browser dev has no updater.
+ *  Deferred until the browser is idle (or 30s after boot): the check does
+ *  DNS/TLS to GitHub and must never compete with first paint + project open. */
+const UPDATES_DEFER_MS = 30_000;
 function scheduleUpdates(): () => void {
   if (!updaterAvailable()) return () => {};
   let timer: number | null = null;
@@ -33,7 +36,12 @@ function scheduleUpdates(): () => void {
       if (s.status === "available" && s.settings?.auto_update) void s.install();
     });
   };
-  void store.loadSettings().then(() => {
+  void store
+    .loadSettings()
+    // Hotpatch/overlay/native state feeds version comparison in checkNow —
+    // without it an applied nightly would be re-offered on every check.
+    .then(() => store.loadHotpatch())
+    .then(() => {
     if (cancelled) return;
     const settings = useUpdatesStore.getState().settings;
     if (!settings?.auto_update) return;
@@ -76,8 +84,30 @@ function App() {
   }, []);
 
   useEffect(() => {
-    const cleanup = scheduleUpdates();
-    return cleanup;
+    // Deferred (see UPDATES_DEFER_MS): never on the boot critical path.
+    let cleanup: (() => void) | null = null;
+    let timer: number | null = window.setTimeout(() => {
+      timer = null;
+      cleanup = scheduleUpdates();
+    }, UPDATES_DEFER_MS);
+    // requestIdleCallback fires earlier on an idle machine; the timeout
+    // above is the backstop for browsers without it or a busy main thread.
+    let idle: number | null = null;
+    const w = window as Window & { requestIdleCallback?: (cb: () => void, opts?: { timeout: number }) => number; cancelIdleCallback?: (id: number) => void };
+    if (typeof w.requestIdleCallback === "function") {
+      idle = w.requestIdleCallback(() => {
+        if (timer != null) {
+          window.clearTimeout(timer);
+          timer = null;
+        }
+        cleanup = scheduleUpdates();
+      }, { timeout: UPDATES_DEFER_MS });
+    }
+    return () => {
+      if (timer != null) window.clearTimeout(timer);
+      if (idle != null) w.cancelIdleCallback?.(idle);
+      cleanup?.();
+    };
   }, []);
 
   // Boot gate: hold the whole UI until the backend base URL is resolved.
@@ -95,7 +125,14 @@ function App() {
       initApiBase(),
       new Promise((resolve) => setTimeout(resolve, API_BOOT_TIMEOUT_MS)),
     ]).then(() => {
-      if (active) setBaseReady(true);
+      if (active) {
+        setBaseReady(true);
+        try {
+          performance.mark("qc:base-resolved");
+        } catch {
+          /* performance API unavailable (older webviews) */
+        }
+      }
     });
     return () => {
       active = false;
@@ -115,50 +152,74 @@ function App() {
       // until it answers. Plain-browser dev keeps the empty dashboard so
       // the E2E suite can exercise the create/open flows deterministically.
       if (typeof window !== "undefined" && "__TAURI_INTERNALS__" in window) {
+        // appSettings and recentProjects are independent — fetch them in
+        // parallel instead of serially.  A settings failure keeps the
+        // default (auto-open); a recent failure enters the retry loop below.
+        const [settingsRes, recentRes] = await Promise.allSettled([
+          api.appSettings(),
+          api.recentProjects(3_000),
+        ]);
+        if (cancelled) return;
+        if (settingsRes.status === "fulfilled" && !settingsRes.value.auto_open_project) return;
         try {
-          const appSettings = await api.appSettings();
-          if (cancelled) return;
-          if (!appSettings.auto_open_project) return;
+          performance.mark("qc:auto-open-start");
         } catch {
-          if (cancelled) return;
-          /* settings unreachable at boot — keep the default (auto-open) */
+          /* performance API unavailable (older webviews) */
         }
         const store = useProjectStore.getState();
         store.setAutoOpening(true);
         store.setAutoOpenStage("backend");
-        const tryAutoOpen = async (attempt: number) => {
+        const openFromRecent = async (recent: string[]) => {
+          if (cancelled) return false;
+          useProjectStore.getState().setAutoOpenStage("open");
+          for (const path of recent.slice(0, 3)) {
+            if (cancelled) return false;
+            // A hanging open (e.g. a large project while the backend is
+            // still warming up) must never freeze the dashboard — give up
+            // after 30s and let the user open it manually.
+            const ok = await Promise.race([
+              useProjectStore.getState().openProject(path),
+              new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 30_000)),
+            ]);
+            if (cancelled) return false;
+            if (ok) return true;
+          }
+          return false;
+        };
+        const tryAutoOpen = async (attempt: number, firstRecent?: string[]) => {
           if (cancelled) return;
           try {
             // Short timeout: when the backend is still booting this fails
-            // fast and the tight retry cadence opens the project the moment
+            // fast and the retry cadence opens the project the moment
             // the backend answers (no welcome screen flash).
-            const { recent } = await api.recentProjects(3_000);
+            const recent = firstRecent ?? (await api.recentProjects(3_000)).recent;
             if (cancelled) return;
-            useProjectStore.getState().setAutoOpenStage("open");
-            for (const path of recent.slice(0, 3)) {
-              if (cancelled) return;
-              // A hanging open (e.g. a large project while the backend is
-              // still warming up) must never freeze the dashboard — give up
-              // after 30s and let the user open it manually.
-              const ok = await Promise.race([
-                useProjectStore.getState().openProject(path),
-                new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 30_000)),
-              ]);
-              if (cancelled) return;
-              if (ok) {
+            if (await openFromRecent(recent)) {
+              if (!cancelled) {
                 useProjectStore.getState().setAutoOpening(false);
-                return;
+                try {
+                  performance.mark("qc:auto-open-done");
+                } catch {
+                  /* performance API unavailable (older webviews) */
+                }
               }
+              return;
             }
           } catch {
             if (!cancelled && attempt < 120) {
-              retryTimer = window.setTimeout(() => void tryAutoOpen(attempt + 1), 250);
+              // Exponential backoff (250ms → 5s cap): fast when the backend
+              // is just about to answer, quiet once it is clearly still down.
+              const delay = Math.min(250 * 2 ** attempt, 5_000);
+              retryTimer = window.setTimeout(() => void tryAutoOpen(attempt + 1), delay);
               return;
             }
           }
           if (!cancelled) useProjectStore.getState().setAutoOpening(false);
         };
-        void tryAutoOpen(0);
+        void tryAutoOpen(
+          0,
+          recentRes.status === "fulfilled" ? recentRes.value.recent : undefined,
+        );
       }
     });
     return () => {

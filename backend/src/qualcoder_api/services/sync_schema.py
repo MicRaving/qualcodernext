@@ -60,6 +60,10 @@ NATURAL_KEYS: dict[str, list[str]] = {
     "dictionary": ["name"],
     "dictionary_entry": ["dict_id", "term"],
     "code_set": ["name"],
+    # Text-PK table without a UNIQUE beyond the PK itself: the name IS the
+    # identity (multiset matching would drop the PK from the signature and
+    # collapse distinct types).
+    "attribute_type": ["name"],
     # Composite-PK table: the pair (set_id, cid) is both the natural key and
     # the primary key.  FK translation normalises the values to local ids
     # before matching, so it is safe to treat both columns as natural.

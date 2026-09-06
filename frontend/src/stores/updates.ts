@@ -1,13 +1,60 @@
 /**
- * App-update state — check/download/install via the Tauri updater plugin.
+ * App-update state — check/download/install via the Tauri updater plugin,
+ * plus the `nightly` channel for `X.Y.Z_NNN` delta patches.
  *
- * The check hits the configured GitHub release manifest; in a plain browser
+ * Channels (`Settings → Updates`, opt-in/out):
+ * - `stable` (default): full Tauri releases from `qcnext-latest.json` only.
+ * - `nightly`: additionally offers signed delta patches from
+ *   `qcnext-nightly.json`. A nightly is OLDER than the stable of the same
+ *   base (`0.1.13_009 < 0.1.13`), so opting out converges back to stable.
+ *
+ * Version ordering mirrors `backend/.../services/versioning.py` — keep the
+ * two in sync. `tauri.conf.json`/`Cargo.toml`/`package.json` always carry
+ * the BASE semver; only `APP_VERSION` and the nightly manifest carry `_NNN`.
+ *
+ * The check hits the configured GitHub release manifests; in a plain browser
  * (dev server / vitest) the Tauri internals are absent, so checks report a
  * friendly "desktop only" error instead of crashing.
  */
 import { errorMessage } from "@/lib/utils";
 import { create } from "zustand";
-import { api, type UpdatesSettings } from "@/lib/api";
+import {
+  ApiError,
+  api,
+  initApiBase,
+  invalidateApiBase,
+  type BackendPatchRef,
+  type HotpatchVersion,
+  type NativePatchRef,
+  type NativeVersion,
+  type OverlayVersion,
+  type UpdatesSettings,
+} from "@/lib/api";
+import { APP_VERSION } from "@/lib/version";
+
+/** Refuse native deltas above this (ship a full release instead).
+ *  Mirrored in `backend/.../services/native.py` — keep in sync. */
+export const NATIVE_DELTA_MAX_BYTES = 60 * 1024 * 1024;
+
+/** Auto-installs stop asking below this; above needs `auto_large_updates`
+ *  (or a manual install from Settings). Full installers always count. */
+export const LARGE_UPDATE_BYTES = 25 * 1024 * 1024;
+
+/** Human download size ("1.4 MB", "900 KB", "12 B"). */
+export function formatBytes(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes < 0) return "0 B";
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(bytes < 10 * 1024 ? 1 : 0)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+/** Total known download bytes across an update's sections (0 if unknown). */
+export function updateDownloadSize(info: UpdateInfo): number {
+  if (info.kind === "full") return Number.POSITIVE_INFINITY;
+  return (
+    (info.size ?? 0) + (info.backend?.size ?? 0) + (info.native?.size ?? 0)
+  );
+}
 
 export type UpdateStatus =
   | "idle"
@@ -15,13 +62,80 @@ export type UpdateStatus =
   | "available"
   | "up-to-date"
   | "downloading"
+  | "patching"
   | "error";
+
+export type UpdateKind = "full" | "nightly";
 
 export interface UpdateInfo {
   version: string;
   body?: string;
   date?: string;
+  kind: UpdateKind;
+  /** Frontend section download bytes (kind === "nightly" only, when known). */
+  size?: number;
+  /** Nightly frontend patch (kind === "nightly" only, when shipped). */
+  url?: string;
+  /** Expected SHA-256 + minisign signature (kind === "nightly" only). */
+  sha256?: string;
+  signature?: string;
+  /** Nightly backend-source patch (kind === "nightly" only, when shipped). */
+  backend?: BackendPatchRef;
+  /** Nightly native-file delta (kind === "nightly" only, when shipped). */
+  native?: NativePatchRef;
 }
+
+/** Nightly patch manifest (`qcnext-nightly.json`, see scripts/build-patch.py). */
+export interface NightlyManifest {
+  version: string;
+  base: string;
+  notes?: string;
+  pub_date?: string;
+  url?: string;
+  sha256?: string;
+  signature?: string;
+  size?: number;
+  backend?: BackendPatchRef;
+  native?: NativePatchRef;
+}
+
+/** Whether a manifest backend/native section is complete + installable. */
+export function patchRefUsable(
+  ref: Partial<BackendPatchRef> | undefined,
+): ref is BackendPatchRef {
+  return !!ref && !!ref.url && !!ref.sha256 && !!ref.signature;
+}
+
+export function nativeRefUsable(
+  ref: Partial<NativePatchRef> | undefined,
+): ref is NativePatchRef {
+  // Independent of patchRefUsable (a guard would narrow `ref` away here).
+  return (
+    !!ref &&
+    !!ref.url &&
+    !!ref.sha256 &&
+    !!ref.signature &&
+    typeof ref.from === "string" &&
+    typeof ref.to === "string" &&
+    typeof ref.size === "number"
+  );
+}
+
+/** Whether a manifest carries at least one complete, installable section. */
+export function nightlyManifestUsable(manifest: Partial<NightlyManifest>): manifest is NightlyManifest {
+  if (typeof manifest.version !== "string" || !parseNightlyVersion(manifest.version)) return false;
+  const frontendOk = !!manifest.url && !!manifest.sha256 && !!manifest.signature;
+  return frontendOk || patchRefUsable(manifest.backend) || nativeRefUsable(manifest.native);
+}
+
+/** Rolling nightly release holding the latest delta patch + manifest. */
+export const NIGHTLY_MANIFEST_URL =
+  "https://github.com/MicRaving/qualcodernext/releases/download/nightly/qcnext-nightly.json";
+
+/** Reload seam (tests replace `reload` with a mock — jsdom has no navigation). */
+export const patchHooks = {
+  reload: () => window.location.reload(),
+};
 
 interface UpdatesState {
   status: UpdateStatus;
@@ -31,10 +145,15 @@ interface UpdatesState {
   error: string | null;
   lastCheckedAt: number | null;
   settings: UpdatesSettings | null;
+  hotpatch: HotpatchVersion | null;
+  overlay: OverlayVersion | null;
+  native: NativeVersion | null;
   loadSettings: () => Promise<void>;
   saveSettings: (settings: UpdatesSettings) => Promise<void>;
+  loadHotpatch: () => Promise<void>;
   checkNow: () => Promise<void>;
-  install: () => Promise<void>;
+  install: (opts?: { manual?: boolean }) => Promise<void>;
+  rollback: () => Promise<void>;
 }
 
 /** Whether the Tauri updater plugin is reachable (desktop app only). */
@@ -63,6 +182,83 @@ export function classifyUpdateCheckError(raw: unknown): typeof NO_UPDATE_MANIFES
   return /valid release JSON/i.test(msg) ? NO_UPDATE_MANIFEST : null;
 }
 
+const NIGHTLY_RE = /^(\d+)\.(\d+)\.(\d+)(?:_(\d{1,5}))?$/;
+
+export function parseNightlyVersion(version: string): [number, number, number, number | null] | null {
+  const match = NIGHTLY_RE.exec((version ?? "").trim());
+  if (!match) return null;
+  return [Number(match[1]), Number(match[2]), Number(match[3]), match[4] === undefined ? null : Number(match[4])];
+}
+
+/** -1 / 0 / +1. Same base: any nightly sorts BEFORE the stable. */
+export function compareNightlyVersions(left: string, right: string): number {
+  const l = parseNightlyVersion(left);
+  const r = parseNightlyVersion(right);
+  if (!l || !r) return 0;
+  for (let i = 0; i < 3; i++) {
+    if (l[i] !== r[i]) return l[i]! < r[i]! ? -1 : 1;
+  }
+  if (l[3] === r[3]) return 0;
+  if (l[3] === null) return 1;
+  if (r[3] === null) return -1;
+  return l[3] < r[3] ? -1 : 1;
+}
+
+/** Whether `candidate` should be offered on `channel` over `current`. */
+export function nightlyVisibleOnChannel(candidate: string, current: string, channel: string): boolean {
+  if (!parseNightlyVersion(candidate) || !parseNightlyVersion(current)) return false;
+  if (channel !== "nightly" && parseNightlyVersion(candidate)?.[3] !== null) return false;
+  return compareNightlyVersions(candidate, current) > 0;
+}
+
+/** Effective running version: the newest of build / hotpatch / native delta.
+ *  Comparing against the max (not just the build) keeps applied nightlies
+ *  from being re-offered on the next check. */
+export function effectiveVersion(
+  hotpatch: HotpatchVersion | null,
+  native: NativeVersion | null = null,
+): string {
+  let best = hotpatch?.frontend_version ?? hotpatch?.app_version ?? APP_VERSION;
+  const nativeTo = native?.applied_to;
+  if (nativeTo && compareNightlyVersions(nativeTo, best) > 0) best = nativeTo;
+  return best;
+}
+
+async function fetchNightlyManifest(): Promise<NightlyManifest | null> {  const ctrl = new AbortController();
+  const timer = window.setTimeout(() => ctrl.abort(), 30_000);
+  try {
+    const res = await fetch(NIGHTLY_MANIFEST_URL, { signal: ctrl.signal });
+    if (!res.ok) return null;
+    const data = (await res.json()) as Partial<NightlyManifest>;
+    if (!nightlyManifestUsable(data)) return null;
+    return data;
+  } catch {
+    return null;
+  } finally {
+    window.clearTimeout(timer);
+  }
+}
+
+/**
+ * Stage a backend-source patch and restart into it. The open project is
+ * captured first: the restart shuts the backend down cleanly (project
+ * closed), so the frontend reopens it once the new process answers.
+ * Afterwards the transport re-resolves the API base (the port may have
+ * changed) — subsequent calls self-heal the same way on retry.
+ */
+async function applyBackendPatch(version: string, backend: BackendPatchRef): Promise<void> {
+  const { useProjectStore } = await import("@/stores/project");
+  const projectPath = useProjectStore.getState().projectPath || null;
+  await api.applyOverlay({ version, ...backend });
+  const core = await import("@tauri-apps/api/core");
+  await core.invoke<number>("restart_backend");
+  invalidateApiBase();
+  await initApiBase();
+  if (projectPath) {
+    await useProjectStore.getState().openProject(projectPath);
+  }
+}
+
 export const useUpdatesStore = create<UpdatesState>((set, get) => ({
   status: "idle",
   info: null,
@@ -70,6 +266,9 @@ export const useUpdatesStore = create<UpdatesState>((set, get) => ({
   error: null,
   lastCheckedAt: null,
   settings: null,
+  hotpatch: null,
+  overlay: null,
+  native: null,
 
   loadSettings: async () => {
     try {
@@ -85,6 +284,19 @@ export const useUpdatesStore = create<UpdatesState>((set, get) => ({
     set({ settings: saved });
   },
 
+  loadHotpatch: async () => {
+    try {
+      const [hotpatch, overlay, native] = await Promise.all([
+        api.hotpatchVersion(),
+        api.patchesVersion(),
+        api.nativeVersion(),
+      ]);
+      set({ hotpatch, overlay, native });
+    } catch {
+      /* backend unreachable at boot — the UI falls back to APP_VERSION */
+    }
+  },
+
   checkNow: async () => {
     if (!updaterAvailable()) {
       set({
@@ -94,21 +306,74 @@ export const useUpdatesStore = create<UpdatesState>((set, get) => ({
         lastCheckedAt: Date.now(),
       });
       return;
-    }    set({ status: "checking", error: null });
+    }
+    set({ status: "checking", error: null });
     try {
+      // Settings are loaded by the app boot (`scheduleUpdates`) and the
+      // Settings tab before any check runs; a missing value means "stable".
+      // (Deliberately no `loadSettings()` here: it hits the network and
+      // must never stall a manual check.)
+      const channel = get().settings?.channel ?? "stable";
+      const current = effectiveVersion(get().hotpatch, get().native);
+
       const { check } = await import("@tauri-apps/plugin-updater");
       const update = await check({ timeout: 30_000 });
-      if (!update) {
+      let best: UpdateInfo | null = update
+        ? {
+            version: update.version,
+            body: update.body ?? undefined,
+            date: update.date ? new Date(update.date).toISOString() : undefined,
+            kind: "full",
+          }
+        : null;
+
+      if (channel === "nightly") {
+        const nightly = await fetchNightlyManifest();
+        if (nightly && nightlyVisibleOnChannel(nightly.version, current, channel)) {
+          const { url, sha256, signature, backend, native } = nightly;
+          // Sections are offered independently: a manifest is usable when at
+          // least one section is complete AND applicable here. Native deltas
+          // chain exactly (from == our pointer) and respect the size ceiling;
+          // the pointer comes from loadHotpatch (boot + Settings tab), so a
+          // never-loaded state simply skips the native section this round.
+          const pointer = get().native?.pointer;
+          const nativeOffer =
+            nativeRefUsable(native) &&
+            pointer !== undefined &&
+            native.from === pointer &&
+            native.size <= NATIVE_DELTA_MAX_BYTES
+              ? native
+              : undefined;
+          if (
+            (url && sha256 && signature) ||
+            patchRefUsable(backend) ||
+            nativeOffer
+          ) {
+            if (!best || compareNightlyVersions(nightly.version, best.version) > 0) {
+              const { url, sha256, signature, size, backend } = nightly;
+              best = {
+                version: nightly.version,
+                body: nightly.notes ?? undefined,
+                date: nightly.pub_date ?? undefined,
+                kind: "nightly",
+                ...(url && sha256 && signature
+                  ? { url, sha256, signature, ...(typeof size === "number" ? { size } : {}) }
+                  : {}),
+                ...(patchRefUsable(backend) ? { backend } : {}),
+                ...(nativeOffer ? { native: nativeOffer } : {}),
+              };
+            }
+          }
+        }
+      }
+
+      if (!best) {
         set({ status: "up-to-date", info: null, lastCheckedAt: Date.now() });
         return;
       }
       set({
         status: "available",
-        info: {
-          version: update.version,
-          body: update.body ?? undefined,
-          date: update.date ? new Date(update.date).toISOString() : undefined,
-        },
+        info: best,
         lastCheckedAt: Date.now(),
       });
     } catch (e) {
@@ -120,9 +385,96 @@ export const useUpdatesStore = create<UpdatesState>((set, get) => ({
     }
   },
 
-  install: async () => {
+  install: async (opts) => {
     const info = get().info;
     if (!info || !updaterAvailable()) return;
+    // Bandwidth control: automatic installs skip large updates unless the
+    // user opted into them — the offer stays for a manual install from
+    // Settings. Manual installs always proceed.
+    const manual = opts?.manual ?? false;
+    if (
+      !manual &&
+      get().settings &&
+      !get().settings!.auto_large_updates &&
+      updateDownloadSize(info) > LARGE_UPDATE_BYTES
+    ) {
+      set({ lastCheckedAt: Date.now() });
+      return;
+    }
+    if (info.kind === "nightly") {
+      // Delta patch, applied bottom-up so one relaunch activates everything:
+      // backend-source overlay (staged), frontend files (staged), native
+      // files (staged + boot plan). Without a native section there is no
+      // app restart — a backend restart (overlay) or WebView reload
+      // (frontend-only) suffices.
+      const hasFrontend = !!(info.url && info.sha256 && info.signature);
+      if (!info.backend && !hasFrontend && !info.native) {
+        set({ status: "error", error: "nightly patch has no usable sections" });
+        return;
+      }
+      set({ status: "patching", progress: 0, error: null });
+      try {
+        if (info.backend && !info.native) {
+          // No relaunch coming: restart the backend now to activate.
+          await applyBackendPatch(info.version, info.backend);
+        } else if (info.backend) {
+          await api.applyOverlay({ version: info.version, ...info.backend });
+        }
+        let hotpatch = get().hotpatch;
+        if (hasFrontend) {
+          hotpatch = await api.applyHotpatch({
+            version: info.version,
+            url: info.url as string,
+            sha256: info.sha256 as string,
+            signature: info.signature as string,
+          });
+        }
+        let overlay = get().overlay;
+        let nativeState = get().native;
+        if (info.backend) {
+          try {
+            overlay = await api.patchesVersion();
+          } catch {
+            /* restart already proved the backend is up; keep prior state */
+          }
+        }
+        if (info.native) {
+          await api.applyNative({
+            version: info.native.to,
+            from_version: info.native.from,
+            url: info.native.url,
+            sha256: info.native.sha256,
+            signature: info.native.signature,
+            size: info.native.size,
+          });
+          try {
+            nativeState = await api.nativeVersion();
+          } catch {
+            /* staged state is known; keep prior state */
+          }
+        }
+        set({
+          hotpatch,
+          overlay,
+          native: nativeState,
+          status: "up-to-date",
+          info: null,
+          lastCheckedAt: Date.now(),
+        });
+        if (info.native) {
+          // The relaunching instance executes the staged plan at boot
+          // (activating all three layers); this process exits instead of
+          // reloading, and the boot gate reopens the recent project.
+          const core = await import("@tauri-apps/api/core");
+          await core.invoke<string>("apply_native_plan_and_relaunch");
+          return;
+        }
+        patchHooks.reload();
+      } catch (e) {
+        set({ status: "error", error: errorMessage(e, String(e)) });
+      }
+      return;
+    }
     set({ status: "downloading", progress: 0, error: null });
     try {
       const { check } = await import("@tauri-apps/plugin-updater");
@@ -151,6 +503,76 @@ export const useUpdatesStore = create<UpdatesState>((set, get) => ({
         status: "error",
         error: errorMessage(e, String(e)),
       });
+    }
+  },
+
+  rollback: async () => {
+    if (!updaterAvailable()) return;
+    set({ status: "patching", error: null });
+    try {
+      // Roll back every layer that keeps a previous copy (404 = none kept).
+      // A native restore needs an app relaunch and covers the other layers
+      // too (boot re-applies their restored state); otherwise a backend
+      // rollback restarts just the backend, and a frontend-only rollback
+      // just reloads the WebView.
+      let rolledBack = false;
+      let needRelaunch = false;
+      let overlayRolledBack = false;
+      try {
+        const nativeState = await api.rollbackNative();
+        set({ native: nativeState });
+        rolledBack = true;
+        needRelaunch = true;
+      } catch (e) {
+        if (!(e instanceof ApiError) || e.status !== 404) throw e;
+      }
+      try {
+        const overlay = await api.rollbackOverlay();
+        set({ overlay });
+        rolledBack = true;
+        overlayRolledBack = true;
+      } catch (e) {
+        if (!(e instanceof ApiError) || e.status !== 404) throw e;
+      }
+      try {
+        const hotpatch = await api.rollbackHotpatch();
+        set({ hotpatch });
+        rolledBack = true;
+      } catch (e) {
+        if (!(e instanceof ApiError) || e.status !== 404) throw e;
+      }
+      if (!rolledBack) {
+        set({ status: "error", error: "nothing to roll back" });
+        return;
+      }
+      if (needRelaunch) {
+        const core = await import("@tauri-apps/api/core");
+        await core.invoke<string>("apply_native_plan_and_relaunch");
+        return;
+      }
+      // A backend rollback only takes effect after a restart; a
+      // frontend-only rollback just needs the reload below.
+      if (overlayRolledBack) {
+        const { useProjectStore } = await import("@/stores/project");
+        const projectPath = useProjectStore.getState().projectPath || null;
+        const core = await import("@tauri-apps/api/core");
+        await core.invoke<number>("restart_backend");
+        invalidateApiBase();
+        await initApiBase();
+        if (projectPath) {
+          await useProjectStore.getState().openProject(projectPath);
+        }
+        // Re-read post-restart truth (the overlay is active now).
+        const [hotpatch, overlay] = await Promise.all([
+          api.hotpatchVersion(),
+          api.patchesVersion(),
+        ]);
+        set({ hotpatch, overlay });
+      }
+      set({ status: "up-to-date", info: null, lastCheckedAt: Date.now() });
+      patchHooks.reload();
+    } catch (e) {
+      set({ status: "error", error: errorMessage(e, String(e)) });
     }
   },
 }));

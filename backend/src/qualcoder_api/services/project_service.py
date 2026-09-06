@@ -283,6 +283,29 @@ class ProjectService:
                     actual_path, codername, instance_id=get_instance_id()
                 )
                 logger.info("created online session %s for %s", self.current_session_id, codername)
+                # Inherit the export watermark: the state file is per-machine
+                # but keyed per-session, so a reopen starts at 0 and
+                # re-exports the previous session's already-exported journal
+                # tail (trim keeps one anchor row per user) as its own —
+                # peers then rebuild an orphan child without its parents.
+                # Carry the max local watermark forward; genuinely pending
+                # rows (id above it, e.g. offline edits) still export.
+                try:
+                    from qualcoder_api.services import sync as _sync_mod
+
+                    _st = _sync_mod.load_state(actual_path)
+                    _ex = _st.setdefault("exports", {})
+                    if _ex.get(self.current_session_id) is None and _ex:
+                        _best = 0
+                        for _v in _ex.values():
+                            try:
+                                _best = max(_best, int(_v))
+                            except (TypeError, ValueError):
+                                continue
+                        _ex[self.current_session_id] = _best
+                        _sync_mod.save_state(actual_path, _st)
+                except Exception as inherit_err:
+                    logger.debug("export watermark inherit failed: %s", inherit_err)
             except Exception as err:
                 logger.warning("create_session failed: %s", err)
                 self.current_session_id = ""
@@ -348,10 +371,28 @@ class ProjectService:
     async def _finalize_open(self, codername: str) -> None:
         """Post-migration maintenance (legacy finalize_project_open)."""
         # VACUUM cannot run inside a transaction — use a raw connection.
+        # It rewrites the whole DB file, so on a large project it costs
+        # seconds on the open critical path.  Gate it on the freelist: a
+        # freshly vacuumed/compacted DB has (almost) no free pages, and
+        # normal opens add rows rather than freeing them — only pay for
+        # the rewrite when there is real garbage to reclaim (>100 free
+        # pages and >5% of the file).  Both PRAGMAs are O(1) reads.
         conn = await aiosqlite.connect(self.db_path())
         try:
-            await conn.execute("VACUUM")
-            await conn.commit()
+            try:
+                async with conn.execute("PRAGMA freelist_count") as cur:
+                    freelist = int((await cur.fetchone() or [0])[0] or 0)
+                async with conn.execute("PRAGMA page_count") as cur:
+                    pages = int((await cur.fetchone() or [0])[0] or 0)
+            except Exception:
+                freelist, pages = 0, 0
+            if freelist > 100 and pages > 0 and freelist / pages > 0.05:
+                await conn.execute("VACUUM")
+                await conn.commit()
+            else:
+                logger.debug(
+                    "skipping open-time VACUUM (freelist=%s pages=%s)", freelist, pages
+                )
         finally:
             await conn.close()
         _, session_factory = self._ensure_engine()

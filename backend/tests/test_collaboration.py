@@ -386,16 +386,16 @@ async def test_repair_heals_cleaned_history_gap(two_machines, tmp_path):
         await SourceRepository(session).add_source(
             name="z.txt", fulltext="x", mediapath="/docs/z.txt", owner="alice"
         )
-    assert (await cycle(a))["ok"] is True  # only Z (+trim leftover) reaches sidecars
+    assert (await cycle(a))["ok"] is True  # only Z reaches sidecars (no stale re-export)
 
     # B joins while A is still open: rebuild sees post-merge sidecars only.
     b = await make("BBBBBBBBBBBB")
     use("BBBBBBBBBBBB")
     sync.set_current_user("bob")
     assert (await b.open_project(shared, codername="bob")).ok is True
-    assert await file_names(b) == ["y.txt", "z.txt"]
+    assert await file_names(b) == ["z.txt"]
 
-    # Repair reconciles against the master archive: X arrives, nothing dupes
+    # Repair reconciles against the master archive: X+Y arrive, nothing dupes
     # (order by id differs — the healed row takes a fresh PK — so compare
     # as sets).
     use("BBBBBBBBBBBB")
@@ -405,6 +405,95 @@ async def test_repair_heals_cleaned_history_gap(two_machines, tmp_path):
     assert result["ok"] is True
     assert sorted(await file_names(a)) == ["x.txt", "y.txt", "z.txt"]
     assert sorted(await file_names(b)) == ["x.txt", "y.txt", "z.txt"]
+
+
+async def test_repair_heals_cleaned_codings_and_links(two_machines, tmp_path):
+    """Master-diff coverage beyond plain files: a coding (translated natural
+    key) and a case link (content multiset, no natural key) merged-and-
+    cleaned before a join must still arrive via repair."""
+    from qualcoder_api.persistence.repositories import (
+        CaseRepository,
+        CodeRepository,
+        CodingRepository,
+        SourceRepository,
+    )
+
+    make, use = two_machines
+    shared = str(tmp_path / "shared.qda")
+
+    async def coding_pairs(svc):
+        async with svc.session_factory() as session:
+            rows = await session.execute(
+                text(
+                    "SELECT n.name, s.name FROM code_text t "
+                    "JOIN code_name n ON n.cid = t.cid "
+                    "JOIN source s ON s.id = t.fid ORDER BY n.name"
+                )
+            )
+            return sorted((r[0], r[1]) for r in rows)
+
+    async def link_pairs(svc):
+        async with svc.session_factory() as session:
+            rows = await session.execute(
+                text(
+                    "SELECT c.name, s.name FROM case_text t "
+                    "JOIN cases c ON c.caseid = t.caseid "
+                    "JOIN source s ON s.id = t.fid ORDER BY c.name"
+                )
+            )
+            return sorted((r[0], r[1]) for r in rows)
+
+    async def cycle(svc):
+        return await sync_engine.run_sync_cycle(
+            svc.session_factory, svc.project_path, svc.current_session_id
+        )
+
+    a = await make("AAAAAAAAAAAA")
+    sync.set_current_user("alice")
+    await a.create_project(shared, codername="alice")
+    async with a.session_factory() as session:
+        for name in ("alice", "bob"):
+            await session.execute(
+                text("INSERT OR IGNORE INTO coder_names (name, visibility) VALUES (:n, 1)"),
+                {"n": name},
+            )
+        await session.commit()
+    user_settings_mod.save_sync_settings(True)
+    assert (await a.activate_collaboration(codername="alice"))["ok"] is True
+    async with a.session_factory() as session:
+        src = await SourceRepository(session).add_source(
+            name="a.txt", fulltext="alpha beta", mediapath="/docs/a.txt", owner="alice"
+        )
+        code = await CodeRepository(session).add_code(name="codeA", owner="alice")
+        await CodingRepository(session).add_text_coding(
+            cid=code.cid, fid=src.id, seltext="alpha", pos0=0, pos1=5, owner="alice"
+        )
+        case = await CaseRepository(session).add_case(name="caseA", owner="alice")
+        await CaseRepository(session).link_file(
+            caseid=case.caseid, fid=src.id, owner="alice"
+        )
+    await a.close_project()  # merge + clean
+    use("AAAAAAAAAAAA")
+    sync.set_current_user("alice")
+    assert (await a.open_project(shared, codername="alice")).ok is True
+    async with a.session_factory() as session:
+        await SourceRepository(session).add_source(
+            name="decoy.txt", fulltext="x", mediapath="/docs/decoy.txt", owner="alice"
+        )
+    assert (await cycle(a))["ok"] is True
+
+    b = await make("BBBBBBBBBBBB")
+    use("BBBBBBBBBBBB")
+    sync.set_current_user("bob")
+    assert (await b.open_project(shared, codername="bob")).ok is True
+
+    use("BBBBBBBBBBBB")
+    result = await sync_engine.run_repair_cycle(
+        b.session_factory, b.project_path, b.current_session_id
+    )
+    assert result["ok"] is True
+    assert await coding_pairs(a) == await coding_pairs(b) == [("codeA", "a.txt")]
+    assert await link_pairs(a) == await link_pairs(b) == [("caseA", "a.txt")]
 
 
 async def test_close_skips_merge_when_converge_fails(two_machines, tmp_path, monkeypatch):

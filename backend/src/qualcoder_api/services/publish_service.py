@@ -12,14 +12,11 @@ from datetime import date
 from io import BytesIO
 from typing import Any
 
-from docx import Document
-from docx.oxml import OxmlElement
-from docx.oxml.ns import qn
-from docx.shared import Pt
-from openpyxl import Workbook
-from openpyxl.styles import Alignment, Font, PatternFill
-from openpyxl.utils import get_column_letter
-from pptx import Presentation
+# NOTE: python-docx/openpyxl/python-pptx are imported lazily inside the
+# builders below.  Together they cost ~0.9s cold at import time
+# (openpyxl ~0.5s, pptx ~0.3s, docx ~0.2s) and publishing is a rare
+# action — paying that on every backend boot would slow all startups
+# for a feature almost nobody uses per session.
 
 _HEADER_FILL = "D9E2F3"
 _XLSX_HEADER_FILL = "4472C4"
@@ -36,6 +33,9 @@ def _text(value: Any) -> str:
 
 
 def _shade_docx_cells(cells: list[Any], fill: str) -> None:
+    from docx.oxml import OxmlElement
+    from docx.oxml.ns import qn
+
     for cell in cells:
         tc_pr = cell._tc.get_or_add_tcPr()
         shd = OxmlElement("w:shd")
@@ -45,6 +45,8 @@ def _shade_docx_cells(cells: list[Any], fill: str) -> None:
 
 
 def _add_docx_table(doc: Any, rows: list[list[str]]) -> None:
+    from docx.shared import Pt
+
     if not rows:
         return
     table = doc.add_table(rows=len(rows), cols=len(rows[0]))
@@ -67,6 +69,9 @@ def build_docx(title: str, sections: list[dict[str, Any]]) -> bytes:
     ``quote`` (indented italic) and ``table`` (list-of-lists; the first row
     is the header). A section may carry several of these keys.
     """
+    from docx import Document
+    from docx.shared import Pt
+
     doc = Document()
     doc.add_heading(_text(title), level=0)
     for section in sections:
@@ -98,6 +103,8 @@ def build_pptx(title: str, slides: list[dict[str, Any]]) -> bytes:
     Each slide entry carries ``title``, ``bullets`` (list of lines) and an
     optional ``memo`` rendered as a trailing ``Memo: …`` line.
     """
+    from pptx import Presentation
+
     prs = Presentation()
     title_slide = prs.slides.add_slide(prs.slide_layouts[0])
     title_slide.shapes.title.text = _text(title)
@@ -133,6 +140,10 @@ def build_xlsx(sheets: list[dict[str, Any]]) -> bytes:
     Each sheet carries ``name``, ``headers`` and ``rows``; the header row is
     bold white on a colored fill, column widths are sized to the content.
     """
+    from openpyxl import Workbook
+    from openpyxl.styles import Alignment, Font, PatternFill
+    from openpyxl.utils import get_column_letter
+
     wb = Workbook()
     wb.remove(wb.active)
     for sheet in sheets:

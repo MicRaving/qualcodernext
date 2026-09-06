@@ -1066,6 +1066,73 @@ export interface SyncCollaborator {
 export interface UpdatesSettings {
   check_interval: "daily" | "weekly" | "never";
   auto_update: boolean;
+  /** Update channel: `stable` (full releases) or `nightly` (`X.Y.Z_NNN` deltas). */
+  channel: "stable" | "nightly";
+  /** Auto-install updates over 25 MB (full installers always count as large). */
+  auto_large_updates: boolean;
+}
+
+export interface HotpatchVersion {
+  app_version: string;
+  frontend_version: string | null;
+  previous_version: string | null;
+  channel: "stable" | "nightly";
+}
+
+export interface HotpatchApplyRequest {
+  version: string;
+  url: string;
+  sha256: string;
+  signature: string;
+}
+
+export interface OverlayVersion {
+  overlay_version: string | null;
+  previous_version: string | null;
+  overlay_active: boolean;
+}
+
+export interface OverlayApplyRequest {
+  version: string;
+  url: string;
+  sha256: string;
+  signature: string;
+}
+
+/** Backend-source patch reference inside a nightly manifest. */
+export interface BackendPatchRef {
+  url: string;
+  sha256: string;
+  signature: string;
+  size?: number;
+}
+
+/** Native-file delta reference inside a nightly manifest. */
+export interface NativePatchRef {
+  from: string;
+  to: string;
+  url: string;
+  sha256: string;
+  signature: string;
+  size: number;
+}
+
+export interface NativeVersion {
+  staged: string | null;
+  applied_from: string | null;
+  applied_to: string | null;
+  previous_to: string | null;
+  bundle_base: string;
+  pointer: string;
+}
+
+export interface NativeApplyRequest {
+  version: string;
+  from_version: string;
+  url: string;
+  sha256: string;
+  signature: string;
+  size: number;
 }
 
 export interface MaintenanceSettings {
