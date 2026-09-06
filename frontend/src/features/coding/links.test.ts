@@ -45,12 +45,12 @@ describe("in-session paste memory", () => {
     rememberCopiedLink(null);
   });
 
-  it("remembers the last copied link without the clipboard API", () => {
+  it("remembers the last copied link without the clipboard API", async () => {
     rememberCopiedLink({ fid: 2, pos0: 4, pos1: 8 });
-    expect(readLinkPayload()).resolves.toEqual({ fid: 2, pos0: 4, pos1: 8 });
+    await expect(readLinkPayload()).resolves.toEqual({ fid: 2, pos0: 4, pos1: 8 });
   });
 
-  it("returns null when nothing was copied", () => {
-    expect(readLinkPayload()).resolves.toBeNull();
+  it("returns null when nothing was copied", async () => {
+    await expect(readLinkPayload()).resolves.toBeNull();
   });
 });
