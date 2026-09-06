@@ -7,7 +7,7 @@ import logging
 import time
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from qualcoder_api.api.v1.ai import router as ai_router
 from qualcoder_api.api.v1.audit import router as audit_router
@@ -244,6 +244,66 @@ async def put_updates_settings(req: UpdatesSettingsRequest) -> UpdatesSettingsRe
     from qualcoder_api.services.user_settings import save_updates_settings
 
     return UpdatesSettingsRequest(**save_updates_settings(req.model_dump()))
+
+
+class NightlySectionRef(BaseModel):
+    #: Patch zip download URL (https only).
+    url: str = ""
+    #: Expected hex SHA-256 of the zip.
+    sha256: str = ""
+    #: Minisign signature line for the zip.
+    signature: str = ""
+    #: Download size in bytes (0 when unknown).
+    size: int = 0
+
+
+class NightlyNativeRef(NightlySectionRef):
+    #: Predecessor the delta chains onto (must equal the client pointer).
+    from_version: str = Field(default="", alias="from")
+    #: Nightly version the delta produces.
+    to: str = ""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
+class NightlyManifestResponse(BaseModel):
+    #: Nightly version (``X.Y.Z_NNN``).
+    version: str = ""
+    #: Stable base the nightly patches.
+    base: str = ""
+    #: Short patch notes for the Settings offer.
+    notes: str = ""
+    #: Publication timestamp (ISO).
+    pub_date: str = ""
+    #: Frontend section (empty when the nightly ships no frontend patch).
+    url: str = ""
+    sha256: str = ""
+    signature: str = ""
+    size: int = 0
+    #: Backend-source section (None when not shipped).
+    backend: NightlySectionRef | None = None
+    #: Native-file delta section (None when not shipped).
+    native: NightlyNativeRef | None = None
+
+
+@router.get("/updates/nightly", response_model=NightlyManifestResponse)
+def get_nightly_manifest() -> NightlyManifestResponse:
+    """Proxy the nightly patch manifest (GitHub sends no CORS headers).
+
+    Sync endpoint (worker threadpool): the download must never block the
+    async event loop. 502 when the manifest is unreachable — the frontend
+    then treats the nightly as unavailable for this check.
+    """
+    from fastapi import HTTPException
+
+    from qualcoder_api.services import hotpatch
+    from qualcoder_api.services.hotpatch import HotpatchError
+
+    try:
+        # Well inside the frontend's own request timeout.
+        return NightlyManifestResponse(**hotpatch.fetch_nightly_manifest(timeout_secs=10))
+    except HotpatchError as err:
+        raise HTTPException(status_code=502, detail=str(err)) from err
 
 
 @router.get("/hotpatch/version", response_model=HotpatchVersionResponse)

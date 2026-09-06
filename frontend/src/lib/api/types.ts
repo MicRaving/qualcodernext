@@ -1135,6 +1135,20 @@ export interface NativeApplyRequest {
   size: number;
 }
 
+/** Nightly patch manifest (`qcnext-nightly.json`, see scripts/build-patch.py). */
+export interface NightlyManifest {
+  version: string;
+  base: string;
+  notes?: string;
+  pub_date?: string;
+  url?: string;
+  sha256?: string;
+  signature?: string;
+  size?: number;
+  backend?: BackendPatchRef;
+  native?: NativePatchRef;
+}
+
 export interface MaintenanceSettings {
   compact_on_close: boolean;
   last_compact: string;

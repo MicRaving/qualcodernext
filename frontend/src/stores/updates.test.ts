@@ -151,6 +151,51 @@ describe("nightly versions (X.Y.Z_NNN)", () => {
     );
   }
 
+  function proxyManifest(version: string) {
+    return {
+      version,
+      base: "9.9.9",
+      notes: "via proxy",
+      url: "https://example.test/qcnext-frontend-nightly.zip",
+      sha256: "abc",
+      signature: "sig",
+    };
+  }
+
+  it("prefers the backend proxy manifest (direct fetch is CORS-blocked)", async () => {
+    enableTauri();
+    mocks.check.mockResolvedValue(null);
+    useUpdatesStore.setState({
+      settings: { check_interval: "daily", auto_update: true, channel: "nightly", auto_large_updates: true },
+      hotpatch: null,
+    });
+    const proxy = vi.spyOn(api, "nightlyManifest").mockResolvedValue(proxyManifest("9.9.9_002"));
+    const directFetch = vi.fn().mockRejectedValue(new TypeError("Failed to fetch"));
+    vi.stubGlobal("fetch", directFetch);
+    await useUpdatesStore.getState().checkNow();
+    const state = useUpdatesStore.getState();
+    expect(state.status).toBe("available");
+    expect(state.info?.version).toBe("9.9.9_002");
+    expect(directFetch).not.toHaveBeenCalled();
+    proxy.mockRestore();
+  });
+
+  it("falls back to direct fetch when the proxy fails", async () => {
+    enableTauri();
+    mocks.check.mockResolvedValue(null);
+    useUpdatesStore.setState({
+      settings: { check_interval: "daily", auto_update: true, channel: "nightly", auto_large_updates: true },
+      hotpatch: null,
+    });
+    const proxy = vi.spyOn(api, "nightlyManifest").mockRejectedValue(new Error("proxy down"));
+    stubNightlyManifest("9.9.9_001");
+    await useUpdatesStore.getState().checkNow();
+    const state = useUpdatesStore.getState();
+    expect(state.status).toBe("available");
+    expect(state.info?.version).toBe("9.9.9_001");
+    proxy.mockRestore();
+  });
+
   it("offers a newer nightly on the nightly channel", async () => {
     enableTauri();
     mocks.check.mockResolvedValue(null);

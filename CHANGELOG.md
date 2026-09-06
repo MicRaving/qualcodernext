@@ -7,6 +7,14 @@
      include (first releases have no base tag, so no link). Add a section
      like "## 0.1.1 (2026-08-31)" at the TOP of the file. -->
 
+## 0.1.15 (2026-09-06)
+
+- Nightly patches are actually offered now: fixed version ordering and manifest fetching.
+- Project-open stall fix with longer timeout and backend open logging.
+- Faster dev boot and leaner bundles.
+
+**Full Changelog**: https://github.com/MicRaving/qualcodernext/compare/v0.1.14...v0.1.15
+
 ## 0.1.14 (2026-09-06)
 
 - Opt-in Nightly channel delivers small signed delta patches without a full download.

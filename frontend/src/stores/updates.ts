@@ -28,6 +28,7 @@ import {
   type HotpatchVersion,
   type NativePatchRef,
   type NativeVersion,
+  type NightlyManifest,
   type OverlayVersion,
   type UpdatesSettings,
 } from "@/lib/api";
@@ -86,19 +87,9 @@ export interface UpdateInfo {
   native?: NativePatchRef;
 }
 
-/** Nightly patch manifest (`qcnext-nightly.json`, see scripts/build-patch.py). */
-export interface NightlyManifest {
-  version: string;
-  base: string;
-  notes?: string;
-  pub_date?: string;
-  url?: string;
-  sha256?: string;
-  signature?: string;
-  size?: number;
-  backend?: BackendPatchRef;
-  native?: NativePatchRef;
-}
+/** Nightly patch manifest shape — the canonical type lives in `@/lib/api`
+ *  (re-exported here so existing imports keep working). */
+export type { NightlyManifest } from "@/lib/api";
 
 /** Whether a manifest backend/native section is complete + installable. */
 export function patchRefUsable(
@@ -225,10 +216,24 @@ export function effectiveVersion(
   return best;
 }
 
-async function fetchNightlyManifest(): Promise<NightlyManifest | null> {  const ctrl = new AbortController();
+async function fetchNightlyManifest(): Promise<NightlyManifest | null> {
+  // Primary: the backend proxy. GitHub release assets send no CORS headers,
+  // so a direct webview fetch always fails the CORS check — the backend
+  // (no CORS outbound) fetches it instead.
+  try {
+    const data = await api.nightlyManifest();
+    if (nightlyManifestUsable(data)) return data;
+  } catch {
+    /* old backend (404) or proxy unreachable — try direct fetch below */
+  }
+  const ctrl = new AbortController();
   const timer = window.setTimeout(() => ctrl.abort(), 30_000);
   try {
-    const res = await fetch(NIGHTLY_MANIFEST_URL, { signal: ctrl.signal });
+    const res = await fetch(NIGHTLY_MANIFEST_URL, {
+      signal: ctrl.signal,
+      // The manifest URL is stable across nightlies — never serve it stale.
+      cache: "no-store",
+    });
     if (!res.ok) return null;
     const data = (await res.json()) as Partial<NightlyManifest>;
     if (!nightlyManifestUsable(data)) return null;

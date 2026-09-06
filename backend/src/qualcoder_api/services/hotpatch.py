@@ -50,6 +50,15 @@ PATCH_PUBKEY = (
 #: Refuse patch downloads larger than this (disk-fill guard).
 MAX_PATCH_BYTES = 50 * 1024 * 1024
 
+#: Rolling nightly release holding the latest delta patch + manifest.
+#: Mirrored in ``frontend/src/stores/updates.ts`` — keep in sync.
+NIGHTLY_MANIFEST_URL = (
+    "https://github.com/MicRaving/qualcodernext/releases/download/nightly/qcnext-nightly.json"
+)
+
+#: Manifests are a few hundred bytes; anything larger is not our manifest.
+NIGHTLY_MANIFEST_MAX_BYTES = 1 * 1024 * 1024
+
 #: Serializes apply/rollback: FastAPI serves requests concurrently and two
 #: overlapping promotes could orphan ``current``.
 _PATCH_LOCK = threading.Lock()
@@ -200,3 +209,32 @@ def rollback_patch() -> str | None:
         version = frontend_version()
     logger.info("hotpatch rolled back to %s", version)
     return version
+
+
+def fetch_nightly_manifest(timeout_secs: int = 30) -> dict:
+    """Download and minimally validate the nightly manifest (server-side).
+
+    GitHub release assets send no CORS headers, so the webview can never
+    fetch the manifest directly — the frontend goes through this proxy
+    (``GET /api/v1/updates/nightly``) instead. Returns the parsed object;
+    shape checks (usable sections) stay client-side with the version logic.
+    """
+    request = urllib.request.Request(
+        NIGHTLY_MANIFEST_URL, headers={"User-Agent": "QCnext-updates/1"}
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=timeout_secs) as response:
+            payload = response.read(NIGHTLY_MANIFEST_MAX_BYTES + 1)
+    except Exception as err:
+        raise HotpatchError(
+            f"could not fetch the nightly manifest ({type(err).__name__})"
+        ) from err
+    if len(payload) > NIGHTLY_MANIFEST_MAX_BYTES:
+        raise HotpatchError("nightly manifest is too large")
+    try:
+        data = json.loads(payload.decode("utf-8"))
+    except (ValueError, UnicodeDecodeError) as err:
+        raise HotpatchError("nightly manifest is not valid JSON") from err
+    if not isinstance(data, dict) or not isinstance(data.get("version"), str):
+        raise HotpatchError("nightly manifest is malformed")
+    return data

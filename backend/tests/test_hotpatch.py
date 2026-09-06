@@ -211,3 +211,62 @@ async def test_apply_and_rollback_endpoints(monkeypatch, tmp_path):
         res = await client.post("/api/v1/hotpatch/rollback")
         assert res.status_code == 200
         assert res.json()["frontend_version"] == "0.1.13_005"
+
+def test_fetch_nightly_manifest_reads_file_url(tmp_path, monkeypatch):
+    manifest = {
+        "version": "0.1.15_001",
+        "base": "0.1.15",
+        "notes": "fixture",
+        "url": "https://example.test/f.zip",
+        "sha256": "abc",
+        "signature": "sig",
+        "kind": "both",
+    }
+    path = tmp_path / "qcnext-nightly.json"
+    path.write_text(json.dumps(manifest), encoding="utf-8")
+    monkeypatch.setattr(hotpatch, "NIGHTLY_MANIFEST_URL", path.as_uri())
+    assert hotpatch.fetch_nightly_manifest() == manifest
+
+
+def test_fetch_nightly_manifest_rejects_malformed(tmp_path, monkeypatch):
+    bad = tmp_path / "bad.json"
+    bad.write_text("[1, 2, 3]", encoding="utf-8")
+    monkeypatch.setattr(hotpatch, "NIGHTLY_MANIFEST_URL", bad.as_uri())
+    with pytest.raises(HotpatchError, match="malformed"):
+        hotpatch.fetch_nightly_manifest()
+    missing = tmp_path / "missing.json"
+    missing.write_text(json.dumps({"base": "0.1.15"}), encoding="utf-8")
+    monkeypatch.setattr(hotpatch, "NIGHTLY_MANIFEST_URL", missing.as_uri())
+    with pytest.raises(HotpatchError, match="malformed"):
+        hotpatch.fetch_nightly_manifest()
+
+
+async def test_nightly_endpoint_proxies_manifest(monkeypatch, tmp_path):
+    payload = {
+        "version": "0.1.15_001",
+        "base": "0.1.15",
+        "notes": "fixture",
+        "url": "https://example.test/f.zip",
+        "sha256": "abc",
+        "signature": "sig",
+        "backend": {"url": "https://example.test/b.zip", "sha256": "d", "signature": "s"},
+    }
+    monkeypatch.setattr(hotpatch, "fetch_nightly_manifest", lambda timeout_secs=30: payload)
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        res = await client.get("/api/v1/updates/nightly")
+        assert res.status_code == 200, res.text
+        body = res.json()
+        assert body["version"] == "0.1.15_001"
+        assert body["backend"]["url"] == "https://example.test/b.zip"
+
+
+async def test_nightly_endpoint_is_502_when_unreachable(monkeypatch):
+    def _boom(timeout_secs=30):
+        raise HotpatchError("could not fetch the nightly manifest (URLError)")
+
+    monkeypatch.setattr(hotpatch, "fetch_nightly_manifest", _boom)
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        res = await client.get("/api/v1/updates/nightly")
+        assert res.status_code == 502

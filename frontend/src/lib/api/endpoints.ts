@@ -97,6 +97,7 @@ import type {
   TranscribeStatus,
   UndoCodingsResponse,
   UpdatesSettings,
+  NightlyManifest,
   HotpatchVersion,
   HotpatchApplyRequest,
   OverlayVersion,
@@ -1183,6 +1184,9 @@ export const api = {
       method: "PUT",
       body: JSON.stringify(body),
     }),
+  /** Nightly manifest via the backend proxy (GitHub sends no CORS headers,
+   *  so the webview can never fetch it directly). */
+  nightlyManifest: () => request<NightlyManifest>("/updates/nightly"),
   hotpatchVersion: () => request<HotpatchVersion>("/hotpatch/version"),
   applyHotpatch: (body: HotpatchApplyRequest) =>
     request<HotpatchVersion>("/hotpatch/apply", {
