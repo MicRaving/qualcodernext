@@ -225,13 +225,13 @@ test("coder flyout stays in the viewport and hosts per-row delete + background t
   await defaultRow.getByRole("button", { name: "Delete", exact: true }).click();
   await expect(defaultRow).toHaveCount(0, { timeout: 10_000 });
 
-  // The coder flyout hosts the sync section: the yellow last-sync button
-  // (Sync-now only exists inside collaboration; the flyout shows the
-  // 'Enable collaboration' action instead. Background-task controls live in
-  // the task-queue flyout.)
-  await expect(
-    flyout.getByRole("button", { name: "Enable collaboration", exact: true }),
-  ).toBeVisible();
+    // The coder flyout hosts the sync section: the yellow last-sync button
+    // (Sync-now only exists inside collaboration; the flyout shows the
+    // collaboration switch instead, off here. Background-task controls live
+    // in the task-queue flyout.)
+    await expect(
+      flyout.getByRole("switch", { name: "Collaboration", exact: true }),
+    ).toBeVisible();
 });
 
 test("sidebars hide when dragged past the minimum and recall via edge arrow", async ({ page }) => {

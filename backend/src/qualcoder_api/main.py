@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 import contextlib as _contextlib
 import logging
+import time
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
@@ -17,6 +18,7 @@ from fastapi.responses import JSONResponse
 from qualcoder_api.api.v1.router import router as v1_router
 from qualcoder_api.services import sync, sync_engine, user_settings
 from qualcoder_api.services.project_service import ProjectService
+from qualcoder_api.services.sync_schema import SYNC_REPAIR_INTERVAL_SECS
 
 logger = logging.getLogger(__name__)
 
@@ -75,10 +77,22 @@ async def _sync_loop() -> None:
                 # Prefer per-session replay files when in a session (new spec 2a),
                 # fall back to legacy per-instance sidecars for old projects.
                 sync_id = getattr(service, "current_session_id", "") or user_settings.get_instance_id()
-                cycle_result = await sync_engine.run_sync_cycle(
-                    service.session_factory, service.project_path,
-                    sync_id,
-                )
+                # Scheduled divergence repair: about every SYNC_REPAIR_INTERVAL
+                # (tracked by run_repair_cycle itself, so manual repairs and
+                # the heal-on-open count too), run a full reset + replay
+                # instead of an incremental cycle.  Idempotent — a no-op when
+                # converged — and it bounds any divergence window.
+                # Snapshot stays manual-only (write amplification).
+                if time.time() - float(sync_engine.repair_health().get("last_at") or 0) >= SYNC_REPAIR_INTERVAL_SECS:
+                    cycle_result = await sync_engine.run_repair_cycle(
+                        service.session_factory, service.project_path,
+                        sync_id, include_snapshot=False,
+                    )
+                else:
+                    cycle_result = await sync_engine.run_sync_cycle(
+                        service.session_factory, service.project_path,
+                        sync_id,
+                    )
                 # The admin merge below must only run on a clean cycle: with
                 # failed imports it would snapshot an incomplete sandbox while
                 # deleting the unimported replays (unrecoverable shared loss).

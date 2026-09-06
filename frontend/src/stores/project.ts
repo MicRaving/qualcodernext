@@ -415,7 +415,7 @@ export const useProjectStore = create<ProjectLifecycleState>((set, get) => ({
         // repaint. Fire-and-forget; idempotent and safe to skip on error.
         if (usePrefsStore.getState().collabMode === "collaboration") {
           api
-            .syncRepair()
+            .syncRepair(false)
             .then((res) => {
               if (!res?.ok) return;
               void get().refreshProject();

@@ -121,7 +121,7 @@ async def test_open_project_migrates_legacy(tmp_path, app_version: str):
     conn = await aiosqlite.connect(legacy / "data.qda")
     cur = await conn.cursor()
     await cur.execute("SELECT databaseversion FROM project")
-    assert (await cur.fetchone())[0] == "v35"
+    assert (await cur.fetchone())[0] == "v36"
     await conn.close()
     await svc.close_project()
 

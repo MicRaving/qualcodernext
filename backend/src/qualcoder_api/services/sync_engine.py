@@ -40,6 +40,7 @@ from qualcoder_api.services.sync_replay import (  # noqa: F401
     export_pending,
     import_pending,
     rebuild_from_sidecars,
+    reconcile_with_master,
 )
 from qualcoder_api.services.sync_schema import (  # noqa: F401
     ENTITY_PKS,
@@ -91,6 +92,39 @@ _last_sync_ts: float = 0.0
 _last_error: str = ""
 _last_error_ts: float = 0.0
 _last_result: dict | None = None
+
+# ── Repair health (divergence watchdog) ───────────────────────────────
+# Every repair records when it ran and whether it actually healed rows
+# (imported + reconciled applies).  Repairs that keep healing, run after
+# run, mean divergence the engine cannot converge on its own (live edits
+# aside) — surfaced via sync_status so it never fails silently.
+_last_repair_ts: float = 0.0
+_repair_consecutive_applied: int = 0
+
+
+def repair_health() -> dict:
+    """Current repair watchdog state (JSON-safe, additive to sync_status)."""
+    return {
+        "last_at": _last_repair_ts,
+        "consecutive_applied": _repair_consecutive_applied,
+    }
+
+
+def _note_repair(applied_total: int) -> None:
+    """Fold one repair's healed-row count into the watchdog state."""
+    global _last_repair_ts, _repair_consecutive_applied
+    import time
+
+    _last_repair_ts = time.time()
+    if applied_total > 0:
+        _repair_consecutive_applied += 1
+        if _repair_consecutive_applied >= 3:
+            logger.warning(
+                "repair healed rows %s cycles in a row — divergence persists",
+                _repair_consecutive_applied,
+            )
+    else:
+        _repair_consecutive_applied = 0
 
 
 def _reset_health_for_project(project_path: str) -> None:
@@ -179,33 +213,57 @@ async def baseline_first_sync(session, project_path: str, instance_id: str) -> b
     return True
 
 
-async def run_repair_cycle(session_factory, project_path: str, instance_id: str) -> dict:
+async def run_repair_cycle(
+    session_factory,
+    project_path: str,
+    instance_id: str,
+    include_snapshot: bool = True,
+) -> dict:
     """Full repair sync: export pending, forget import watermarks, replay
-    every sidecar, then publish a full-state snapshot.
+    every sidecar, reconcile against the master archive, then (optionally)
+    publish a full-state snapshot.
 
     Incremental cycles only read entries above per-remote watermarks.  When a
     watermark has run ahead of the applied state (aborted rebuild, torn
     backlog, stale seed), rows stay missing forever with no signal.
     Resetting ``imports`` and replaying everything is idempotent
-    (natural-key converge) and bounds any divergence window; the trailing
-    snapshot additionally publishes rows that never entered any journal
+    (natural-key converge) and bounds any divergence window; the master diff
+    additionally heals rows whose sidecars were already cleaned up; the
+    trailing snapshot publishes rows that never entered any journal
     (pre-capture legacy writes), so peers receive genuinely local-only rows
-    too.  The snapshot runs AFTER converging, so it reflects merged state
-    and cannot resurrect peer-deleted rows.  Acks, remaps and baselines are
-    left untouched.  Returns the cycle report plus ``repaired: True``.
+    too.  Snapshot and master diff run AFTER converging, so they reflect
+    merged state.  Acks, remaps and baselines are left untouched.  Returns
+    the cycle report plus ``repaired: True``.
     """
     state = load_state(project_path)
     state["imports"] = {}
     save_state(project_path, state)
     result = await run_sync_cycle(session_factory, project_path, instance_id)
     try:
-        async with session_factory() as session:
-            snap = await export_full_state(session, project_path, instance_id)
+        reconciled = await reconcile_with_master(session_factory, project_path)
     except Exception as err:  # pragma: no cover - defensive
-        logger.warning("repair snapshot failed: %s", err)
-        snap = {"exported": 0}
+        logger.warning("repair master-diff failed: %s", err)
+        reconciled = {"applied": 0, "conflicts": [], "skipped": 0}
+    result["reconciled"] = reconciled
+    if include_snapshot:
+        try:
+            async with session_factory() as session:
+                snap = await export_full_state(session, project_path, instance_id)
+        except Exception as err:  # pragma: no cover - defensive
+            logger.warning("repair snapshot failed: %s", err)
+            snap = {"exported": 0}
+        result["snapshot_exported"] = int(snap.get("exported", 0) or 0)
+    else:
+        result["snapshot_exported"] = 0
     result["repaired"] = True
-    result["snapshot_exported"] = int(snap.get("exported", 0) or 0)
+    healed = 0
+    if isinstance(result.get("imported"), dict):
+        for report in result["imported"].values():
+            if isinstance(report, dict):
+                healed += int(report.get("applied", 0) or 0)
+    if isinstance(reconciled, dict):
+        healed += int(reconciled.get("applied", 0) or 0)
+    _note_repair(healed)
     return result
 
 

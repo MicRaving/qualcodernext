@@ -119,6 +119,12 @@ async def sync_status(session_factory, project_path: str, instance_id: str) -> d
         state_str = "active"
 
     from qualcoder_api.services.sync import sync_enabled
+    try:
+        from qualcoder_api.services.sync_engine import repair_health
+
+        repair = repair_health()
+    except Exception:  # pragma: no cover - defensive
+        repair = {"last_at": 0.0, "consecutive_applied": 0}
     return {
         "ok": True,
         "enabled": sync_enabled(),
@@ -132,6 +138,9 @@ async def sync_status(session_factory, project_path: str, instance_id: str) -> d
         "last_sync": _sync_mod._last_sync_ts,
         "last_error": _sync_mod._last_error,
         "last_error_at": _sync_mod._last_error_ts,
+        # Divergence watchdog: when the scheduled/manual repairs keep
+        # healing rows run after run, instances disagree persistently.
+        "repair": repair,
     }
 
 

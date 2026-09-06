@@ -70,6 +70,7 @@ class MigrationChain:
         applied += await self.migrate_v33(app_version)
         applied += await self.migrate_v34(app_version)
         applied += await self.migrate_v35(app_version)
+        applied += await self.migrate_v36(app_version)
         return applied
 
 
@@ -914,4 +915,25 @@ class MigrationChain:
             await self.conn.commit()
             return ["v35"]
         return []
+
+
+    async def migrate_v36(self, app_version: str) -> list[str]:
+        """v36: content-addressed delete tombstones — adds ``row_json`` to
+        ``sync_rev`` so a fresh insert can prove by content comparison that
+        it is not resurrecting a deleted row, independent of divergent
+        per-instance PKs.  No backfill (existing tombstones simply carry no
+        content and are ignored by the check). No-op when the column already
+        exists (fresh projects create it in their schema)."""
+        if self.conn is None:
+            return []
+        cur = await self.conn.cursor()
+        if not await self._has_table(cur, "sync_rev"):
+            return []
+        if await self._has_column(cur, "sync_rev", "row_json"):
+            return []
+        await cur.execute("ALTER TABLE sync_rev ADD row_json text default NULL")
+        await self.conn.commit()
+        await cur.execute('update project set databaseversion="v36", about=?', [app_version])
+        await self.conn.commit()
+        return ["v36"]
 

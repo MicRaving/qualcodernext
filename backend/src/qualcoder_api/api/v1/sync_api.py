@@ -199,17 +199,20 @@ async def sync_now(svc: OpenProjectDep) -> dict:
 
 
 @router.post("/repair")
-async def sync_repair(svc: OpenProjectDep) -> dict:
+async def sync_repair(svc: OpenProjectDep, snapshot: bool = True) -> dict:
     """Full repair sync: export pending, forget import watermarks, replay
-    every sidecar, then publish a full-state snapshot.
+    every sidecar, reconcile against the master archive, then (unless
+    ``snapshot`` is false) publish a full-state snapshot.
 
     Idempotent (natural-key converge): heals rows missed by incremental
     cycles and publishes genuinely local-only rows, without duplicating
     anything.  Use when instances show different counts, or automatically
-    after opening a collaboration project.
+    after opening a collaboration project (which passes ``snapshot=false``
+    to avoid re-appending a full snapshot on every open).
     """
     return await sync_engine.run_repair_cycle(
-        svc.session_factory, svc.project_path, _sync_id(svc)
+        svc.session_factory, svc.project_path, _sync_id(svc),
+        include_snapshot=snapshot,
     )
 
 

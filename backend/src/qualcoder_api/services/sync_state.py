@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import os
 import threading as _threading
 from pathlib import Path
 
@@ -18,8 +19,22 @@ _STATE_LOCK = _threading.Lock()
 
 # ── State (per-machine, outside the synced folder) ──────────────────────
 
+def _normalize_project_path(project_path: str) -> str:
+    """Canonicalize a project path before hashing (and comparing).
+
+    The same shared folder can surface under different spellings — slash
+    direction, ``.`` segments, letter case on Windows, mapped-drive letter
+    vs UNC path.  Each spelling previously hashed to a DIFFERENT state file,
+    so reopening via another spelling silently reset all watermarks and
+    replayed the entire history (and split export watermarks across files).
+    """
+    return os.path.normcase(os.path.normpath(project_path))
+
+
 def _state_path(project_path: str) -> Path:
-    digest = hashlib.sha1(project_path.encode("utf-8")).hexdigest()[:16]
+    digest = hashlib.sha1(
+        _normalize_project_path(project_path).encode("utf-8")
+    ).hexdigest()[:16]
     return Path.home() / ".qualcoder" / "sync" / f"{digest}.json"
 
 

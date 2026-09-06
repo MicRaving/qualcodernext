@@ -7,6 +7,13 @@
      include (first releases have no base tag, so no link). Add a section
      like "## 0.1.1 (2026-08-31)" at the TOP of the file. -->
 
+## 0.1.13 (2026-09-05)
+
+- Deleted rows stay deleted: tombstones now carry content, blocking stale resurrections.
+- Repair sync reconciles against the master archive and replays less on every open.
+
+**Full Changelog**: https://github.com/MicRaving/qualcodernext/compare/v0.1.12...v0.1.13
+
 ## 0.1.12 (2026-09-05)
 
 - Imported codebooks and RQDA projects now sync their codes and categories.

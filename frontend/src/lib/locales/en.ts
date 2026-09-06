@@ -1891,7 +1891,7 @@ export const en: Record<string, string> = {
   "sync.pendingExport": "{n} to send",
   "sync.pendingImport": "{n} to receive",
   "sync.now": "Sync now",
-  "sync.repair": "Repair sync",
+  "sync.repair": "Repair",
   "sync.repairHint": "Replay every change (fixes divergent counts between instances).",
   "sync.lastSyncShort": "{when} ago",
   "sync.never": "Never",

@@ -1,6 +1,8 @@
 """Coder create/delete/rename/visibility and sync toggle handlers."""
 from __future__ import annotations
 
+import contextlib
+
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -151,10 +153,8 @@ async def _revert_coder(session: AsyncSession, row: dict, *, undo: bool, **kwarg
             text("UPDATE coder_names SET name = :to WHERE name = :from"),
             {"to": target, "from": source},
         )
-        try:
+        with contextlib.suppress(Exception):
             await _sync_capture(session, "coder_names", "delete", "name", source)
-        except Exception:
-            pass
         try:
             row = (
                 await session.execute(

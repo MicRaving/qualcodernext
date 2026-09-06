@@ -125,7 +125,14 @@ interface PrefsState {
   setSyncEnabled: (enabled: boolean, opts?: { remember?: boolean }) => Promise<boolean>;
   runSyncNow: () => Promise<boolean>;
   /** Full repair sync: forget import watermarks and replay every sidecar,
-   *  then repaint. Idempotent — heals rows incremental cycles missed. */
+   *  then repaint. Idempotent — heals rows incremental cycles missed.
+   *
+   *  Deliberately NOT merged into Sync-now: Sync-now is the cheap incremental
+   *  path (export pending + import new entries) for frequent use, while
+   *  repair replays the whole history (and optionally snapshots). Folding
+   *  repair into Sync-now would make every manual sync pay full-replay cost.
+   *  "Replay since last bake" is not equivalent either: it misses exactly
+   *  the pre-bake watermark-ahead gaps repair exists to heal. */
   runRepairSync: () => Promise<boolean>;
   /** Background pull: run one cycle and, when it imported new rows, refresh
    *  the project data + the open coder's segments so other raters' changes

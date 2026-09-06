@@ -111,6 +111,68 @@ async def _record_conflict(
 
 # ── Replay ──────────────────────────────────────────────────────────────
 
+async def _record_tombstone_content(
+    session: AsyncSession, entity: str, pk_str: str, row: dict | None
+) -> None:
+    """Best-effort tombstone content for content-addressed resurrection
+    checks (pre-v36 schemas lack the column — must never fail the replay)."""
+    if not row:
+        return
+    try:
+        async with session.begin_nested():
+            await session.execute(
+                text("UPDATE sync_rev SET row_json = :rj WHERE entity = :e AND pk = :pk"),
+                {"rj": json.dumps(row, ensure_ascii=False, default=str),
+                 "e": entity, "pk": pk_str},
+            )
+    except Exception:
+        pass
+
+
+async def _tombstone_blocks(
+    session: AsyncSession,
+    entity: str,
+    pk_name: str,
+    row: dict,
+    incoming_rev: int,
+    incoming_mtime: str = "",
+) -> bool:
+    """Whether a recorded delete tombstone makes this insert stale.
+
+    Tombstones store the deleted row's content, so the check is independent
+    of divergent per-instance PKs.  Block when the tombstone is at least as
+    new by BOTH clocks (rev and wall time): a higher incoming rev means
+    genuine re-creation after the delete, and a newer incoming mtime means
+    the row was recreated even when its rev counter restarted lower (clock
+    reset, e.g. a reseeded sandbox) — both proceed.  Pre-v36 tombstones
+    carry no content and never block.
+    """
+    try:
+        rows = await session.execute(
+            text(
+                "SELECT rev, row_json, mtime FROM sync_rev "
+                "WHERE entity = :e AND deleted = 1 AND row_json IS NOT NULL"
+            ),
+            {"e": entity},
+        )
+    except Exception:
+        return False  # pre-v36 schema
+    for trev, trj, tmtime in rows:
+        try:
+            old = json.loads(trj)
+        except (TypeError, ValueError):
+            continue
+        if not isinstance(old, dict):
+            continue
+        if not _rows_equal(row, old, pk_name):
+            continue
+        if int(incoming_rev or 0) > int(trev or 0):
+            continue  # genuinely newer by rev: re-created after the delete
+        if str(incoming_mtime or "") > str(tmtime or ""):
+            continue  # genuinely newer by wall time despite restarted counter
+        return True
+    return False
+
 async def _insert_row(session: AsyncSession, entity: str, row: dict) -> None:
     """Insert a row into *entity* (monkeypatchable in tests)."""
     # LSTeach sidecars contain legacy columns (e.g. source.sort_index)
@@ -443,6 +505,10 @@ async def _replay_one(
         insert_row = dict(row) if row else {}
         if not insert_row:
             return {"status": "skipped", "reason": "no row"}
+        if await _tombstone_blocks(
+            session, entity, pk_name, insert_row, incoming_rev, mtime
+        ):
+            return {"status": "skipped", "reason": "tombstoned"}
         pk_cols = _pk_cols(pk_name)
         fresh_pk: Any = None
         if len(pk_cols) == 1:
@@ -482,6 +548,9 @@ async def _replay_one(
             # Nothing to delete locally — record a tombstone so the delete
             # propagates and future re-inserts of the same row don't resurrect it.
             await _upsert_sync_rev(max(incoming_rev, local_rev), True)
+            await _record_tombstone_content(
+                session, entity, pk_str, row if isinstance(row, dict) else None
+            )
             return {"status": "applied", "detail": "tombstone"}
         if incoming_rev == 0 and local_rev == 0:
             # Both at the unversioned baseline (rev==0).  The pre-versioned
@@ -496,6 +565,7 @@ async def _replay_one(
             binds = dict(zip(params, _pk_values(pk_name, local_pk), strict=True))
             await session.execute(text(f"DELETE FROM {entity} WHERE {where}"), binds)
             await _upsert_sync_rev(incoming_rev, True)
+            await _record_tombstone_content(session, entity, pk_str, local_row)
             return {"status": "applied"}
         if winner is False:
             return {"status": "skipped", "reason": "stale"}
@@ -785,6 +855,290 @@ async def import_pending(session: AsyncSession, project_path: str, instance_id: 
     return report
 
 
+# ── Master-diff reconciliation ─────────────────────────────────────────
+#
+# Entities safe to reconcile against the cold archive: matchable by a
+# foreign-key-free natural key (or a text PK), so divergent per-instance PKs
+# never confuse identity.  Everything else (codings, links, graph items,
+# …) heals through the sidecar replays, which carry proper FK remaps.
+
+_RECONCILE_ENTITIES = frozenset({
+    "source",
+    "code_name",
+    "code_cat",
+    "cases",
+    "journal",
+    "code_set",
+    "dictionary",
+    "coder_names",
+    "stored_sql",
+    "r_script",
+    "attribute_type",
+})
+
+
+async def _master_row_by_id(mconn, table_name: str, id_col: str, value: Any) -> dict | None:
+    """One master-archive row by PK (None when absent/unreadable)."""
+    try:
+        cur = await mconn.cursor()
+        await cur.execute(f"SELECT * FROM {table_name} WHERE {id_col} = :v", {"v": value})
+        row = await cur.fetchone()
+        if row is None:
+            return None
+        cols = [c[0] for c in cur.description]
+        return {k: v for k, v in dict(zip(cols, row, strict=True)).items() if not k.startswith("_")}
+    except Exception:
+        return None
+
+
+async def _local_id_by_name(
+    session: AsyncSession, table_name: str, name_col: str, id_col: str, name: Any
+) -> Any:
+    """Local PK for a unique-named row (None when absent/unreadable)."""
+    if not name:
+        return None
+    try:
+        row = await session.execute(
+            text(f"SELECT {id_col} FROM {table_name} WHERE {name_col} = :n"),
+            {"n": name},
+        )
+        hit = row.first()
+        return hit[0] if hit is not None else None
+    except Exception:
+        return None
+
+
+async def _translate_tree_ref(
+    mconn, session: AsyncSession, table_name: str, id_col: str, value: Any
+) -> Any:
+    """Map a merger-namespace FK id to the local id via the unique name."""
+    if value is None:
+        return None
+    ref = await _master_row_by_id(mconn, table_name, id_col, value)
+    if not ref:
+        return None
+    return await _local_id_by_name(session, table_name, "name", id_col, ref.get("name"))
+
+
+async def reconcile_with_master(session_factory, project_path: str) -> dict:
+    """Copy master-newer rows into the live sandbox (presence healing).
+
+    Compares the cold archive's ``sync_rev`` clocks against the sandbox's
+    for covered entities: rows the master has at a higher rev (or that the
+    sandbox lacks) are replayed through ``_replay_one`` with exact revs, so
+    crash gaps over cleaned-up history heal.  Master tombstones newer than a
+    locally held row delete it (content-matched, so divergent PKs are safe).
+    Returns ``{"applied", "conflicts", "skipped"}``.
+    """
+    applied = skipped = 0
+    conflicts: list[dict] = []
+    archive = Path(project_path) / "data.qda"
+    if not archive.exists():
+        return {"applied": 0, "conflicts": [], "skipped": 0}
+
+    import aiosqlite as _aiosqlite
+
+    try:
+        mconn = await _aiosqlite.connect(str(archive))
+    except Exception:
+        return {"applied": 0, "conflicts": [], "skipped": 0}
+    try:
+        try:
+            cur = await mconn.cursor()
+            await cur.execute(
+                "SELECT entity, pk, rev, deleted, mtime, row_json FROM sync_rev"
+            )
+            master_revs = {
+                (str(e), str(p)): (int(r or 0), bool(d), str(m or ""), rj)
+                for e, p, r, d, m, rj in await cur.fetchall()
+            }
+        except Exception:
+            return {"applied": 0, "conflicts": [], "skipped": 0}
+
+        async with session_factory() as session, suspended():
+            try:
+                local_revs = {
+                    (str(e), str(p)): int(r or 0)
+                    for e, p, r in await session.execute(
+                        text("SELECT entity, pk, rev FROM sync_rev")
+                    )
+                }
+            except Exception:
+                local_revs = {}
+            remaps: dict[tuple[str, str], str] = {}
+            for entity in EXPORT_ORDER:
+                if entity not in _RECONCILE_ENTITIES:
+                    continue
+                pk_name = ENTITY_PKS.get(entity)
+                if not pk_name or "," in pk_name:
+                    continue
+                # Master rows present.
+                try:
+                    mcur = await mconn.cursor()
+                    await mcur.execute(f"SELECT * FROM {entity}")
+                    cols = [c[0] for c in mcur.description]
+                    mrows = [dict(zip(cols, r, strict=True)) for r in await mcur.fetchall()]
+                except Exception:
+                    continue
+                # Local presence + revs for this entity.
+                try:
+                    local_rows = (
+                        await session.execute(text(f"SELECT * FROM {entity}"))
+                    ).mappings().all()
+                except Exception:
+                    continue
+                local_by_pk = {str(dict(r).get(pk_name)): dict(r) for r in local_rows}
+                # Identity across divergent PK namespaces is by natural key
+                # (a rebuilt sandbox assigns fresh PKs, so PK strings only
+                # match in the same-namespace archive-seed case).
+                natural = NATURAL_KEYS.get(entity) or []
+                local_by_nk: dict[tuple, tuple[str, dict]] = {}
+                if natural:
+                    for lpk, lrow in local_by_pk.items():
+                        try:
+                            local_by_nk.setdefault(
+                                tuple(lrow.get(k) for k in natural), (lpk, lrow)
+                            )
+                        except Exception:
+                            continue
+                for mrow in mrows:
+                    mrow = {k: v for k, v in mrow.items() if not k.startswith("_")}
+                    mpk = str(mrow.get(pk_name))
+                    rev, _deleted, mtime, _rj = master_revs.get(
+                        (entity, mpk), (0, False, "", None)
+                    )
+                    if natural:
+                        found = local_by_nk.get(tuple(mrow.get(k) for k in natural))
+                        if found is not None:
+                            _lpk, _lrow = found
+                            if rev <= local_revs.get((entity, _lpk), 0):
+                                skipped += 1
+                                continue
+                    elif (entity, mpk) in local_revs and rev <= local_revs[(entity, mpk)]:
+                        # Text-PK identity (attribute_type): the PK is the key.
+                        skipped += 1
+                        continue
+                    entry_row = dict(mrow)
+                    if entity == "source":
+                        # Transcript/reference links live in foreign PK
+                        # namespaces; null them rather than dangle (links
+                        # re-heal through live flows; presence is what counts).
+                        entry_row["av_text_id"] = None
+                        entry_row["risid"] = None
+                    elif entity == "code_name":
+                        entry_row["catid"] = await _translate_tree_ref(
+                            mconn, session, "code_cat", "catid", entry_row.get("catid")
+                        )
+                        entry_row["supercid"] = await _translate_tree_ref(
+                            mconn, session, "code_name", "cid", entry_row.get("supercid")
+                        )
+                    elif entity == "code_cat":
+                        entry_row["supercatid"] = await _translate_tree_ref(
+                            mconn, session, "code_cat", "catid",
+                            entry_row.get("supercatid"),
+                        )
+                    entry = {
+                        "entity": entity,
+                        "action": "insert",
+                        "pk_name": pk_name,
+                        "pk_value": mrow.get(pk_name),
+                        "rev": rev,
+                        "mtime": mtime,
+                        "row": entry_row,
+                        "instance": "master",
+                        "coder": "",
+                    }
+                    try:
+                        outcome = await _replay_one(session, entry, None, remaps, "master")
+                    except Exception:
+                        await session.rollback()
+                        continue
+                    status = outcome.get("status")
+                    if status == "applied":
+                        applied += 1
+                    elif status == "conflict":
+                        conflicts.append(outcome)
+                    else:
+                        skipped += 1
+                    try:
+                        await session.commit()
+                    except Exception:
+                        await session.rollback()
+                # Master tombstones vs locally held rows (content-matched so
+                # divergent PKs are safe).
+                for (e, _pk), (rev, deleted, mtime, _rj) in master_revs.items():
+                    if e != entity or not deleted:
+                        continue
+                    for lpk, lrow in local_by_pk.items():
+                        if rev < local_revs.get((entity, lpk), 0):
+                            continue
+                        # Content match against the tombstoned row when the
+                        # master still carries it, else PK-equality fallback
+                        # (same-namespace archives).
+                        hit = lpk == _pk
+                        if not hit and _rj:
+                            try:
+                                old = json.loads(_rj)
+                            except (TypeError, ValueError):
+                                old = None
+                            hit = (
+                                isinstance(old, dict)
+                                and _rows_equal(lrow, old, pk_name)
+                                and str(mtime or "") >= str(
+                                    (await _local_mtime(session, entity, lpk)) or ""
+                                )
+                            )
+                        if not hit:
+                            continue
+                        entry = {
+                            "entity": entity,
+                            "action": "delete",
+                            "pk_name": pk_name,
+                            "pk_value": lrow.get(pk_name),
+                            "rev": rev,
+                            "mtime": mtime,
+                            "row": None,
+                            "instance": "master",
+                            "coder": "",
+                        }
+                        try:
+                            outcome = await _replay_one(
+                                session, entry, None, remaps, "master"
+                            )
+                        except Exception:
+                            await session.rollback()
+                            continue
+                        if outcome.get("status") == "applied":
+                            applied += 1
+                        else:
+                            skipped += 1
+                        try:
+                            await session.commit()
+                        except Exception:
+                            await session.rollback()
+            try:
+                await session.commit()
+            except Exception:
+                await session.rollback()
+    finally:
+        with contextlib.suppress(Exception):
+            await mconn.close()
+    return {"applied": applied, "conflicts": conflicts, "skipped": skipped}
+
+
+async def _local_mtime(session: AsyncSession, entity: str, pk: str) -> str:
+    """The local sync_rev mtime for a row ("" when unknown)."""
+    try:
+        row = await session.execute(
+            text("SELECT mtime FROM sync_rev WHERE entity = :e AND pk = :pk"),
+            {"e": entity, "pk": str(pk)},
+        )
+        first = row.first()
+        return str(first[0] or "") if first else ""
+    except Exception:
+        return ""
+
+
 # ── Full-state export & sandbox rebuild ─────────────────────────────────
 
 async def export_full_state(
@@ -798,16 +1152,28 @@ async def export_full_state(
     first) so FK translation on the receiving side always has a recorded remap.
     Entries carry the row's current ``sync_rev`` (0 when it has none) so live
     instances replaying the snapshot do not fabricate spurious conflicts.
+    The per-entry ``mtime`` is the row's own revision timestamp ("" when it
+    has none) — never the export time — so content-tombstone checks order
+    snapshot rows truthfully and a snapshot can neither resurrect
+    peer-deleted rows nor suppress genuine re-creations.
 
     Returns ``{"exported": N}`` (or ``{"exported": 0, "deferred": N}`` when the
     sidecar write was deferred).
     """
     state = load_state(project_path)
     coder = current_user()
-    rev_map: dict[tuple[str, str], int] = {}
-    result = await session.execute(text("SELECT entity, pk, rev FROM sync_rev"))
-    for entity, pk, rev in result:
-        rev_map[(str(entity), str(pk))] = int(rev or 0)
+    rev_map: dict[tuple[str, str], tuple[int, str]] = {}
+    try:
+        result = await session.execute(text("SELECT entity, pk, rev, mtime FROM sync_rev"))
+    except Exception:  # pragma: no cover - pre-v35 schema without sync_rev
+        result = None
+    if result is not None:
+        for entity, pk, rev, mtime in result:
+            rev_map[(str(entity), str(pk))] = (int(rev or 0), str(mtime or ""))
+    else:  # pragma: no cover - defensive
+        result = await session.execute(text("SELECT entity, pk, rev FROM sync_rev"))
+        for entity, pk, rev in result:
+            rev_map[(str(entity), str(pk))] = (int(rev or 0), "")
 
     base_seq = _max_sidecar_seq(project_path)
     entries: list[dict] = []
@@ -829,6 +1195,7 @@ async def export_full_state(
             if pk_value is None:
                 continue
             base_seq += 1
+            rev, mtime = rev_map.get((entity, str(pk_value)), (0, ""))
             entries.append({
                 "seq": base_seq,
                 "instance": instance_id,
@@ -837,8 +1204,8 @@ async def export_full_state(
                 "action": "insert",
                 "pk_name": pk_name,
                 "pk_value": pk_value,
-                "rev": rev_map.get((entity, str(pk_value)), 0),
-                "mtime": ts,
+                "rev": rev,
+                "mtime": mtime,
                 "row": row,
             })
 
@@ -976,7 +1343,12 @@ async def rebuild_from_sidecars(
                 retries += 1
                 break
             await session.commit()
-        # If no project row came through the sidecars, reseed a minimal one.
+        # If no project row came through the sidecars (e.g. every live
+        # replay postdates the last merge that cleaned the snapshot away),
+        # reseed a minimal one.  The ``about`` marker must identify a
+        # QualCoder database — the open gate rejects anything else, which
+        # used to make every post-cleanup join fail with "not a QualCoder
+        # database".
         count = (await session.execute(text("SELECT COUNT(*) FROM project"))).scalar()
         if not count:
             await session.execute(
@@ -984,7 +1356,7 @@ async def rebuild_from_sidecars(
                     "INSERT INTO project (databaseversion, date, memo, about, codername) "
                     "VALUES ('v31', :ts, '', :about, :coder)"
                 ),
-                {"ts": now(), "about": "rebuilt sandbox", "coder": current_user()},
+                {"ts": now(), "about": "QualCoder 4.0 (rebuilt sandbox)", "coder": current_user()},
             )
             await session.commit()
 

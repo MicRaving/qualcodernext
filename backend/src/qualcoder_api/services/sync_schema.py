@@ -16,6 +16,10 @@ SYNC_DIR_NAME = "changes"
 SYNC_INTERVAL_SECS = 60
 SYNC_LOCK = asyncio.Lock()
 SIDECAR_PRUNE_AFTER_SECS = 86400  # prune sidecars from instances offline >24h
+# How often the background loop runs a full repair (reset + replay, no
+# snapshot) instead of an incremental cycle: bounds any divergence window
+# without paying full-replay cost every iteration.
+SYNC_REPAIR_INTERVAL_SECS = 1800
 
 # Cleanup thresholds for sidecar compaction.
 SIDECAR_COMPACT_THRESHOLD_ENTRIES = 10_000

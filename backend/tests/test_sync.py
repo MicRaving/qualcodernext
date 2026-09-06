@@ -447,6 +447,50 @@ async def test_delete_propagates(rater_a, rater_b):
         assert len((await session.execute(tables.code_text.select())).scalars().all()) == 0
 
 
+async def test_tombstone_blocks_stale_insert_but_allows_recreation(rater_a):
+    """Content-addressed tombstones: a stale re-assert of deleted content is
+    skipped, while a genuine re-creation (newer rev) after the delete lands."""
+    from qualcoder_api.services.sync_replay import _replay_one
+
+    sync.set_current_user("anna")
+    async with rater_a.session_factory() as session:
+        created = await SourceRepository(session).add_source(
+            name="gone.txt", fulltext="x", mediapath="/docs/gone.txt", owner="anna")
+        # Faithful snapshot of the deleted content (same dict the journal saw).
+        row_v1 = dict(
+            (await session.execute(tables.source.select())).mappings().first()
+        )
+        await SourceRepository(session).delete_source(created.id)
+
+    def insert_entry(rev, mtime, pk=99):
+        return {
+            "entity": "source", "action": "insert", "pk_name": "id", "pk_value": pk,
+            "rev": rev, "mtime": mtime, "row": dict(row_v1),
+            "instance": "peer", "coder": "peer",
+        }
+
+    async def names():
+        async with rater_a.session_factory() as session:
+            rows = await session.execute(
+                tables.source.select().with_only_columns(tables.source.c.name)
+            )
+            return sorted(r[0] for r in rows)
+
+    # Stale re-assert (older rev than the tombstone): stays deleted.
+    async with rater_a.session_factory() as session:
+        outcome = await _replay_one(session, insert_entry(1, "2020-01-01T00:00:00"), {}, {})
+        assert outcome["status"] == "skipped"
+        await session.commit()
+    assert await names() == []
+
+    # Genuine re-creation (newer rev): lands as a fresh row.
+    async with rater_a.session_factory() as session:
+        outcome = await _replay_one(session, insert_entry(9, "2026-09-05T00:00:00"), {}, {})
+        assert outcome["status"] == "applied"
+        await session.commit()
+    assert await names() == ["gone.txt"]
+
+
 async def test_repair_endpoint(project_client):
     """POST /sync/repair runs a full repair cycle and reports it."""
     from qualcoder_api.main import service

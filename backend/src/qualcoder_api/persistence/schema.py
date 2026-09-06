@@ -84,6 +84,7 @@ _SCHEMA_SQL: list[str] = [
     "CREATE UNIQUE INDEX IF NOT EXISTS idx_sync_log_user_seq ON sync_log(user, seq);",
     "CREATE TABLE sync_rev (entity text not null, pk text not null, rev integer not null default 0, "
     "mtime text not null default '', origin text not null default '', deleted integer not null default 0, "
+    "row_json text default NULL, "
     "primary key (entity, pk))",
     "CREATE TABLE sync_conflict (id integer primary key autoincrement, entity text not null, "
     "pk text not null, pk_name text not null, local_rev integer not null, remote_rev integer not null, "

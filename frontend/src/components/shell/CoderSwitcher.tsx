@@ -37,7 +37,7 @@ import { useCoderStore } from "@/stores/coder";
 import { usePrefsStore } from "@/stores/prefs";
 import { useProjectStore } from "@/stores/project";
 import { useToast } from "@/lib/toast";
-import { Button, HelpFlyout, IconButton, Menu, MenuItem, Modal } from "@/components/ui/orchestrator";
+import { Button, HelpFlyout, IconButton, Menu, MenuItem, Modal, Toggle } from "@/components/ui/orchestrator";
 import { ConflictResolver } from "@/components/collaboration/ConflictResolver";
 
 const FLYOUT_WIDTH = 260;
@@ -355,7 +355,27 @@ export function CoderSwitcher() {
     }
   }
 
-  async function handleActivateCollab() {
+  async function toggleCollab() {
+    if (syncBusy) return;
+    if (collabMode === "collaboration") {
+      // Disabling is destructive (consolidates back to single-coder) —
+      // keep the explicit confirmation the revert button used to have.
+      if (!window.confirm(t("collab.revertConfirm"))) return;
+      setSyncBusy(true);
+      try {
+        const ok = await revertCollaboration();
+        if (ok) {
+          toast.success(t("collab.reverted"));
+          // Leaving collaboration makes background sync irrelevant.
+          await setSyncEnabled(false, { remember: true });
+        } else {
+          toast.error(t("collab.activateFailed"));
+        }
+      } finally {
+        setSyncBusy(false);
+      }
+      return;
+    }
     setSyncBusy(true);
     try {
       // Collaboration requires background sync; enabling is part of the
@@ -365,23 +385,6 @@ export function CoderSwitcher() {
       const ok = await activateCollaboration();
       if (ok) toast.success(t("collab.activated"));
       else toast.error(t("collab.activateFailed"));
-    } finally {
-      setSyncBusy(false);
-    }
-  }
-
-  async function handleRevertCollab() {
-    if (!window.confirm(t("collab.revertConfirm"))) return;
-    setSyncBusy(true);
-    try {
-      const ok = await revertCollaboration();
-      if (ok) {
-        toast.success(t("collab.reverted"));
-        // Leaving collaboration makes background sync irrelevant.
-        await setSyncEnabled(false, { remember: true });
-      } else {
-        toast.error(t("collab.activateFailed"));
-      }
     } finally {
       setSyncBusy(false);
     }
@@ -719,7 +722,13 @@ export function CoderSwitcher() {
           <div className="px-2 py-1.5">
             <div className="flex items-center justify-between gap-2">
               <span className="flex min-w-0 items-center gap-1 text-sm text-text-primary">
-                <span className="truncate">{t("collab.mode")}</span>
+                <span className={syncBusy ? "pointer-events-none opacity-50" : ""}>
+                  <Toggle
+                    checked={collabMode === "collaboration"}
+                    onChange={() => void toggleCollab()}
+                    label={t("collab.mode")}
+                  />
+                </span>
                 <IconButton
                   label={t("collab.activateHint")}
                   title={t("collab.activateHint")}
@@ -728,20 +737,11 @@ export function CoderSwitcher() {
                   <HelpCircle size={12} aria-hidden />
                 </IconButton>
               </span>
-              <span
-                role="status"
-                className={`shrink-0 rounded-sm px-1.5 py-0.5 text-[10px] font-medium leading-none ${
-                  collabMode === "collaboration"
-                    ? "bg-accent/15 text-accent"
-                    : "bg-border/50 text-text-secondary"
-                }`}
-              >
-                {collabMode === "collaboration" ? t("collab.active") : t("collab.single")}
-              </span>
             </div>
             {/* Background sync is inherently ON while collaborating and
                 irrelevant otherwise — no standalone toggle (user directive).
-                Sync-now + Revert/Activate live on one row below. */}
+                Sync-now + Repair live on one row below; the collaboration
+                on/off switch sits in the header row above. */}
             {livePeers.length > 0 && (
               /* Live peers (fresh heartbeats): who is working on what now. */
               <div className="mt-1.5 space-y-1" data-testid="live-peers">
@@ -798,26 +798,6 @@ export function CoderSwitcher() {
                   className="shrink-0 rounded-sm border border-border px-2 py-0.5 text-xs text-text-secondary hover:bg-surface-higher disabled:opacity-50"
                 >
                   {t("sync.repair")}
-                </button>
-              )}
-              {collabMode === "collaboration" ? (
-                <button
-                  type="button"
-                  onClick={() => void handleRevertCollab()}
-                  disabled={syncBusy}
-                  className="shrink-0 rounded-sm border border-danger/30 bg-danger/5 px-2 py-0.5 text-xs text-danger hover:bg-danger/10 disabled:opacity-50"
-                >
-                  {t("collab.revert")}
-                </button>
-              ) : (
-                <button
-                  type="button"
-                  onClick={() => void handleActivateCollab()}
-                  disabled={syncBusy}
-                  title={t("collab.needsTwoCoders")}
-                  className="flex-1 rounded-sm bg-accent px-2 py-0.5 text-xs font-medium leading-none text-[var(--qc-bg)] hover:bg-accent-hover disabled:opacity-50"
-                >
-                  {t("collab.activate")}
                 </button>
               )}
             </div>

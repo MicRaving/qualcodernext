@@ -1038,10 +1038,12 @@ export interface SyncStatus {
   /** Total pending conflicts (drives the red indicator). */
   pending_conflicts: number;
   collaborators: SyncCollaboratorV2[];
-  last_sync: number; // epoch seconds of the last successful cycle (0 = never)
-  last_error: string;
-  last_error_at: number;
-}
+    last_sync: number; // epoch seconds of the last successful cycle (0 = never)
+    last_error: string;
+    last_error_at: number;
+    /** Divergence watchdog: last repair time + consecutive repairs that healed rows. */
+    repair?: { last_at: number; consecutive_applied: number };
+  }
 
 /** Legacy conflict type (kept for SyncResult backward compat). */
 export interface SyncConflict {

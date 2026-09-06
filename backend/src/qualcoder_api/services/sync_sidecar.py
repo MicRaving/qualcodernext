@@ -156,9 +156,9 @@ def _compact_sidecar(sidecar: Path) -> int:
             if prevd is None or _seq(e) >= _seq(prevd):
                 latest_delete[key] = e
     kept: dict[int, dict] = {}
-    for key, e in latest.items():
+    for e in latest.values():
         kept[id(e)] = e
-    for key, e in latest_delete.items():
+    for e in latest_delete.values():
         kept[id(e)] = e
     ordered = sorted(kept.values(), key=_seq)
     lines = "\n".join(

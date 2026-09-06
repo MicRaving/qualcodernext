@@ -34,7 +34,7 @@ LEGACY_TABLES = [
     "CREATE TABLE journal (jid integer primary key, name text, jentry text, date text, owner text)",
 ]
 
-ALL_VERSIONS = [f"v{v}" for v in range(2, 32)] + ["v34", "v35"]
+ALL_VERSIONS = [f"v{v}" for v in range(2, 32)] + ["v34", "v35", "v36"]
 
 
 @pytest.fixture
@@ -98,7 +98,7 @@ async def test_full_chain_sets_final_version(v2_db):
     cur = await v2_db.cursor()
     await cur.execute("SELECT databaseversion, about FROM project")
     row = await cur.fetchone()
-    assert row[0] == "v35"
+    assert row[0] == "v36"
     assert row[1] == "4.0-test"
 
 
@@ -317,6 +317,19 @@ async def test_v29_adds_code_set_tables(v2_db):
     assert {"set_id", "cid"} <= member_cols
 
 
+async def test_v36_adds_sync_rev_row_json(v2_db):
+    """v36 adds the tombstone-content column to sync_rev (idempotent)."""
+    chain = MigrationChain(v2_db)
+    applied = await chain.run_all("4.0-test", "tester")
+    assert "v36" in applied
+    cur = await v2_db.cursor()
+    await cur.execute("PRAGMA table_info(sync_rev)")
+    cols = {row[1] for row in await cur.fetchall()}
+    assert "row_json" in cols
+    second = await chain.run_all("4.0-test", "tester")
+    assert "v36" not in second
+
+
 async def test_chain_is_idempotent(v2_db):
     chain = MigrationChain(v2_db)
     await chain.run_all("4.0-test", "tester")
@@ -407,10 +420,10 @@ async def test_v34_adds_ai_chat_tables(tmp_path):
     )
     assert await cur.fetchone() is not None
     await cur.execute("SELECT databaseversion FROM project")
-    assert (await cur.fetchone())[0] == "v35"
+    assert (await cur.fetchone())[0] == "v36"
     await conn.close()
 
-    # Fresh schema: tables already exist → v34 and v35 are no-ops.
+    # Fresh schema: tables already exist → v34, v35 and v36 are no-ops.
     fresh = tmp_path / "fresh.qda"
     conn = await aiosqlite.connect(fresh)
     await create_new_project_schema(conn, app_version="4.0-test", codername="tester")

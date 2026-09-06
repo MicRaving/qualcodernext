@@ -46,11 +46,12 @@ async function openCoderFlyout(page: import("@playwright/test").Page) {
     const coderBtn = page.getByRole("button", { name: /Current coder:/ });
     try {
       await expect(coderBtn).toBeVisible({ timeout: 15_000 });
-      await coderBtn.click();
-      await expect(page.getByText("Single-coder mode", { exact: true })).toBeVisible({
-        timeout: 8_000,
-      });
-      return;
+        await coderBtn.click();
+        // Collaboration is a single switch, off in single mode.
+        await expect(
+          page.getByRole("switch", { name: "Collaboration" }),
+        ).toHaveAttribute("aria-checked", "false", { timeout: 8_000 });
+        return;
     } catch {
       await page.goto("/");
       await expect(
@@ -69,11 +70,12 @@ test("collaboration flyout: activate gates Sync now to collab mode", async ({ pa
   await createProject(page, PLAIN_PROJECT);
   await openCoderFlyout(page);
 
-  // Single mode: no standalone sync toggle exists, and Sync now is hidden
-  // (background sync is irrelevant without collaboration). Activation is
-  // labelled 'Enable collaboration'.
-  const activate = page.getByRole("button", { name: "Enable collaboration", exact: true });
-  await expect(activate).toBeVisible();
+    // Single mode: no standalone sync toggle exists, and Sync now is hidden
+    // (background sync is irrelevant without collaboration). Collaboration
+    // is a single switch, off here.
+    const collabSwitch = page.getByRole("switch", { name: "Collaboration", exact: true });
+    await expect(collabSwitch).toBeVisible();
+    await expect(collabSwitch).toHaveAttribute("aria-checked", "false");
 
   await page.getByRole("button", { name: /Current coder:/ }).click(); // close
   await openCoderFlyout(page);
@@ -83,9 +85,9 @@ test("collaboration flyout: activate gates Sync now to collab mode", async ({ pa
 });
 
 test("shared-folder auto-detect does NOT auto-enable collaboration", async ({ page }) => {
-  // The project lives under a "OneDrive" path (cloud-sync folder). Policy:
-  // collaboration is never enabled automatically — the mode pill must stay
-  // 'Single-coder mode' and no sync UI appears.
+    // The project lives under a "OneDrive" path (cloud-sync folder). Policy:
+    // collaboration is never enabled automatically - the collaboration
+    // switch must stay off and no sync UI appears.
   await createProject(page, CLOUD_PROJECT);
   await page.request.post(`${BACKEND}/api/v1/projects/close`);
 
@@ -95,9 +97,12 @@ test("shared-folder auto-detect does NOT auto-enable collaboration", async ({ pa
   await openDialog.locator("#open-path").fill(CLOUD_PROJECT);
   await openDialog.getByRole("button", { name: "Open project" }).click();
 
-  await expect(page.getByRole("button", { name: "Cases" })).toBeVisible({ timeout: 30_000 });
-  await expect(page.getByText("Collaboration active")).toHaveCount(0);
-});
+    await expect(page.getByRole("button", { name: "Cases" })).toBeVisible({ timeout: 30_000 });
+    await openCoderFlyout(page);
+    await expect(
+      page.getByRole("switch", { name: "Collaboration", exact: true }),
+    ).toHaveAttribute("aria-checked", "false");
+  });
 
 test("live coder presence: indicator + file shown in the coder flyout", async ({ page }) => {
   // Create via API so we get back the EXACT path (create appends _1 on

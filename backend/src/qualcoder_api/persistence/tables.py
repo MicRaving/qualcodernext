@@ -484,11 +484,15 @@ sync_rev = Table(
     Column("pk", String, primary_key=True),
     # Scalar clock: incremented on every mutation, set to incoming on import.
     # Equal rev + different content = concurrent edit = conflict.
-    Column("rev", Integer, nullable=False, default=0),
-    Column("mtime", String, nullable=False, default=""),  # last mutation time
-    Column("origin", String, nullable=False, default=""),  # instance_id of last modifier
-    Column("deleted", Integer, nullable=False, default=0),  # tombstone flag
-)
+      Column("rev", Integer, nullable=False, default=0),
+      Column("mtime", String, nullable=False, default=""),  # last mutation time
+      Column("origin", String, nullable=False, default=""),  # instance_id of last modifier
+      Column("deleted", Integer, nullable=False, default=0),  # tombstone flag
+      # Tombstone content (JSON row snapshot, only when deleted=1): lets a
+      # fresh insert prove it is NOT resurrecting this deleted row by content
+      # comparison, independent of divergent per-instance PKs (v36+).
+      Column("row_json", Text),
+  )
 
 sync_conflict = Table(
     "sync_conflict",

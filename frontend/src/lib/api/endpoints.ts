@@ -1013,8 +1013,13 @@ export const api = {
       body: JSON.stringify({ file_id: fileId, file_name: fileName }),
     }),
   syncNow: () => request<SyncResult>("/sync/now", { method: "POST" }),
-  /** Full repair sync: forget import watermarks and replay every sidecar. */
-  syncRepair: () => request<SyncResult>("/sync/repair", { method: "POST" }),
+  /** Full repair sync: forget import watermarks and replay every sidecar.
+   *  Pass snapshot=false to skip the trailing full-state snapshot (used by
+   *  the automatic heal-on-open; the manual button publishes everything). */
+  syncRepair: (snapshot = true) =>
+    request<SyncResult>(`/sync/repair?snapshot=${snapshot ? "true" : "false"}`, {
+      method: "POST",
+    }),
   /** Current sync switch state + cadence. */
   syncSettings: () => request<SyncSettings>("/sync/settings"),
   setSyncEnabled: (enabled: boolean, intervalSecs?: number) =>

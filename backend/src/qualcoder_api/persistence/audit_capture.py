@@ -146,6 +146,28 @@ async def capture(
                         "row_json": json.dumps(row, ensure_ascii=False, default=str),
                     },
                 )
+                # Content-addressed tombstone: on deletes, stash the removed
+                # row on its sync_rev entry so a later fresh insert can prove
+                # by content comparison that it is (or isn't) resurrecting
+                # this exact row — independent of divergent per-instance PKs.
+                # Best effort in its own savepoint (pre-v36 schemas lack the
+                # column; that must never fail the capturing mutation).
+                if is_delete:
+                    try:
+                        async with session.begin_nested():
+                            await session.execute(
+                                text(
+                                    "UPDATE sync_rev SET row_json = :rj "
+                                    "WHERE entity = :e AND pk = :pk"
+                                ),
+                                {
+                                    "rj": json.dumps(row, ensure_ascii=False, default=str),
+                                    "e": entity,
+                                    "pk": pk_str,
+                                },
+                            )
+                    except Exception:
+                        pass
             return
         except IntegrityError:
             # seq already taken by a concurrent writer — recompute and retry.

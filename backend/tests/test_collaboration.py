@@ -341,6 +341,72 @@ async def test_join_from_stale_archive_heals(two_machines, tmp_path):
     assert await file_names(b) == ["f0.txt"]
 
 
+async def test_repair_heals_cleaned_history_gap(two_machines, tmp_path):
+    """A fresh sandbox rebuilt after a merge sees only post-merge sidecars:
+    rows merged-and-cleaned earlier are missing with no sidecar left to
+    import.  Repair's master-diff pass copies them from the archive, so the
+    joiner converges to the full state."""
+    from qualcoder_api.persistence.repositories import SourceRepository
+
+    make, use = two_machines
+    shared = str(tmp_path / "shared.qda")
+
+    async def file_names(svc) -> list[str]:
+        async with svc.session_factory() as session:
+            rows = await session.execute(text("SELECT name FROM source ORDER BY id"))
+            return [r[0] for r in rows]
+
+    async def cycle(svc):
+        return await sync_engine.run_sync_cycle(
+            svc.session_factory, svc.project_path, svc.current_session_id
+        )
+
+    a = await make("AAAAAAAAAAAA")
+    sync.set_current_user("alice")
+    await a.create_project(shared, codername="alice")
+    async with a.session_factory() as session:
+        for name in ("alice", "bob"):
+            await session.execute(
+                text("INSERT OR IGNORE INTO coder_names (name, visibility) VALUES (:n, 1)"),
+                {"n": name},
+            )
+        await session.commit()
+    user_settings_mod.save_sync_settings(True)
+    assert (await a.activate_collaboration(codername="alice"))["ok"] is True
+    async with a.session_factory() as session:
+        for name in ("x.txt", "y.txt"):
+            await SourceRepository(session).add_source(
+                name=name, fulltext="x", mediapath=f"/docs/{name}", owner="alice"
+            )
+    await a.close_project()  # last session merges: archive has X+Y, replays cleaned
+    use("AAAAAAAAAAAA")
+    sync.set_current_user("alice")
+    assert (await a.open_project(shared, codername="alice")).ok is True
+    async with a.session_factory() as session:
+        await SourceRepository(session).add_source(
+            name="z.txt", fulltext="x", mediapath="/docs/z.txt", owner="alice"
+        )
+    assert (await cycle(a))["ok"] is True  # only Z (+trim leftover) reaches sidecars
+
+    # B joins while A is still open: rebuild sees post-merge sidecars only.
+    b = await make("BBBBBBBBBBBB")
+    use("BBBBBBBBBBBB")
+    sync.set_current_user("bob")
+    assert (await b.open_project(shared, codername="bob")).ok is True
+    assert await file_names(b) == ["y.txt", "z.txt"]
+
+    # Repair reconciles against the master archive: X arrives, nothing dupes
+    # (order by id differs — the healed row takes a fresh PK — so compare
+    # as sets).
+    use("BBBBBBBBBBBB")
+    result = await sync_engine.run_repair_cycle(
+        b.session_factory, b.project_path, b.current_session_id
+    )
+    assert result["ok"] is True
+    assert sorted(await file_names(a)) == ["x.txt", "y.txt", "z.txt"]
+    assert sorted(await file_names(b)) == ["x.txt", "y.txt", "z.txt"]
+
+
 async def test_close_skips_merge_when_converge_fails(two_machines, tmp_path, monkeypatch):
     """A last-closer whose final import fails must NOT merge.
 

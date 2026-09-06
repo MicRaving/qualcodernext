@@ -209,6 +209,18 @@ async def _resolve_conflict_locked(
                 current_user(),
             )
 
+        # Tombstone content for delete resolutions (best effort, pre-v36 safe).
+        if resolved_deleted:
+            tombstone_row = current_local
+            if tombstone_row is None and conflict["remote_row"]:
+                try:
+                    tombstone_row = json.loads(conflict["remote_row"])
+                except (TypeError, ValueError):
+                    tombstone_row = None
+            from qualcoder_api.services.sync_replay import _record_tombstone_content
+
+            await _record_tombstone_content(session, entity, pk, tombstone_row)
+
         # Mark the conflict as resolved.
         await session.execute(
             text(
