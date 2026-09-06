@@ -55,6 +55,7 @@ import { useProjectStore } from "@/stores/project";
 import { usePrefsStore } from "@/stores/prefs";
 import { TranscribeDialog } from "@/features/coding/TranscribeDialog";
 import { AutocodeDialog } from "@/features/coding/AutocodeDialog";
+import { PseudonymsMenu } from "@/features/manage/PseudonymsMenu";
 import {
   filterSources,
   mediaTypeLabel,
@@ -809,6 +810,7 @@ export function FileManager() {
             </Button>
           </>
         )}
+        <PseudonymsMenu />
         <IconButton
           label={t("files.badLinks")}
           title={t("files.badLinks")}

@@ -39,6 +39,7 @@ Entering a URL into the **Import URL** dialog provides two import modes:
 
 * **Multiselect**: Select multiple files using `Ctrl+Click` or `Shift+Click` to move, assign cases, or delete in bulk.
 * **File Memos \& Attributes**: Attach analytical notes to any file or assign structured attributes (e.g., source medium, collection date).
+* **Pseudonymization**: Click the mask icon in the topbar (left of broken-links) to define original-to-replacement pseudonym pairs (e.g., `John Doe → Participant_A`) for automated name anonymization on file replacement and survey import. They travel with the project.
 
 ### Batch Processing
 

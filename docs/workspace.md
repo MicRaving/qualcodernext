@@ -75,10 +75,9 @@ You can also toggles between the following panes:
   * **Appearance**: Switch between **Dark** and **Light** themes (defaults to system preference).
   * **Language**: Select UI display language.
   * **Accessibility**: Toggle specialized display modes (High Contrast, Screenreader, Large Text, Reduced Motion, Colorblind Friendly).
-  * **Pseudonymization**: Define original-to-replacement pseudonym pairs (e.g., `John Doe → Participant\\\\\\\\\\\\\\\_A`, `Springfield High → School\\\\\\\\\\\\\\\_1`) for automated quote anonymization when exporting reports.
   * **Auto-Updates**: Configure update checks (Daily, Weekly, Never) and single-click update installation. Opt into the Nightly channel for small delta patches (0.1.13_001) that verify, install, and activate on reload — with one-step undo.
   * **Project Maintenance**: Toggle automatic database compaction upon project closure.
-  * **R Environment**: Displays R installation status, version, and binary path for statistical scripts.
+  * **About**: App version plus the R installation status — click the R path to point the app at an Rscript manually.
 
 ### Delta & nightly patches
 
