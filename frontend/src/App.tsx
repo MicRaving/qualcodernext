@@ -174,12 +174,13 @@ function App() {
           useProjectStore.getState().setAutoOpenStage("open");
           for (const path of recent.slice(0, 3)) {
             if (cancelled) return false;
-            // A hanging open (e.g. a large project while the backend is
-            // still warming up) must never freeze the dashboard — give up
-            // after 30s and let the user open it manually.
+            // A hanging open must never freeze the dashboard — but the cap
+            // must exceed PROJECT_OPEN_TIMEOUT_MS (120s): large/shared
+            // projects legitimately take that long, and cutting them off
+            // early just restarts the same slow open on every retry.
             const ok = await Promise.race([
               useProjectStore.getState().openProject(path),
-              new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 30_000)),
+              new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 150_000)),
             ]);
             if (cancelled) return false;
             if (ok) return true;

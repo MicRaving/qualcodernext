@@ -10,6 +10,7 @@
 import { errorMessage, errorTextOf } from "@/lib/utils";
 import { create } from "zustand";
 import {
+  ApiError,
   api,
   type Case,
   type CodeTreeItem,
@@ -17,6 +18,7 @@ import {
   type Source,
   type Journal,
 } from "@/lib/api";
+import { PROJECT_OPEN_TIMEOUT_MS } from "@/lib/config";
 import { DEFAULT_GITHUB_REPO } from "@/features/bugreport/github";
 import { useCoderStore } from "./coder";
 import { useGraphStore } from "./graph";
@@ -388,7 +390,7 @@ export const useProjectStore = create<ProjectLifecycleState>((set, get) => ({
   openProject: async (path) => {
     set({ busy: true, error: null });
     try {
-      const res = await api.openProject(path);
+      const res = await api.openProject(path, undefined, PROJECT_OPEN_TIMEOUT_MS);
       if (!res.ok) {
         set({ busy: false, error: res.lock_user ? `Project is in use by ${res.lock_user}` : res.error });
         return false;
@@ -425,7 +427,14 @@ export const useProjectStore = create<ProjectLifecycleState>((set, get) => ({
       });
       return true;
     } catch (e) {
-      set({ busy: false, error: errorMessage(e, "Could not open project")});
+      // Transport-level stalls (backend accepted the open but a large or
+      // shared-folder project outlasted the timeout) surface as ApiError
+      // status 0 — explain that instead of the raw "Backend unreachable".
+      const detail =
+        e instanceof ApiError && e.status === 0
+          ? "Project is taking too long to open — large or shared-folder projects can be slow on first open. Try again, or copy it to a local disk first."
+          : errorMessage(e, "Could not open project");
+      set({ busy: false, error: detail});
       return false;
     }
   },

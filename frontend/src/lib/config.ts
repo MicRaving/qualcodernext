@@ -15,6 +15,11 @@ export const REQUEST_TIMEOUT_MS = 15_000;
 /** Timeout for raw source-file fetches (large PDFs, images). */
 export const SOURCE_TIMEOUT_MS = 60_000;
 
+/** Project-open timeout (ms) — opening legitimately takes a minute or more
+ *  (migrations, shared-folder sandbox rebuilds, cloud-drive latency), so it
+ *  gets far longer than a normal call. Never gate it with a shorter race. */
+export const PROJECT_OPEN_TIMEOUT_MS = 120_000;
+
 /** AI chat timeout (ms) — local backends (Ollama, LM Studio) can take a long
  *  time to produce a non-streaming reply (model load + CPU/GPU generation),
  *  so this must stay generous even though normal API calls use 15 s. */

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import contextlib
 import logging
+import time
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
@@ -567,10 +568,22 @@ async def open_project(req: OpenProjectRequest, svc: ServiceDep) -> ProjectRespo
         )
     from qualcoder_api.services.user_settings import resolve_owner
 
+    # Open can legitimately take a minute (migrations, shared-folder sandbox
+    # rebuilds, cloud-drive latency). Uvicorn only logs on completion, so a
+    # stalled open is invisible — log start/finish with elapsed instead.
+    open_start = time.monotonic()
+    short_path = (req.project_path.split("|")[-1] or "?").replace("\\", "/").rsplit("/", 1)[-1]
+    logger.info("open project start: %s", short_path)
     result: OpenResult = await svc.open_project(
         req.project_path,
         codername=resolve_owner(req.codername),
         backup_on_open=req.backup_on_open,
+    )
+    logger.info(
+        "open project finish: %s ok=%s (%.1fs)",
+        short_path,
+        result.ok,
+        time.monotonic() - open_start,
     )
     if not result.ok:
         return ProjectResponse(

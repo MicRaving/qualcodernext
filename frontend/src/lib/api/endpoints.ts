@@ -212,11 +212,15 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ project_path, codername }),
     }),
-  openProject: (project_path: string, codername?: string) =>
-    request<OpenProjectResult>("/projects/open", {
-      method: "POST",
-      body: JSON.stringify({ project_path, codername }),
-    }),
+  openProject: (project_path: string, codername?: string, timeoutMs?: number) =>
+    request<OpenProjectResult>(
+      "/projects/open",
+      {
+        method: "POST",
+        body: JSON.stringify({ project_path, codername }),
+      },
+      timeoutMs,
+    ),
   closeProject: () => request<OpenProjectResult>("/projects/close", { method: "POST" }),
   projectSummary: () => request<{ summary: ProjectSummary }>("/projects/current/summary"),
   projectOpeners: () => request<{ openers: { user: string; pid: number; ts: number }[] }>("/projects/openers"),

@@ -272,6 +272,12 @@ async def lifespan(_app: FastAPI):
 def create_app() -> FastAPI:
     from qualcoder_api.core import APP_VERSION
 
+    # Route INFO+ to stderr (the packaged log file) when nothing configured
+    # it yet. Uvicorn's own loggers keep their setup; this only fills the
+    # root gap so service logs (e.g. project-open timing) are diagnosable
+    # instead of vanishing. No-op when handlers already exist (dev CLI).
+    if not logging.getLogger().handlers:
+        logging.basicConfig(level=logging.INFO)
     app = FastAPI(
         title="QualCoder v4 API",
         version=APP_VERSION,

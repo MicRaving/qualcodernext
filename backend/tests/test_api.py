@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+
 import pytest
 from httpx import ASGITransport, AsyncClient
 
@@ -119,6 +121,23 @@ async def test_open_missing_project_returns_error(client, tmp_path):
     assert res.status_code == 200
     assert res.json()["ok"] is False
     assert res.json()["error"] != ""
+
+
+async def test_open_logs_start_and_finish(client, tmp_path, caplog):
+    target = tmp_path / "api-log.qda"
+    await client.post("/api/v1/projects", json={"project_path": str(target)})
+    await client.post("/api/v1/projects/close")
+
+    with caplog.at_level(logging.INFO, logger="qualcoder_api.api.v1.router"):
+        opened = await client.post(
+            "/api/v1/projects/open", json={"project_path": str(target)}
+        )
+    assert opened.status_code == 200
+    messages = [record.message for record in caplog.records]
+    assert any(message.startswith("open project start:") for message in messages)
+    assert any(message.startswith("open project finish:") for message in messages)
+
+    await client.post("/api/v1/projects/close")
 
 
 async def test_open_locked_project_reports_lock_user(client, tmp_path):
