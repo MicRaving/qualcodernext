@@ -62,7 +62,7 @@ from qualcoder_api.services import minisign  # noqa: E402  (script reuses the ba
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Build a nightly frontend delta patch.")
-    parser.add_argument("--version", required=True, help="Nightly version, e.g. 0.1.13_001")
+    parser.add_argument("--version", required=False, default="", help="Nightly version, e.g. 0.1.13_001")
     parser.add_argument(
         "--frontend-dist",
         default=str(ROOT / "frontend" / "dist"),
@@ -111,7 +111,36 @@ def parse_args() -> argparse.Namespace:
         "--backend-dist against. The matching installed version must equal "
         "the client's backend bundle version.",
     )
+    parser.add_argument(
+        "--check-key",
+        action="store_true",
+        help="Validate the signing key against updater.key.pub and exit "
+        "(fast CI preflight before the slow builds). Prints only a keynum "
+        "and public-key fingerprint — never key material.",
+    )
     return parser.parse_args()
+
+
+def check_signing_key(sign_key: str) -> int:
+    """Validate the secret key matches the repo public key. Prints metadata only."""
+    if not sign_key:
+        print("error: no signing key (--sign-key or $PATCH_SIGN_KEY_FILE)")
+        return 2
+    try:
+        pub_text = (ROOT / "updater.key.pub").read_text(encoding="utf-8")
+        exp_keynum, exp_pub = minisign.parse_pubkey(pub_text)
+        keynum, seed = minisign.parse_secret_key(
+            Path(sign_key).read_text(encoding="utf-8"), keynum_hint=exp_keynum
+        )
+    except (OSError, ValueError) as err:
+        print(f"error: unusable signing key: {err}")
+        return 2
+    if minisign.ed25519_pubkey(seed) != exp_pub or keynum != exp_keynum:
+        print("error: signing key does not match updater.key.pub")
+        return 2
+    fingerprint = hashlib.sha256(exp_pub).hexdigest()[:16]
+    print(f"signing key OK (keynum {exp_keynum[::-1].hex().upper()}, pubkey {fingerprint}…)")
+    return 0
 
 
 def sha256_file(path: Path) -> str:
@@ -283,6 +312,11 @@ def load_files_manifest(source: str) -> dict:
 
 def main() -> int:
     args = parse_args()
+    if args.check_key:
+        return check_signing_key(args.sign_key)
+    if not args.version:
+        print("error: --version is required (e.g. 0.1.13_001)")
+        return 2
     match = NIGHTLY_RE.match(args.version.strip())
     if not match:
         print(f"error: --version must be X.Y.Z_NNN (e.g. 0.1.13_001), got {args.version!r}")

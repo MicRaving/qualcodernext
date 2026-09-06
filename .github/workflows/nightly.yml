@@ -67,6 +67,27 @@ jobs:
             exit 1
           fi
 
+      - name: Inspect signing key format (temporary debug, metadata only)
+        env:
+          SIGN_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        run: |
+          python3 - <<'EOF'
+          import base64, os
+          # Structural metadata ONLY — key material is never printed
+          # (GitHub also redacts the secret itself should it ever appear).
+          text = os.environ.get("SIGN_KEY", "")
+          lines = [l for l in text.splitlines() if l.strip()]
+          print("lines:", len(lines))
+          for i, line in enumerate(lines):
+              s = line.strip()
+              print(f"line{i}: chars={len(s)} starts_with_untrusted={s.startswith('untrusted')}")
+              try:
+                  raw = base64.b64decode(s)
+                  print(f"  b64decodes: bytes={len(raw)} starts_with_Ed={raw[:2] == b'Ed'}")
+              except Exception as err:
+                  print(f"  not base64: {type(err).__name__}")
+          EOF
+
       - uses: actions/setup-node@v7
         with:
           node-version: "24"
@@ -76,12 +97,6 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: "3.11"
-
-      - name: Frontend deps + build
-        working-directory: frontend
-        run: |
-          npm ci
-          npm run build
 
       - name: Restore the signing key
         env:
@@ -93,6 +108,15 @@ jobs:
           fi
           printf '%s' "$SIGN_KEY" > "$RUNNER_TEMP/patch.key"
           echo "PATCH_SIGN_KEY_FILE=$RUNNER_TEMP/patch.key" >> "$GITHUB_ENV"
+
+      - name: Check signing key (fast preflight before slow builds)
+        run: python scripts/build-patch.py --check-key
+
+      - name: Frontend deps + build
+        working-directory: frontend
+        run: |
+          npm ci
+          npm run build
 
       - name: Backend deps (native deltas only)
         if: inputs.native == true

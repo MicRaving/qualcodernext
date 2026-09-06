@@ -100,3 +100,47 @@ def test_rejects_garbage_containers():
     with pytest.raises(ValueError, match="secret key"):
         minisign.parse_secret_key("untrusted comment: x\nAAAA")
     assert minisign.verify_message("hello", b"msg", "AAAA") is False
+
+
+_HINT = bytes([1, 2, 3, 4, 5, 6, 7, 8])
+
+
+def _pub_text(keynum: bytes, pubkey: bytes) -> str:
+    import base64 as _base64
+
+    return "untrusted comment: minisign public key: test\n" + _base64.b64encode(
+        b"Ed" + keynum + pubkey
+    ).decode("ascii")
+
+
+def test_raw_secret_formats_with_keynum_hint():
+    import base64 as _base64
+
+    raw64 = _base64.b64encode(_SEED1 + _PK1).decode("ascii")
+    keynum, seed = minisign.parse_secret_key(raw64, keynum_hint=_HINT)
+    assert (keynum, seed) == (_HINT, _SEED1)
+    # The emitted signature verifies under a pub container with that keynum.
+    sig = minisign.sign_message(raw64, b"hello", keynum_hint=_HINT)
+    assert minisign.verify_message(_pub_text(_HINT, _PK1), b"hello", sig) is True
+    # Raw 32-byte seed likewise.
+    raw32 = _base64.b64encode(_SEED1).decode("ascii")
+    assert minisign.parse_secret_key(raw32, keynum_hint=_HINT) == (_HINT, _SEED1)
+    # Bare standard struct (comment line stripped) still parses.
+    _pub, sec = minisign.generate_keypair()
+    bare = sec.splitlines()[1]
+    assert minisign.parse_secret_key(bare)[1] == minisign.parse_secret_key(sec)[1]
+
+
+def test_raw_secret_rejects_mismatch_and_missing_hint():
+    import base64 as _base64
+
+    raw64 = _base64.b64encode(_SEED1 + _PK1).decode("ascii")
+    with pytest.raises(ValueError, match="keynum_hint"):
+        minisign.parse_secret_key(raw64)
+    # A standard struct parsed against the wrong pubkey's keynum is refused.
+    _pub, sec = minisign.generate_keypair()
+    with pytest.raises(ValueError, match="does not match"):
+        minisign.parse_secret_key(sec, keynum_hint=b"87654321")
+    bad_len = _base64.b64encode(b"x" * 40).decode("ascii")
+    with pytest.raises(ValueError, match="40 bytes"):
+        minisign.parse_secret_key(bad_len, keynum_hint=_HINT)

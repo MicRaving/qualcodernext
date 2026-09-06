@@ -200,34 +200,62 @@ def parse_signature(text: str) -> tuple[bytes, bytes]:
     return raw[2:10], raw[10:74]
 
 
-def parse_secret_key(text: str) -> tuple[bytes, bytes]:
-    """Parse an UNENCRYPTED minisign secret key → ``(keynum, seed)``.
+def parse_secret_key(text: str, *, keynum_hint: bytes | None = None) -> tuple[bytes, bytes]:
+    """Parse a minisign secret key → ``(keynum, seed)``.
 
-    Returns the 8-byte key number and the 32-byte seed (first half of the
-    64-byte secret). Encrypted ``rsign`` keys are rejected — the release
+    Accepted encodings for the payload (a 2-line file with an ``untrusted
+    comment:`` first line, or the bare base64 payload alone):
+
+    - standard unencrypted struct (74 bytes: ``Ed + keynum + seed + pub``);
+    - raw 64 bytes (``seed + pub``) or raw 32-byte seed — these carry no key
+      number, so ``keynum_hint`` (e.g. from the matching ``.pub``) is
+      required and the derived pubkey is NOT self-checkable here (callers
+      must compare against the known pubkey; ``sign_message`` does not —
+      see ``build-patch.py --check-key``).
+
+    Encrypted ``rsign`` keys (104 bytes) are rejected — the release
     pipeline signs with an empty password.
     """
-    lines = [line for line in _unwrap_outer_base64(text).splitlines() if line.strip()]
-    if len(lines) != 2 or not lines[0].startswith("untrusted comment:"):
-        raise ValueError("not a minisign secret key (expected 2 lines)")
+    stripped = _unwrap_outer_base64(text).strip()
+    lines = [line for line in stripped.splitlines() if line.strip()]
+    if len(lines) == 2 and lines[0].startswith("untrusted comment:"):
+        payload = lines[1].strip()
+    elif len(lines) == 1:
+        payload = lines[0].strip()
+    else:
+        raise ValueError("not a minisign secret key (expected 2 lines or a bare payload)")
     try:
-        raw = base64.b64decode(lines[1].strip())
+        raw = base64.b64decode(payload)
     except ValueError as err:
         raise ValueError(f"invalid minisign secret key encoding: {err}") from err
     if len(raw) == 104:
         raise ValueError("encrypted secret keys are not supported (use an empty password)")
-    if len(raw) != 74 or raw[:2] != _SIG_ALG:
-        raise ValueError("invalid minisign secret key (expected Ed + keynum + 64 bytes)")
-    secret = raw[10:74]
-    seed, pubkey = secret[:32], secret[32:]
-    if ed25519_pubkey(seed) != pubkey:
-        raise ValueError("minisign secret key checksum failed (seed/pubkey mismatch)")
-    return raw[2:10], seed
+    if len(raw) == 74 and raw[:2] == _SIG_ALG:
+        secret = raw[10:74]
+        seed, pubkey = secret[:32], secret[32:]
+        if ed25519_pubkey(seed) != pubkey:
+            raise ValueError("minisign secret key checksum failed (seed/pubkey mismatch)")
+        keynum = raw[2:10]
+        if keynum_hint is not None and keynum_hint != keynum:
+            raise ValueError("secret key number does not match the expected public key")
+        return keynum, seed
+    if len(raw) in (64, 32):
+        if keynum_hint is None or len(keynum_hint) != 8:
+            raise ValueError("raw secret carries no key number — pass keynum_hint")
+        seed, pubkey = (raw[:32], raw[32:]) if len(raw) == 64 else (raw, ed25519_pubkey(raw))
+        if len(raw) == 64 and ed25519_pubkey(seed) != pubkey:
+            raise ValueError("raw secret checksum failed (seed/pubkey mismatch)")
+        return keynum_hint, seed
+    raise ValueError(
+        f"invalid minisign secret key (got {len(raw)} bytes, expected 74/64/32)"
+    )
 
 
-def sign_message(secret_key_text: str, message: bytes) -> str:
+def sign_message(
+    secret_key_text: str, message: bytes, *, keynum_hint: bytes | None = None
+) -> str:
     """Sign ``message``; returns the base64 74-byte minisign signature line."""
-    keynum, seed = parse_secret_key(secret_key_text)
+    keynum, seed = parse_secret_key(secret_key_text, keynum_hint=keynum_hint)
     return base64.b64encode(_SIG_ALG + keynum + ed25519_sign(seed, message)).decode("ascii")
 
 
