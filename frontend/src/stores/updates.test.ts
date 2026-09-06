@@ -117,9 +117,10 @@ describe("nightly versions (X.Y.Z_NNN)", () => {
     expect(parseNightlyVersion("1.2")).toBeNull();
   });
 
-  it("sorts nightlies before the stable of the same base", () => {
-    expect(compareNightlyVersions("0.1.13_009", "0.1.13")).toBeLessThan(0);
-    expect(compareNightlyVersions("0.1.13", "0.1.13_009")).toBeGreaterThan(0);
+  it("sorts nightlies after the stable of the same base", () => {
+    // Post-release patches: a client on the stable must be offered the nightly.
+    expect(compareNightlyVersions("0.1.14_001", "0.1.14")).toBeGreaterThan(0);
+    expect(compareNightlyVersions("0.1.14", "0.1.14_001")).toBeLessThan(0);
     expect(compareNightlyVersions("0.1.13_001", "0.1.13_002")).toBeLessThan(0);
     expect(compareNightlyVersions("0.1.12", "0.1.13_001")).toBeLessThan(0);
   });
@@ -128,7 +129,10 @@ describe("nightly versions (X.Y.Z_NNN)", () => {
     expect(nightlyVisibleOnChannel("0.1.14", "0.1.13", "stable")).toBe(true);
     expect(nightlyVisibleOnChannel("0.1.14_001", "0.1.13", "stable")).toBe(false);
     expect(nightlyVisibleOnChannel("0.1.14_001", "0.1.13", "nightly")).toBe(true);
-    expect(nightlyVisibleOnChannel("0.1.13", "0.1.13_009", "nightly")).toBe(true);
+    expect(nightlyVisibleOnChannel("0.1.14", "0.1.13_009", "nightly")).toBe(true);
+    // Regression: same-base nightly over the installed stable must show.
+    expect(nightlyVisibleOnChannel("0.1.14_001", "0.1.14", "nightly")).toBe(true);
+    expect(nightlyVisibleOnChannel("0.1.14_001", "0.1.14", "stable")).toBe(false);
   });
 
   function stubNightlyManifest(version: string) {

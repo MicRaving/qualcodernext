@@ -5,8 +5,9 @@
  * Channels (`Settings → Updates`, opt-in/out):
  * - `stable` (default): full Tauri releases from `qcnext-latest.json` only.
  * - `nightly`: additionally offers signed delta patches from
- *   `qcnext-nightly.json`. A nightly is OLDER than the stable of the same
- *   base (`0.1.13_009 < 0.1.13`), so opting out converges back to stable.
+ *   `qcnext-nightly.json`. A nightly is NEWER than the stable of the same
+ *   base (`0.1.13_001 > 0.1.13`): nightlies are post-release patches, so a
+ *   client on the stable must be offered them.
  *
  * Version ordering mirrors `backend/.../services/versioning.py` — keep the
  * two in sync. `tauri.conf.json`/`Cargo.toml`/`package.json` always carry
@@ -190,7 +191,7 @@ export function parseNightlyVersion(version: string): [number, number, number, n
   return [Number(match[1]), Number(match[2]), Number(match[3]), match[4] === undefined ? null : Number(match[4])];
 }
 
-/** -1 / 0 / +1. Same base: any nightly sorts BEFORE the stable. */
+/** -1 / 0 / +1. Same base: any nightly sorts AFTER the stable. */
 export function compareNightlyVersions(left: string, right: string): number {
   const l = parseNightlyVersion(left);
   const r = parseNightlyVersion(right);
@@ -199,8 +200,8 @@ export function compareNightlyVersions(left: string, right: string): number {
     if (l[i] !== r[i]) return l[i]! < r[i]! ? -1 : 1;
   }
   if (l[3] === r[3]) return 0;
-  if (l[3] === null) return 1;
-  if (r[3] === null) return -1;
+  if (l[3] === null) return -1;
+  if (r[3] === null) return 1;
   return l[3] < r[3] ? -1 : 1;
 }
 

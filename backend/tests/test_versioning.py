@@ -37,9 +37,11 @@ def test_format_version_round_trip():
         versioning.format_version("0.1.13", 100000)
 
 
-def test_nightly_is_older_than_same_base_stable():
-    assert versioning.compare("0.1.13_009", "0.1.13") == -1
-    assert versioning.compare("0.1.13", "0.1.13_009") == 1
+def test_nightly_is_newer_than_same_base_stable():
+    # Nightlies are post-release patches: a client on the stable must be
+    # offered the nightly built on top of it (the 0.1.14_001 incident).
+    assert versioning.compare("0.1.14_001", "0.1.14") == 1
+    assert versioning.compare("0.1.14", "0.1.14_001") == -1
     assert versioning.compare("0.1.13_001", "0.1.13_002") == -1
     assert versioning.compare("0.1.13_002", "0.1.13_002") == 0
     assert versioning.compare("0.1.12", "0.1.13_001") == -1
@@ -55,10 +57,13 @@ def test_visible_on_channel():
     # Stable users never see nightlies, even newer ones.
     assert versioning.visible_on_channel("0.1.14", "0.1.13", "stable") is True
     assert versioning.visible_on_channel("0.1.14_001", "0.1.13", "stable") is False
-    # Nightly users see anything newer — nightlies and the stable upgrade path.
+    # Nightly users see anything newer — nightlies and the next stable.
     assert versioning.visible_on_channel("0.1.14_001", "0.1.13", "nightly") is True
     assert versioning.visible_on_channel("0.1.13_002", "0.1.13_001", "nightly") is True
-    assert versioning.visible_on_channel("0.1.13", "0.1.13_009", "nightly") is True
+    assert versioning.visible_on_channel("0.1.14", "0.1.13_009", "nightly") is True
     assert versioning.visible_on_channel("0.1.13_001", "0.1.13_001", "nightly") is False
+    # Regression: same-base nightly over the installed stable must show.
+    assert versioning.visible_on_channel("0.1.14_001", "0.1.14", "nightly") is True
+    assert versioning.visible_on_channel("0.1.14_001", "0.1.14", "stable") is False
     # Unknown channels fall back to stable behaviour.
     assert versioning.visible_on_channel("0.1.14_001", "0.1.13", "beta") is False

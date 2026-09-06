@@ -9,9 +9,11 @@ Rules (mirrored in ``frontend/src/stores/updates.ts`` — keep in sync):
 - ``tauri.conf.json`` / ``Cargo.toml`` / ``package.json`` always carry the
   BASE semver (``X.Y.Z``); Tauri/Cargo reject ``_NNN`` suffixes. Only
   ``APP_VERSION`` and the nightly manifest carry the full ``X.Y.Z_NNN``.
-- A nightly is OLDER than the stable of the same base
-  (``0.1.13_009 < 0.1.13``), so opting out of nightlies converges back to
-  the next stable. Nightlies order by their counter.
+- A nightly is NEWER than the stable of the same base
+  (``0.1.13_001 > 0.1.13``): nightlies are post-release patches, so a client
+  on the stable must be offered them. Nightlies order by their counter.
+  (Opting out of nightlies does not downgrade — the channel only controls
+  what is *offered*; the next stable is newer than every nightly below it.)
 - ``stable`` channel users are only offered non-nightly candidates;
   ``nightly`` channel users are offered anything newer (nightly or stable).
 """
@@ -60,7 +62,7 @@ def compare(left: str, right: str) -> int:
     """Compare two versions: -1 / 0 / +1.
 
     Base semver compares first; within the same base, any nightly sorts
-    BEFORE the stable (``_009 < stable``) and nightlies order by counter.
+    AFTER the stable (``_001 > stable``) and nightlies order by counter.
     """
     left_parts = parse(left)
     right_parts = parse(right)
@@ -69,11 +71,11 @@ def compare(left: str, right: str) -> int:
     left_nightly, right_nightly = left_parts[3], right_parts[3]
     if left_nightly == right_nightly:
         return 0
-    # Stable (None) is newer than any nightly of the same base.
+    # A nightly of the same base is a post-release patch: newer than the stable.
     if left_nightly is None:
-        return 1
-    if right_nightly is None:
         return -1
+    if right_nightly is None:
+        return 1
     return -1 if left_nightly < right_nightly else 1
 
 
