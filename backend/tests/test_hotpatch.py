@@ -24,6 +24,8 @@ def hotpatch_dirs(monkeypatch, tmp_path):
     root = tmp_path / "hotpatch" / "frontend"
     current = root / "current"
     current.mkdir(parents=True)
+    # Real hotpatch behavior (the session flag stays off for hermeticity).
+    monkeypatch.delenv("QC_NO_HOTPATCH", raising=False)
     monkeypatch.setattr(hotpatch, "FRONTEND_DIR", root)
     monkeypatch.setattr(hotpatch, "FRONTEND_CURRENT", current)
     monkeypatch.setattr(hotpatch, "FRONTEND_PREVIOUS", root / "previous")
@@ -270,3 +272,33 @@ async def test_nightly_endpoint_is_502_when_unreachable(monkeypatch):
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         res = await client.get("/api/v1/updates/nightly")
         assert res.status_code == 502
+
+
+async def test_spa_mount_serves_patched_frontend(monkeypatch, tmp_path):
+    """Mount contract: with a hotpatch present, a fresh app serves the SPA
+    at ``/`` (incl. client-route fallback) while real API routes keep working.
+
+    (The session sets ``QC_NO_HOTPATCH=1`` so a developer's real hotpatch
+    never leaks into other tests — this one opts back out explicitly.)
+    """
+    from qualcoder_api.main import create_app
+
+    spa = tmp_path / "spa"
+    (spa / "assets").mkdir(parents=True)
+    (spa / "index.html").write_text("<html>patched</html>", encoding="utf-8")
+    (spa / "version.json").write_text(json.dumps({"version": "9.9.9_001"}), encoding="utf-8")
+    monkeypatch.delenv("QC_NO_HOTPATCH", raising=False)
+    monkeypatch.setattr(hotpatch, "FRONTEND_CURRENT", spa)
+    monkeypatch.setattr(hotpatch, "FRONTEND_VERSION_FILE", spa / "version.json")
+    app = create_app()
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        res = await client.get("/")
+        assert res.status_code == 200
+        assert "patched" in res.text
+        res = await client.get("/api/v1/health")
+        assert res.status_code == 200
+        assert res.json()["status"] == "ok"
+        res = await client.get("/some/client/route")
+        assert res.status_code == 200
+        assert "patched" in res.text

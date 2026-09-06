@@ -22,11 +22,13 @@ import {
   nightlyVisibleOnChannel,
   parseNightlyVersion,
   patchHooks,
+  staleBackend,
   updateDownloadSize,
   useUpdatesStore,
 } from "@/stores/updates";
 import { api } from "@/lib/api";
 import { ApiError } from "@/lib/api";
+import { APP_VERSION } from "@/lib/version";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 
@@ -49,6 +51,7 @@ beforeEach(async () => {
     hotpatch: null,
     overlay: null,
     native: null,
+    backendBaseMismatch: null,
   });
   // @ts-expect-error test cleanup: restore the non-Tauri (browser) default
   delete window.__TAURI_INTERNALS__;
@@ -609,5 +612,50 @@ describe("download size display", () => {
     expect(applyHotpatch).toHaveBeenCalled();
     expect(patchHooks.reload).toHaveBeenCalled();
     applyHotpatch.mockRestore();
+  });
+});
+
+describe("stale backend detection", () => {
+  const hotpatchOf = (app_version: string) => ({
+    app_version,
+    frontend_version: null,
+    previous_version: null,
+    channel: "stable" as const,
+  });
+
+  it("flags a backend older than the app", () => {
+    expect(staleBackend(hotpatchOf("0.0.1"))).toEqual({ app: APP_VERSION, backend: "0.0.1" });
+  });
+
+  it("ignores equal, newer and unparseable backends", () => {
+    expect(staleBackend(hotpatchOf(APP_VERSION))).toBeNull();
+    expect(staleBackend(hotpatchOf("9.9.9"))).toBeNull();
+    expect(staleBackend(null)).toBeNull();
+    expect(staleBackend(hotpatchOf(""))).toBeNull();
+  });
+
+  it("loadHotpatch records the mismatch", async () => {
+    const hp = vi.spyOn(api, "hotpatchVersion").mockResolvedValue(hotpatchOf("0.0.1"));
+    const pv = vi.spyOn(api, "patchesVersion").mockResolvedValue({
+      overlay_version: null,
+      previous_version: null,
+      overlay_active: false,
+    });
+    const nv = vi.spyOn(api, "nativeVersion").mockResolvedValue({
+      staged: null,
+      applied_from: null,
+      applied_to: null,
+      previous_to: null,
+      bundle_base: "0.0.1",
+      pointer: "0.0.1",
+    });
+    await useUpdatesStore.getState().loadHotpatch();
+    expect(useUpdatesStore.getState().backendBaseMismatch).toEqual({
+      app: APP_VERSION,
+      backend: "0.0.1",
+    });
+    hp.mockRestore();
+    pv.mockRestore();
+    nv.mockRestore();
   });
 });

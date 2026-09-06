@@ -146,6 +146,7 @@ function UpdateStatusRow() {
 
 function StatusBar() {
   const { t } = useI18n();
+  const backendBaseMismatch = useUpdatesStore((s) => s.backendBaseMismatch);
   const summary = useProjectStore((s) => s.summary);
   const projectName = useProjectStore((s) => s.projectName);
   const cases = useProjectStore((s) => s.cases);
@@ -172,6 +173,20 @@ function StatusBar() {
       {annotations.length > 0 && <span>{annotations.length} {t("status.annotations")}</span>}
       {memoCount > 0 && <span>{memoCount} {t("status.memos")}</span>}
       <span className="flex-1" />
+      {backendBaseMismatch && (
+        <span
+          className="max-w-72 truncate text-warning"
+          title={t("settings.backendStale", {
+            backend: backendBaseMismatch.backend,
+            app: backendBaseMismatch.app,
+          })}
+        >
+          {t("settings.backendStale", {
+            backend: backendBaseMismatch.backend,
+            app: backendBaseMismatch.app,
+          })}
+        </span>
+      )}
       <span title={t("app.versionLabel")}>v{APP_VERSION}</span>
     </footer>
   );

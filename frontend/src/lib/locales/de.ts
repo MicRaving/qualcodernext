@@ -162,6 +162,7 @@ export const de: Record<string, string> = {
   "settings.updatesOverlayActive": "Backend-Patch {version} aktiv.",
   "settings.updatesNativeActive": "Native-Dateien {version} aktiv.",
   "settings.updatesNightlyManifest": "Nightly-Patch-Manifest",
+  "settings.backendStale": "Backend {backend} ist älter als die App ({app}) – vollständig beenden und neu starten",
   "settings.rDetectedAt": "R {version} erkannt unter",
   "settings.rManual": "manuell",
   "settings.rChoose": "Wählen…",

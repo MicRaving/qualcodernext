@@ -80,7 +80,15 @@ def frontend_version() -> str | None:
 
 
 def frontend_spa_dir() -> Path | None:
-    """The directory to serve at ``/`` when a hotpatch is active."""
+    """The directory to serve at ``/`` when a hotpatch is active.
+
+    ``QC_NO_HOTPATCH=1`` (set by the pytest session) disables the mount: it
+    is evaluated at ``create_app()`` time from these same dirs, and a real
+    user hotpatch on the dev machine would otherwise shadow dynamically
+    added test routes and break hermeticity. Production never sets the flag.
+    """
+    if os.environ.get("QC_NO_HOTPATCH"):
+        return None
     return FRONTEND_CURRENT if frontend_version() is not None else None
 
 

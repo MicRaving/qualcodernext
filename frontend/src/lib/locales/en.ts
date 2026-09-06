@@ -161,6 +161,7 @@ export const en: Record<string, string> = {
   "settings.updatesOverlayActive": "Running backend patch {version}.",
   "settings.updatesNativeActive": "Running native files {version}.",
   "settings.updatesNightlyManifest": "Nightly patch manifest",
+  "settings.backendStale": "Backend {backend} is older than the app ({app}) — quit fully and restart",
   "settings.rDetectedAt": "R {version} detected at",
   "settings.rManual": "manual",
   "settings.rChoose": "Choose…",

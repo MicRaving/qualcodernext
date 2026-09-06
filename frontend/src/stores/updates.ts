@@ -136,6 +136,8 @@ interface UpdatesState {
   hotpatch: HotpatchVersion | null;
   overlay: OverlayVersion | null;
   native: NativeVersion | null;
+  /** Non-null when the backend runs an older base than the app build. */
+  backendBaseMismatch: BackendBaseMismatch | null;
   loadSettings: () => Promise<void>;
   saveSettings: (settings: UpdatesSettings) => Promise<void>;
   loadHotpatch: () => Promise<void>;
@@ -197,6 +199,33 @@ export function nightlyVisibleOnChannel(candidate: string, current: string, chan
   if (!parseNightlyVersion(candidate) || !parseNightlyVersion(current)) return false;
   if (channel !== "nightly" && parseNightlyVersion(candidate)?.[3] !== null) return false;
   return compareNightlyVersions(candidate, current) > 0;
+}
+
+/** A backend running an older base than the app (mixed/stale install). */
+export interface BackendBaseMismatch {
+  app: string;
+  backend: string;
+}
+
+/** `X.Y.Z` base of a version, or null when unparseable. */
+export function baseOfVersion(version: string): string | null {
+  const parts = parseNightlyVersion(version);
+  if (!parts) return null;
+  return `${parts[0]}.${parts[1]}.${parts[2]}`;
+}
+
+/**
+ * Detect a stale backend: its reported base is strictly older than the
+ * app's own build version (e.g. new frontend talking to a backend process
+ * that survived an update). A backend AHEAD of the app is legitimate
+ * (backend-overlay nightlies move it forward) and never flagged.
+ */
+export function staleBackend(hotpatch: HotpatchVersion | null): BackendBaseMismatch | null {
+  const appBase = baseOfVersion(APP_VERSION);
+  const backendBase = hotpatch?.app_version ? baseOfVersion(hotpatch.app_version) : null;
+  if (!appBase || !backendBase) return null;
+  if (compareNightlyVersions(backendBase, appBase) >= 0) return null;
+  return { app: APP_VERSION, backend: hotpatch?.app_version ?? "?" };
 }
 
 /** Effective running version: the newest of build / hotpatch / native delta.
@@ -271,6 +300,7 @@ export const useUpdatesStore = create<UpdatesState>((set, get) => ({
   hotpatch: null,
   overlay: null,
   native: null,
+  backendBaseMismatch: null,
 
   loadSettings: async () => {
     try {
@@ -293,7 +323,7 @@ export const useUpdatesStore = create<UpdatesState>((set, get) => ({
         api.patchesVersion(),
         api.nativeVersion(),
       ]);
-      set({ hotpatch, overlay, native });
+      set({ hotpatch, overlay, native, backendBaseMismatch: staleBackend(hotpatch) });
     } catch {
       /* backend unreachable at boot — the UI falls back to APP_VERSION */
     }

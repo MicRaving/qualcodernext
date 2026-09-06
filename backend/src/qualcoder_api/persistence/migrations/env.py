@@ -19,7 +19,10 @@ from qualcoder_api.persistence import tables
 config = context.config
 
 if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+    # Never disable existing loggers: fileConfig defaults to switching them
+    # all off process-wide, which would silently swallow the application's
+    # own logs (and break any log-asserting test running afterwards).
+    fileConfig(config.config_file_name, disable_existing_loggers=False)
 
 target_metadata = tables.metadata
 
