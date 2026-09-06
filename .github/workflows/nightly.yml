@@ -67,27 +67,6 @@ jobs:
             exit 1
           fi
 
-      - name: Inspect signing key format (temporary debug, metadata only)
-        env:
-          SIGN_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-        run: |
-          python3 - <<'EOF'
-          import base64, os
-          # Structural metadata ONLY — key material is never printed
-          # (GitHub also redacts the secret itself should it ever appear).
-          text = os.environ.get("SIGN_KEY", "")
-          lines = [l for l in text.splitlines() if l.strip()]
-          print("lines:", len(lines))
-          for i, line in enumerate(lines):
-              s = line.strip()
-              print(f"line{i}: chars={len(s)} starts_with_untrusted={s.startswith('untrusted')}")
-              try:
-                  raw = base64.b64decode(s)
-                  print(f"  b64decodes: bytes={len(raw)} starts_with_Ed={raw[:2] == b'Ed'}")
-              except Exception as err:
-                  print(f"  not base64: {type(err).__name__}")
-          EOF
-
       - uses: actions/setup-node@v7
         with:
           node-version: "24"

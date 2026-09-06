@@ -34,10 +34,11 @@ Versioning: `tauri.conf.json` / `Cargo.toml` / `package.json` keep the BASE
 semver (`0.1.13`); only the patch zip + manifest carry `_001`. Tauri/Cargo
 reject `_` suffixes, so never write the full nightly into those files.
 
-Signing: pass `--sign-key updater.key` (the same unencrypted minisign key
-as the Tauri updater) or set `PATCH_SIGN_KEY_FILE`. The manifest carries
-the signature and the backend refuses unsigned patches — an unsigned
-manifest is only useful for local smoke tests.
+Signing: pass `--sign-key updater.key` (the same password-encrypted rsign
+key as the Tauri updater) plus `--sign-password` when it has one (the
+release pipeline uses an empty password), or set `PATCH_SIGN_KEY_FILE`.
+The manifest carries the signature and the backend refuses unsigned
+patches — an unsigned manifest is only useful for local smoke tests.
 """
 
 from __future__ import annotations
@@ -78,8 +79,15 @@ def parse_args() -> argparse.Namespace:
         "--sign-key",
         default=os.environ.get("PATCH_SIGN_KEY_FILE", ""),
         help="Minisign secret key file (same key as the Tauri updater; "
-        "unencrypted only). Falls back to $PATCH_SIGN_KEY_FILE. Omit for an "
+        "password-encrypted rsign boxes welcome — see --sign-password). "
+        "Falls back to $PATCH_SIGN_KEY_FILE. Omit for an "
         "unsigned local smoke build (the backend will refuse to install it).",
+    )
+    parser.add_argument(
+        "--sign-password",
+        default=os.environ.get("PATCH_SIGN_PASSWORD", ""),
+        help="Secret-key password ($PATCH_SIGN_PASSWORD wins when set; the "
+        "release pipeline uses an empty password).",
     )
     parser.add_argument(
         "--tag",
@@ -121,7 +129,7 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def check_signing_key(sign_key: str) -> int:
+def check_signing_key(sign_key: str, password: str) -> int:
     """Validate the secret key matches the repo public key. Prints metadata only."""
     if not sign_key:
         print("error: no signing key (--sign-key or $PATCH_SIGN_KEY_FILE)")
@@ -130,7 +138,9 @@ def check_signing_key(sign_key: str) -> int:
         pub_text = (ROOT / "updater.key.pub").read_text(encoding="utf-8")
         exp_keynum, exp_pub = minisign.parse_pubkey(pub_text)
         keynum, seed = minisign.parse_secret_key(
-            Path(sign_key).read_text(encoding="utf-8"), keynum_hint=exp_keynum
+            Path(sign_key).read_text(encoding="utf-8"),
+            keynum_hint=exp_keynum,
+            password=password,
         )
     except (OSError, ValueError) as err:
         print(f"error: unusable signing key: {err}")
@@ -313,7 +323,7 @@ def load_files_manifest(source: str) -> dict:
 def main() -> int:
     args = parse_args()
     if args.check_key:
-        return check_signing_key(args.sign_key)
+        return check_signing_key(args.sign_key, args.sign_password)
     if not args.version:
         print("error: --version is required (e.g. 0.1.13_001)")
         return 2
@@ -352,7 +362,7 @@ def main() -> int:
         if not args.sign_key:
             return ""
         key_text = Path(args.sign_key).read_text(encoding="utf-8")
-        return minisign.sign_message(key_text, payload)
+        return minisign.sign_message(key_text, payload, password=args.sign_password)
 
     payload = zip_path.read_bytes()
     signature = _sign(payload)

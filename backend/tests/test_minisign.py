@@ -144,3 +144,59 @@ def test_raw_secret_rejects_mismatch_and_missing_hint():
     bad_len = _base64.b64encode(b"x" * 40).decode("ascii")
     with pytest.raises(ValueError, match="40 bytes"):
         minisign.parse_secret_key(bad_len, keynum_hint=_HINT)
+
+
+def test_scrypt_param_mapping():
+    # Tauri/rsign defaults.
+    assert minisign._scrypt_n_r_p(1_048_576, 33_554_432) == (32768, 8, 1)
+    # Small-parameter branch.
+    assert minisign._scrypt_n_r_p(32768, 2**20) == (1024, 8, 1)
+    # Absurd parameters are refused, not attempted.
+    with pytest.raises(ValueError, match="too high"):
+        minisign._scrypt_n_r_p(2**30, 2**40)
+
+
+def test_encrypted_box_roundtrip():
+    import base64 as _base64
+
+    seed = bytes(range(32))  # deterministic fixture, not a real secret
+    keynum = b"87654321"
+    box = minisign._encrypt_box(seed, keynum, "s3cret", salt=b"s" * 32)
+    assert len(box) == 158
+    text = "untrusted comment: rsign encrypted secret key\n" + _base64.b64encode(box).decode(
+        "ascii"
+    )
+    assert minisign.parse_secret_key(text, password="s3cret") == (keynum, seed)
+    with pytest.raises(ValueError, match="needs a password"):
+        minisign.parse_secret_key(text)
+    with pytest.raises(ValueError, match=r"Wrong password|wrong password"):
+        minisign.parse_secret_key(text, password="nope")
+    # Tampering reads as a checksum failure, never as another key.
+    tampered = bytearray(box)
+    tampered[100] ^= 1
+    tampered_text = "untrusted comment: rsign encrypted secret key\n" + _base64.b64encode(
+        bytes(tampered)
+    ).decode("ascii")
+    with pytest.raises(ValueError, match=r"Wrong password|wrong password"):
+        minisign.parse_secret_key(tampered_text, password="s3cret")
+    # Signatures from the decrypted seed verify under the matching pubkey.
+    sig = minisign.sign_message(text, b"hello", password="s3cret")
+    assert minisign.verify_message(_pub_text(keynum, minisign.ed25519_pubkey(seed)), b"hello", sig)
+
+
+def test_decrypts_repo_release_key():
+    """Decrypt the real release key (present on maintainer machines only).
+
+    Asserts the decrypted seed derives the repo pubkey — the same check
+    `build-patch.py --check-key` performs in CI. Never prints key material:
+    failures only ever show public key numbers/keys.
+    """
+    repo_root = Path(__file__).resolve().parent.parent.parent
+    key_path = repo_root / "updater.key"
+    if not key_path.exists():
+        pytest.skip("release key not present (CI)")
+    pub_text = (repo_root / "updater.key.pub").read_text(encoding="utf-8")
+    exp_keynum, exp_pub = minisign.parse_pubkey(pub_text)
+    keynum, seed = minisign.parse_secret_key(key_path.read_text(encoding="utf-8"), password="")
+    assert keynum == exp_keynum
+    assert minisign.ed25519_pubkey(seed) == exp_pub
