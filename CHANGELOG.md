@@ -7,6 +7,14 @@
      include (first releases have no base tag, so no link). Add a section
      like "## 0.1.1 (2026-08-31)" at the TOP of the file. -->
 
+## 0.1.17 (2026-09-07)
+
+- Backend updates install again: the app shell permits its own commands.
+- Nightly patches are only offered on their own base; everyone else gets the full update.
+- Patched screens appear immediately, without an app restart.
+
+**Full Changelog**: https://github.com/MicRaving/qualcodernext/compare/v0.1.16...v0.1.17
+
 ## 0.1.16 (2026-09-06)
 
 - Updates tab reworked: icon-only check, always auto-install, sizes and notes.
