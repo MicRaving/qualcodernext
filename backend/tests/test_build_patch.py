@@ -122,5 +122,8 @@ def test_verify_base_matches_tree(build_patch, tmp_path):
     )
     with pytest.raises(SystemExit, match=r"package\.json"):
         build_patch.verify_base_matches_tree("0.1.16", root)
-    # And against the real tree right now (0.1.16 everywhere).
-    assert build_patch.verify_base_matches_tree("0.1.16") is None
+    # And against the real tree right now (whatever base it carries — the
+    # test must survive release bumps without edits).
+    real_base = build_patch.tree_versions()["tauri.conf.json"]
+    assert real_base, "real tree has no parsable base version"
+    assert build_patch.verify_base_matches_tree(real_base) is None

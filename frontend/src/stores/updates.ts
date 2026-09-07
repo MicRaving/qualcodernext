@@ -541,7 +541,14 @@ export const useUpdatesStore = create<UpdatesState>((set, get) => ({
           await core.invoke<string>("apply_native_plan_and_relaunch");
           return;
         }
-        patchHooks.showPatchedFrontend(backendOrigin());
+        // Navigate only when patched frontend files exist behind the backend
+        // URL: a backend-only install over a bundle window has no SPA there
+        // (the backend answers 404) — a plain reload is correct instead.
+        if (get().hotpatch?.frontend_version) {
+          patchHooks.showPatchedFrontend(backendOrigin());
+        } else {
+          patchHooks.reload();
+        }
       } catch (e) {
         set({ status: "error", error: errorMessage(e, String(e)) });
       }
@@ -642,9 +649,14 @@ export const useUpdatesStore = create<UpdatesState>((set, get) => ({
         set({ hotpatch, overlay });
       }
       set({ status: "up-to-date", info: null, lastCheckedAt: Date.now() });
-      // A restored frontend lives behind the backend URL too — same
-      // bundle-staleness rule as installs (see patchHooks).
-      patchHooks.showPatchedFrontend(backendOrigin());
+      // A restored frontend lives behind the backend URL too — but only
+      // when files are actually there (rolling back the last frontend
+      // patch leaves no SPA behind the backend URL: reload the bundle).
+      if (get().hotpatch?.frontend_version) {
+        patchHooks.showPatchedFrontend(backendOrigin());
+      } else {
+        patchHooks.reload();
+      }
     } catch (e) {
       set({ status: "error", error: errorMessage(e, String(e)) });
     }

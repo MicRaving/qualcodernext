@@ -14,6 +14,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
+from starlette.convertors import StringConvertor, register_url_convertor
 
 from qualcoder_api.api.v1.router import router as v1_router
 from qualcoder_api.services import sync, sync_engine, user_settings
@@ -147,28 +148,54 @@ async def _sync_loop() -> None:
                 logger.exception("background sync cycle failed: %s", err)
 
 
+class _SpaPathConvertor(StringConvertor):
+    """Path matcher for the SPA catch-all: everything EXCEPT the API/docs/
+    OpenAPI namespace. Excluding them at the ROUTE level (not just inside
+    the handler) means the catch-all can never shadow API routes — including
+    routes registered after app creation, which dynamically-added test
+    routes rely on. Mirrors the ``startswith`` guard inside the handler."""
+
+    regex = r"(?!api/|docs|redoc|openapi\.json).*"
+
+
+register_url_convertor("spa", _SpaPathConvertor())
+
+
 def _mount_hotpatch_spa(app: FastAPI) -> None:
-    """Serve the hotpatched SPA at ``/`` when a delta patch is installed.
+    """Serve the hotpatched SPA at ``/`` whenever a delta patch is installed.
 
     Decision 1 (backend-served SPA): ``scripts/build-patch.py`` drops a
     signed ``frontend/dist`` build into ``~/.qualcoder/hotpatch/frontend/
     current/``. Once present, the Tauri shell navigates here instead of its
-    embedded assets, so frontend-only nightlies (``X.Y.Z_NNN``) apply with a
-    WebView reload — no installer, no app restart. Without a hotpatch this
-    is a no-op (dev uses Vite, packaged uses embedded assets).
+    embedded assets, so frontend nightlies (``X.Y.Z_NNN``) apply with a
+    WebView navigation — no installer, no app restart.
+
+    The route is ALWAYS registered and resolves the hotpatch dir PER
+    REQUEST: a patch installed into an already-running backend (the normal
+    flow — backend restart, then frontend apply) must serve immediately.
+    Gating the mount on boot-time state meant the first frontend install on
+    a fresh backend navigated to an unmounted ``/`` (a bare
+    ``{"detail": "Not Found"}``) until a full app restart. Without a
+    hotpatch this answers 404 exactly like an unmounted route (dev uses
+    Vite, packaged uses embedded assets).
     """
+    from fastapi import HTTPException
+
     from qualcoder_api.services import hotpatch
 
-    spa_dir = hotpatch.frontend_spa_dir()
-    if spa_dir is None:
-        return
-    index = spa_dir / "index.html"
-
-    @app.get("/{spa_path:path}", include_in_schema=False)
+    @app.get("/{spa_path:spa}", include_in_schema=False)
     async def _serve_hotpatch_spa(spa_path: str) -> FileResponse:
-        # Never shadow the API, docs, or OpenAPI schema.
+        # Never shadow the API, docs, or OpenAPI schema (the route already
+        # excludes that namespace; this is belt and braces).
         if spa_path.startswith(("api/", "docs", "redoc", "openapi.json")):
             return JSONResponse(status_code=404, content={"detail": "not found"})  # type: ignore[return-value]
+        spa_dir = hotpatch.frontend_spa_dir()
+        if spa_dir is None:
+            # No hotpatch installed: identical to no route at all.
+            raise HTTPException(status_code=404)
+        index = spa_dir / "index.html"
+        if not index.is_file():
+            raise HTTPException(status_code=404)
         candidate = spa_dir / spa_path
         try:
             resolved = candidate.resolve()
@@ -182,7 +209,7 @@ def _mount_hotpatch_spa(app: FastAPI) -> None:
             pass
         return FileResponse(str(index))
 
-    logger.info("serving hotpatched SPA from %s", spa_dir)
+    logger.info("hotpatch SPA route registered (serves current/ when installed)")
 
 
 async def _presence_loop() -> None:
@@ -313,8 +340,9 @@ def create_app() -> FastAPI:
             prefix="/api/v1",
             dependencies=[Depends(gate_project_scoped)],
         )
-    # Hotpatch SPA last: the catch-all ``/{spa_path:path}`` must never win
-    # over API/docs routes registered above.
+    # Hotpatch SPA last: the catch-all must never win over API/docs routes
+    # registered above (it excludes that namespace itself, but order is
+    # still the clearest guarantee).
     _mount_hotpatch_spa(app)
     return app
 

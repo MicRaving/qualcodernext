@@ -419,6 +419,77 @@ describe("nightly install + rollback", () => {
     openProject.mockRestore();
     useProjectStore.setState({ projectPath: "" });
   });
+
+  it("reloads the bundle (no navigation) on a backend-only install", async () => {
+    // No frontend files behind the backend URL: navigating would land on
+    // the backend's 404 instead of the app.
+    enableTauri();
+    const core = await import("@tauri-apps/api/core");
+    vi.mocked(core.invoke).mockResolvedValue(8766);
+    useUpdatesStore.setState({
+      status: "available",
+      info: {
+        version: "9.9.9_001",
+        kind: "nightly",
+        backend: { url: "https://example.test/b.zip", sha256: "b", signature: "bs" },
+      },
+      settings: nightlySettings,
+      hotpatch: null,
+      overlay: null,
+    });
+    const applyOverlay = vi.spyOn(api, "applyOverlay").mockResolvedValue({
+      overlay_version: "9.9.9_001",
+      previous_version: null,
+      overlay_active: false,
+    });
+    const applyHotpatch = vi.spyOn(api, "applyHotpatch");
+    const patchesVersion = vi.spyOn(api, "patchesVersion").mockResolvedValue({
+      overlay_version: "9.9.9_001",
+      previous_version: null,
+      overlay_active: true,
+    });
+    await useUpdatesStore.getState().install();
+    expect(applyOverlay).toHaveBeenCalled();
+    expect(applyHotpatch).not.toHaveBeenCalled();
+    expect(useUpdatesStore.getState().status).toBe("up-to-date");
+    expect(patchHooks.reload).toHaveBeenCalled();
+    expect(patchHooks.showPatchedFrontend).not.toHaveBeenCalled();
+    applyOverlay.mockRestore();
+    applyHotpatch.mockRestore();
+    patchesVersion.mockRestore();
+  });
+
+  it("reloads the bundle when rollback removes the last frontend patch", async () => {
+    enableTauri();
+    useUpdatesStore.setState({
+      hotpatch: {
+        app_version: "9.9.9",
+        frontend_version: "9.9.9_001",
+        previous_version: null,
+        channel: "nightly",
+      },
+    });
+    const rollbackNativeNone = vi.spyOn(api, "rollbackNative").mockRejectedValue(
+      new ApiError(404, "no active native delta"),
+    );
+    const rollbackOverlay = vi.spyOn(api, "rollbackOverlay").mockRejectedValue(
+      new ApiError(404, "API error 404 on /patches/rollback: no previous overlay"),
+    );
+    const rollback = vi.spyOn(api, "rollbackHotpatch").mockResolvedValue({
+      app_version: "9.9.9",
+      frontend_version: null,
+      previous_version: null,
+      channel: "nightly",
+    });
+    await useUpdatesStore.getState().rollback();
+    expect(rollback).toHaveBeenCalled();
+    expect(useUpdatesStore.getState().hotpatch?.frontend_version).toBeNull();
+    expect(patchHooks.reload).toHaveBeenCalled();
+    expect(patchHooks.showPatchedFrontend).not.toHaveBeenCalled();
+    rollback.mockRestore();
+    rollbackNativeNone.mockRestore();
+    rollbackOverlay.mockRestore();
+  });
 });
 
 describe("nightly base discipline", () => {
