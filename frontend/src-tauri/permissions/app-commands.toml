@@ -1,0 +1,29 @@
+"$schema" = "schemas/schema.json"
+
+# App-defined commands (see src/lib.rs `invoke_handler`). Tauri v2 denies
+# every custom command by default ("not allowed by ACL") — each command the
+# frontend invokes needs an `allow-*` permission here AND an entry in
+# `capabilities/default.json`. The build FAILS on unknown identifiers
+# (tauri-build `validate_capabilities`), so adding a `#[tauri::command]`
+# without extending this file breaks the build loudly, not the installed
+# app silently. Keep the capability list in sync when commands change.
+
+[[permission]]
+identifier = "allow-backend-health"
+description = "Probe whether the bundled backend answers (boot gate)."
+commands.allow = ["backend_health"]
+
+[[permission]]
+identifier = "allow-backend-port"
+description = "Resolve the running backend's port (API base URL)."
+commands.allow = ["backend_port"]
+
+[[permission]]
+identifier = "allow-restart-backend"
+description = "Restart the backend child process (backend-overlay nightlies)."
+commands.allow = ["restart_backend"]
+
+[[permission]]
+identifier = "allow-apply-native-plan-and-relaunch"
+description = "Execute the staged native-file plan and relaunch the app."
+commands.allow = ["apply_native_plan_and_relaunch"]

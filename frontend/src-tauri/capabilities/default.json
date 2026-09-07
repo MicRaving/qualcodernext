@@ -2,6 +2,15 @@
   "identifier": "default",
   "description": "Default capability for the main window",
   "windows": ["main"],
-  "permissions": ["core:default", "dialog:default", "opener:default", "updater:default"],
+  "permissions": [
+    "core:default",
+    "dialog:default",
+    "opener:default",
+    "updater:default",
+    "allow-backend-health",
+    "allow-backend-port",
+    "allow-restart-backend",
+    "allow-apply-native-plan-and-relaunch"
+  ],
   "remote": { "urls": ["http://127.0.0.1:*/*", "http://localhost:*/*"] }
 }
