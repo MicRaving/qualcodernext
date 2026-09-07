@@ -39,6 +39,12 @@ key as the Tauri updater) plus `--sign-password` when it has one (the
 release pipeline uses an empty password), or set `PATCH_SIGN_KEY_FILE`.
 The manifest carries the signature and the backend refuses unsigned
 patches — an unsigned manifest is only useful for local smoke tests.
+
+Lifecycle: a nightly is always built UPON a released stable and numbered
+``<stable>_NNN`` (``--enforce-base`` fails otherwise — CI always passes
+it). When the next stable ships, its release job wipes the rolling
+``nightly`` release clean, so no stale delta can ever be offered again;
+native-file deltas then re-baseline under the new base.
 """
 
 from __future__ import annotations
@@ -125,6 +131,12 @@ def parse_args() -> argparse.Namespace:
         help="Validate the signing key against updater.key.pub and exit "
         "(fast CI preflight before the slow builds). Prints only a keynum "
         "and public-key fingerprint — never key material.",
+    )
+    parser.add_argument(
+        "--enforce-base",
+        action="store_true",
+        help="Refuse unless every tree version file matches the nightly's "
+        "base (nightlies are always built upon a released stable).",
     )
     return parser.parse_args()
 
@@ -320,6 +332,55 @@ def load_files_manifest(source: str) -> dict:
     return data
 
 
+def tree_versions(root: Path = ROOT) -> dict[str, str]:
+    """Version strings baked across the tree (tauri/frontend/backend)."""
+    import re as _re
+
+    versions: dict[str, str] = {}
+
+    def _json_version(path: Path) -> str:
+        try:
+            value = json.loads(path.read_text(encoding="utf-8")).get("version", "")
+        except (OSError, ValueError):
+            value = ""
+        return value if isinstance(value, str) else ""
+
+    def _toml_version(path: Path) -> str:
+        try:
+            match = _re.search(r'^version\s*=\s*"([^"]+)"', path.read_text(encoding="utf-8"), _re.M)
+        except OSError:
+            return ""
+        return match.group(1) if match else ""
+
+    def _app_version(path: Path) -> str:
+        try:
+            match = _re.search(r'^APP_VERSION\s*=\s*"([^"]+)"', path.read_text(encoding="utf-8"), _re.M)
+        except OSError:
+            return ""
+        return match.group(1) if match else ""
+
+    versions["tauri.conf.json"] = _json_version(root / "frontend" / "src-tauri" / "tauri.conf.json")
+    versions["package.json"] = _json_version(root / "frontend" / "package.json")
+    versions["Cargo.toml"] = _toml_version(root / "frontend" / "src-tauri" / "Cargo.toml")
+    versions["pyproject.toml"] = _toml_version(root / "backend" / "pyproject.toml")
+    versions["APP_VERSION"] = _app_version(
+        root / "backend" / "src" / "qualcoder_api" / "core" / "__init__.py"
+    )
+    return versions
+
+
+def verify_base_matches_tree(base: str, root: Path = ROOT) -> None:
+    """Fail unless every tree version file carries the nightly's base.
+
+    A nightly is always built UPON a stable: its ``<base>_NNN`` number must
+    match the released tree it packages, never an older (or newer) base.
+    """
+    mismatched = {name: ver for name, ver in tree_versions(root).items() if ver != base}
+    if mismatched:
+        detail = ", ".join(f"{name}={ver!r}" for name, ver in sorted(mismatched.items()))
+        raise SystemExit(f"tree is not at base {base} ({detail}) — release the stable first")
+
+
 def main() -> int:
     args = parse_args()
     if args.check_key:
@@ -333,6 +394,8 @@ def main() -> int:
         return 2
     version = args.version.strip()
     base = f"{match.group(1)}.{match.group(2)}.{match.group(3)}"
+    if args.enforce_base:
+        verify_base_matches_tree(base)
     dist = Path(args.frontend_dist)
     if not dist.is_dir():
         print(f"error: frontend dist not found: {dist}")

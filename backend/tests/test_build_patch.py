@@ -93,3 +93,34 @@ def test_load_files_manifest_rejects_garbage(build_patch, tmp_path):
     bad.write_text(json.dumps({"nope": 1}), encoding="utf-8")
     with pytest.raises(SystemExit, match="not a backend-files manifest"):
         build_patch.load_files_manifest(str(bad))
+
+
+def test_verify_base_matches_tree(build_patch, tmp_path):
+    root = tmp_path / "repo"
+    (root / "frontend" / "src-tauri").mkdir(parents=True)
+    (root / "backend" / "src" / "qualcoder_api" / "core").mkdir(parents=True)
+    (root / "frontend" / "src-tauri" / "tauri.conf.json").write_text(
+        json.dumps({"version": "0.1.16"}), encoding="utf-8"
+    )
+    (root / "frontend" / "package.json").write_text(
+        json.dumps({"version": "0.1.16"}), encoding="utf-8"
+    )
+    (root / "frontend" / "src-tauri" / "Cargo.toml").write_text(
+        '[package]\nname = "qcnext"\nversion = "0.1.16"\n', encoding="utf-8"
+    )
+    (root / "backend" / "pyproject.toml").write_text(
+        '[project]\nname = "x"\nversion = "0.1.16"\n', encoding="utf-8"
+    )
+    (root / "backend" / "src" / "qualcoder_api" / "core" / "__init__.py").write_text(
+        'APP_VERSION = "0.1.16"\n', encoding="utf-8"
+    )
+    # Matching base passes silently.
+    assert build_patch.verify_base_matches_tree("0.1.16", root) is None
+    # Any drift fails loud, naming the offenders.
+    (root / "frontend" / "package.json").write_text(
+        json.dumps({"version": "0.1.15"}), encoding="utf-8"
+    )
+    with pytest.raises(SystemExit, match=r"package\.json"):
+        build_patch.verify_base_matches_tree("0.1.16", root)
+    # And against the real tree right now (0.1.16 everywhere).
+    assert build_patch.verify_base_matches_tree("0.1.16") is None

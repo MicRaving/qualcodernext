@@ -421,3 +421,19 @@ jobs:
         uses: softprops/action-gh-release@v3
         with:
           files: qcnext-latest.json
+
+      - name: Clean superseded nightly patches
+        # A stable release absorbs every nightly built on older bases: drop
+        # the rolling nightly's assets so no stale delta can ever be offered
+        # or applied again. The next nightly re-baselines (fresh files
+        # manifest) under the new base. Never fails the release when there
+        # is nothing (or nothing yet) to clean.
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          assets="$(gh release view nightly --json assets --jq '.assets[].name' 2>/dev/null || true)"
+          if [ -z "$assets" ]; then echo "no nightly assets to clean"; exit 0; fi
+          echo "$assets" | while read -r asset; do
+            [ -n "$asset" ] || continue
+            gh release delete-asset nightly "$asset" --yes || echo "::warning::could not delete $asset"
+          done
