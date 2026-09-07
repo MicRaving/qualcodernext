@@ -35,8 +35,14 @@ function resolveBase(): Promise<string> {
               if (typeof port === "number" && port > 0) {
                 return `http://127.0.0.1:${port}/api/v1`;
               }
-            } catch {
-              /* not in the Tauri shell — use the dev default */
+            } catch (err) {
+              // Permission denial (a shell predating the app-command ACL
+              // entries): the command can never succeed, so fall back
+              // immediately instead of burning the full ~30s poll budget on
+              // every boot. Any other failure means "backend not up yet" —
+              // keep polling for the port file below.
+              const msg = err instanceof Error ? err.message : String(err);
+              if (/not allowed by ACL/i.test(msg)) return DEV_FALLBACK;
             }
             await new Promise((r) => setTimeout(r, PORT_POLL_INTERVAL_MS));
           }

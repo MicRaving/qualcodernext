@@ -163,3 +163,18 @@ jobs:
             [ -e "$f" ] && existing+=("$f")
           done
           gh release upload nightly "${existing[@]}" --clobber
+          # Drop superseded patch zips so the release page shows exactly the
+          # set the live manifest references (one coherent version — the
+          # frontend/backend/natives of a nightly always share its _NNN).
+          # backend-files-*.json are KEPT (future native-diff predecessors);
+          # the manifest is the only client contract, so deleting stale zips
+          # can never break an install. Never fails the job.
+          gh release view nightly --json assets --jq '.assets[].name' 2>/dev/null \
+          | grep -E '^qcnext-(frontend|backend|native)-' \
+          | grep -vF "${{ inputs.version }}" \
+          | while read -r asset; do
+            [ -n "$asset" ] || continue
+            gh release delete-asset nightly "$asset" --yes \
+              || echo "::warning::could not delete superseded $asset"
+          done
+          echo "rolling nightly now at ${{ inputs.version }}"
