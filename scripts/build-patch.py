@@ -492,6 +492,10 @@ def main() -> int:
     manifest = {
         "version": version,
         "base": base,
+        # Floor this delta may install onto (== base: deltas never cross
+        # bases; the client enforces manifest.base == its own base and the
+        # nightly gate refuses any other base at build time).
+        "min_base": base,
         "notes": args.notes or f"QCnext nightly {version}",
         "pub_date": datetime.datetime.now(datetime.UTC).isoformat(),
         "url": f"https://github.com/{REPO_SLUG}/releases/download/{args.tag}/{zip_path.name}",

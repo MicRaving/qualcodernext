@@ -8,7 +8,7 @@
  * update auto-installs (including large ones) — there is no size gate.
  */
 import { useEffect, useState } from "react";
-import { Check, Download, LoaderCircle, RotateCw, Undo2 } from "lucide-react";
+import { Check, Download, Info, LoaderCircle, RotateCw, Undo2 } from "lucide-react";
 import { Button, Select } from "@/components/ui/orchestrator";
 import { useI18n } from "@/lib/i18n";
 import {
@@ -163,12 +163,15 @@ export function UpdatesTab() {
         </div>
       </div>
 
-      {/* Channel opt-in/out (hint lives in the hover tooltip). */}
+      {/* Channel opt-in/out (hint lives in the hover tooltip on the label). */}
       <label
         className="mt-3 flex items-center gap-1.5 text-[11px] text-text-secondary"
         title={t("settings.updatesChannelHint")}
       >
-        <span>{t("settings.updatesChannel")}</span>
+        <span className="inline-flex cursor-help items-center gap-1">
+          {t("settings.updatesChannel")}
+          <Info size={12} className="shrink-0 opacity-70" aria-hidden />
+        </span>
         <Select
           value={channel}
           onChange={(e) => void setChannelAndSave(e.target.value as UpdatesSettings["channel"])}

@@ -7,7 +7,16 @@
  * - `nightly`: additionally offers signed delta patches from
  *   `qcnext-nightly.json`. A nightly is NEWER than the stable of the same
  *   base (`0.1.13_001 > 0.1.13`): nightlies are post-release patches, so a
- *   client on the stable must be offered them.
+ *   client on the stable must be offered them. A nightly is offered ONLY on
+ *   its own base (`manifest.base` must equal the app's base) — any other
+ *   base is offered the newer stable full update instead. Cross-base delta
+ *   application is never attempted (backend sources + native files would
+ *   mismatch the running tree).
+ *
+ * After a frontend patch activates, the window navigates to the
+ * backend-served SPA: Tauri loads the frozen bundle (`frontendDist`), so a
+ * bare reload would re-render the STALE bundle — only the boot gate
+ * reroutes, and only installs navigate.
  *
  * Version ordering mirrors `backend/.../services/versioning.py` — keep the
  * two in sync. `tauri.conf.json`/`Cargo.toml`/`package.json` always carry
@@ -22,6 +31,7 @@ import { create } from "zustand";
 import {
   ApiError,
   api,
+  apiBaseSync,
   initApiBase,
   invalidateApiBase,
   type BackendPatchRef,
@@ -120,9 +130,23 @@ export function nightlyManifestUsable(manifest: Partial<NightlyManifest>): manif
 export const NIGHTLY_MANIFEST_URL =
   "https://github.com/MicRaving/qualcodernext/releases/download/nightly/qcnext-nightly.json";
 
-/** Reload seam (tests replace `reload` with a mock — jsdom has no navigation). */
+/** Reload seam (tests replace these with mocks — jsdom has no navigation). */
 export const patchHooks = {
   reload: () => window.location.reload(),
+  /**
+   * Show the freshly activated frontend: navigate to the backend-served
+   * SPA when the window still shows the frozen bundle, else reload in
+   * place. A bare `reload()` here would re-render the STALE bundle and
+   * the patch would look like it never applied (visible only after a
+   * full app restart via the boot gate).
+   */
+  showPatchedFrontend: (origin: string) => {
+    if (origin && !window.location.href.startsWith(origin)) {
+      window.location.replace(`${origin}/`);
+    } else {
+      window.location.reload();
+    }
+  },
 };
 
 interface UpdatesState {
@@ -199,6 +223,28 @@ export function nightlyVisibleOnChannel(candidate: string, current: string, chan
   if (!parseNightlyVersion(candidate) || !parseNightlyVersion(current)) return false;
   if (channel !== "nightly" && parseNightlyVersion(candidate)?.[3] !== null) return false;
   return compareNightlyVersions(candidate, current) > 0;
+}
+
+/**
+ * Whether a nightly manifest applies to THIS app: its `base` must equal the
+ * app's own base (stable or already-patched nightly). Anything else means
+ * the client belongs on the newer stable full update, never on this delta.
+ */
+export function nightlyBaseMatches(manifest: Partial<NightlyManifest>, current: string): boolean {
+  return (
+    typeof manifest.base === "string" &&
+    baseOfVersion(current) !== null &&
+    manifest.base === baseOfVersion(current)
+  );
+}
+
+/** Origin (`scheme://host:port`) serving the backend API — and the patched SPA. */
+export function backendOrigin(): string {
+  try {
+    return new URL(apiBaseSync()).origin;
+  } catch {
+    return "";
+  }
 }
 
 /** A backend running an older base than the app (mixed/stale install). */
@@ -361,7 +407,14 @@ export const useUpdatesStore = create<UpdatesState>((set, get) => ({
 
       if (channel === "nightly") {
         const nightly = await fetchNightlyManifest();
-        if (nightly && nightlyVisibleOnChannel(nightly.version, current, channel)) {
+        // Same-base only: a foreign-base nightly is never offered (the
+        // newer stable full update in `best` stands), so a delta can never
+        // be applied onto a tree it wasn't built for.
+        if (
+          nightly &&
+          nightlyBaseMatches(nightly, current) &&
+          nightlyVisibleOnChannel(nightly.version, current, channel)
+        ) {
           const { url, sha256, signature, backend, native } = nightly;
           // Sections are offered independently: a manifest is usable when at
           // least one section is complete AND applicable here. Native deltas
@@ -488,7 +541,7 @@ export const useUpdatesStore = create<UpdatesState>((set, get) => ({
           await core.invoke<string>("apply_native_plan_and_relaunch");
           return;
         }
-        patchHooks.reload();
+        patchHooks.showPatchedFrontend(backendOrigin());
       } catch (e) {
         set({ status: "error", error: errorMessage(e, String(e)) });
       }
@@ -589,7 +642,9 @@ export const useUpdatesStore = create<UpdatesState>((set, get) => ({
         set({ hotpatch, overlay });
       }
       set({ status: "up-to-date", info: null, lastCheckedAt: Date.now() });
-      patchHooks.reload();
+      // A restored frontend lives behind the backend URL too — same
+      // bundle-staleness rule as installs (see patchHooks).
+      patchHooks.showPatchedFrontend(backendOrigin());
     } catch (e) {
       set({ status: "error", error: errorMessage(e, String(e)) });
     }

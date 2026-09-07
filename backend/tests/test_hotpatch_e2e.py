@@ -52,6 +52,8 @@ def test_build_sign_and_apply_roundtrip(monkeypatch, tmp_path, fixture_dist):
     manifest = json.loads((out / "qcnext-nightly.json").read_text(encoding="utf-8"))
     assert manifest["version"] == "0.1.13_007"
     assert manifest["base"] == "0.1.13"
+    # The install floor always equals the base: deltas never cross bases.
+    assert manifest["min_base"] == "0.1.13"
     assert manifest["signature"], "signed builds must carry a signature"
 
     root = tmp_path / "hotpatch" / "frontend"

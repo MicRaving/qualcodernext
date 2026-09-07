@@ -14,10 +14,12 @@ vi.mock("@tauri-apps/plugin-updater", () => ({ check: mocks.check }));
 import {
   NO_UPDATE_MANIFEST,
   NATIVE_DELTA_MAX_BYTES,
+  backendOrigin,
   classifyUpdateCheckError,
   compareNightlyVersions,
   effectiveVersion,
   formatBytes,
+  nightlyBaseMatches,
   nightlyManifestUsable,
   nightlyVisibleOnChannel,
   parseNightlyVersion,
@@ -28,6 +30,7 @@ import {
 } from "@/stores/updates";
 import { api } from "@/lib/api";
 import { ApiError } from "@/lib/api";
+import { apiBaseSync } from "@/lib/api";
 import { APP_VERSION } from "@/lib/version";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
@@ -55,8 +58,9 @@ beforeEach(async () => {
   });
   // @ts-expect-error test cleanup: restore the non-Tauri (browser) default
   delete window.__TAURI_INTERNALS__;
-  // Fresh reload mock for every test (jsdom has no navigation).
+  // Fresh navigation mocks for every test (jsdom has no navigation).
   patchHooks.reload = vi.fn();
+  patchHooks.showPatchedFrontend = vi.fn();
   // Sane default for Tauri invokes (individual tests override per command).
   const core = await import("@tauri-apps/api/core");
   vi.mocked(core.invoke).mockReset().mockResolvedValue(8765);
@@ -169,11 +173,16 @@ describe("nightly versions (X.Y.Z_NNN)", () => {
     mocks.check.mockResolvedValue(null);
     useUpdatesStore.setState({
       settings: { check_interval: "daily", auto_update: true, channel: "nightly" },
-      hotpatch: null,
+      // Manifest base is 9.9.9 — the client must be on that base to see it.
+      hotpatch: {
+        app_version: "9.9.9",
+        frontend_version: null,
+        previous_version: null,
+        channel: "nightly",
+      },
     });
     const proxy = vi.spyOn(api, "nightlyManifest").mockResolvedValue(proxyManifest("9.9.9_002"));
-    const directFetch = vi.fn().mockRejectedValue(new TypeError("Failed to fetch"));
-    vi.stubGlobal("fetch", directFetch);
+    const directFetch = vi.fn().mockRejectedValue(new TypeError("Failed to fetch"));    vi.stubGlobal("fetch", directFetch);
     await useUpdatesStore.getState().checkNow();
     const state = useUpdatesStore.getState();
     expect(state.status).toBe("available");
@@ -187,7 +196,12 @@ describe("nightly versions (X.Y.Z_NNN)", () => {
     mocks.check.mockResolvedValue(null);
     useUpdatesStore.setState({
       settings: { check_interval: "daily", auto_update: true, channel: "nightly" },
-      hotpatch: null,
+      hotpatch: {
+        app_version: "9.9.9",
+        frontend_version: null,
+        previous_version: null,
+        channel: "nightly",
+      },
     });
     const proxy = vi.spyOn(api, "nightlyManifest").mockRejectedValue(new Error("proxy down"));
     stubNightlyManifest("9.9.9_001");
@@ -203,7 +217,12 @@ describe("nightly versions (X.Y.Z_NNN)", () => {
     mocks.check.mockResolvedValue(null);
     useUpdatesStore.setState({
       settings: { check_interval: "daily", auto_update: true, channel: "nightly" },
-      hotpatch: null,
+      hotpatch: {
+        app_version: "9.9.9",
+        frontend_version: null,
+        previous_version: null,
+        channel: "nightly",
+      },
     });
     stubNightlyManifest("9.9.9_001");
     await useUpdatesStore.getState().checkNow();
@@ -280,7 +299,7 @@ describe("nightly install + rollback", () => {
     const state = useUpdatesStore.getState();
     expect(state.status).toBe("up-to-date");
     expect(state.hotpatch?.frontend_version).toBe("9.9.9_001");
-    expect(patchHooks.reload).toHaveBeenCalled();
+    expect(patchHooks.showPatchedFrontend).toHaveBeenCalled();
     apply.mockRestore();
   });
 
@@ -297,7 +316,7 @@ describe("nightly install + rollback", () => {
     const state = useUpdatesStore.getState();
     expect(state.status).toBe("error");
     expect(state.error).toContain("signature invalid");
-    expect(patchHooks.reload).not.toHaveBeenCalled();
+    expect(patchHooks.showPatchedFrontend).not.toHaveBeenCalled();
     apply.mockRestore();
   });
 
@@ -327,7 +346,7 @@ describe("nightly install + rollback", () => {
     expect(rollback).toHaveBeenCalled();
     const state = useUpdatesStore.getState();
     expect(state.hotpatch?.frontend_version).toBe("9.9.9_001");
-    expect(patchHooks.reload).toHaveBeenCalled();
+    expect(patchHooks.showPatchedFrontend).toHaveBeenCalled();
     rollback.mockRestore();
     rollbackNativeNone.mockRestore();
     rollbackOverlay.mockRestore();
@@ -387,7 +406,7 @@ describe("nightly install + rollback", () => {
     const state = useUpdatesStore.getState();
     expect(state.status).toBe("up-to-date");
     expect(state.overlay?.overlay_active).toBe(true);
-    expect(patchHooks.reload).toHaveBeenCalled();
+    expect(patchHooks.showPatchedFrontend).toHaveBeenCalled();
     const order = [
       applyOverlay.mock.invocationCallOrder[0],
       invoke.mock.invocationCallOrder[0],
@@ -399,6 +418,117 @@ describe("nightly install + rollback", () => {
     patchesVersion.mockRestore();
     openProject.mockRestore();
     useProjectStore.setState({ projectPath: "" });
+  });
+});
+
+describe("nightly base discipline", () => {
+  const nightlySettings = {
+    check_interval: "daily" as const,
+    auto_update: true,
+    channel: "nightly" as const,
+  };
+  const manifestFor = (base: string) => ({
+    version: "0.1.16_001",
+    base,
+    url: "https://example.test/f.zip",
+    sha256: "f",
+    signature: "fs",
+  });
+  const hotpatchOfBase = (app_version: string) => ({
+    app_version,
+    frontend_version: null,
+    previous_version: null,
+    channel: "nightly" as const,
+  });
+  // beforeEach replaces the seam with a mock — keep the real one for the
+  // navigation tests below.
+  const realShowPatchedFrontend = patchHooks.showPatchedFrontend;
+  const realLocation = window.location;
+
+  afterEach(() => {
+    Object.defineProperty(window, "location", {
+      value: realLocation,
+      writable: true,
+      configurable: true,
+    });
+  });
+
+  function stubLocation(href: string) {
+    const replace = vi.fn();
+    const reload = vi.fn();
+    Object.defineProperty(window, "location", {
+      value: { href, replace, reload },
+      writable: true,
+      configurable: true,
+    });
+    return { replace, reload };
+  }
+
+  it("matches a manifest only on the same base", () => {
+    expect(nightlyBaseMatches({ version: "0.1.16_001", base: "0.1.16" }, "0.1.16")).toBe(true);
+    expect(nightlyBaseMatches({ version: "0.1.16_001", base: "0.1.16" }, "0.1.16_001")).toBe(true);
+    expect(nightlyBaseMatches({ version: "0.1.16_001", base: "0.1.16" }, "0.1.15")).toBe(false);
+    expect(nightlyBaseMatches({ version: "0.1.16_001", base: "0.1.16" }, "0.1.14_002")).toBe(false);
+    expect(nightlyBaseMatches({ version: "0.1.16_001" }, "0.1.16")).toBe(false);
+    expect(nightlyBaseMatches({ version: "0.1.16_001", base: "garbage" }, "0.1.16")).toBe(false);
+  });
+
+  it("keeps the full stable when the nightly targets another base", async () => {
+    enableTauri();
+    mocks.check.mockResolvedValue({ version: "0.1.16", body: "notes", date: "2026-09-07" });
+    const proxy = vi.spyOn(api, "nightlyManifest").mockResolvedValue(manifestFor("0.1.16"));
+    useUpdatesStore.setState({
+      settings: nightlySettings,
+      hotpatch: hotpatchOfBase("0.1.14"),
+      overlay: null,
+      native: null,
+    });
+    await useUpdatesStore.getState().checkNow();
+    const state = useUpdatesStore.getState();
+    expect(state.status).toBe("available");
+    expect(state.info?.kind).toBe("full");
+    expect(state.info?.version).toBe("0.1.16");
+    proxy.mockRestore();
+  });
+
+  it("offers the nightly on its own base", async () => {
+    enableTauri();
+    mocks.check.mockResolvedValue(null);
+    const proxy = vi.spyOn(api, "nightlyManifest").mockResolvedValue(manifestFor("0.1.16"));
+    useUpdatesStore.setState({
+      settings: nightlySettings,
+      hotpatch: hotpatchOfBase("0.1.16"),
+      overlay: null,
+      native: null,
+    });
+    await useUpdatesStore.getState().checkNow();
+    const state = useUpdatesStore.getState();
+    expect(state.status).toBe("available");
+    expect(state.info?.kind).toBe("nightly");
+    expect(state.info?.version).toBe("0.1.16_001");
+    proxy.mockRestore();
+  });
+
+  it("derives the backend origin from the API base", () => {
+    expect(backendOrigin()).toBe(new URL(apiBaseSync()).origin);
+  });
+
+  it("navigates to the backend SPA when the bundle is showing", () => {
+    const { replace, reload } = stubLocation("tauri://localhost/");
+    realShowPatchedFrontend("http://127.0.0.1:8765");
+    expect(replace).toHaveBeenCalledWith("http://127.0.0.1:8765/");
+    expect(reload).not.toHaveBeenCalled();
+  });
+
+  it("reloads in place when already backend-served (or origin unknown)", () => {
+    const first = stubLocation("http://127.0.0.1:8765/#/settings");
+    realShowPatchedFrontend("http://127.0.0.1:8765");
+    expect(first.reload).toHaveBeenCalled();
+    expect(first.replace).not.toHaveBeenCalled();
+    const second = stubLocation("tauri://localhost/");
+    realShowPatchedFrontend("");
+    expect(second.reload).toHaveBeenCalled();
+    expect(second.replace).not.toHaveBeenCalled();
   });
 });
 
@@ -457,7 +587,14 @@ describe("native deltas", () => {
     mocks.check.mockResolvedValue(null);
     useUpdatesStore.setState({
       settings: nightlySettings,
-      hotpatch: null,
+      // Current base must equal the manifest base (9.9.9): foreign-base
+      // nightlies are never offered.
+      hotpatch: {
+        app_version: "9.9.9",
+        frontend_version: null,
+        previous_version: null,
+        channel: "nightly",
+      },
       overlay: null,
       native: nativeState,
     });
@@ -474,7 +611,12 @@ describe("native deltas", () => {
     mocks.check.mockResolvedValue(null);
     useUpdatesStore.setState({
       settings: nightlySettings,
-      hotpatch: null,
+      hotpatch: {
+        app_version: "9.9.9",
+        frontend_version: null,
+        previous_version: null,
+        channel: "nightly",
+      },
       overlay: null,
       native: nativeState,
     });
@@ -527,7 +669,7 @@ describe("native deltas", () => {
     });
     expect(invoke).toHaveBeenCalledWith("apply_native_plan_and_relaunch");
     expect(applyHotpatch).not.toHaveBeenCalled();
-    expect(patchHooks.reload).not.toHaveBeenCalled();
+    expect(patchHooks.showPatchedFrontend).not.toHaveBeenCalled();
     applyNative.mockRestore();
     applyHotpatch.mockRestore();
   });
@@ -556,7 +698,7 @@ describe("native deltas", () => {
     await useUpdatesStore.getState().rollback();
     expect(rollbackNative).toHaveBeenCalled();
     expect(invoke).toHaveBeenCalledWith("apply_native_plan_and_relaunch");
-    expect(patchHooks.reload).not.toHaveBeenCalled();
+    expect(patchHooks.showPatchedFrontend).not.toHaveBeenCalled();
     rollbackNative.mockRestore();
     rollbackOverlay.mockRestore();
     rollbackHotpatch.mockRestore();
@@ -610,7 +752,7 @@ describe("download size display", () => {
     });
     await useUpdatesStore.getState().install();
     expect(applyHotpatch).toHaveBeenCalled();
-    expect(patchHooks.reload).toHaveBeenCalled();
+    expect(patchHooks.showPatchedFrontend).toHaveBeenCalled();
     applyHotpatch.mockRestore();
   });
 });
