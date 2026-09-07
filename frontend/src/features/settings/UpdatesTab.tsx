@@ -84,7 +84,10 @@ export function UpdatesTab() {
     <div className="p-3">
       {/* Header with the icon-only check button on the right. */}
       <div className="flex items-center justify-between gap-2">
-        <h2 className="text-sm font-semibold text-text-primary">{t("settings.updatesSection")}</h2>
+        <h2 className="flex items-center gap-1.5 text-sm font-semibold text-text-primary">
+          <Download size={13} className="shrink-0" aria-hidden />
+          {t("settings.updatesSection")}
+        </h2>
         <Button
           variant="secondary"
           icon={

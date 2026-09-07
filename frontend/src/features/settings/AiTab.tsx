@@ -11,7 +11,7 @@
  * lifetime and is re-used on reopen; it dies with the app session.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
-import { LoaderCircle } from "lucide-react";
+import { LoaderCircle, Sparkles } from "lucide-react";
 import { api } from "@/lib/api";
 import { AI_REFRESH_MS } from "@/lib/config";
 import { errorDetail } from "@/features/ai/format";
@@ -238,8 +238,11 @@ export function AiTab() {
       {saveError && <ErrorBanner>{saveError}</ErrorBanner>}
       <div className="p-3">
         <div className="flex items-center justify-between gap-2">
-          <h2 className="text-sm font-semibold text-text-primary">{t("settings.aiAssistant")}</h2>
-          {/* Enable switch, styled like the status toggle */}
+          <h2 className="flex items-center gap-1.5 text-sm font-semibold text-text-primary">
+            <Sparkles size={13} className="shrink-0" aria-hidden />
+            {t("settings.aiAssistant")}
+          </h2>
+          {/* Enable switch (pill only, no text label) styled like the status toggle */}
           <button
             type="button"
             role="switch"
@@ -258,12 +261,11 @@ export function AiTab() {
                 enabled ? "bg-accent" : "bg-border"
               }`}
             >
-              <span
-                className="absolute top-0.5 h-2.5 w-2.5 rounded-full bg-white transition-all"
-                style={{ left: enabled ? 16 : 2 }}
-              />
+            <span
+              className="absolute top-0.5 h-2.5 w-2.5 rounded-full bg-white transition-all"
+              style={{ left: enabled ? 16 : 2 }}
+            />
             </span>
-            {t("settings.aiEnable")}
           </button>
         </div>
 

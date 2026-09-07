@@ -11,7 +11,7 @@
  * progress rides the store's task queue (ribbon chip / queue flyout).
  */
 import { useState } from "react";
-import { Download, HelpCircle, Upload } from "lucide-react";
+import { ArrowRightLeft, Download, HelpCircle, Upload } from "lucide-react";
 import { api } from "@/lib/api";
 import { Button, HelpFlyout, IconButton, Modal } from "@/components/ui/orchestrator";
 import { cls } from "@/components/ui/tokens";
@@ -63,7 +63,10 @@ export function InterchangeView() {
 
   return (
     <div>
-      <h2 className="text-sm font-semibold text-text-primary">{t("settings.interchange")}</h2>
+      <h2 className="flex items-center gap-1.5 text-sm font-semibold text-text-primary">
+        <ArrowRightLeft size={13} className="shrink-0" aria-hidden />
+        {t("settings.interchange")}
+      </h2>
       <p className="mt-1 text-xs text-text-secondary">{t("settings.interchangeHint")}</p>
 
       {/* Button row: Import… (opens the overlay) + Export + export help */}

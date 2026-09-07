@@ -9,7 +9,7 @@
  */
 import { useState } from "react";
 import { useAsyncEffect } from "@/lib/useAsync";
-import { Bug, CircleAlert, CircleCheck, LoaderCircle, Settings } from "lucide-react";
+import { Bug, CircleAlert, CircleCheck, Info, LoaderCircle, Settings } from "lucide-react";
 import { useI18n } from "@/lib/i18n";
 import { api, type RStatus } from "@/lib/api";
 import { BarHeader, BarTitle, IconButton, LeftBar } from "@/components/ui/orchestrator";
@@ -82,7 +82,10 @@ export function SettingsView() {
 
         {/* About — ALWAYS the very last section (R line merged in). */}
         <section className="p-3">
-          <h2 className="text-sm font-semibold text-text-primary">{t("settings.about")}</h2>
+          <h2 className="flex items-center gap-1.5 text-sm font-semibold text-text-primary">
+            <Info size={13} className="shrink-0" aria-hidden />
+            {t("settings.about")}
+          </h2>
           <p className="mt-1 text-xs text-text-secondary">{t("settings.aboutText")}</p>
           {rStatus === null ? (
             <p className="mt-2 flex items-center gap-1.5 text-xs text-text-secondary">
