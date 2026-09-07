@@ -7,6 +7,15 @@
      include (first releases have no base tag, so no link). Add a section
      like "## 0.1.1 (2026-08-31)" at the TOP of the file. -->
 
+## 0.1.16 (2026-09-06)
+
+- Updates tab reworked: icon-only check, always auto-install, sizes and notes.
+- R path merged into About with a manual file pick.
+- Pseudonym editor moved from Settings to the Files topbar mask menu.
+- Status bar warns on stale backends; slow boots show progress and log timings.
+
+**Full Changelog**: https://github.com/MicRaving/qualcodernext/compare/v0.1.15...v0.1.16
+
 ## 0.1.15 (2026-09-06)
 
 - Nightly patches are actually offered now: fixed version ordering and manifest fetching.
