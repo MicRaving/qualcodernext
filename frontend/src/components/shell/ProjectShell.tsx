@@ -146,6 +146,7 @@ function UpdateStatusRow() {
 
 function StatusBar() {
   const { t } = useI18n();
+  const hotpatchVersion = useUpdatesStore((s) => s.hotpatch?.frontend_version);
   const backendBaseMismatch = useUpdatesStore((s) => s.backendBaseMismatch);
   const summary = useProjectStore((s) => s.summary);
   const projectName = useProjectStore((s) => s.projectName);
@@ -187,7 +188,7 @@ function StatusBar() {
           })}
         </span>
       )}
-      <span title={t("app.versionLabel")}>v{APP_VERSION}</span>
+      <span title={t("app.versionLabel")}>v{hotpatchVersion ?? APP_VERSION}</span>
     </footer>
   );
 }

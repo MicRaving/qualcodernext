@@ -352,6 +352,48 @@ fn restart_backend(app: tauri::AppHandle) -> Result<u16, String> {
     Err("backend did not come back after restart".to_string())
 }
 
+/// Append a line to the boot-timing log (`%TEMP%/qcnext-boot.log`).
+///
+/// Release builds have no console, so `eprintln!` vanishes — but slow boots
+/// ("blank screen for 30s") are otherwise undiagnosable. Best-effort only:
+/// failures are swallowed, and the file is truncated past 512 KiB.
+fn boot_log_line(message: &str) {
+    append_boot_line(&std::env::temp_dir(), message);
+}
+
+fn append_boot_line(dir: &std::path::Path, message: &str) {
+    use std::fmt::Write as _;
+    let path = dir.join("qcnext-boot.log");
+    let mut body = String::new();
+    if let Ok(existing) = std::fs::read_to_string(&path) {
+        if existing.len() < 512 * 1024 {
+            body.push_str(&existing);
+            if !body.is_empty() && !body.ends_with('\n') {
+                body.push('\n');
+            }
+        }
+    }
+    let _ = writeln!(body, "{message}");
+    let _ = std::fs::write(&path, body);
+}
+
+/// Watch the backend port file and log how long the backend took to appear.
+/// Runs on a background thread; the boot gate polls the same file.
+#[cfg(not(debug_assertions))]
+fn log_boot_timing(boot_t0: std::time::Instant) {
+    std::thread::spawn(move || {
+        for _ in 0..150 {
+            if backend_port().is_some() {
+                let elapsed = boot_t0.elapsed().as_secs_f32();
+                boot_log_line(&format!("backend port visible after {elapsed:.1}s"));
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(200));
+        }
+        boot_log_line("backend port never appeared within 30s");
+    });
+}
+
 /// Kill the backend child on app exit.
 fn kill_backend() {
     let mut guard = match BACKEND_CHILD.lock() {
@@ -505,18 +547,22 @@ pub fn run() {
             // spawned yet, so no installed file is locked. Dev builds have
             // no bundled backend to patch.
             #[cfg(not(debug_assertions))]
-            if let Some(home) = native_plan::qualcoder_home() {
-                let native_dir = home.join("hotpatch").join("native");
-                match app
-                    .path()
-                    .resolve("backend", tauri::path::BaseDirectory::Resource)
-                {
-                    Ok(resource_backend) => eprintln!(
-                        "[tauri] {}",
-                        native_plan::execute_pending_plan(&native_dir, &resource_backend)
+            {
+                use std::time::Instant;
+                let boot_t0 = Instant::now();
+                if let Some(home) = native_plan::qualcoder_home() {
+                    let native_dir = home.join("hotpatch").join("native");
+                    match app
+                        .path()
+                        .resolve("backend", tauri::path::BaseDirectory::Resource)
+                    {
+                    Ok(resource_backend) => boot_log_line(
+                        &native_plan::execute_pending_plan(&native_dir, &resource_backend),
                     ),
-                    Err(err) => eprintln!("[tauri] native plan skipped: {err}"),
+                        Err(err) => boot_log_line(&format!("native plan skipped: {err}")),
+                    }
                 }
+                log_boot_timing(boot_t0);
             }
             start_backend(app.handle());
             #[cfg(not(debug_assertions))]
@@ -534,6 +580,42 @@ pub fn run() {
             kill_backend();
         }
     });
+}
+
+#[cfg(test)]
+mod boot_log_tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    fn temp_dir(name: &str) -> PathBuf {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let dir = std::env::temp_dir().join(format!("qcnext-{name}-{nanos}"));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn appends_lines() {
+        let dir = temp_dir("bootlog");
+        append_boot_line(&dir, "first");
+        append_boot_line(&dir, "second");
+        let body = std::fs::read_to_string(dir.join("qcnext-boot.log")).unwrap();
+        assert_eq!(body, "first\nsecond\n");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn truncates_an_oversized_log() {
+        let dir = temp_dir("bootlog-big");
+        std::fs::write(dir.join("qcnext-boot.log"), vec![b'x'; 600 * 1024]).unwrap();
+        append_boot_line(&dir, "fresh");
+        let body = std::fs::read_to_string(dir.join("qcnext-boot.log")).unwrap();
+        assert_eq!(body, "fresh\n");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 }
 
 

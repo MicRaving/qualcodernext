@@ -43,3 +43,14 @@
     Sleep 500
   ${EndIf}
 !macroend
+
+!macro NSIS_HOOK_POSTINSTALL
+  ; A full install is a new baseline: drop derived delta state (downloaded
+  ; patches, staged plans, backups) so a stale overlay can never pin the
+  ; old UI or sources over the fresh install. User data (projects,
+  ; settings.json) lives directly under .qualcoder and is untouched.
+  ; $PROFILE is the installing user's profile (installMode is currentUser).
+  ClearErrors
+  RMDir /r "$PROFILE\.qualcoder\hotpatch"
+  RMDir /r "$PROFILE\.qualcoder\patches"
+!macroend

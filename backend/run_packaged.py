@@ -33,6 +33,16 @@ def pick_port() -> int:
 
 
 if __name__ == "__main__":
+    import time as _time
+
+    _t0 = _time.monotonic()
+
+    def _mark(stage: str) -> None:
+        # stdout is already redirected to the backend log by runtime_hook
+        # (frozen) or plain console (manual runs) — either way visible.
+        print(f"[boot] {stage} at +{_time.monotonic() - _t0:.1f}s", flush=True)
+
+    _mark("process start")
     port = pick_port()
     pid = os.getpid()
     port_file = os.path.join(tempfile.gettempdir(), f"qualcoder-port-{pid}.json")
@@ -41,12 +51,15 @@ if __name__ == "__main__":
             json.dump({"port": port, "pid": pid}, f)
     except OSError:
         port_file = ""
+    _mark(f"port file written (port {port})")
     # The heavy qualcoder_api import happens AFTER the port file is written,
     # so the Tauri shell discovers the port while Python is still booting.
     # Loop/protocol are pinned (no auto-detection cost at server start).
     from qualcoder_api.main import app
 
+    _mark("imports done")
     try:
+        _mark("serving")
         uvicorn.run(app, host="127.0.0.1", port=port, log_level="info", loop="asyncio", http="httptools")
     finally:
         if port_file:

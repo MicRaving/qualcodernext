@@ -65,6 +65,19 @@ function scheduleUpdates(): () => void {
   };
 }
 
+/** Boot-gate note: after 10s of blank loading, say so with a live count.
+ *  Rendered outside i18n like the gate itself (which hardcodes the brand).
+ *  Neutral wording — slow spawns are usually AV/first-run scanning. */
+function BootSlowNote() {
+  const [secs, setSecs] = useState(0);
+  useEffect(() => {
+    const timer = window.setInterval(() => setSecs((s) => s + 1), 1000);
+    return () => window.clearInterval(timer);
+  }, []);
+  if (secs < 10) return null;
+  return <p className="text-xs">Still starting the backend ({secs}s)…</p>;
+}
+
 function App() {
   const [baseReady, setBaseReady] = useState(false);
   // Re-render after a server-mode login stores a token.
@@ -230,7 +243,12 @@ function App() {
   }, []);
 
   if (!baseReady) {
-    return <LoadingState>QualCoder</LoadingState>;
+    return (
+      <div className="flex h-full flex-col items-center justify-center gap-2 bg-bg text-text-secondary">
+        <LoadingState>QualCoder</LoadingState>
+        <BootSlowNote />
+      </div>
+    );
   }
 
   return (
