@@ -163,8 +163,11 @@ export function UpdatesTab() {
         </div>
       </div>
 
-      {/* Channel opt-in/out */}
-      <label className="mt-3 flex items-center gap-1.5 text-[11px] text-text-secondary">
+      {/* Channel opt-in/out (hint lives in the hover tooltip). */}
+      <label
+        className="mt-3 flex items-center gap-1.5 text-[11px] text-text-secondary"
+        title={t("settings.updatesChannelHint")}
+      >
         <span>{t("settings.updatesChannel")}</span>
         <Select
           value={channel}
@@ -175,7 +178,6 @@ export function UpdatesTab() {
           <option value="nightly">{t("settings.updatesChannelNightly")}</option>
         </Select>
       </label>
-      <p className="mt-1 text-[11px] text-text-secondary">{t("settings.updatesChannelHint")}</p>
 
       {updatesStatus === "checking" && (
         <p className="mt-2 text-xs text-text-secondary">{t("settings.updatesChecking")}</p>
