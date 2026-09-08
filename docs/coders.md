@@ -1,7 +1,5 @@
 # Coding Files
 
-[← Back to Documentation Hub](README.md)
-
 QCnext features six specialized coding environments tailored to different media types: Plain Text, PDF documents, Images, CSV/Spreadsheet tables, Webpages, and Audio/Video media. 
 
 
@@ -98,7 +96,3 @@ The **Audio / Video Coder** integrates media playback, timeline range coding, tr
 
 * **Manual Mode**: Turn on **Transcribe mode** to type transcripts manually. Pressing `Enter` or `F9` auto-inserts timestamp markers `\[mm:ss]`.
 * **Speaker Detection**: Automatically detect speaker turns from transcript identifiers (e.g., `Speaker 1:`, `\[Alice]`, `{@Bob}`) or custom regex patterns. QCnext automatically generates speaker codes and codes every turn across the transcript.
-
-
-[← Back to Documentation Hub](README.md)
-
