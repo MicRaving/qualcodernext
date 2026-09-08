@@ -1,7 +1,5 @@
 # AI Assistant \& Settings
 
-[← Back to Documentation Hub](README.md)
-
 QCnext integrates both privacy-focused Local LLMs (Ollama, LM Studio) and Cloud AI Providers (Gemini, OpenAI GPT, Anthropic Claude, custom endpoints) to support qualitative coding and topic discovery.
 
 The AI must be configured in Settings → AI Assistant first.
@@ -51,5 +49,3 @@ The **hourglass** button (top bar) opens the history menu:
 * A reply can take a long time on local backends (model load + generation) — the request timeout is generous (up to 5 minutes).
 * An agentic turn is capped at a bounded number of model↔tool round trips so a misbehaving model cannot loop forever.
 * A paused "Confirm writes" approval is held in memory — restarting the backend before answering discards it.
-
-[← Back to Documentation Hub](README.md)
