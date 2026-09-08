@@ -31,17 +31,14 @@ It also contains a **Task Queue Indicator** that displays background execution s
 
 
 
-The **Collaboration** flyout allows switching the active coder and toggling collaboration sync. Multiple raters can work on the **same project simultaneously** without requiring a dedicated server. QCnext automatically detects potential shared folders and turns sync on/off, but you can always override this setting.
-
-When turned on, raters work **on separate copies of the same `.qda` project folder**, shared through any folder-sync tool (Nextcloud, ownCloud, Sync\&Share, Syncthing, Dropbox, ...). Every instance writes its own change history and merges each other's changes on an **asynchronous \~60-second cycle** (plus on demand via the "Sync now" button).
+The **Collaboration** flyout allows switching the active coder and toggling collaboration sync. Multiple raters can work on the **same project simultaneously** without requiring a dedicated server. When turned on, raters work **on separate copies of the same `.qda` project folder**, shared through any folder-sync tool (Nextcloud, ownCloud, Sync\&Share, Syncthing, Dropbox, ...). Every instance writes its own change history and merges each other's changes. The project in the shared folder is refreshed whenever a collaborator closes the project (or on demand via **Refresh archive** in the coder flyout) and gets downloaded whenever problems in the local problems are detected.
 
 The coder flyout shows a **per-coder activity indicator** (who is actively working right now, and on which file) and a **Live now** section. The sync dot in the ribbon reflects the overall sync state: green = in sync, yellow = changes pending, red = conflicts or an error.
 
 When two coders edit the same item concurrently, QCnext detects the conflict and shows it in the **Conflict Resolution** dialog. For each conflict you can choose **Keep mine**, **Take theirs**, or **Merge** to combine both versions — or resolve every pending conflict at once with **Keep all mine** / **Take all theirs**. Resolved changes sync to all other instances automatically.
 
-**Collaboration (Golden Master + sandbox) mode.** A project with a single coder reads `data.qda` directly, as always. When a **second coder is added** and sync is enabled, QCnext switches the project into collaboration mode: the live working database moves to a **local sandbox** on each machine, and `data.qda` stays in the shared folder as a **cold archive** that is refreshed whenever a collaborator closes the project (or on demand via **Refresh archive** in the coder flyout). This keeps the shared `data.qda` a clean, single-file ground truth that you can open in other tools while everyone works on their own sandbox. A lost or corrupt sandbox is **rebuilt automatically from the sync sidecars**. Use **Disable collaboration** in the coder flyout to copy everything back to `data.qda`, remove the sandbox and sidecars, and return to single-coder mode.
-
-
+> \[!NOTE]
+> Simultaneous collaboration is currently considered an experimental feature. Make sure to back up your data regularly.
 
 **The Left Bar** holds view-specific navigation. You will usually see the files list if no file is open, the codes if a file is open, the case list in Cases, report list in Analysis, or worksheet list in Crafter.
 
@@ -74,13 +71,3 @@ You can also toggles between the following panes:
   * **Auto-Updates**: Configure update checks (Daily, Weekly, Never) and single-click update installation. Opt into the Nightly channel for small delta patches (0.1.13_001) that verify, install, and activate on reload — with one-step undo.
   * **Project Maintenance**: Toggle automatic database compaction upon project closure.
   * **About**: App version plus the R installation status — click the R path to point the app at an Rscript manually.
-
-### Delta & nightly patches
-
-Stable releases arrive as full installers. The opt-in **Nightly** channel (Settings → Updates) additionally offers small signed patches numbered `X.Y.Z_001`:
-
-* **Frontend** (~1 MB): activates on reload, no restart.
-* **Backend Python** (~1 MB): activates on a ~2 s backend restart.
-* **Backend native files** (only what changed): stages while you work and applies on the next app start (one relaunch, combined with the layers above).
-
-Every patch is checksum- and signature-verified before anything is touched, the previous state is kept for one-step **Undo patch**, and oversized deltas are refused in favor of the full release. Every available update installs automatically — there is no size gate.
