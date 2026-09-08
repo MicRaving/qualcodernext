@@ -8,13 +8,12 @@ Qualitative research extends far beyond attaching labels to text. QCnext provide
 2. **Creative Coding**: An incubator for capturing early ideas and converting fragments directly into codes.
 3. **Crafter**: Structured workspaces for gathering quotes, charts, notes, and links under research questions to build final analytical arguments.
 
-\---
 
 ## Notes: Journal, Annotations \& Memos
 
 Access the Notes workspace by clicking **Journal** in the ribbon.
 
-!\[Notes \& Journal Workspace](screenshots/journal.jpg)
+![Notes \& Journal Workspace](screenshots/journal.jpg)
 
 ### 1\. Research Journal
 
@@ -32,7 +31,6 @@ Access the Notes workspace by clicking **Journal** in the ribbon.
 * **Tree View**: Code memos are displayed in a collapsible tree mirroring the codebook structure.
 * **Single Source of Truth**: Editing a code memo from the Inspector, Code Tree, or Notes view updates the exact same underlying memo instantly.
 
-\---
 
 ## Crafter Worksheets
 
@@ -62,7 +60,6 @@ Worksheet sections hold four types of curated items:
 
 While reading a document in any coder, select a passage and click **Send to QTT** in the floating toolbar. Choose a worksheet and section; the quote is saved as a live-linked segment item.
 
-\---
 
 ## Creative Coding
 
@@ -76,7 +73,6 @@ The **Creative Coding** scratchpad opens in the right-bar utility pane (click ü
    * Converts the scratchpad entry into a durable code in your codebook.
    * If the item had an attached source quote, automatically **codes the referenced document passage** with the newly created code.
 
-\---
 
 [‚Üê Back to Documentation Hub](README.md)
 
