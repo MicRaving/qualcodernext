@@ -24,7 +24,7 @@ export function GeneralTab() {
 
   return (
     <div className="p-3">
-      <section className="p-3">
+      <section>
         <h2 className="flex items-center gap-1.5 text-sm font-semibold text-text-primary">
           <SlidersHorizontal size={13} className="shrink-0" aria-hidden />
           {t("settings.general")}
@@ -78,7 +78,7 @@ export function GeneralTab() {
       </section>
 
       {/* Import / Export — embedded in the General tab (no ribbon entry) */}
-      <section className="p-3 [&>div>p]:hidden">
+      <section className="mt-3 border-t border-border pt-3 [&>div>p]:hidden">
         <InterchangeView />
       </section>
     </div>

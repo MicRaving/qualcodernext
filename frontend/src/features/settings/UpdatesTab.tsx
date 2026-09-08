@@ -9,7 +9,7 @@
  */
 import { useEffect, useState } from "react";
 import { Check, Download, Info, LoaderCircle, RotateCw, Undo2 } from "lucide-react";
-import { Button, Select } from "@/components/ui/orchestrator";
+import { Button, SectionLabel, Select } from "@/components/ui/orchestrator";
 import { useI18n } from "@/lib/i18n";
 import {
   NIGHTLY_MANIFEST_URL,
@@ -80,6 +80,35 @@ export function UpdatesTab() {
       ? ` · ${formatBytes(offerSize)}`
       : "";
 
+  // Running patch as ONE row: a coherent nightly carries the frontend and
+  // backend layers at the same version. Only transitional states (a newer
+  // frontend over an older backend or vice versa) name both layers.
+  const frontendPatch = hotpatch?.frontend_version ?? null;
+  const backendPatch =
+    overlay?.overlay_version && overlay.overlay_active ? overlay.overlay_version : null;
+  const patchStatus =
+    frontendPatch && backendPatch
+      ? frontendPatch === backendPatch
+        ? t("settings.updatesPatchActive", { version: frontendPatch })
+        : `${t("settings.updatesHotpatchActive", { version: frontendPatch })} ${t("settings.updatesOverlayActive", { version: backendPatch })}`
+      : frontendPatch
+        ? t("settings.updatesHotpatchActive", { version: frontendPatch })
+        : backendPatch
+          ? t("settings.updatesOverlayActive", { version: backendPatch })
+          : null;
+  const canUndo =
+    (!!hotpatch?.previous_version ||
+      !!overlay?.previous_version ||
+      !!nativeState?.applied_to) &&
+    updatesStatus !== "patching";
+  const rollbackHint = t("settings.updatesRollbackHint", {
+    version:
+      hotpatch?.previous_version ??
+      overlay?.previous_version ??
+      nativeState?.applied_to ??
+      "",
+  });
+
   return (
     <div className="p-3">
       {/* Header with the icon-only check button on the right. */}
@@ -104,15 +133,8 @@ export function UpdatesTab() {
         />
       </div>
 
-      {hotpatch?.frontend_version && (
-        <p className="mt-1 text-[11px] text-text-secondary">
-          {t("settings.updatesHotpatchActive", { version: hotpatch.frontend_version })}
-        </p>
-      )}
-      {overlay?.overlay_version && overlay.overlay_active && (
-        <p className="mt-1 text-[11px] text-text-secondary">
-          {t("settings.updatesOverlayActive", { version: overlay.overlay_version })}
-        </p>
+      {patchStatus && (
+        <p className="mt-1 text-[11px] text-text-secondary">{patchStatus}</p>
       )}
       {nativeState?.applied_to && (
         <p className="mt-1 text-[11px] text-text-secondary">
@@ -120,21 +142,52 @@ export function UpdatesTab() {
         </p>
       )}
 
-      {/* Interval (left) | Install + Undo (right) */}
-      <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
-        <label className="flex items-center gap-1.5 text-[11px] text-text-secondary">
-          <span>{t("settings.updatesInterval")}</span>
-          <Select
-            value={checkInterval}
-            onChange={(e) => void setIntervalAndSave(e.target.value as UpdatesSettings["check_interval"])}
-            className="w-28"
-          >
-            <option value="daily">{t("settings.updatesIntervalDaily")}</option>
-            <option value="weekly">{t("settings.updatesIntervalWeekly")}</option>
-            <option value="never">{t("settings.updatesIntervalNever")}</option>
-          </Select>
-        </label>
-        <div className="flex flex-wrap items-center gap-2">
+      {/* Check cadence (label above the dropdown) */}
+      <div className="mt-3 border-t border-border pt-3">
+        <SectionLabel>{t("settings.updatesInterval")}</SectionLabel>
+        <Select
+          value={checkInterval}
+          onChange={(e) => void setIntervalAndSave(e.target.value as UpdatesSettings["check_interval"])}
+          className="mt-2 w-full"
+          aria-label={t("settings.updatesInterval")}
+        >
+          <option value="daily">{t("settings.updatesIntervalDaily")}</option>
+          <option value="weekly">{t("settings.updatesIntervalWeekly")}</option>
+          <option value="never">{t("settings.updatesIntervalNever")}</option>
+        </Select>
+      </div>
+
+      {/* Channel opt-in/out (hint lives in the hover tooltip on the label). */}
+      <div className="mt-3 border-t border-border pt-3" title={t("settings.updatesChannelHint")}>
+        <SectionLabel>
+          <span className="inline-flex cursor-help items-center gap-1">
+            {t("settings.updatesChannel")}
+            <Info size={12} className="shrink-0 opacity-70" aria-hidden />
+          </span>
+        </SectionLabel>
+        <Select
+          value={channel}
+          onChange={(e) => void setChannelAndSave(e.target.value as UpdatesSettings["channel"])}
+          className="mt-2 w-full"
+          aria-label={t("settings.updatesChannel")}
+        >
+          <option value="stable">{t("settings.updatesChannelStable")}</option>
+          <option value="nightly">{t("settings.updatesChannelNightly")}</option>
+        </Select>
+      </div>
+
+      {/* Actions: undo (icon-only) sits left of install. */}
+      {(updatesStatus === "available" && updatesInfo) || canUndo ? (
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          {canUndo && (
+            <Button
+              variant="secondary"
+              icon={<Undo2 size={12} aria-hidden />}
+              onClick={() => void useUpdatesStore.getState().rollback()}
+              title={rollbackHint}
+              aria-label={rollbackHint}
+            />
+          )}
           {updatesStatus === "available" && updatesInfo && (
             <Button
               variant="primary"
@@ -144,46 +197,8 @@ export function UpdatesTab() {
               {isNightly ? t("settings.updatesNightlyInstall") : t("settings.updatesInstall")}
             </Button>
           )}
-          {(hotpatch?.previous_version ||
-            overlay?.previous_version ||
-            nativeState?.applied_to) &&
-            updatesStatus !== "patching" && (
-              <Button
-                variant="secondary"
-                icon={<Undo2 size={12} aria-hidden />}
-                onClick={() => void useUpdatesStore.getState().rollback()}
-                title={t("settings.updatesRollbackHint", {
-                  version:
-                    hotpatch?.previous_version ??
-                    overlay?.previous_version ??
-                    nativeState?.applied_to ??
-                    "",
-                })}
-              >
-                {t("settings.updatesRollback")}
-              </Button>
-            )}
         </div>
-      </div>
-
-      {/* Channel opt-in/out (hint lives in the hover tooltip on the label). */}
-      <label
-        className="mt-3 flex items-center gap-1.5 text-[11px] text-text-secondary"
-        title={t("settings.updatesChannelHint")}
-      >
-        <span className="inline-flex cursor-help items-center gap-1">
-          {t("settings.updatesChannel")}
-          <Info size={12} className="shrink-0 opacity-70" aria-hidden />
-        </span>
-        <Select
-          value={channel}
-          onChange={(e) => void setChannelAndSave(e.target.value as UpdatesSettings["channel"])}
-          className="w-28"
-        >
-          <option value="stable">{t("settings.updatesChannelStable")}</option>
-          <option value="nightly">{t("settings.updatesChannelNightly")}</option>
-        </Select>
-      </label>
+      ) : null}
 
       {updatesStatus === "checking" && (
         <p className="mt-2 text-xs text-text-secondary">{t("settings.updatesChecking")}</p>

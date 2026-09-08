@@ -72,8 +72,9 @@ export function BackupsSection() {
   }
 
   return (
-    <div className="mt-6">
-      <h2 className="text-sm font-semibold text-text-primary">{t("settings.backupSection")}</h2>
+    <div className="mt-3 border-t border-border pt-3">
+      {/* Subcategory: no icon (only category labels carry one). */}
+      <h3 className="text-sm font-semibold text-text-primary">{t("settings.backupSection")}</h3>
       {error && <ErrorBanner onClose={() => setError(null)}>{error}</ErrorBanner>}
       <div className="mt-2 flex items-center justify-between gap-2">
         <p className="text-xs text-text-secondary">{t("settings.backupHint")}</p>

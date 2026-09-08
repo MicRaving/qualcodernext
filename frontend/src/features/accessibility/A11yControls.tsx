@@ -3,10 +3,9 @@
  * screen readers) and a compact screen-reader toggle. Mounted in the
  * dashboard and in the Settings view (General section).
  */
-import { SlidersHorizontal } from "lucide-react";
 import { useI18n } from "@/lib/i18n";
 import { usePrefsStore, type A11yMode } from "@/stores/prefs";
-import { Select } from "@/components/ui/orchestrator";
+import { SectionLabel, Select } from "@/components/ui/orchestrator";
 
 const A11Y_MODES: { mode: A11yMode; labelKey: string; hintKey: string }[] = [
   { mode: "off", labelKey: "a11y.off", hintKey: "a11y.offHint" },
@@ -23,11 +22,12 @@ function A11yModePicker() {
   const setA11yMode = usePrefsStore((s) => s.setA11yMode);
   const current = A11Y_MODES.find((m) => m.mode === a11yMode) ?? A11Y_MODES[0];
   return (
-    <div className="flex flex-col gap-1">
+    <div>
+      <SectionLabel>{t("a11y.mode")}</SectionLabel>
       <Select
         value={a11yMode}
         onChange={(e) => setA11yMode(e.target.value as A11yMode)}
-        className="w-full"
+        className="mt-2 w-full"
         aria-label={t("a11y.mode")}
       >
         {A11Y_MODES.map((m) => (
@@ -36,7 +36,7 @@ function A11yModePicker() {
           </option>
         ))}
       </Select>
-      <p className="text-xs text-text-secondary">{t(current.hintKey)}</p>
+      <p className="mt-1 text-xs text-text-secondary">{t(current.hintKey)}</p>
     </div>
   );
 }
@@ -46,10 +46,8 @@ export function A11yControls() {
   const { t } = useI18n();
   return (
     <div className="flex flex-col gap-2">
-      <div className="flex items-center gap-2 text-xs font-medium text-text-secondary">
-        <SlidersHorizontal size={14} aria-hidden />
-        <span>{t("a11y.section")}</span>
-      </div>
+      {/* Subcategory: no icon (only category labels carry one). */}
+      <h3 className="text-sm font-semibold text-text-primary">{t("a11y.section")}</h3>
       <A11yModePicker />
     </div>
   );
