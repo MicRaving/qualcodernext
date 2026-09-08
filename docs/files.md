@@ -1,7 +1,5 @@
 # Files \& Import
 
-[← Back to Documentation Hub](README.md)
-
 This guide covers file management, document import options, batch processing, metadata tagging, and interoperability with other Qualitative Data Analysis (QDA) software through standard interchange formats. Access the File Manager by clicking **Coding** (or the file manager icon) in the ribbon. The **left bar** displays all files in the project, including a search and quick options. You can import files and URLs (featuring a web scraper) here. The **Center View** displays additional options and allows for sorting and additional options.
 
 When you select multiple files, you have the option to batch Autocode and Transcribe them with identical settings; QCnext only selects previously unprocessed files and adds them to the background queue. You can also batch delete files here.
@@ -67,7 +65,3 @@ Access the Interchange tool via **Settings → Import / Export**.
 ### Automatic Format Detection \& Preview
 
 When importing external files or projects, QCnext inspects content markers and headers (e.g., XML schemas, magic numbers) rather than relying solely on file extensions. Before committing changes, a read-only preview card displays expected imports (count of files, codes, codings, cases, and attributes to be created).
-
-
-[← Back to Documentation Hub](README.md)
-
