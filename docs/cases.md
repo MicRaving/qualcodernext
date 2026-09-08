@@ -1,19 +1,6 @@
 # Cases & Mixed-Methods Attributes
 
-[← Back to Documentation Hub](README.md)
-
 This guide covers **Cases** (study units such as individuals, organizations, schools, or sites) and **Attributes** (structured quantitative/qualitative variables) for mixed-methods analysis in QCnext.
-
----
-
-## Table of Contents
-- [Overview & Concept](#overview--concept)
-- [Case Management Layout](#case-management-layout)
-- [Managing Attributes & Value Labels](#managing-attributes--value-labels)
-- [Linking Files & Spans to Cases](#linking-files--spans-to-cases)
-- [Mixed-Methods Integration](#mixed-methods-integration)
-
----
 
 ## Overview & Concept
 
@@ -26,7 +13,6 @@ In QCnext:
 
 Structuring your data into cases and attributes allows you to compare coding patterns across demographic groups or correlate qualitative themes with quantitative variables in the **Statistics Report**.
 
----
 
 ## Case Management Layout
 
@@ -44,7 +30,6 @@ Access the Cases workspace by clicking **Cases** in the ribbon.
   - **Member Files**: List of files linked to this case, with single-click linking/unlinking controls.
 - **Right Bar**: The Inspector showing entity details and summary counts.
 
----
 
 ## Managing Attributes & Value Labels
 
@@ -59,7 +44,6 @@ Attributes define structured metadata across cases or files.
    - When value labels are defined, the attribute field renders as an intuitive dropdown menu across all cases while still preserving custom text entry options.
 4. **Data Types**: Supports text, numeric scales, dates, and categorical variables.
 
----
 
 ## Linking Files & Spans to Cases
 
@@ -73,7 +57,6 @@ Link entire files (e.g., `P01_Interview.docx`, `P01_Demographics.csv`) to a case
 ### 2. File Span Linking
 If a single transcript contains dialogue from multiple participants (e.g., a focus group transcript), you can assign specific character ranges or sections within the file to distinct cases.
 
----
 
 ## Mixed-Methods Integration
 
@@ -82,7 +65,3 @@ Setting up cases and attributes unlocks powerful mixed-methods reports in the An
 - **Crosstabs & Chi-Square**: Test whether code frequencies differ significantly across attribute categories (e.g., comparing themes between *Control* vs. *Treatment* groups).
 - **Group Comparisons (Mann-Whitney U)**: Evaluate differences in code density across numeric attribute scales.
 - **Stacked Attribute Charts**: Visualize coding distribution broken down by demographic variables.
-
----
-
-[← Back to Documentation Hub](README.md)
