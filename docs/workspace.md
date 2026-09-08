@@ -7,7 +7,7 @@ This guide covers the core application structure of QCnext: project creation and
 
 The **Dashboard** is the application home screen for opening / creating projects and showing basic project statistics and shortcuts.
 
-!\[Active Project Dashboard](screenshots/dashboard.jpg)
+![Active Project Dashboard](screenshots/dashboard.jpg)
 
 * **New Project**: Opens the project creation dialog. Keep in mind that projects are hosted in folders. A **project** in QCnext is a self-contained directory holding your raw source material (interview transcripts, PDFs, images, field notes, survey spreadsheets, audio/video recordings, and web captures) along with an integrated database that records your analysis.
 * **Open Project**: Opens the system folder picker to open an existing project folder.
