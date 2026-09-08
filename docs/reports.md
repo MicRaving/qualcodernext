@@ -8,7 +8,7 @@ This guide covers the Analysis workspace in QCnext: eleven analytical reports, s
 
 ## Overview of Analysis Workspace
 
-!\[Code Frequencies](screenshots/reports.jpg)
+![Code Frequencies](screenshots/reports.jpg)
 
 Access Analysis by clicking **Reports** in the ribbon. The left bar organizes available tools into three sections: **Analytical Reports**, **Tools**, and **Graphs**. In the header of most reports you can click Publish to export to Word, Excel, and PowerPoint formats (experimental).
 
