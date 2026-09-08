@@ -1,7 +1,5 @@
 # Analysis, Reports \& Statistics
 
-[← Back to Documentation Hub](README.md)
-
 This guide covers the Analysis workspace in QCnext: eleven analytical reports, statistical tools, interrater reliability calculations, publishing capabilities, SQL/R consoles, and the SVG visual code map editor with automated model generators.
 
 
@@ -36,7 +34,7 @@ Bibliography manager holding RIS/Zotero reference metadata (authors, year, title
 
 ### Read-Only SQL Query Editor
 
-!\[SQL Query](screenshots/sql.jpg)
+![SQL Query](screenshots/sql.jpg)
 Execute custom read-only `SELECT` queries directly against the project SQLite database. Save and load query templates for advanced data extraction.
 
 ### R Script Console
@@ -66,7 +64,3 @@ Click **Models** on the graph toolbar to generate visual graphs automatically:
 |**Case Hierarchy**|Cases with associated files and attributes.|
 |**Case Comparison**|Bipartite graph mapping cases to applied codes.|
 |**Co-Occurrence Network**|Network graph connecting codes based on co-occurrence density.|
-
-
-[← Back to Documentation Hub](README.md)
-
