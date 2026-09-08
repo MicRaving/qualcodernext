@@ -8,8 +8,9 @@
  * update auto-installs (including large ones) — there is no size gate.
  */
 import { useEffect, useState } from "react";
-import { Check, Download, Info, LoaderCircle, RotateCw, Undo2 } from "lucide-react";
+import { Check, Download, ExternalLink, Info, LoaderCircle, RotateCw, Undo2 } from "lucide-react";
 import { Button, SectionLabel, Select } from "@/components/ui/orchestrator";
+import { openExternal } from "@/features/bugreport/github";
 import { useI18n } from "@/lib/i18n";
 import {
   NIGHTLY_MANIFEST_URL,
@@ -176,6 +177,16 @@ export function UpdatesTab() {
             <option value="stable">{t("settings.updatesChannelStable")}</option>
             <option value="nightly">{t("settings.updatesChannelNightly")}</option>
           </Select>
+          {channel === "nightly" && (
+            <Button
+              variant="secondary"
+              icon={<ExternalLink size={12} aria-hidden />}
+              onClick={() => void openExternal(NIGHTLY_MANIFEST_URL)}
+              title={t("settings.updatesNightlyManifest")}
+              aria-label={t("settings.updatesNightlyManifest")}
+              className="shrink-0"
+            />
+          )}
           {channel === "nightly" && canUndo && (
             <Button
               variant="secondary"
@@ -251,18 +262,6 @@ export function UpdatesTab() {
             : updatesError === NO_UPDATE_MANIFEST
               ? t("settings.updatesNoManifest")
               : t("settings.updatesError", { detail: updatesError ?? "" })}
-        </p>
-      )}
-      {channel === "nightly" && (
-        <p className="mt-2 text-[11px] text-text-secondary">
-          <a
-            className="underline"
-            href={NIGHTLY_MANIFEST_URL}
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            {t("settings.updatesNightlyManifest")}
-          </a>
         </p>
       )}
     </div>

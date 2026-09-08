@@ -13,6 +13,7 @@ import { Bug, CircleAlert, CircleCheck, Info, LoaderCircle, Settings } from "luc
 import { useI18n } from "@/lib/i18n";
 import { api, type RStatus } from "@/lib/api";
 import { BarHeader, BarTitle, IconButton, LeftBar } from "@/components/ui/orchestrator";
+import { openExternal } from "@/features/bugreport/github";
 import { useProjectStore } from "@/stores/project";
 import { GeneralTab } from "@/features/settings/GeneralTab";
 import { AiTab } from "@/features/settings/AiTab";
@@ -131,6 +132,15 @@ export function SettingsView() {
                 href="https://www.r-project.org/"
                 target="_blank"
                 rel="noreferrer"
+                onClick={(e) => {
+                  // Packaged app: WebView2 blocks window.open popups, so a
+                  // bare anchor does nothing — go through the opener plugin.
+                  // Plain browsers keep native anchor behavior.
+                  if (typeof window !== "undefined" && "__TAURI_INTERNALS__" in window) {
+                    e.preventDefault();
+                    void openExternal("https://www.r-project.org/");
+                  }
+                }}
                 className="mt-1 inline-block text-xs text-accent underline"
               >
                 {t("r.installHint")}
