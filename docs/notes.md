@@ -1,7 +1,5 @@
 # Notes, Crafter \& Creative Coding
 
-[← Back to Documentation Hub](README.md)
-
 Qualitative research extends far beyond attaching labels to text. QCnext provides three complementary layers for analytical writing and synthesis:
 
 1. **Reflective Notes**: Methodological journaling, passage annotations, and code/file memos.
@@ -72,7 +70,3 @@ The **Creative Coding** scratchpad opens in the right-bar utility pane (click �
 
    * Converts the scratchpad entry into a durable code in your codebook.
    * If the item had an attached source quote, automatically **codes the referenced document passage** with the newly created code.
-
-
-[← Back to Documentation Hub](README.md)
-
