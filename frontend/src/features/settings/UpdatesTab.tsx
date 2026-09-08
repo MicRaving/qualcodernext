@@ -157,7 +157,8 @@ export function UpdatesTab() {
         </Select>
       </div>
 
-      {/* Channel opt-in/out (hint lives in the hover tooltip on the label). */}
+      {/* Channel opt-in/out (hint lives in the hover tooltip on the label).
+          Undo sits right of the dropdown and only exists on nightly. */}
       <div className="mt-3 border-t border-border pt-3" title={t("settings.updatesChannelHint")}>
         <SectionLabel>
           <span className="inline-flex cursor-help items-center gap-1">
@@ -165,40 +166,41 @@ export function UpdatesTab() {
             <Info size={12} className="shrink-0 opacity-70" aria-hidden />
           </span>
         </SectionLabel>
-        <Select
-          value={channel}
-          onChange={(e) => void setChannelAndSave(e.target.value as UpdatesSettings["channel"])}
-          className="mt-2 w-full"
-          aria-label={t("settings.updatesChannel")}
-        >
-          <option value="stable">{t("settings.updatesChannelStable")}</option>
-          <option value="nightly">{t("settings.updatesChannelNightly")}</option>
-        </Select>
-      </div>
-
-      {/* Actions: undo (icon-only) sits left of install. */}
-      {(updatesStatus === "available" && updatesInfo) || canUndo ? (
-        <div className="mt-3 flex flex-wrap items-center gap-2">
-          {canUndo && (
+        <div className="mt-2 flex items-center gap-2">
+          <Select
+            value={channel}
+            onChange={(e) => void setChannelAndSave(e.target.value as UpdatesSettings["channel"])}
+            className="w-full"
+            aria-label={t("settings.updatesChannel")}
+          >
+            <option value="stable">{t("settings.updatesChannelStable")}</option>
+            <option value="nightly">{t("settings.updatesChannelNightly")}</option>
+          </Select>
+          {channel === "nightly" && canUndo && (
             <Button
               variant="secondary"
               icon={<Undo2 size={12} aria-hidden />}
               onClick={() => void useUpdatesStore.getState().rollback()}
               title={rollbackHint}
               aria-label={rollbackHint}
+              className="shrink-0"
             />
           )}
-          {updatesStatus === "available" && updatesInfo && (
-            <Button
-              variant="primary"
-              icon={<Download size={12} aria-hidden />}
-              onClick={() => void useUpdatesStore.getState().install()}
-            >
-              {isNightly ? t("settings.updatesNightlyInstall") : t("settings.updatesInstall")}
-            </Button>
-          )}
         </div>
-      ) : null}
+      </div>
+
+      {/* Install action. */}
+      {updatesStatus === "available" && updatesInfo && (
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          <Button
+            variant="primary"
+            icon={<Download size={12} aria-hidden />}
+            onClick={() => void useUpdatesStore.getState().install()}
+          >
+            {isNightly ? t("settings.updatesNightlyInstall") : t("settings.updatesInstall")}
+          </Button>
+        </div>
+      )}
 
       {updatesStatus === "checking" && (
         <p className="mt-2 text-xs text-text-secondary">{t("settings.updatesChecking")}</p>
