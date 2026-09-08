@@ -16,8 +16,7 @@ Click **Autocode** in any coder to open the dialog and code via AI Autocode usin
 
 Across all text-based coders (Text, PDF, CSV, Webpage, AV Transcripts), selecting content triggers the floating **Selection Toolbar**:
 
-!\[Text Coder](screenshots/coder.jpg)
-
+![Text Coder](screenshots/coder.jpg)
 
 
 Toolbar Actions
@@ -33,8 +32,6 @@ Toolbar Actions
 * When multiple codes overlap on the same text, their colors stack.
 * Hovering over a coded segment displays a tooltip with code names and memos; clicking opens the **Segment Details Inspector**.
 
-\---
-
 ## Text Coder
 
 The **Text Coder** is the primary workspace for interview transcripts, field notes, survey text, and imported documents (`.txt`, `.md`, `.docx`).
@@ -46,8 +43,6 @@ The **Text Coder** is the primary workspace for interview transcripts, field not
   * Upon saving (`Ctrl/Cmd+S`), all character offsets for existing codings and annotations are re-anchored instantly.
 * **Code Tree Integration**: Single-clicking a code in the left bar sets it as active; double-clicking opens its Inspector details.
 
-\---
-
 ## PDF Coder
 
 The **PDF Coder** combines visual page region drawing with extracted plain-text coding in a dual-pane environment.
@@ -56,13 +51,11 @@ The **PDF Coder** combines visual page region drawing with extracted plain-text 
 * **Plain text**: Display extracted plain text; PDF and Plain text can be shown in split view.
 * **Coding**: You can code either text or rectangular regions anywhere on a PDF page to code charts, diagrams, formulas, or non-extractable text. Coordinates are stored in vector page relative space.
 
-\---
 
 ## Image Coder
 
 The **Image Coder** allows researchers to mark and code graphic material (`.png`, `.jpg`, `.webp`, `.svg`). Click and drag over photos, diagrams, or scans to mark rectangular regions.
 
-\---
 
 ## CSV / Table Coder
 
@@ -71,7 +64,6 @@ The **CSV / Table Coder** provides cell-level text coding for survey data, tabul
 * **Cell-Level Character Coding**: Code specific words or phrases *inside* individual cells rather than marking entire table rows.
 * **Plain Text Fallback**: Toggle to view the raw tabular document in the standard text coder if preferred.
 
-\---
 
 ## Webpage Coder
 
@@ -80,7 +72,6 @@ The **Webpage Coder** handles HTML page captures and web articles imported via U
 * **Split View Layout**: Displays the raw rendered HTML snapshot alongside clean extracted article text, similar to PDFs.
 * **Coding**: Select text on the rendered webpage to code it directly like in other text modes.
 
-\---
 
 ## Audio / Video Coder \& Transcripts
 
@@ -108,7 +99,6 @@ The **Audio / Video Coder** integrates media playback, timeline range coding, tr
 * **Manual Mode**: Turn on **Transcribe mode** to type transcripts manually. Pressing `Enter` or `F9` auto-inserts timestamp markers `\[mm:ss]`.
 * **Speaker Detection**: Automatically detect speaker turns from transcript identifiers (e.g., `Speaker 1:`, `\[Alice]`, `{@Bob}`) or custom regex patterns. QCnext automatically generates speaker codes and codes every turn across the transcript.
 
-\---
 
 [← Back to Documentation Hub](README.md)
 
