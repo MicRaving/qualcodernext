@@ -6,7 +6,7 @@ This guide covers file management, document import options, batch processing, me
 
 When you select multiple files, you have the option to batch Autocode and Transcribe them with identical settings; QCnext only selects previously unprocessed files and adds them to the background queue. You can also batch delete files here.
 
-!\[File Manager](screenshots/files.jpg)
+![File Manager](screenshots/files.jpg)
 
 ## Importing Material
 
@@ -31,7 +31,6 @@ Entering a URL into the **Import URL** dialog provides two import modes:
 2. **Full Snapshot**: Captures full HTML, stylesheets, and images into a self-contained snapshot for visual webpage coding.
 3. **YouTube Import**: Scrapes video comments and organizes them in a worksheet.
 
-\---
 
 ## File Management \& Batch Jobs
 
@@ -45,8 +44,6 @@ Entering a URL into the **Import URL** dialog provides two import modes:
 
 * **Batch AI / Dictionary Autocode**: Select multiple files in the File Manager and click **Autocode** to queue background coding across all selected files.
 * **Batch Export**: Export raw files or coded document reports for selected subsets of material.
-
-\---
 
 ### Supported Interchange Formats
 
@@ -71,7 +68,6 @@ Access the Interchange tool via **Settings → Import / Export**.
 
 When importing external files or projects, QCnext inspects content markers and headers (e.g., XML schemas, magic numbers) rather than relying solely on file extensions. Before committing changes, a read-only preview card displays expected imports (count of files, codes, codings, cases, and attributes to be created).
 
-\---
 
 [← Back to Documentation Hub](README.md)
 
