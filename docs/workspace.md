@@ -4,7 +4,6 @@
 
 This guide covers the core application structure of QCnext: project creation and management, the 5-slot workspace layout, background job execution, asynchronous multi-coder collaboration sync, the full audit history with per-row undo/redo, and the integrated bug reporter.
 
-\---
 
 ## Dashboard \& Project Management
 
@@ -17,7 +16,6 @@ The **Dashboard** is the application home screen for opening / creating projects
 * **Recent Projects**: Displays recently opened projects.
 * **Accessibility Controls**: Quick dropdown to select high-contrast, screenreader, large-text, reduced-motion, or colorblind-friendly modes (experimental).
 
-\---
 
 ## The General Layout
 
@@ -88,8 +86,6 @@ Stable releases arrive as full installers. The opt-in **Nightly** channel (Setti
 * **Backend native files** (only what changed): stages while you work and applies on the next app start (one relaunch, combined with the layers above).
 
 Every patch is checksum- and signature-verified before anything is touched, the previous state is kept for one-step **Undo patch**, and oversized deltas are refused in favor of the full release. Every available update installs automatically — there is no size gate.
-
-\---
 
 [← Back to Documentation Hub](README.md)
 
