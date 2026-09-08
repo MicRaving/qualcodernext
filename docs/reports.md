@@ -4,7 +4,6 @@
 
 This guide covers the Analysis workspace in QCnext: eleven analytical reports, statistical tools, interrater reliability calculations, publishing capabilities, SQL/R consoles, and the SVG visual code map editor with automated model generators.
 
-\---
 
 ## Overview of Analysis Workspace
 
@@ -24,7 +23,6 @@ Access Analysis by clicking **Reports** in the ribbon. The left bar organizes av
 10. Sentiment Analysis: Analyzes emotional tone across passages using offline VADER lexicon scoring (negative, neutral, positive, compound) or AI-assisted sentiment evaluation.
 11. Document Comparison: Side-by-side alignment of two text files linked by Longest Common Subsequence (LCS), highlighting code overlays, Dice similarity coefficients, and co-occurrence tables.
 
-\---
 
 ## Analytical Tools: Codebook, References, SQL \& R
 
@@ -45,7 +43,6 @@ Execute custom read-only `SELECT` queries directly against the project SQLite da
 
 Integrated environment for executing R statistical scripts against project data. Features pre-built script templates (RSQLite matrices, `quanteda` word frequencies, `irr` agreement metrics), background execution, and artifact rendering (stdout, PNG charts, CSV outputs).
 
-\---
 
 ## Graphs \& Visual Code Maps
 
@@ -70,7 +67,6 @@ Click **Models** on the graph toolbar to generate visual graphs automatically:
 |**Case Comparison**|Bipartite graph mapping cases to applied codes.|
 |**Co-Occurrence Network**|Network graph connecting codes based on co-occurrence density.|
 
-\---
 
 [← Back to Documentation Hub](README.md)
 
