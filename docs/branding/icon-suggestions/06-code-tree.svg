@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512" role="img" aria-label="QCnext icon concept: a code tree with a highlighted root">
+  <defs>
+    <linearGradient id="bg06" x1="0" y1="0" x2="512" y2="512" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#313150"/>
+      <stop offset="1" stop-color="#1e1e2e"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="512" height="512" rx="112" fill="url(#bg06)"/>
+  <rect x="1.5" y="1.5" width="509" height="509" rx="110.5" fill="none" stroke="#3e3e5c" stroke-width="3"/>
+
+  <g fill="none" stroke="#6b6b8a" stroke-width="18" stroke-linecap="round">
+    <path d="M256 168 V222"/>
+    <path d="M256 222 H164 V276"/>
+    <path d="M256 222 H348 V276"/>
+    <path d="M164 324 V360"/>
+    <path d="M164 360 H118 V396"/>
+    <path d="M164 360 H214 V396"/>
+    <path d="M348 324 V360"/>
+    <path d="M348 360 H298 V396"/>
+    <path d="M348 360 H394 V396"/>
+  </g>
+
+  <circle cx="256" cy="132" r="40" fill="#f59e0b"/>
+  <circle cx="164" cy="298" r="26" fill="#e8e8ed"/>
+  <circle cx="348" cy="298" r="26" fill="#e8e8ed"/>
+  <circle cx="118" cy="418" r="20" fill="#9a9ab0"/>
+  <circle cx="214" cy="418" r="20" fill="#9a9ab0"/>
+  <circle cx="298" cy="418" r="20" fill="#9a9ab0"/>
+  <circle cx="394" cy="418" r="20" fill="#9a9ab0"/>
+</svg>

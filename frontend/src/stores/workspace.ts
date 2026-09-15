@@ -8,6 +8,7 @@
  */
 import { create } from "zustand";
 import type { SortDir, SortKey } from "@/features/manage/files";
+import type { MetaHit } from "@/lib/api/types";
 import { useInspectorStore } from "./inspector";
 
 export type WorkspaceView =
@@ -21,7 +22,8 @@ export type WorkspaceView =
   | { kind: "graphs" }
   | { kind: "history" }
   | { kind: "settings" }
-  | { kind: "ai" };
+  | { kind: "ai" }
+  | { kind: "meta" };
 
 /** Which panel the right bar shows. Inspector is the default; AI, Settings,
  *  History, Creative and Help are toggleable panes driven from the top bar. */
@@ -89,7 +91,37 @@ interface WorkspaceState {
   /** Analysis area UI state (reports left bar / center coordination). */
   analyzeUi: { selectedId: ReportId | null };
   setAnalyzeUi: (patch: Partial<{ selectedId: ReportId | null }>) => void;
+  /** Meta-analysis workspace state, shared between the study left bar and the
+   *  center view (tab = pipeline stage, selectedHit = focused study,
+   *  selectedIds = papers ticked for a batch/autocode run, scheme = active
+   *  coding scheme, email = Unpaywall contact, importOpen/schemeOpen open the
+   *  respective dialogs from the left bar, tick = bumped after mutations so
+   *  the left bar reloads). */
+  metaUi: {
+    tab: MetaTab;
+    selectedHit: MetaHit | null;
+    selectedIds: number[];
+    scheme: string;
+    email: string;
+    importOpen: boolean;
+    schemeOpen: boolean;
+    tick: number;
+  };
+  setMetaUi: (
+    patch: Partial<{
+      tab: MetaTab;
+      selectedHit: MetaHit | null;
+      selectedIds: number[];
+      scheme: string;
+      email: string;
+      importOpen: boolean;
+      schemeOpen: boolean;
+      tick: number;
+    }>,
+  ) => void;
 }
+
+export type MetaTab = "screen" | "download" | "extract";
 
 export const useWorkspaceStore = create<WorkspaceState>((set) => ({
   view: { kind: "dashboard" },
@@ -122,4 +154,15 @@ export const useWorkspaceStore = create<WorkspaceState>((set) => ({
   setNotesUi: (patch) => set((s) => ({ notesUi: { ...s.notesUi, ...patch } })),
   analyzeUi: { selectedId: "code-frequencies" },
   setAnalyzeUi: (patch) => set((s) => ({ analyzeUi: { ...s.analyzeUi, ...patch } })),
+  metaUi: {
+    tab: "screen",
+    selectedHit: null,
+    selectedIds: [],
+    scheme: "",
+    email: "",
+    importOpen: false,
+    schemeOpen: false,
+    tick: 0,
+  },
+  setMetaUi: (patch) => set((s) => ({ metaUi: { ...s.metaUi, ...patch } })),
 }));

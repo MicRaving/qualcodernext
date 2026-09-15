@@ -1,0 +1,38 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512" role="img" aria-label="QCnext app icon: a lens-shaped Q and C above the neutral word next with an amber x">
+  <title>QCnext app icon</title>
+  <defs>
+    <linearGradient id="bg11" x1="0" y1="0" x2="512" y2="512" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#313150"/>
+      <stop offset="1" stop-color="#1e1e2e"/>
+    </linearGradient>
+    <linearGradient id="amber11" x1="40" y1="110" x2="330" y2="340" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#fbbf24"/>
+      <stop offset="1" stop-color="#d97706"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="512" height="512" rx="112" fill="url(#bg11)"/>
+  <rect x="1.5" y="1.5" width="509" height="509" rx="110.5" fill="none" stroke="#3e3e5c" stroke-width="3"/>
+
+  <!-- line 1: Q as a lens + C -->
+  <g transform="translate(19.95 -41.85) scale(0.95)" stroke-linecap="round" stroke-linejoin="round">
+    <circle cx="128" cy="200" r="76" fill="none" stroke="url(#amber11)" stroke-width="42"/>
+    <path d="M180 252 L232 304" fill="none" stroke="url(#amber11)" stroke-width="42"/>
+    <path d="M446.9 141.8 A76 76 0 1 0 446.9 258.2" fill="none" stroke="#e8e8ed" stroke-width="38"/>
+  </g>
+
+  <!-- line 2: next -->
+  <g transform="translate(-263.6 265.8) scale(0.6)" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M540 300 V176" fill="none" stroke="#e8e8ed" stroke-width="34"/>
+    <path d="M540 236 C540 198 557 180 574 180 C591 180 608 198 608 236 V300" fill="none" stroke="#e8e8ed" stroke-width="34"/>
+
+    <path d="M788 236 A58 58 0 1 0 730 294" fill="none" stroke="#e8e8ed" stroke-width="34"/>
+    <path d="M672 236 H788" fill="none" stroke="#e8e8ed" stroke-width="34"/>
+
+    <path d="M868 178 L1028 302" fill="none" stroke="url(#amber11)" stroke-width="34"/>
+    <path d="M1028 178 L868 302" fill="none" stroke="url(#amber11)" stroke-width="34"/>
+
+    <path d="M1150 152 V300" fill="none" stroke="#e8e8ed" stroke-width="34"/>
+    <path d="M1108 208 H1192" fill="none" stroke="#e8e8ed" stroke-width="34"/>
+  </g>
+</svg>

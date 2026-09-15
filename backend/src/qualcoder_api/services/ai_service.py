@@ -379,6 +379,42 @@ class AiService:
             content = (choices[0].get("message") or {}).get("content") or ""
         return {"reply": content, "model": ai["model"], "tool_calls": []}
 
+    async def chat_messages(
+        self,
+        ai: dict,
+        messages: list[dict],
+        temperature: float = 0.0,
+        max_tokens: int | None = None,
+    ) -> str:
+        """Raw chat-completions call with caller-supplied message list.
+
+        Unlike ``chat`` (which injects personas, context and the wrapping
+        prompt), this posts ``messages`` verbatim and returns the assistant's
+        content string — used by the meta-analysis pipeline for screening and
+        extraction prompts that need their own system prompts and strict JSON
+        output. Reuses the shared error handling, auto-start and timeout.
+        """
+        ok, _ = self.is_configured(ai)
+        if not ok:
+            raise AiUnavailable("AI is not configured")
+        api_base = ai["api_base"].rstrip("/")
+        url = f"{api_base}{CHAT_PATH}"
+        payload: dict = {
+            "model": ai["model"],
+            "messages": messages,
+            "stream": False,
+            "temperature": temperature,
+        }
+        if max_tokens:
+            payload["max_tokens"] = max_tokens
+        response = await self._post_chat(url, payload, ai)
+        data = response.json()
+        content = ""
+        for choice in data.get("choices") or []:
+            content = (choice.get("message") or {}).get("content") or ""
+            break
+        return content
+
     # ------------------------------------------------------------------
     # Agentic chat — the model can call the project's MCP tools
     # ------------------------------------------------------------------

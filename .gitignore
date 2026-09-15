@@ -17,6 +17,9 @@ src-tauri/gen/
 # Generated artifacts
 src/lib/_locale_report.json
 
+# Nightly delta patches (built by scripts/build-patch.py / the nightly CI job)
+dist-patches/
+
 # Project databases (user data)
 *.qda
 

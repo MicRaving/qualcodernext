@@ -7,6 +7,17 @@
      include (first releases have no base tag, so no link). Add a section
      like "## 0.1.1 (2026-08-31)" at the TOP of the file. -->
 
+## 0.2.0 (2026-09-09)
+
+- New Meta-analysis workspace: search-hit table with abstract screening, paper download and data extraction, each optionally automated with the AI backend.
+- Screening verdicts per criterion/coder with certainty and rationale; configurable inclusion criteria.
+- Paper retrieval via OpenAlex, Unpaywall, Crossref landing pages, local Zotero reuse and manual PDF assignment.
+- Scheme-driven extraction with metafor-completeness validation, optional publish to cases/codes and CSV/Excel export.
+- Streamlined Meta layout: abstract screening in the center, per-tab actions in the menubar and study left bar, batch PDF import, multi-select autocoding and an in-app PDF viewer.
+- Reworked coding-scheme editor with group, type and editor selectors and a dropdown-option list editor.
+
+**Full Changelog**: https://github.com/MicRaving/qualcodernext/compare/v0.1.17...v0.2.0
+
 ## 0.1.17 (2026-09-07)
 
 - Backend updates install again: the app shell permits its own commands.

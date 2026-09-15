@@ -71,6 +71,7 @@ class MigrationChain:
         applied += await self.migrate_v34(app_version)
         applied += await self.migrate_v35(app_version)
         applied += await self.migrate_v36(app_version)
+        applied += await self.migrate_v37(app_version)
         return applied
 
 
@@ -936,4 +937,91 @@ class MigrationChain:
         await cur.execute('update project set databaseversion="v36", about=?', [app_version])
         await self.conn.commit()
         return ["v36"]
+
+
+    async def migrate_v37(self, app_version: str) -> list[str]:
+        """v37: meta-analysis mode tables — ``meta_hit``, ``meta_criterion``,
+        ``meta_screening``, ``meta_document``, ``meta_extraction`` and
+        ``meta_scheme``.
+
+        Local-only in v1: the tables deliberately stay OUT of ``sync_log`` /
+        ``OWNER_TABLES`` so the collaboration engine, undo registry and
+        upstream-parity tests are untouched. Rows carry ``owner`` so a later
+        collaboration milestone can add capture + replay additively. No-op
+        when the tables are already present (fresh projects create them in
+        their schema).
+        """
+        if self.conn is None:
+            return []
+        cur = await self.conn.cursor()
+        changed = False
+        ddl = [
+            (
+                "meta_hit",
+                "CREATE TABLE meta_hit (hit_id integer primary key autoincrement, title text not null, "
+                "abstract text, authors text, doi text, year text, source text, language text, "
+                "search_run text, status text not null default 'imported', created text, updated text, "
+                "unique(doi))",
+            ),
+            (
+                "meta_criterion",
+                "CREATE TABLE meta_criterion (id integer primary key autoincrement, "
+                "position integer not null default 0, key text not null, label text not null, "
+                "prompt_text text not null, created text)",
+            ),
+            (
+                "meta_screening",
+                "CREATE TABLE meta_screening (id integer primary key autoincrement, "
+                "hit_id integer not null, owner text not null, run_id text not null default '', "
+                "verdicts text, intervention_type text, rationale text, "
+                "origin text not null default 'manual', model text, prompt_hash text, "
+                "created text, updated text, unique(hit_id, owner, run_id))",
+            ),
+            (
+                "meta_document",
+                "CREATE TABLE meta_document (id integer primary key autoincrement, "
+                "hit_id integer not null, source_id integer, retrieval_method text, url text, "
+                "status text not null default 'pending', message text, created text, updated text, "
+                "unique(hit_id))",
+            ),
+            (
+                "meta_extraction",
+                "CREATE TABLE meta_extraction (id integer primary key autoincrement, "
+                "hit_id integer not null, source_id integer, owner text not null, scheme text not null, "
+                "study_vars text, dv_metrics text, prescreen text, model text, prompt_hash text, "
+                "status text not null default 'prescreen_pending', missing_reason text, created text, "
+                "updated text, unique(hit_id))",
+            ),
+            (
+                "meta_scheme",
+                "CREATE TABLE meta_scheme (id integer primary key autoincrement, "
+                "name text not null unique, label text, description text, prescreen_prompt text, "
+                "coding_prompt text, codebook text, created text, updated text)",
+            ),
+        ]
+        for table, create_sql in ddl:
+            if not await self._has_table(cur, table):
+                await cur.execute(create_sql)
+                await self.conn.commit()
+                changed = True
+        for index, table, column in (
+            ("idx_meta_hit_doi", "meta_hit", "doi"),
+            ("idx_meta_screening_hit", "meta_screening", "hit_id"),
+            ("idx_meta_document_hit", "meta_document", "hit_id"),
+            ("idx_meta_extraction_hit", "meta_extraction", "hit_id"),
+        ):
+            if not await self._has_table(cur, table):
+                continue
+            await cur.execute(
+                "SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = ?", (index,)
+            )
+            if await cur.fetchone() is None:
+                await cur.execute(f"CREATE INDEX {index} ON {table}({column})")
+                await self.conn.commit()
+                changed = True
+        if changed:
+            await cur.execute('update project set databaseversion="v37", about=?', [app_version])
+            await self.conn.commit()
+            return ["v37"]
+        return []
 

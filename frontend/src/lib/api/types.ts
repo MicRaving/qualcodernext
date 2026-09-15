@@ -1170,3 +1170,131 @@ export interface SyncResult {
   imported?: Record<string, { applied: number; conflicts: SyncConflict[] }>;
   repaired?: boolean;
 }
+
+
+// ── Meta-analysis pipeline ───────────────────────────────────────────
+
+export interface MetaHit {
+  hit_id: number;
+  title: string;
+  abstract?: string | null;
+  authors?: string | null;
+  doi?: string | null;
+  year?: string | null;
+  source?: string | null;
+  language?: string | null;
+  search_run?: string | null;
+  status: string;
+  eligible?: boolean;
+  screened?: boolean;
+  created: string;
+  updated: string;
+}
+
+export interface MetaCriterion {
+  id: number;
+  position: number;
+  key: string;
+  label: string;
+  prompt_text: string;
+  created: string;
+}
+
+export interface MetaScreening {
+  id: number;
+  hit_id: number;
+  owner: string;
+  run_id: string;
+  verdicts: Record<string, { applies: string; certainty: string }>;
+  intervention_type?: string | null;
+  rationale?: string | null;
+  origin: string;
+  model?: string | null;
+  prompt_hash?: string | null;
+  created: string;
+  updated: string;
+}
+
+export interface MetaDocument {
+  id: number;
+  hit_id: number;
+  source_id?: number | null;
+  retrieval_method?: string | null;
+  url?: string | null;
+  status: string;
+  message?: string | null;
+  title?: string;
+  doi?: string | null;
+  created: string;
+  updated: string;
+}
+
+export interface MetaExtraction {
+  id: number;
+  hit_id: number;
+  source_id?: number | null;
+  owner: string;
+  scheme: string;
+  scheme_label?: string;
+  study_vars: Record<string, unknown>;
+  dv_metrics: Record<string, unknown>[];
+  prescreen?: Record<string, unknown> | null;
+  model?: string | null;
+  prompt_hash?: string | null;
+  status: string;
+  missing_reason?: string | null;
+  title?: string;
+  doi?: string | null;
+  created: string;
+  updated: string;
+}
+
+export interface MetaScheme {
+  id: number;
+  name: string;
+  label?: string | null;
+  description?: string | null;
+  prescreen_prompt?: string | null;
+  coding_prompt?: string | null;
+  codebook?: string | null;
+  created: string;
+  updated: string;
+}
+
+export interface MetaJob {
+  id: string;
+  kind: string;
+  label: string;
+  state: string;
+  progress: number;
+  message: string;
+  result?: unknown;
+  error?: string | null;
+  paused: boolean;
+  started: number;
+}
+
+export interface MetaImportPreview {
+  format: string;
+  structured: boolean;
+  sheets: string[];
+  sheet: string;
+  header_row: number;
+  columns: string[];
+  head_rows: string[][];
+  rows_sample: string[][];
+  mapping: Record<string, number | null>;
+  fields: string[];
+}
+
+export interface MetaStatus {
+  hits: number;
+  criteria: number;
+  schemes: number;
+  screening_rows: number;
+  eligible: number;
+  documents_done: number;
+  extracted: number;
+  tabs?: { screening: number; downloads: number; extraction: number };
+  by_status: Record<string, number>;
+}

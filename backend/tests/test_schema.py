@@ -54,6 +54,12 @@ EXPECTED_TABLES = {
     "ai_prompt",
     "sync_rev",
     "sync_conflict",
+    "meta_hit",
+    "meta_criterion",
+    "meta_screening",
+    "meta_document",
+    "meta_extraction",
+    "meta_scheme",
 }
 
 EXPECTED_VIEWS = {

@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512" role="img" aria-label="QCnext icon concept: a Q followed by forward chevrons">
+  <defs>
+    <linearGradient id="bg01" x1="0" y1="0" x2="512" y2="512" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#313150"/>
+      <stop offset="1" stop-color="#1e1e2e"/>
+    </linearGradient>
+    <linearGradient id="amber01" x1="110" y1="120" x2="360" y2="400" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#fbbf24"/>
+      <stop offset="1" stop-color="#d97706"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="512" height="512" rx="112" fill="url(#bg01)"/>
+  <rect x="1.5" y="1.5" width="509" height="509" rx="110.5" fill="none" stroke="#3e3e5c" stroke-width="3"/>
+
+  <g fill="none" stroke-linecap="round" stroke-linejoin="round">
+    <circle cx="196" cy="244" r="94" stroke="url(#amber01)" stroke-width="46"/>
+    <path d="M267 315 L316 364" stroke="url(#amber01)" stroke-width="46"/>
+    <path d="M348 176 L412 244 L348 312" stroke="#e8e8ed" stroke-width="30"/>
+    <path d="M394 176 L458 244 L394 312" stroke="#9a9ab0" stroke-width="30"/>
+  </g>
+</svg>

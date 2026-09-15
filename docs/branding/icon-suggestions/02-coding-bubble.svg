@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512" role="img" aria-label="QCnext icon concept: a speech bubble with coded text lines">
+  <defs>
+    <linearGradient id="bg02" x1="0" y1="0" x2="512" y2="512" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#313150"/>
+      <stop offset="1" stop-color="#1e1e2e"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="512" height="512" rx="112" fill="url(#bg02)"/>
+  <rect x="1.5" y="1.5" width="509" height="509" rx="110.5" fill="none" stroke="#3e3e5c" stroke-width="3"/>
+
+  <path d="M176 300 L168 384 L256 300 Z" fill="#e8e8ed"/>
+  <rect x="114" y="112" width="284" height="196" rx="52" fill="#e8e8ed"/>
+
+  <g stroke-linecap="round">
+    <path d="M168 170 H340" stroke="#1e1e2e" stroke-width="24"/>
+    <path d="M168 216 H308" stroke="#d97706" stroke-width="24"/>
+    <path d="M168 262 H272" stroke="#1e1e2e" stroke-width="24"/>
+  </g>
+</svg>

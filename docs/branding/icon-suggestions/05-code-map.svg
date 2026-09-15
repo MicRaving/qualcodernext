@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512" role="img" aria-label="QCnext icon concept: a network of coding nodes">
+  <defs>
+    <linearGradient id="bg05" x1="0" y1="0" x2="512" y2="512" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#313150"/>
+      <stop offset="1" stop-color="#1e1e2e"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="512" height="512" rx="112" fill="url(#bg05)"/>
+  <rect x="1.5" y="1.5" width="509" height="509" rx="110.5" fill="none" stroke="#3e3e5c" stroke-width="3"/>
+
+  <g fill="none" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M256 140 L374 226 L330 364 L182 364 L138 226 Z" stroke="#6b6b8a" stroke-width="16"/>
+    <path d="M330 364 L398 430" stroke="#f59e0b" stroke-width="28"/>
+    <circle cx="256" cy="140" r="32" fill="#f59e0b" stroke="none"/>
+    <circle cx="374" cy="226" r="28" fill="#e8e8ed" stroke="none"/>
+    <circle cx="182" cy="364" r="28" fill="#e8e8ed" stroke="none"/>
+    <circle cx="138" cy="226" r="28" fill="#e8e8ed" stroke="none"/>
+    <circle cx="330" cy="364" r="28" fill="#e8e8ed" stroke="none"/>
+  </g>
+</svg>

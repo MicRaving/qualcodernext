@@ -108,17 +108,81 @@ export interface ViewHeaderProps extends Omit<HTMLAttributes<HTMLElement>, "titl
   /** Show the uniform back button (default true); a function overrides
    *  the default "back to Files" navigation. */
   back?: boolean | (() => void);
+  /** Secondary control cluster rendered directly after the title, before the
+   *  spacer (e.g. a view's tab strip, so it stays next to the label). */
+  leading?: ReactNode;
   /** Interaction buttons rendered on the right. */
   actions?: ReactNode;
   /** Allow the row to wrap to a second line (coder headers with many
    *  controls). */
   wrap?: boolean;
+  /** Keep the bar on ONE row: when the controls no longer fit, the title is
+   *  hidden rather than pushing them to a second line. */
+  collapseTitle?: boolean;
 }
 
-/** Center-view header: [back] [title] [meta] … [actions]. */
-export function ViewHeader({ title, meta, back = true, actions, wrap = false, children, ...rest }: ViewHeaderProps) {
+/** Center-view header: [back] [title] [meta] [leading] … [actions]. */
+export function ViewHeader({
+  title,
+  meta,
+  back = true,
+  leading,
+  actions,
+  wrap = false,
+  collapseTitle = false,
+  children,
+  ...rest
+}: ViewHeaderProps) {
+  const headerRef = useRef<HTMLElement | null>(null);
+  const titleRef = useRef<HTMLHeadingElement | null>(null);
+  const leadingRef = useRef<HTMLDivElement | null>(null);
+  const actionsRef = useRef<HTMLDivElement | null>(null);
+  const [hideTitle, setHideTitle] = useState(false);
+  // Cache the natural title width while it is visible (a display:none title
+  // measures 0, so re-measuring it would oscillate).
+  const naturalRef = useRef(0);
+  const hiddenRef = useRef(false);
+
+  useEffect(() => {
+    if (!collapseTitle) return;
+    const header = headerRef.current;
+    const titleEl = titleRef.current;
+    if (!header || !titleEl) return;
+    let raf = 0;
+    const measure = () => {
+      cancelAnimationFrame(raf);
+      raf = requestAnimationFrame(() => {
+        const gap = 8; // gap-2
+        const gaps = Math.max(0, header.children.length - 1) * gap;
+        const leadingW = leadingRef.current?.offsetWidth ?? 0;
+        const actionsW = actionsRef.current?.offsetWidth ?? 0;
+        if (!hiddenRef.current) naturalRef.current = Math.max(titleEl.scrollWidth, titleEl.offsetWidth);
+        const available = header.clientWidth - leadingW - actionsW - gaps;
+        const hide = naturalRef.current > available;
+        hiddenRef.current = hide;
+        setHideTitle(hide);
+      });
+    };
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(header);
+    window.addEventListener("resize", measure);
+    return () => {
+      cancelAnimationFrame(raf);
+      ro.disconnect();
+      window.removeEventListener("resize", measure);
+    };
+  }, [collapseTitle]);
+
+  const hasTitle = title !== undefined && title !== null && title !== "";
   return (
-    <header className={wrap ? cls.barWrap : cls.bar} {...rest}>
+    <header
+      ref={headerRef}
+      className={`${collapseTitle ? cls.bar : wrap ? cls.barWrap : cls.bar}${
+        collapseTitle ? " overflow-hidden" : ""
+      }`}
+      {...rest}
+    >
       {back !== false &&
         (typeof back === "function" ? (
           <button
@@ -133,10 +197,36 @@ export function ViewHeader({ title, meta, back = true, actions, wrap = false, ch
         ) : (
           <ViewBackButton />
         ))}
-      <h1 className="min-w-0 truncate text-sm font-semibold text-text-primary">{title}</h1>
+      {hasTitle && (
+        <h1
+          ref={titleRef}
+          className={`min-w-0 truncate text-sm font-semibold text-text-primary ${
+            collapseTitle && hideTitle ? "hidden" : ""
+          }`}
+        >
+          {title}
+        </h1>
+      )}
       {meta && <span className="hidden min-w-0 truncate text-xs text-text-secondary xl:inline">{meta}</span>}
-      <div className="flex-1" />
-      {children ?? actions}
+      {collapseTitle ? (
+        <>
+          {leading != null && (
+            <div ref={leadingRef} className="flex shrink-0 items-center gap-1">
+              {leading}
+            </div>
+          )}
+          <div className="flex-1" />
+          <div ref={actionsRef} className="flex shrink-0 items-center gap-2">
+            {children ?? actions}
+          </div>
+        </>
+      ) : (
+        <>
+          {leading}
+          <div className="flex-1" />
+          {children ?? actions}
+        </>
+      )}
     </header>
   );
 }
@@ -295,7 +385,7 @@ export function LeftBar({
   const resolved = ctxWidth ?? widthPx;
   return (
     <aside
-      className={`flex ${
+      className={`flex h-full ${
         width === "sm" ? "w-64" : width === "lg" ? "w-96" : "w-72"
       } shrink-0 flex-col ${
         borderSide === "r" ? "border-r" : "border-l"

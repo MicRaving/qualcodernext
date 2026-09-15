@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1260 420" width="1260" height="420" role="img" aria-label="QCnext wordmark in dark ink for light backgrounds">
+  <title>QCnext logo (dark ink)</title>
+  <defs>
+    <linearGradient id="amber10i" x1="40" y1="110" x2="330" y2="340" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#fbbf24"/>
+      <stop offset="1" stop-color="#d97706"/>
+    </linearGradient>
+  </defs>
+
+  <g stroke-linecap="round" stroke-linejoin="round">
+    <circle cx="128" cy="200" r="76" fill="none" stroke="url(#amber10i)" stroke-width="42"/>
+    <path d="M180 252 L232 304" fill="none" stroke="url(#amber10i)" stroke-width="42"/>
+
+    <path d="M446.9 141.8 A76 76 0 1 0 446.9 258.2" fill="none" stroke="#1e1e2e" stroke-width="38"/>
+
+    <path d="M540 300 V176" fill="none" stroke="#1e1e2e" stroke-width="34"/>
+    <path d="M540 236 C540 198 557 180 574 180 C591 180 608 198 608 236 V300" fill="none" stroke="#1e1e2e" stroke-width="34"/>
+
+    <path d="M788 236 A58 58 0 1 0 730 294" fill="none" stroke="#1e1e2e" stroke-width="34"/>
+    <path d="M672 236 H788" fill="none" stroke="#1e1e2e" stroke-width="34"/>
+
+    <path d="M852 178 L908 240 L852 302" fill="none" stroke="url(#amber10i)" stroke-width="34"/>
+    <path d="M1044 178 L988 240 L1044 302" fill="none" stroke="url(#amber10i)" stroke-width="34"/>
+
+    <path d="M1150 152 V300" fill="none" stroke="#1e1e2e" stroke-width="34"/>
+    <path d="M1108 208 H1192" fill="none" stroke="#1e1e2e" stroke-width="34"/>
+    <path d="M1150 92 L1214 122 L1150 152 L1086 122 Z" fill="#1e1e2e" stroke="none"/>
+    <path d="M1214 122 V166" fill="none" stroke="url(#amber10i)" stroke-width="12"/>
+    <circle cx="1214" cy="179" r="11" fill="url(#amber10i)" stroke="none"/>
+  </g>
+</svg>

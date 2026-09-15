@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512" role="img" aria-label="QCnext icon concept: a prism splitting a beam into strands">
+  <defs>
+    <linearGradient id="bg03" x1="0" y1="0" x2="512" y2="512" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#313150"/>
+      <stop offset="1" stop-color="#1e1e2e"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="512" height="512" rx="112" fill="url(#bg03)"/>
+  <rect x="1.5" y="1.5" width="509" height="509" rx="110.5" fill="none" stroke="#3e3e5c" stroke-width="3"/>
+
+  <g fill="none" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M196 148 L196 364 L332 256 Z" stroke="#e8e8ed" stroke-width="28"/>
+    <path d="M84 256 H190" stroke="#9a9ab0" stroke-width="24"/>
+    <path d="M240 256 L432 148" stroke="#f59e0b" stroke-width="26"/>
+    <path d="M240 256 H432" stroke="#e8e8ed" stroke-width="26"/>
+    <path d="M240 256 L432 364" stroke="#60a5fa" stroke-width="26"/>
+  </g>
+</svg>

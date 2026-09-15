@@ -25,6 +25,7 @@ from qualcoder_api.persistence.repo.case_repo import CaseRepository
 from qualcoder_api.persistence.repo.code_repo import CodeRepository
 from qualcoder_api.persistence.repo.coding_repo import CodingRepository
 from qualcoder_api.persistence.repo.journal_repo import JournalRepository
+from qualcoder_api.persistence.repo.meta_repo import MetaRepository
 from qualcoder_api.persistence.repo.project_repo import ProjectRepository
 from qualcoder_api.persistence.repo.source_repo import SourceRepository
 
@@ -35,6 +36,7 @@ __all__ = [
     "CodeRepository",
     "CodingRepository",
     "JournalRepository",
+    "MetaRepository",
     "ProjectRepository",
     "SourceRepository",
     "_capture",

@@ -10,6 +10,7 @@ import {
   BarChart3,
   Download,
   Files,
+  FlaskConical,
   HelpCircle,
   History,
   LayoutDashboard,
@@ -43,6 +44,8 @@ import { AnalyzeView } from "@/features/analyze/AnalyzeView";
 import { ReportsList } from "@/features/analyze/ReportsList";
 import { GraphsInspector, GraphsView } from "@/features/graphs/GraphsView";
 import { HistoryView } from "@/features/history/HistoryView";
+import { MetaList } from "@/features/meta/MetaList";
+import { MetaView } from "@/features/meta/MetaView";
 import { CreativePanel } from "@/features/creative/CreativePanel";
 import { SettingsView } from "@/features/settings/SettingsView";
 import { AiView } from "@/features/ai/AiView";
@@ -199,6 +202,7 @@ const NAV_BUTTONS: { kind: WorkspaceView["kind"]; labelKey: string; icon: typeof
   { kind: "cases", labelKey: "nav.cases", icon: Users },
   { kind: "notes", labelKey: "nav.notes", icon: NotebookPen },
   { kind: "qtt", labelKey: "nav.qtt", icon: ScrollText },
+  { kind: "meta", labelKey: "nav.meta", icon: FlaskConical },
   { kind: "analyze", labelKey: "nav.analyze", icon: BarChart3 },
 ];
 
@@ -259,6 +263,36 @@ export function ProjectShell() {
   }, []);
   const announceRef = useRef<HTMLDivElement>(null);
   const a11yMode = usePrefsStore((s) => s.a11yMode);
+
+  // Ribbon: never let the nav items shrink or wrap onto a second row. When
+  // the labels no longer fit, they are hidden (icons stay) instead.
+  const ribbonRef = useRef<HTMLElement | null>(null);
+  const [compactNav, setCompactNav] = useState(false);
+  const navNaturalRef = useRef(0);
+  const navHiddenRef = useRef(false);
+  useEffect(() => {
+    const el = ribbonRef.current;
+    if (!el) return;
+    let raf = 0;
+    const measure = () => {
+      cancelAnimationFrame(raf);
+      raf = requestAnimationFrame(() => {
+        if (!navHiddenRef.current) navNaturalRef.current = el.scrollWidth;
+        const hide = navNaturalRef.current > el.clientWidth;
+        navHiddenRef.current = hide;
+        setCompactNav(hide);
+      });
+    };
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    window.addEventListener("resize", measure);
+    return () => {
+      cancelAnimationFrame(raf);
+      ro.disconnect();
+      window.removeEventListener("resize", measure);
+    };
+  }, []);
 
   // Shared-folder notice: shown for 3s after the backend auto-enabled
   // collaboration sync on project open (non-intrusive, self-clearing).
@@ -601,7 +635,10 @@ export function ProjectShell() {
       )}
       <WorkspaceLayout
       ribbon={
-        <header className="flex h-11 shrink-0 items-center gap-0.5 border-b border-border bg-surface px-3">
+        <header
+          ref={ribbonRef}
+          className="flex h-11 shrink-0 items-center gap-0.5 border-b border-border bg-surface px-3"
+        >
           {NAV_BUTTONS.map(({ kind, labelKey, icon: Icon }) => {
             const label = t(labelKey);
             return (
@@ -624,7 +661,7 @@ export function ProjectShell() {
                 disabled={!projectOpen}
                 aria-label={label}
                 title={projectOpen ? label : t("shell.navDisabled")}
-                className={`flex items-center gap-1.5 rounded-sm px-2 py-1 qc-motion ${
+                className={`flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-sm px-2 py-1 qc-motion ${
                   !projectOpen
                     ? "cursor-not-allowed text-text-secondary/40"
                     : `hover:bg-surface-higher ${
@@ -632,14 +669,14 @@ export function ProjectShell() {
                       }`
                 }`}
               >
-                <Icon size={20} aria-hidden />
-                <span className="text-xs font-medium">{label}</span>
+                <Icon size={20} className="shrink-0" aria-hidden />
+                <span className={`text-xs font-medium ${compactNav ? "hidden" : ""}`}>{label}</span>
               </button>
             );
           })}
           <div className="h-5 w-px bg-border" aria-hidden />
           {projectOpen && (
-            <div className="relative">
+            <div className="relative shrink-0">
               <Search
                 size={13}
                 className="pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 text-text-secondary"
@@ -863,11 +900,11 @@ export function ProjectShell() {
                   aria-label={label}
                   title={label}
                   aria-pressed={active}
-                  className={`rounded-sm px-2 py-1 hover:bg-surface-higher qc-motion ${
+                  className={`shrink-0 rounded-sm px-2 py-1 hover:bg-surface-higher qc-motion ${
                     active ? "bg-surface-higher text-accent" : "text-text-secondary"
                   }`}
                 >
-                  <Icon size={20} aria-hidden />
+                  <Icon size={20} className="shrink-0" aria-hidden />
                 </button>
               );
             })}
@@ -891,11 +928,11 @@ export function ProjectShell() {
           aria-label={t("nav.settings")}
           title={t("nav.settings")}
           aria-pressed={rightPane === "settings"}
-          className={`rounded-sm px-2 py-1 hover:bg-surface-higher qc-motion ${
+          className={`shrink-0 rounded-sm px-2 py-1 hover:bg-surface-higher qc-motion ${
             rightPane === "settings" ? "bg-surface-higher text-accent" : "text-text-secondary"
           }`}
         >
-          <Settings size={20} aria-hidden />
+          <Settings size={20} className="shrink-0" aria-hidden />
         </button>
       </header>
       }
@@ -904,8 +941,10 @@ export function ProjectShell() {
           <CasesList />
         ) : view.kind === "notes" ? (
           <NotesList />
-        ) : view.kind === "qtt" ? (
+        ) :         view.kind === "qtt" ? (
           <QttList />
+        ) : view.kind === "meta" ? (
+          <MetaList />
         ) : view.kind === "analyze" ? (
           // The reports list replaces the standard file-groups sidebar
           // while the Analysis area is active (graphs live under it too).
@@ -950,6 +989,8 @@ export function ProjectShell() {
             <NotesEditor />
           ) : view.kind === "qtt" ? (
             <QttView />
+          ) : view.kind === "meta" ? (
+            <MetaView />
           ) : view.kind === "analyze" ? (
             analyzeUi.selectedId === "graphs" ? (
               <GraphsView />

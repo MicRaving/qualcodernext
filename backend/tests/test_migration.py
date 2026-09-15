@@ -34,7 +34,7 @@ LEGACY_TABLES = [
     "CREATE TABLE journal (jid integer primary key, name text, jentry text, date text, owner text)",
 ]
 
-ALL_VERSIONS = [f"v{v}" for v in range(2, 32)] + ["v34", "v35", "v36"]
+ALL_VERSIONS = [f"v{v}" for v in range(2, 32)] + ["v34", "v35", "v36", "v37"]
 
 
 @pytest.fixture
@@ -98,7 +98,7 @@ async def test_full_chain_sets_final_version(v2_db):
     cur = await v2_db.cursor()
     await cur.execute("SELECT databaseversion, about FROM project")
     row = await cur.fetchone()
-    assert row[0] == "v36"
+    assert row[0] == "v37"
     assert row[1] == "4.0-test"
 
 
@@ -420,7 +420,7 @@ async def test_v34_adds_ai_chat_tables(tmp_path):
     )
     assert await cur.fetchone() is not None
     await cur.execute("SELECT databaseversion FROM project")
-    assert (await cur.fetchone())[0] == "v36"
+    assert (await cur.fetchone())[0] == "v37"
     await conn.close()
 
     # Fresh schema: tables already exist → v34, v35 and v36 are no-ops.

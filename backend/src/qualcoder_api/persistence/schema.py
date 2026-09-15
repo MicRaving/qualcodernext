@@ -109,6 +109,27 @@ _SCHEMA_SQL: list[str] = [
     "role text, text text, request_json text, created text)",
     "CREATE TABLE ai_prompt (id integer primary key autoincrement, name text, description text, "
     "text text, created text, updated text)",
+    "CREATE TABLE meta_hit (hit_id integer primary key autoincrement, title text not null, "
+    "abstract text, authors text, doi text, year text, source text, language text, "
+    "search_run text, status text not null default 'imported', created text, updated text, "
+    "unique(doi))",
+    "CREATE TABLE meta_criterion (id integer primary key autoincrement, position integer not null default 0, "
+    "key text not null, label text not null, prompt_text text not null, created text)",
+    "CREATE TABLE meta_screening (id integer primary key autoincrement, hit_id integer not null, "
+    "owner text not null, run_id text not null default '', verdicts text, intervention_type text, "
+    "rationale text, origin text not null default 'manual', model text, prompt_hash text, "
+    "created text, updated text, unique(hit_id, owner, run_id))",
+    "CREATE TABLE meta_document (id integer primary key autoincrement, hit_id integer not null, "
+    "source_id integer, retrieval_method text, url text, status text not null default 'pending', "
+    "message text, created text, updated text, unique(hit_id))",
+    "CREATE TABLE meta_extraction (id integer primary key autoincrement, hit_id integer not null, "
+    "source_id integer, owner text not null, scheme text not null, study_vars text, "
+    "dv_metrics text, prescreen text, model text, prompt_hash text, "
+    "status text not null default 'prescreen_pending', missing_reason text, created text, "
+    "updated text, unique(hit_id))",
+    "CREATE TABLE meta_scheme (id integer primary key autoincrement, name text not null unique, "
+    "label text, description text, prescreen_prompt text, coding_prompt text, codebook text, "
+    "created text, updated text)",
 ]
 
 # Hot-path indexes (created for new projects; the migration chain adds the
@@ -140,6 +161,10 @@ _INDEX_SQL: list[str] = [
     "CREATE INDEX IF NOT EXISTS idx_comment_target ON comment(target_kind, target_id)",
     "CREATE INDEX IF NOT EXISTS idx_ai_chat_message_chat_id ON ai_chat_message(chat_id)",
     "CREATE INDEX IF NOT EXISTS idx_sync_conflict_unresolved ON sync_conflict(entity, pk) WHERE resolved_at IS NULL",
+    "CREATE INDEX IF NOT EXISTS idx_meta_hit_doi ON meta_hit(doi)",
+    "CREATE INDEX IF NOT EXISTS idx_meta_screening_hit ON meta_screening(hit_id)",
+    "CREATE INDEX IF NOT EXISTS idx_meta_document_hit ON meta_document(hit_id)",
+    "CREATE INDEX IF NOT EXISTS idx_meta_extraction_hit ON meta_extraction(hit_id)",
 ]
 
 # Extra tables/views beyond the v14 core (added at project-open time).

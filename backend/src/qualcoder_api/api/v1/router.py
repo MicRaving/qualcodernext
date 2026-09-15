@@ -32,6 +32,7 @@ from qualcoder_api.api.v1.help import router as help_router
 from qualcoder_api.api.v1.importers import router as importers_router
 from qualcoder_api.api.v1.interchange import router as interchange_router
 from qualcoder_api.api.v1.links import router as links_router
+from qualcoder_api.api.v1.meta import router as meta_router
 from qualcoder_api.api.v1.publish import router as publish_router
 from qualcoder_api.api.v1.qtt import router as qtt_router
 from qualcoder_api.api.v1.r import router as r_router
@@ -90,6 +91,7 @@ _include(graphs_router)
 _include(sync_router)
 _include(dictionaries_router)
 _include(links_router)
+_include(meta_router)
 _include(sentiment_router)
 _include(compare_router)
 _include(scrape_router)

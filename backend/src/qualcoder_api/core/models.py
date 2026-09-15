@@ -249,3 +249,148 @@ class Annotation(BaseModel):
     memo: str = ""
     owner: str = ""
     date: str = ""
+
+
+class MetaHit(BaseModel):
+    """A search hit in the meta-analysis pipeline (``meta_hit`` row)."""
+
+    model_config = ConfigDict(frozen=True)
+
+    hit_id: int = 0
+    title: str = ""
+    abstract: str | None = None
+    authors: str | None = None
+    doi: str | None = None
+    year: str | None = None
+    source: str | None = None
+    language: str | None = None
+    search_run: str | None = None
+    status: str = "imported"
+    created: str = ""
+    updated: str = ""
+
+
+class MetaCriterion(BaseModel):
+    """A user-configurable inclusion criterion (``meta_criterion`` row)."""
+
+    model_config = ConfigDict(frozen=True)
+
+    id: int = 0
+    position: int = 0
+    key: str = ""
+    label: str = ""
+    prompt_text: str = ""
+    created: str = ""
+
+
+class MetaScreening(BaseModel):
+    """A per-coder screening verdict (``meta_screening`` row)."""
+
+    model_config = ConfigDict(frozen=True)
+
+    id: int = 0
+    hit_id: int = 0
+    owner: str = ""
+    run_id: str = ""
+    verdicts: dict = {}
+    intervention_type: str | None = None
+    rationale: str | None = None
+    origin: str = "manual"
+    model: str | None = None
+    prompt_hash: str | None = None
+    created: str = ""
+    updated: str = ""
+
+    @field_validator("verdicts", mode="before")
+    @classmethod
+    def _verdicts(cls, v: object) -> object:
+        """Accept a JSON-encoded string (persisted column) or a dict."""
+        if isinstance(v, str):
+            try:
+                return json.loads(v)
+            except ValueError:
+                return {}
+        return v
+
+
+class MetaDocument(BaseModel):
+    """Paper-retrieval state for a hit (``meta_document`` row)."""
+
+    model_config = ConfigDict(frozen=True)
+
+    id: int = 0
+    hit_id: int = 0
+    source_id: int | None = None
+    retrieval_method: str | None = None
+    url: str | None = None
+    status: str = "pending"
+    message: str | None = None
+    created: str = ""
+    updated: str = ""
+
+
+class MetaExtraction(BaseModel):
+    """A scheme-driven extraction result (``meta_extraction`` row)."""
+
+    model_config = ConfigDict(frozen=True)
+
+    id: int = 0
+    hit_id: int = 0
+    source_id: int | None = None
+    owner: str = ""
+    scheme: str = ""
+    study_vars: dict = {}
+    dv_metrics: list = []
+    prescreen: dict | None = None
+    model: str | None = None
+    prompt_hash: str | None = None
+    status: str = "prescreen_pending"
+    missing_reason: str | None = None
+    created: str = ""
+    updated: str = ""
+
+    @field_validator("study_vars", mode="before")
+    @classmethod
+    def _study_vars(cls, v: object) -> object:
+        if isinstance(v, str):
+            try:
+                return json.loads(v)
+            except ValueError:
+                return {}
+        return v
+
+    @field_validator("dv_metrics", mode="before")
+    @classmethod
+    def _dv_metrics(cls, v: object) -> object:
+        if isinstance(v, str):
+            try:
+                return json.loads(v)
+            except ValueError:
+                return []
+        return v
+
+    @field_validator("prescreen", mode="before")
+    @classmethod
+    def _prescreen(cls, v: object) -> object:
+        if isinstance(v, str):
+            try:
+                return json.loads(v)
+            except ValueError:
+                return None
+        return v
+
+
+class MetaScheme(BaseModel):
+    """A meta coding scheme (``meta_scheme`` row)."""
+
+    model_config = ConfigDict(frozen=True)
+
+    id: int = 0
+    name: str = ""
+    label: str | None = None
+    description: str | None = None
+    prescreen_prompt: str | None = None
+    coding_prompt: str | None = None
+    codebook: str | None = None
+    created: str = ""
+    updated: str = ""

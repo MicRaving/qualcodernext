@@ -555,6 +555,30 @@
       "description": "Permission identifier",
       "oneOf": [
         {
+          "description": "Execute the staged native-file plan and relaunch the app.",
+          "type": "string",
+          "const": "allow-apply-native-plan-and-relaunch",
+          "markdownDescription": "Execute the staged native-file plan and relaunch the app."
+        },
+        {
+          "description": "Probe whether the bundled backend answers (boot gate).",
+          "type": "string",
+          "const": "allow-backend-health",
+          "markdownDescription": "Probe whether the bundled backend answers (boot gate)."
+        },
+        {
+          "description": "Resolve the running backend's port (API base URL).",
+          "type": "string",
+          "const": "allow-backend-port",
+          "markdownDescription": "Resolve the running backend's port (API base URL)."
+        },
+        {
+          "description": "Restart the backend child process (backend-overlay nightlies).",
+          "type": "string",
+          "const": "allow-restart-backend",
+          "markdownDescription": "Restart the backend child process (backend-overlay nightlies)."
+        },
+        {
           "description": "Default core plugins set.\n#### This default permission set includes:\n\n- `core:path:default`\n- `core:event:default`\n- `core:window:default`\n- `core:webview:default`\n- `core:app:default`\n- `core:image:default`\n- `core:resources:default`\n- `core:menu:default`\n- `core:tray:default`",
           "type": "string",
           "const": "core:default",

@@ -72,6 +72,15 @@ import type {
   Journal,
   MaintenanceSettings,
   MemoItem,
+  MetaCriterion,
+  MetaDocument,
+  MetaExtraction,
+  MetaHit,
+  MetaImportPreview,
+  MetaJob,
+  MetaScheme,
+  MetaScreening,
+  MetaStatus,
   OpenProjectResult,
   ProjectSummary,
   Pseudonym,
@@ -1231,4 +1240,173 @@ export const api = {
       body: JSON.stringify(body),
     }),
   compactProject: () => request<CompactResult>("/projects/compact", { method: "POST" }),
+
+  // --- Meta-analysis -------------------------------------------------
+
+  metaStatus: () => request<MetaStatus>("/meta/status"),
+  metaHits: (opts?: {
+    searchRun?: string;
+    filter?: string;
+    scope?: "all" | "included" | "acquired";
+    limit?: number;
+    offset?: number;
+  }) => {
+    const q = new URLSearchParams();
+    if (opts?.searchRun) q.set("search_run", opts.searchRun);
+    if (opts?.filter) q.set("filter", opts.filter);
+    if (opts?.scope && opts.scope !== "all") q.set("scope", opts.scope);
+    if (opts?.limit !== undefined) q.set("limit", String(opts.limit));
+    if (opts?.offset !== undefined) q.set("offset", String(opts.offset));
+    const suffix = q.toString() ? `?${q.toString()}` : "";
+    return request<{ hits: MetaHit[]; total: number; limit: number; offset: number }>(
+      `/meta/hits${suffix}`,
+    );
+  },
+  metaSearchRuns: () => request<string[]>("/meta/hits/search-runs"),
+  metaPreviewHits: (file: File, sheet?: string) => {
+    const form = new FormData();
+    form.append("file", file);
+    if (sheet) form.append("sheet", sheet);
+    return uploadRequest<MetaImportPreview>("/meta/hits/preview", form);
+  },
+  metaImportHits: (
+    file: File,
+    searchRun?: string,
+    opts?: { sheet?: string; headerRow?: number; mapping?: Record<string, number | null> },
+  ) => {
+    const form = new FormData();
+    form.append("file", file);
+    if (searchRun) form.append("search_run", searchRun);
+    if (opts?.sheet) form.append("sheet", opts.sheet);
+    if (opts?.headerRow !== undefined) form.append("header_row", String(opts.headerRow));
+    if (opts?.mapping) form.append("mapping", JSON.stringify(opts.mapping));
+    return uploadRequest<{ ok: boolean; imported: number; parsed: number; duplicates_skipped: number }>(
+      "/meta/hits/import",
+      form,
+    );
+  },
+  metaDeleteHit: (hitId: number) =>
+    request<void>(`/meta/hits/${hitId}`, { method: "DELETE" }),
+
+  metaCriteria: () => request<MetaCriterion[]>("/meta/criteria"),
+  metaReplaceCriteria: (criteria: MetaCriterion[]) =>
+    request<MetaCriterion[]>("/meta/criteria", { method: "PUT", body: JSON.stringify(criteria) }),
+  metaDeleteCriterion: (criterionId: number) =>
+    request<void>(`/meta/criteria/${criterionId}`, { method: "DELETE" }),
+
+  metaSchemes: () => request<MetaScheme[]>("/meta/schemes"),
+  metaCreateScheme: (body: {
+    name: string;
+    label?: string;
+    description?: string;
+    prescreen_prompt?: string;
+    coding_prompt?: string;
+    codebook?: Record<string, unknown>;
+  }) =>
+    request<{ ok: boolean; id: number; name: string }>("/meta/schemes", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  metaUpdateScheme: (
+    schemeId: number,
+    body: {
+      name: string;
+      label?: string;
+      description?: string;
+      prescreen_prompt?: string;
+      coding_prompt?: string;
+      codebook?: Record<string, unknown>;
+    },
+  ) =>
+    request<{ ok: boolean; id: number }>(`/meta/schemes/${schemeId}`, {
+      method: "PUT",
+      body: JSON.stringify(body),
+    }),
+  metaDeleteScheme: (schemeId: number) =>
+    request<void>(`/meta/schemes/${schemeId}`, { method: "DELETE" }),
+
+  metaScreening: (opts?: { hit_id?: number; owner?: string; run_id?: string }) => {
+    const q = new URLSearchParams();
+    if (opts?.hit_id !== undefined) q.set("hit_id", String(opts.hit_id));
+    if (opts?.owner) q.set("owner", opts.owner);
+    if (opts?.run_id !== undefined) q.set("run_id", opts.run_id);
+    const suffix = q.toString() ? `?${q.toString()}` : "";
+    return request<MetaScreening[]>(`/meta/screening${suffix}`);
+  },
+  metaSaveScreening: (body: {
+    hit_id: number;
+    run_id?: string;
+    verdicts: Record<string, { applies: string; certainty: string }>;
+    intervention_type?: string | null;
+    rationale?: string | null;
+    owner?: string;
+  }) =>
+    request<{ ok: boolean; id: number; hit_id: number; status: string }>("/meta/screening", {
+      method: "PUT",
+      body: JSON.stringify(body),
+    }),
+  metaLlmScreen: (body: {
+    run_id?: string;
+    hit_ids?: number[];
+    cluster_size?: number;
+    model?: string;
+  }) => request<{ ok: boolean; job_id: string }>("/meta/screening/llm", {
+    method: "POST",
+    body: JSON.stringify(body),
+  }),
+
+  metaDocuments: () => request<MetaDocument[]>("/meta/documents"),
+  metaDownloadRun: (body: { hit_ids?: number[]; email?: string }) =>
+    request<{ ok: boolean; job_id: string }>("/meta/downloads/run", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  metaAssignPdf: (hitId: number, file: File) => {
+    const form = new FormData();
+    form.append("file", file);
+    return uploadRequest<{ ok: boolean; source_id: number; document_id: number }>(
+      `/meta/downloads/assign/${hitId}`,
+      form,
+    );
+  },
+  metaAssignPdfs: (files: File[]) => {
+    const form = new FormData();
+    for (const file of files) form.append("files", file);
+    return uploadRequest<{
+      ok: boolean;
+      assigned: { filename: string; hit_id: number; source_id: number; document_id: number }[];
+      unmatched: string[];
+      failed: { filename: string; error: string }[];
+    }>("/meta/downloads/assign-batch", form);
+  },
+
+  metaExtractions: (hitId?: number) =>
+    request<MetaExtraction[]>(`/meta/extractions${hitId ? `?hit_id=${hitId}` : ""}`),
+  metaExtractRun: (body: {
+    scheme: string;
+    hit_ids?: number[];
+    model?: string;
+    stop_after?: number;
+    max_input_chars?: number;
+    fulltext_only?: boolean;
+  }) =>
+    request<{ ok: boolean; job_id: string }>("/meta/extract/run", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  metaExtractPublish: (body: { hit_id: number; to_cases: boolean; to_codes: boolean }) =>
+    request<{ ok: boolean; cases?: unknown; codes?: unknown }>("/meta/extract/publish", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+
+  metaJobs: (kind?: string) =>
+    request<MetaJob[]>(`/meta/jobs${kind ? `?kind=${encodeURIComponent(kind)}` : ""}`),
+  metaJob: (jobId: string) => request<MetaJob>(`/meta/jobs/${jobId}`),
+  metaJobControl: (jobId: string, action: string) =>
+    request<{ ok: boolean }>(`/meta/jobs/${jobId}/control?action=${encodeURIComponent(action)}`, {
+      method: "POST",
+    }),
+  metaJobDelete: (jobId: string) =>
+    request<void>(`/meta/jobs/${jobId}`, { method: "DELETE" }),
 };

@@ -93,6 +93,7 @@ async def test_hotpatch_version_endpoint_reports_channel(monkeypatch, tmp_path):
     monkeypatch.setattr(
         hotpatch, "FRONTEND_VERSION_FILE", tmp_path / "empty" / "version.json"
     )
+    monkeypatch.setattr(hotpatch, "FRONTEND_PREVIOUS", tmp_path / "empty-previous")
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         res = await client.get("/api/v1/hotpatch/version")

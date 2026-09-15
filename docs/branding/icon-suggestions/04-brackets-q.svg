@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512" role="img" aria-label="QCnext icon concept: a Q inside code brackets">
+  <defs>
+    <linearGradient id="bg04" x1="0" y1="0" x2="512" y2="512" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#313150"/>
+      <stop offset="1" stop-color="#1e1e2e"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="512" height="512" rx="112" fill="url(#bg04)"/>
+  <rect x="1.5" y="1.5" width="509" height="509" rx="110.5" fill="none" stroke="#3e3e5c" stroke-width="3"/>
+
+  <g fill="none" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M190 146 H142 V366 H190" stroke="#f59e0b" stroke-width="30"/>
+    <path d="M322 146 H370 V366 H322" stroke="#f59e0b" stroke-width="30"/>
+    <circle cx="256" cy="248" r="58" stroke="#e8e8ed" stroke-width="28"/>
+    <path d="M297 289 L331 323" stroke="#e8e8ed" stroke-width="28"/>
+  </g>
+</svg>

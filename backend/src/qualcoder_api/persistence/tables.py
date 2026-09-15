@@ -679,3 +679,120 @@ ai_prompt = Table(
     Column("created", String),
     Column("updated", String),
 )
+
+# ── Meta-analysis mode (v37, local-only in v1 — deliberately NOT in
+#    OWNER_TABLES / VISIBILITY_VIEWS / sync_log: collaboration support is a
+#    later milestone. Rows carry ``owner`` so a future sync/undo integration
+#    can be added additively.) ─────────────────────────────────────────────
+
+# One row per search hit (imported from EBSCO XML / Excel / RIS exports).
+meta_hit = Table(
+    "meta_hit",
+    metadata,
+    Column("hit_id", Integer, primary_key=True, autoincrement=True),
+    Column("title", Text, nullable=False),
+    Column("abstract", Text),
+    Column("authors", Text),
+    Column("doi", Text),
+    Column("year", String),
+    Column("source", Text),
+    Column("language", String),
+    Column("search_run", String),
+    # imported | included | excluded | downloading | downloaded | extracted
+    Column("status", String, nullable=False, server_default=text("'imported'")),
+    Column("created", String),
+    Column("updated", String),
+    UniqueConstraint("doi", name="u_meta_hit_doi"),
+)
+
+# User-configurable inclusion criteria (per project; seeded via a template).
+meta_criterion = Table(
+    "meta_criterion",
+    metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("position", Integer, nullable=False, server_default=text("0")),
+    Column("key", String, nullable=False),
+    Column("label", String, nullable=False),
+    Column("prompt_text", Text, nullable=False),
+    Column("created", String),
+)
+
+# One verdict row per (hit, coder, screening run). ``verdicts`` is JSON:
+# {criterion_key: {"applies": "Yes"|"No"|"Unsure",
+#                  "certainty": "High"|"Medium"|"Low"}}.
+meta_screening = Table(
+    "meta_screening",
+    metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("hit_id", Integer, nullable=False),
+    Column("owner", String, nullable=False),
+    Column("run_id", String, nullable=False, server_default=text("''")),
+    Column("verdicts", Text),
+    Column("intervention_type", String),
+    Column("rationale", Text),
+    # manual | llm — llm rows are editable proposals until saved as manual.
+    Column("origin", String, nullable=False, server_default=text("'manual'")),
+    Column("model", String),
+    Column("prompt_hash", String),
+    Column("created", String),
+    Column("updated", String),
+    UniqueConstraint("hit_id", "owner", "run_id", name="u_meta_screening"),
+)
+
+# Paper-retrieval state per hit (replaces the reference pipeline's
+# PDF_Filename column + papers/ folder).
+meta_document = Table(
+    "meta_document",
+    metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("hit_id", Integer, nullable=False),
+    Column("source_id", Integer),
+    # openalex | unpaywall | crossref | landing | zotero | manual
+    Column("retrieval_method", String),
+    Column("url", String),
+    # pending | working | done | failed | unretrievable | skipped
+    Column("status", String, nullable=False, server_default=text("'pending'")),
+    Column("message", Text),
+    Column("created", String),
+    Column("updated", String),
+    UniqueConstraint("hit_id", name="u_meta_document_hit"),
+)
+
+# Extraction result per included paper (scheme-driven). ``study_vars`` and
+# ``dv_metrics`` are JSON; ``prescreen`` holds the pre-extraction verdict.
+meta_extraction = Table(
+    "meta_extraction",
+    metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("hit_id", Integer, nullable=False),
+    Column("source_id", Integer),
+    Column("owner", String, nullable=False),
+    Column("scheme", String, nullable=False),
+    Column("study_vars", Text),
+    Column("dv_metrics", Text),
+    Column("prescreen", Text),
+    Column("model", String),
+    Column("prompt_hash", String),
+    # prescreen_pending | prescreened | excluded | extracted | error
+    Column("status", String, nullable=False, server_default=text("'prescreen_pending'")),
+    Column("missing_reason", Text),
+    Column("created", String),
+    Column("updated", String),
+    UniqueConstraint("hit_id", name="u_meta_extraction_hit"),
+)
+
+# Coding schemes: the (generated) prescreen + coding prompts and the codebook
+# mapping used by the optional "publish to cases/codes" step.
+meta_scheme = Table(
+    "meta_scheme",
+    metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("name", String, nullable=False, unique=True),
+    Column("label", String),
+    Column("description", Text),
+    Column("prescreen_prompt", Text),
+    Column("coding_prompt", Text),
+    Column("codebook", Text),
+    Column("created", String),
+    Column("updated", String),
+)

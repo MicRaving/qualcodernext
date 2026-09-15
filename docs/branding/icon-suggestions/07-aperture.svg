@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512" role="img" aria-label="QCnext icon concept: an aperture focusing on data">
+  <defs>
+    <linearGradient id="bg07" x1="0" y1="0" x2="512" y2="512" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#313150"/>
+      <stop offset="1" stop-color="#1e1e2e"/>
+    </linearGradient>
+    <linearGradient id="amber07" x1="180" y1="180" x2="332" y2="332" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#fbbf24"/>
+      <stop offset="1" stop-color="#d97706"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="512" height="512" rx="112" fill="url(#bg07)"/>
+  <rect x="1.5" y="1.5" width="509" height="509" rx="110.5" fill="none" stroke="#3e3e5c" stroke-width="3"/>
+
+  <g fill="none" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M256 106 L386 181 L386 331 L256 406 L126 331 L126 181 Z" stroke="#e8e8ed" stroke-width="28"/>
+    <path d="M256 180 L328 222 L328 306 L256 348 L184 306 L184 222 Z" fill="url(#amber07)" stroke="none"/>
+  </g>
+</svg>
