@@ -61,6 +61,8 @@ beforeEach(async () => {
   // Fresh navigation mocks for every test (jsdom has no navigation).
   patchHooks.reload = vi.fn();
   patchHooks.showPatchedFrontend = vi.fn();
+  // The backend serves the patched SPA (an old frozen backend does not).
+  patchHooks.spaServed = vi.fn().mockResolvedValue(true);
   // Sane default for Tauri invokes (individual tests override per command).
   const core = await import("@tauri-apps/api/core");
   vi.mocked(core.invoke).mockReset().mockResolvedValue(8765);
@@ -358,6 +360,7 @@ describe("nightly install + rollback", () => {
     const invoke = vi.mocked(core.invoke).mockImplementation((cmd: string) =>
       cmd === "restart_backend" ? Promise.resolve(8766) : Promise.resolve(8765),
     );
+    vi.spyOn(api, "health").mockResolvedValue({ status: "ok", version: "test" });
     const { useProjectStore } = await import("@/stores/project");
     useUpdatesStore.setState({
       status: "available",
@@ -426,6 +429,7 @@ describe("nightly install + rollback", () => {
     enableTauri();
     const core = await import("@tauri-apps/api/core");
     vi.mocked(core.invoke).mockResolvedValue(8766);
+    vi.spyOn(api, "health").mockResolvedValue({ status: "ok", version: "test" });
     useUpdatesStore.setState({
       status: "available",
       info: {
@@ -457,6 +461,76 @@ describe("nightly install + rollback", () => {
     applyOverlay.mockRestore();
     applyHotpatch.mockRestore();
     patchesVersion.mockRestore();
+  });
+
+  it("waits for the backend to answer before reopening the project", async () => {
+    // The port file lands ~2s before uvicorn listens; without the readiness
+    // wait the reopen raced the boot and failed the entire install.
+    enableTauri();
+    const core = await import("@tauri-apps/api/core");
+    vi.mocked(core.invoke).mockResolvedValue(8765);
+    const { useProjectStore } = await import("@/stores/project");
+    useProjectStore.setState({ projectPath: "C:/proj.qda" });
+    const openProject = vi
+      .spyOn(useProjectStore.getState(), "openProject")
+      .mockResolvedValue(true);
+    const applyOverlay = vi.spyOn(api, "applyOverlay").mockResolvedValue({
+      overlay_version: "9.9.9_001",
+      previous_version: null,
+      overlay_active: false,
+    });
+    const patchesVersion = vi.spyOn(api, "patchesVersion").mockResolvedValue({
+      overlay_version: "9.9.9_001",
+      previous_version: null,
+      overlay_active: true,
+    });
+    const health = vi
+      .spyOn(api, "health")
+      .mockRejectedValueOnce(new ApiError(0, "Backend unreachable — Failed to fetch"))
+      .mockResolvedValue({ status: "ok", version: "test" });
+    useUpdatesStore.setState({
+      status: "available",
+      info: {
+        version: "9.9.9_001",
+        kind: "nightly",
+        backend: { url: "https://example.test/b.zip", sha256: "b", signature: "bs" },
+      },
+      settings: nightlySettings,
+      hotpatch: null,
+      overlay: null,
+    });
+    await useUpdatesStore.getState().install();
+    expect(health).toHaveBeenCalledTimes(2); // retried past the boot race
+    expect(openProject).toHaveBeenCalledWith("C:/proj.qda");
+    expect(useUpdatesStore.getState().status).toBe("up-to-date");
+    applyOverlay.mockRestore();
+    patchesVersion.mockRestore();
+    openProject.mockRestore();
+    useProjectStore.setState({ projectPath: "" });
+  });
+
+  it("keeps the bundled build when the backend cannot serve the SPA", async () => {
+    // An older frozen backend has no SPA route: navigating would strand the
+    // window on "Not Found", so the patch waits for the next app start.
+    enableTauri();
+    patchHooks.spaServed = vi.fn().mockResolvedValue(false);
+    useUpdatesStore.setState({
+      status: "available",
+      info: nightlyInfo,
+      settings: nightlySettings,
+      hotpatch: null,
+    });
+    const apply = vi.spyOn(api, "applyHotpatch").mockResolvedValue({
+      app_version: "9.9.9",
+      frontend_version: "9.9.9_001",
+      previous_version: null,
+      channel: "nightly",
+    });
+    await useUpdatesStore.getState().install();
+    expect(apply).toHaveBeenCalled();
+    expect(patchHooks.reload).toHaveBeenCalled();
+    expect(patchHooks.showPatchedFrontend).not.toHaveBeenCalled();
+    apply.mockRestore();
   });
 
   it("reloads the bundle when rollback removes the last frontend patch", async () => {

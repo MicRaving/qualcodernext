@@ -208,6 +208,10 @@ function storeGithubLocalSettings(patch: { github_token?: string; github_repo?: 
 export const api = {
   recentProjects: (timeoutMs?: number) =>
     request<{ recent: string[] }>("/projects", undefined, timeoutMs),
+  /** Liveness probe — cheap, no project needed. Used to wait for a
+   *  restarted backend to actually accept connections (its port file
+   *  appears ~2s before uvicorn listens). */
+  health: () => request<{ status: string; version: string }>("/health", undefined, 5_000),
   createProject: (project_path: string, codername?: string) =>
     request<OpenProjectResult>("/projects", {
       method: "POST",

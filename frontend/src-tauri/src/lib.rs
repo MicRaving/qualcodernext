@@ -313,14 +313,55 @@ fn store_child(spawn_result: std::io::Result<Child>) {
     }
 }
 
+/// Probe `GET /api/v1/health` until the backend answers 200 (or the timeout
+/// expires). Plain `TcpStream` HTTP — no HTTP client dependency (mirrors the
+/// probe in `maybe_navigate_to_hotpatch`).
+///
+/// Needed because the port file is written ~2s BEFORE uvicorn starts
+/// accepting connections (the heavy imports dominate boot): a caller that
+/// used the port immediately hit "connection refused" and reported the
+/// restart as a failed update.
+fn wait_for_backend_health(port: u16, timeout: Duration) -> bool {
+    use std::io::{Read, Write};
+
+    let addr: SocketAddr = match format!("127.0.0.1:{port}").parse() {
+        Ok(addr) => addr,
+        Err(_) => return false,
+    };
+    let deadline = std::time::Instant::now() + timeout;
+    while std::time::Instant::now() < deadline {
+        let probe = TcpStream::connect_timeout(&addr, Duration::from_millis(500))
+            .and_then(|mut stream| {
+                stream.set_read_timeout(Some(Duration::from_secs(2)))?;
+                stream.write_all(
+                    b"GET /api/v1/health HTTP/1.0\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n",
+                )?;
+                let mut body = String::new();
+                stream.read_to_string(&mut body)?;
+                Ok(body)
+            });
+        if let Ok(body) = probe {
+            if body.starts_with("HTTP/1.1 200") || body.starts_with("HTTP/1.0 200") {
+                return true;
+            }
+        }
+        std::thread::sleep(Duration::from_millis(150));
+    }
+    false
+}
+
 /// Restart the backend child process (e.g. after staging a backend-source
-/// overlay) and return the new backend's port once it answers.
+/// overlay) and return the new backend's port once it ANSWERS HTTP.
 ///
 /// The old child is terminated the same way as on app exit; the new child
 /// is spawned with the same resolution order (bundled onedir first). The
 /// caller re-resolves its API base (the port may change) and reopens its
 /// project — the backend shuts down cleanly (open project closed) before
 /// the old process exits.
+///
+/// Waits for a real `/api/v1/health` answer, not just the port file: the
+/// file appears ~2s before the server listens, and returning early made
+/// every caller race the boot ("Backend unreachable — Failed to fetch").
 #[tauri::command]
 fn restart_backend(app: tauri::AppHandle) -> Result<u16, String> {
     kill_backend();
@@ -343,7 +384,14 @@ fn restart_backend(app: tauri::AppHandle) -> Result<u16, String> {
         if let Ok(text) = std::fs::read_to_string(&port_file) {
             if let Ok(json) = serde_json::from_str::<serde_json::Value>(&text) {
                 if let Some(port) = json.get("port").and_then(|p| p.as_u64()) {
-                    return Ok(port as u16);
+                    let port = port as u16;
+                    // Serving yet? The port file exists well before the
+                    // server accepts connections — see wait_for_backend_health.
+                    return if wait_for_backend_health(port, Duration::from_secs(30)) {
+                        Ok(port)
+                    } else {
+                        Err("backend did not answer after restart".to_string())
+                    };
                 }
             }
         }

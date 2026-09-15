@@ -147,7 +147,59 @@ export const patchHooks = {
       window.location.reload();
     }
   },
+  /**
+   * Whether the backend actually serves the hotpatched SPA at `/`.
+   *
+   * A shell whose *backend* predates the per-request SPA route (any stable
+   * before 0.1.18) answers 404 there: navigating to it strands the window
+   * on `{"detail":"Not Found"}`. Probe first and keep the bundled build
+   * when the backend cannot serve the patch.
+   */
+  spaServed: async (origin: string): Promise<boolean> => {
+    const ctrl = new AbortController();
+    const timer = window.setTimeout(() => ctrl.abort(), 5_000);
+    try {
+      const res = await fetch(`${origin}/`, { signal: ctrl.signal, cache: "no-store" });
+      const type = res.headers.get("content-type") ?? "";
+      return res.ok && type.includes("html");
+    } catch {
+      return false;
+    } finally {
+      window.clearTimeout(timer);
+    }
+  },
 };
+
+/**
+ * Wait until the backend actually SERVES HTTP — not merely until its port
+ * file exists.
+ *
+ * `restart_backend` returns as soon as the new process writes its port file
+ * (`[boot] port file written at +0.0s`), but uvicorn starts accepting
+ * connections only after the heavy imports (`[boot] serving at +1.9s`).
+ * Any API call issued inside that ~2s window fails with "Backend
+ * unreachable — Failed to fetch" (the transport retries once, immediately:
+ * a refused connection has no timeout to ride out), which aborted every
+ * backend-patch install. Poll `/health` until the server answers.
+ */
+export async function waitForBackendReady(timeoutMs = 30_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  let lastError: unknown = null;
+  for (;;) {
+    try {
+      await api.health();
+      return;
+    } catch (err) {
+      lastError = err;
+      if (Date.now() >= deadline) {
+        throw new Error(
+          `backend did not become ready within ${Math.round(timeoutMs / 1000)}s: ${errorMessage(lastError, String(lastError))}`,
+        );
+      }
+      await new Promise((resolve) => window.setTimeout(resolve, 250));
+    }
+  }
+}
 
 interface UpdatesState {
   status: UpdateStatus;
@@ -329,11 +381,36 @@ async function applyBackendPatch(version: string, backend: BackendPatchRef): Pro
   await api.applyOverlay({ version, ...backend });
   const core = await import("@tauri-apps/api/core");
   await core.invoke<number>("restart_backend");
+  // The port file exists ~2s before the server accepts connections: without
+  // this wait the reopen below races the boot and fails as "backend
+  // unreachable" (see waitForBackendReady).
+  await waitForBackendReady();
   invalidateApiBase();
   await initApiBase();
   if (projectPath) {
     await useProjectStore.getState().openProject(projectPath);
   }
+}
+
+/**
+ * Show the frontend that a patch just activated.
+ *
+ * Navigates to the backend-served SPA only when the backend can actually
+ * serve it; an older frozen backend has no SPA route and would strand the
+ * window on "Not Found". Otherwise the bundled build is reloaded (the patch
+ * stays on disk and activates on the next full app start).
+ */
+async function activatePatchedFrontend(hasFrontendPatch: boolean): Promise<void> {
+  if (!hasFrontendPatch) {
+    patchHooks.reload();
+    return;
+  }
+  const origin = backendOrigin();
+  if (!origin || !(await patchHooks.spaServed(origin))) {
+    patchHooks.reload();
+    return;
+  }
+  patchHooks.showPatchedFrontend(origin);
 }
 
 export const useUpdatesStore = create<UpdatesState>((set, get) => ({
@@ -544,11 +621,7 @@ export const useUpdatesStore = create<UpdatesState>((set, get) => ({
         // Navigate only when patched frontend files exist behind the backend
         // URL: a backend-only install over a bundle window has no SPA there
         // (the backend answers 404) — a plain reload is correct instead.
-        if (get().hotpatch?.frontend_version) {
-          patchHooks.showPatchedFrontend(backendOrigin());
-        } else {
-          patchHooks.reload();
-        }
+        await activatePatchedFrontend(!!get().hotpatch?.frontend_version);
       } catch (e) {
         set({ status: "error", error: errorMessage(e, String(e)) });
       }
@@ -636,6 +709,7 @@ export const useUpdatesStore = create<UpdatesState>((set, get) => ({
         const projectPath = useProjectStore.getState().projectPath || null;
         const core = await import("@tauri-apps/api/core");
         await core.invoke<number>("restart_backend");
+        await waitForBackendReady();
         invalidateApiBase();
         await initApiBase();
         if (projectPath) {
@@ -652,11 +726,7 @@ export const useUpdatesStore = create<UpdatesState>((set, get) => ({
       // A restored frontend lives behind the backend URL too — but only
       // when files are actually there (rolling back the last frontend
       // patch leaves no SPA behind the backend URL: reload the bundle).
-      if (get().hotpatch?.frontend_version) {
-        patchHooks.showPatchedFrontend(backendOrigin());
-      } else {
-        patchHooks.reload();
-      }
+      await activatePatchedFrontend(!!get().hotpatch?.frontend_version);
     } catch (e) {
       set({ status: "error", error: errorMessage(e, String(e)) });
     }
