@@ -30,6 +30,9 @@ HEADERS = {
 }
 HTTP_TIMEOUT = 45
 ZOTERO_API = "http://localhost:23119"
+#: Hard ceiling for a downloaded paper. A paywalled/redirected response can be
+#: arbitrarily large (HTML, media); buffering it whole would exhaust memory.
+MAX_PDF_BYTES = 40 * 1024 * 1024
 
 
 def _is_pdf(content_type: str, chunk: bytes) -> bool:
@@ -125,18 +128,33 @@ async def resolve_landing_page(client: httpx.AsyncClient, url: str) -> str | Non
 
 
 async def download_pdf(client: httpx.AsyncClient, url: str, dest: Path) -> bool:
-    """Download ``url`` into ``dest`` if it looks like a PDF; True on success."""
+    """Download ``url`` into ``dest`` if it looks like a PDF; True on success.
+
+    The first five bytes are validated as soon as they are available (before
+    the rest of the body is buffered) and the download is aborted past
+    ``MAX_PDF_BYTES`` so a hostile or misdirected response cannot exhaust
+    memory.
+    """
     try:
         async with client.stream("GET", url, follow_redirects=True, headers=HEADERS) as resp:
             if resp.status_code != 200:
                 return False
             content_type = resp.headers.get("content-type", "")
             first: bytes = b""
+            total = 0
             out: list[bytes] = []
             async for chunk in resp.aiter_bytes():
+                if not chunk:
+                    continue
                 if len(first) < 5:
-                    first += chunk
-                    first = first[:5]
+                    first = (first + chunk)[:5]
+                    # Validate immediately once the magic block is present.
+                    if len(first) >= 5 and not _is_pdf(content_type, first):
+                        return False
+                total += len(chunk)
+                if total > MAX_PDF_BYTES:
+                    logger.warning("Download aborted (> %d bytes): %s", MAX_PDF_BYTES, url)
+                    return False
                 out.append(chunk)
             if not _is_pdf(content_type, first):
                 return False

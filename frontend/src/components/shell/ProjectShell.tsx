@@ -46,6 +46,7 @@ import { GraphsInspector, GraphsView } from "@/features/graphs/GraphsView";
 import { HistoryView } from "@/features/history/HistoryView";
 import { MetaList } from "@/features/meta/MetaList";
 import { MetaView } from "@/features/meta/MetaView";
+import { MetaPdfPane } from "@/features/meta/MetaPdfPane";
 import { CreativePanel } from "@/features/creative/CreativePanel";
 import { SettingsView } from "@/features/settings/SettingsView";
 import { AiView } from "@/features/ai/AiView";
@@ -219,6 +220,7 @@ export function ProjectShell() {
   const view = useWorkspaceStore((s) => s.view);
   const setView = useWorkspaceStore((s) => s.setView);
   const analyzeUi = useWorkspaceStore((s) => s.analyzeUi);
+  const metaUi = useWorkspaceStore((s) => s.metaUi);
   const rightPane = useWorkspaceStore((s) => s.rightPane);
   const setRightPane = useWorkspaceStore((s) => s.setRightPane);
   const projectOpen = useProjectStore((s) => s.projectOpen);
@@ -964,6 +966,11 @@ export function ProjectShell() {
           <HistoryView />
         ) : rightPane === "creative" ? (
           <CreativePanel />
+        ) : view.kind === "meta" && (metaUi.tab === "extract" || metaUi.tab === "download") ? (
+          // The Extract/Download tabs' right bar is the paper linked to the
+          // focused (or clicked) study (the app's shared PDF viewer); closing
+          // AI/Settings/History/Creative returns here.
+          <MetaPdfPane />
         ) : view.kind === "analyze" && analyzeUi.selectedId === "graphs" ? (
           // The graph details inspector opens automatically; closing the
           // AI/Settings/History panes returns here.

@@ -15,7 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from qualcoder_api.core.models import MetaCriterion, MetaHit
 from qualcoder_api.persistence.repo.meta_repo import MetaRepository
 from qualcoder_api.services import ai_service
-from qualcoder_api.services.meta_eligibility import verdict_all_yes
+from qualcoder_api.services.meta_eligibility import evaluate_criteria
 from qualcoder_api.services.meta_prompt import (
     build_cluster_messages,
     criteria_prompt_hash,
@@ -51,12 +51,25 @@ def _normalize(raw: object, mapping: dict[str, str], default: str) -> str:
     return mapping.get(str(raw or "").strip().lower(), default)
 
 
+def _match_option(value: object, options: list) -> str:
+    """Match a free-text answer to a configured option (case-insensitive)."""
+    text = str(value or "").strip()
+    text_l = text.lower()
+    for option in options or []:
+        if str(option).strip().lower() == text_l:
+            return str(option).strip()
+    return text
+
+
 def parse_verdicts(entry: dict, criteria: list[MetaCriterion]) -> dict:
     """Extract a clean verdicts dict from one LLM response entry.
 
     Accepts the documented ``criterionN_applies`` / ``criterionN_certainty``
     keys, and also tolerates the model answering under the criterion's own key
     (a bool or ``{"applies": ...}``), which schema-agnostic models often do.
+
+    The ``kind`` controls normalisation: ``verdict`` maps to Yes/No/Unsure,
+    ``classify`` keeps the chosen option, ``number`` keeps the numeric value.
     """
     verdicts: dict = {}
     for i, criterion in enumerate(criteria, start=1):
@@ -67,12 +80,19 @@ def parse_verdicts(entry: dict, criteria: list[MetaCriterion]) -> dict:
                 raw_applies = "Yes" if alt else "No"
             elif isinstance(alt, dict):
                 raw_applies = alt.get("applies")
-            elif isinstance(alt, str):
+            elif isinstance(alt, (str, int, float)):
                 raw_applies = alt
         if raw_applies is None:
             continue
+        kind = (criterion.kind or "verdict").strip().lower()
+        if kind == "classify":
+            applies = _match_option(raw_applies, list(criterion.options or []))
+        elif kind == "number":
+            applies = str(raw_applies).strip()
+        else:
+            applies = _normalize(raw_applies, _APPLIES_MAP, "Unsure")
         verdicts[criterion.key] = {
-            "applies": _normalize(raw_applies, _APPLIES_MAP, "Unsure"),
+            "applies": applies,
             "certainty": _normalize(entry.get(f"criterion{i}_certainty"), _CERTAINTY_MAP, "Medium"),
         }
     return verdicts
@@ -163,7 +183,8 @@ async def _screen_cluster(
         )
         # Keep the hit status in sync so the whole-queue download/extraction
         # passes (and the UI badge) reflect the AI verdict immediately.
-        await repo.set_hit_status(hit_id, "included" if verdict_all_yes(verdicts) else "excluded")
+        eligible = evaluate_criteria(criteria, verdicts)["eligible"]
+        await repo.set_hit_status(hit_id, "included" if eligible else "excluded")
         written += 1
     return written
 

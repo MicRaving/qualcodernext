@@ -114,11 +114,15 @@ _SCHEMA_SQL: list[str] = [
     "search_run text, status text not null default 'imported', created text, updated text, "
     "unique(doi))",
     "CREATE TABLE meta_criterion (id integer primary key autoincrement, position integer not null default 0, "
-    "key text not null, label text not null, prompt_text text not null, created text)",
+    "key text not null, label text not null, prompt_text text not null, created text, "
+    "kind text not null default 'verdict', options text not null default '[]', "
+    "pass_values text not null default '[\"yes\"]', exclude_reason text not null default '', "
+    "gating integer not null default 1, help text not null default '')",
     "CREATE TABLE meta_screening (id integer primary key autoincrement, hit_id integer not null, "
     "owner text not null, run_id text not null default '', verdicts text, intervention_type text, "
     "rationale text, origin text not null default 'manual', model text, prompt_hash text, "
-    "created text, updated text, unique(hit_id, owner, run_id))",
+    "created text, updated text, stage text not null default 'abstract', "
+    "reason text not null default '', unique(hit_id, owner, run_id, stage))",
     "CREATE TABLE meta_document (id integer primary key autoincrement, hit_id integer not null, "
     "source_id integer, retrieval_method text, url text, status text not null default 'pending', "
     "message text, created text, updated text, unique(hit_id))",
@@ -126,7 +130,7 @@ _SCHEMA_SQL: list[str] = [
     "source_id integer, owner text not null, scheme text not null, study_vars text, "
     "dv_metrics text, prescreen text, model text, prompt_hash text, "
     "status text not null default 'prescreen_pending', missing_reason text, created text, "
-    "updated text, unique(hit_id))",
+    "updated text, unique(hit_id, owner, scheme))",
     "CREATE TABLE meta_scheme (id integer primary key autoincrement, name text not null unique, "
     "label text, description text, prescreen_prompt text, coding_prompt text, codebook text, "
     "created text, updated text)",

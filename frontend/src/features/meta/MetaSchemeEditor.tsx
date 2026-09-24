@@ -1,27 +1,55 @@
 /**
  * Meta coding-scheme editor / creator.
  *
- * A scheme is a named field list (groups + fields + optional qualitative
- * fields) plus its prescreen prompt; the coding prompt can be generated from
- * the fields and then edited. Fields use dropdown selectors for group, type
- * and editor, and a dedicated option-list editor for select/list fields.
+ * A scheme is a field list (groups + study fields + optional per-contrast
+ * metric fields) plus its prescreen/coding prompts. The editor follows the
+ * codebook-v2 contract (`docs/meta-port.md` §3): every field carries a type, an
+ * editor, and an optional controlled **role** from the shared vocabulary; the
+ * metrics section is a repeatable per-contrast field list gated by a toggle,
+ * and enabled effect-size families can be expanded into editable metric fields.
  *
- * Stored on ``meta_scheme``: the structured schema lives in ``codebook``
- * (``groups`` + ``study_fields`` + ``code_fields``), the prompts as text.
+ * Stored on ``meta_scheme``: the structured schema lives in ``codebook`` (v2)
+ * with ``study_fields`` kept as a v1 alias so the publish path keeps working.
  */
-import { useEffect, useMemo, useState, type ReactNode } from "react";
-import { ChevronDown, ChevronUp, Plus, Sparkles, Trash2 } from "lucide-react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { ChevronDown, ChevronUp, Copy, Download, Plus, Sparkles, Trash2, Upload } from "lucide-react";
 import { api } from "@/lib/api";
-import type { MetaScheme } from "@/lib/api/types";
+import type {
+  FieldRole,
+  MetaEffectFamily,
+  MetaScheme,
+  MetaSchemeCodebookV2,
+  MetaSchemeExport,
+  SchemeField,
+} from "@/lib/api/types";
+import { EFFECT_FAMILIES, METRIC_ROLES, STUDY_ROLES } from "@/lib/api/types";
 import { Button, IconButton, Input, Modal, Select, Textarea, Toggle } from "@/components/ui/orchestrator";
 import { useI18n } from "@/lib/i18n";
 import { useToast } from "@/lib/toast";
 import { errorMessage } from "@/lib/utils";
 
 const FIELD_TYPES = ["string", "integer", "number", "boolean", "list", "object"] as const;
-const EDITORS = ["text", "number", "select", "textarea"] as const;
+const EDITORS = [
+  "text",
+  "textarea",
+  "number",
+  "boolean",
+  "select",
+  "multiselect",
+  "date",
+  "json",
+  "objectlist",
+  "kv",
+] as const;
 
-interface SchemeField {
+type Scope = "field" | "metric";
+
+interface ColumnDraft {
+  name: string;
+  type: string;
+}
+
+interface FieldDraft {
   id: string;
   name: string;
   label: string;
@@ -29,8 +57,13 @@ interface SchemeField {
   type: string;
   editor: string;
   description: string;
+  instruction: string;
   required: boolean;
   options: string[];
+  columns: ColumnDraft[];
+  role: FieldRole | "";
+  /** Offer this field as a subgroup/moderator variable. */
+  moderator: boolean;
 }
 
 interface SchemeDraft {
@@ -43,7 +76,12 @@ interface SchemeDraft {
   prompt: string;
   groups: string[];
   codeFields: string;
-  fields: SchemeField[];
+  fields: FieldDraft[];
+  metricsEnabled: boolean;
+  metricsGroup: string;
+  metricsLabel: string;
+  metricsFields: FieldDraft[];
+  effectFamilies: string[];
 }
 
 const EMPTY: SchemeDraft = {
@@ -57,6 +95,77 @@ const EMPTY: SchemeDraft = {
   groups: ["Study"],
   codeFields: "",
   fields: [],
+  metricsEnabled: false,
+  metricsGroup: "Metrics",
+  metricsLabel: "Effect sizes",
+  metricsFields: [],
+  effectFamilies: [],
+};
+
+const ALL_ROLES: readonly FieldRole[] = [...STUDY_ROLES, ...METRIC_ROLES];
+
+/** Standard metric field presets for each enabled effect-size family. */
+const FAMILY_FIELDS: Record<
+  MetaEffectFamily,
+  { name: string; label: string; type: string; editor: string; role: FieldRole }[]
+> = {
+  descriptives: [
+    { name: "n1i", label: "N (group 1)", type: "integer", editor: "number", role: "n1" },
+    { name: "m1i", label: "Mean (group 1)", type: "number", editor: "number", role: "m1" },
+    { name: "sd1i", label: "SD (group 1)", type: "number", editor: "number", role: "sd1" },
+    { name: "n2i", label: "N (group 2)", type: "integer", editor: "number", role: "n2" },
+    { name: "m2i", label: "Mean (group 2)", type: "number", editor: "number", role: "m2" },
+    { name: "sd2i", label: "SD (group 2)", type: "number", editor: "number", role: "sd2" },
+  ],
+  t: [
+    { name: "t_val", label: "t statistic", type: "number", editor: "number", role: "t" },
+    { name: "df_den", label: "df (denominator)", type: "number", editor: "number", role: "df_den" },
+  ],
+  F: [
+    { name: "F_val", label: "F statistic", type: "number", editor: "number", role: "F" },
+    { name: "df_num", label: "df (numerator)", type: "number", editor: "number", role: "df_num" },
+    { name: "df_den", label: "df (denominator)", type: "number", editor: "number", role: "df_den" },
+  ],
+  r: [
+    { name: "r_val", label: "Correlation r", type: "number", editor: "number", role: "r" },
+    { name: "n_total", label: "Total N", type: "integer", editor: "number", role: "n_total" },
+  ],
+  yi: [
+    { name: "yi", label: "Effect size yi", type: "number", editor: "number", role: "yi" },
+    { name: "vi", label: "Variance vi", type: "number", editor: "number", role: "vi" },
+    { name: "sei", label: "Standard error sei", type: "number", editor: "number", role: "sei" },
+  ],
+  d_g: [
+    { name: "d_val", label: "Cohen's d", type: "number", editor: "number", role: "d" },
+    { name: "g_val", label: "Hedges' g", type: "number", editor: "number", role: "g" },
+    { name: "d_ci_low", label: "d CI low", type: "number", editor: "number", role: "d_ci_low" },
+    { name: "d_ci_high", label: "d CI high", type: "number", editor: "number", role: "d_ci_high" },
+    { name: "g_ci_low", label: "g CI low", type: "number", editor: "number", role: "g_ci_low" },
+    { name: "g_ci_high", label: "g CI high", type: "number", editor: "number", role: "g_ci_high" },
+    { name: "d_se", label: "d standard error", type: "number", editor: "number", role: "d_se" },
+    { name: "g_se", label: "g standard error", type: "number", editor: "number", role: "g_se" },
+  ],
+  odds_ratio: [
+    { name: "or_val", label: "Odds ratio", type: "number", editor: "number", role: "or" },
+    { name: "or_ci_low", label: "OR CI low", type: "number", editor: "number", role: "or_ci_low" },
+    { name: "or_ci_high", label: "OR CI high", type: "number", editor: "number", role: "or_ci_high" },
+    { name: "log_odds", label: "Log odds", type: "number", editor: "number", role: "log_odds" },
+    { name: "rr", label: "Risk ratio", type: "number", editor: "number", role: "rr" },
+  ],
+  beta: [
+    { name: "beta_val", label: "Regression beta", type: "number", editor: "number", role: "beta" },
+    { name: "beta_se", label: "Beta standard error", type: "number", editor: "number", role: "beta_se" },
+  ],
+  eta2p: [
+    { name: "eta2p", label: "Partial eta squared", type: "number", editor: "number", role: "eta2p" },
+    { name: "eta2p_ci_low", label: "Partial eta² CI low", type: "number", editor: "number", role: "eta2p_ci_low" },
+    { name: "eta2p_ci_high", label: "Partial eta² CI high", type: "number", editor: "number", role: "eta2p_ci_high" },
+  ],
+  chi2: [
+    { name: "chi2_val", label: "Chi-square", type: "number", editor: "number", role: "chi2" },
+    { name: "p_val", label: "p-value", type: "number", editor: "number", role: "p" },
+    { name: "p_censored", label: "p censored (e.g. < .001)", type: "boolean", editor: "boolean", role: "p_censored" },
+  ],
 };
 
 function uid(): string {
@@ -72,7 +181,19 @@ function slugifyName(label: string): string {
   return /^[0-9]/.test(slug) ? `f_${slug}` : slug;
 }
 
-function fieldOf(raw: Record<string, unknown>, fallbackGroup: string): SchemeField {
+function normalizeRole(raw: unknown): FieldRole | "" {
+  const value = String(raw ?? "");
+  return (ALL_ROLES as readonly string[]).includes(value) ? (value as FieldRole) : "";
+}
+
+function readColumns(raw: unknown): ColumnDraft[] {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .filter((c): c is Record<string, unknown> => Boolean(c) && typeof c === "object")
+    .map((c) => ({ name: String(c.name ?? ""), type: String(c.type ?? "string") }));
+}
+
+function fieldOf(raw: Record<string, unknown>, fallbackGroup: string): FieldDraft {
   return {
     id: uid(),
     name: String(raw.name ?? ""),
@@ -81,9 +202,36 @@ function fieldOf(raw: Record<string, unknown>, fallbackGroup: string): SchemeFie
     type: String(raw.type ?? "string"),
     editor: String(raw.editor ?? "text"),
     description: String(raw.description ?? ""),
+    instruction: String(raw.instruction ?? ""),
     required: Boolean(raw.required),
     options: Array.isArray(raw.options) ? (raw.options as unknown[]).map(String) : [],
+    columns: readColumns(raw.columns),
+    role: normalizeRole(raw.role),
+    // Fields opt in by default; only an explicit false hides them.
+    moderator: raw.moderator === undefined ? true : Boolean(raw.moderator),
   };
+}
+
+function blankField(group: string): FieldDraft {
+  return fieldOf({ group }, group);
+}
+
+/** Read `groups` from either v1 string list or v2 `{name,label}` list. */
+function readGroups(raw: unknown): string[] {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .map((g) => (g && typeof g === "object" ? String((g as { name?: unknown }).name ?? "") : String(g)))
+    .map((g) => g.trim())
+    .filter(Boolean);
+}
+
+/** Read `code_fields` from either v1 string list or v2 `{name,label}` list. */
+function readCodeFields(raw: unknown): string {
+  if (!Array.isArray(raw)) return "";
+  return raw
+    .map((c) => (c && typeof c === "object" ? String((c as { name?: unknown }).name ?? "") : String(c)))
+    .filter(Boolean)
+    .join(", ");
 }
 
 function draftFor(scheme: MetaScheme): SchemeDraft {
@@ -94,14 +242,21 @@ function draftFor(scheme: MetaScheme): SchemeDraft {
   } catch {
     book = {};
   }
-  const groups = Array.isArray(book.groups) ? (book.groups as unknown[]).map(String) : [];
+  const groups = readGroups(book.groups);
   const rawFields = (book.study_fields ?? book.fields) as unknown;
   const fields = Array.isArray(rawFields)
     ? (rawFields as Record<string, unknown>[]).map((f) => fieldOf(f, groups[0] ?? "Study"))
     : [];
-  const codeFields = Array.isArray(book.code_fields)
-    ? (book.code_fields as unknown[]).map(String).join(", ")
-    : "";
+  const metricsRaw =
+    book.metrics && typeof book.metrics === "object" ? (book.metrics as Record<string, unknown>) : {};
+  const metricsFields = Array.isArray(metricsRaw.fields)
+    ? (metricsRaw.fields as Record<string, unknown>[]).map((f) =>
+        fieldOf(f, String(metricsRaw.group ?? "Metrics")),
+      )
+    : [];
+  const families = Array.isArray(book.effect_families)
+    ? (book.effect_families as unknown[]).map(String).filter((f): f is MetaEffectFamily => f in FAMILY_FIELDS)
+    : [];
   return {
     id: scheme.id,
     name: scheme.name,
@@ -111,8 +266,13 @@ function draftFor(scheme: MetaScheme): SchemeDraft {
     prescreen: scheme.prescreen_prompt ?? "",
     prompt: scheme.coding_prompt ?? "",
     groups: groups.length ? groups : ["Study"],
-    codeFields,
+    codeFields: readCodeFields(book.code_fields),
     fields,
+    metricsEnabled: Boolean(metricsRaw.enabled) || metricsFields.length > 0,
+    metricsGroup: String(metricsRaw.group ?? "Metrics"),
+    metricsLabel: String(metricsRaw.label ?? "Effect sizes"),
+    metricsFields,
+    effectFamilies: families,
   };
 }
 
@@ -123,38 +283,186 @@ function splitList(value: string): string[] {
     .filter(Boolean);
 }
 
+function fieldLine(field: FieldDraft): string {
+  const opts = field.options.filter((o) => o.trim() !== "");
+  const req = field.required ? " (required)" : "";
+  const role = field.role ? ` [role: ${field.role}]` : "";
+  const label = field.label && field.label !== field.name ? ` — ${field.label}` : "";
+  const instruction = field.instruction ? ` ${field.instruction}` : "";
+  const options = opts.length ? ` Options: ${opts.join(", ")}.` : "";
+  return `* **${field.name}**${label}${role}${req}: ${field.description}${instruction}${options}`;
+}
+
+/** Role-aware coding prompt generation (contract §3/§11). */
 function generatePrompt(draft: SchemeDraft): string {
   const lines: string[] = [];
   const groups = [...draft.groups];
   for (const field of draft.fields) {
     if (field.group && !groups.includes(field.group)) groups.push(field.group);
   }
+  lines.push(
+    "You are an expert academic research assistant and data coder. Read the paper thoroughly and code each independent experiment.",
+  );
+  lines.push(
+    'Output the extracted data strictly as a JSON array of objects, one per experiment: [{"study": {...}, "metrics": [...]}].',
+  );
+  lines.push("");
+  lines.push("Study fields:");
+  const studyLines: string[] = [];
   for (const group of groups) {
     const members = draft.fields.filter((f) => (f.group || groups[0]) === group);
     if (members.length === 0) continue;
-    lines.push(`### ${group}`);
-    for (const field of members) {
-      const opts = field.options.length ? ` Options: ${field.options.join(", ")}.` : "";
-      const req = field.required ? " (required)" : "";
-      const label = field.label && field.label !== field.name ? ` — ${field.label}` : "";
-      lines.push(`* **${field.name}**${label}${req}: ${field.description}${opts}`);
-    }
+    studyLines.push(`### ${group}`);
+    for (const field of members) studyLines.push(fieldLine(field));
   }
+  lines.push(...(studyLines.length ? studyLines : ["* (add fields to generate this section)"]));
+
+  const requiredStudy = draft.fields.filter((f) => f.required).map((f) => f.name);
+  if (requiredStudy.length) lines.push(`Required study fields: ${requiredStudy.join(", ")}.`);
+
+  if (draft.metricsEnabled) {
+    lines.push("");
+    lines.push(`${draft.metricsLabel || "Effect sizes"} — one entry per inferential DV/contrast:`);
+    for (const field of draft.metricsFields) lines.push(fieldLine(field));
+    const roles = draft.metricsFields.map((f) => f.role).filter(Boolean);
+    if (roles.length) lines.push(`Metric roles in use: ${[...new Set(roles)].join(", ")}.`);
+    const families = draft.effectFamilies.filter((f) => f in FAMILY_FIELDS);
+    if (families.length) lines.push(`Preferred effect-size families: ${families.join(", ")}.`);
+    lines.push(
+      "For every inferential DV and every reported group contrast add a metrics entry with at least one complete set of: full descriptives (roles n1, m1, sd1, n2, m2, sd2), (role t with n1, n2), (role F with df_num, df_den, n1, n2), (role r with n_total), (role yi with vi or sei), (role d or g with n1, n2).",
+    );
+    lines.push(
+      "Never leave a contrast without a complete metric set; leave unavailable numeric fields null and record why in the **missing_metrics_reason** field.",
+    );
+  } else {
+    lines.push("");
+    lines.push(
+      "Effect sizes: for every inferential dependent variable (DV) and every reported group contrast add a metrics array entry with at least one complete set of full descriptives or a documented fallback.",
+    );
+  }
+
   const codeFields = splitList(draft.codeFields);
-  return [
-    "You are an expert academic research assistant and data coder. Read the paper thoroughly and code each independent experiment.",
-    "Output the extracted data strictly as a JSON array of objects (one object per experiment).",
-    "",
-    "Study fields:",
-    ...(lines.length ? lines : ["* (add fields to generate this section)"]),
-    "",
-    "Effect sizes: for every inferential dependent variable (DV) and every reported group contrast add a DV_Metrics array entry with at least one complete set of:",
-    "full descriptives (n1i, m1i, sd1i, n2i, m2i, sd2i), (t_val, n1i, n2i), (F_val, df_num, df_den, n1i, n2i), (r_val, n_total), (yi, vi) or (yi, sei).",
-    "Never leave a DV comparison without full descriptives or one complete fallback set; set missing numeric fields to null and note why in missing_metrics_reason.",
-    ...(codeFields.length
-      ? ["", `Also provide these qualitative fields as short strings or arrays: ${codeFields.join(", ")}.`]
-      : []),
-  ].join("\n");
+  if (codeFields.length) {
+    lines.push("");
+    lines.push(`Also provide these qualitative fields as short strings or arrays: ${codeFields.join(", ")}.`);
+  }
+  return lines.join("\n");
+}
+
+/** Export bundle built from the current draft (used when the scheme is new). */
+function bundleFromDraft(draft: SchemeDraft): MetaSchemeExport {
+  const studyFields = buildStudyFields(draft);
+  const metricFields = buildMetricFields(draft);
+  const codebook: MetaSchemeCodebookV2 = {
+    version: 2,
+    category: draft.category || `Meta / ${draft.label || draft.name}`,
+    groups: draft.groups.map((g) => ({ name: g, label: g })),
+    fields: studyFields,
+    study_fields: studyFields,
+    metrics: {
+      enabled: draft.metricsEnabled,
+      group: draft.metricsGroup || "Metrics",
+      label: draft.metricsLabel || "Effect sizes",
+      fields: metricFields,
+    },
+    effect_families: draft.effectFamilies.filter(
+      (f): f is MetaEffectFamily => f in FAMILY_FIELDS,
+    ),
+    code_fields: splitList(draft.codeFields).map((name) => ({ name, label: name, instruction: "" })),
+  };
+  return {
+    name: draft.name.trim() || "scheme",
+    label: draft.label || undefined,
+    description: draft.description || undefined,
+    prescreen_prompt: draft.prescreen,
+    coding_prompt: draft.prompt,
+    codebook,
+  };
+}
+
+function toApiField(field: FieldDraft, fallbackGroup: string): SchemeField {
+  return {
+    name: field.name || slugifyName(field.label) || "field",
+    label: field.label || field.name,
+    group: field.group || fallbackGroup,
+    type: field.type,
+    editor: field.editor,
+    required: field.required,
+    description: field.description,
+    instruction: field.instruction,
+    options: field.options.filter((o) => o.trim() !== ""),
+    columns: field.columns.filter((c) => c.name.trim() !== ""),
+    role: field.role || null,
+    moderator: field.moderator,
+  };
+}
+
+function buildStudyFields(draft: SchemeDraft): SchemeField[] {
+  return draft.fields.map((f) => toApiField(f, draft.groups[0] || "Study"));
+}
+
+function buildMetricFields(draft: SchemeDraft): SchemeField[] {
+  return draft.metricsFields.map((f) => toApiField(f, draft.metricsGroup || "Metrics"));
+}
+
+function draftFromBundle(bundle: MetaSchemeExport): SchemeDraft {
+  const codebook = bundle.codebook ?? ({} as MetaSchemeCodebookV2);
+  const asScheme: MetaScheme = {
+    id: 0,
+    name: bundle.name ?? "scheme",
+    label: bundle.label ?? null,
+    description: bundle.description ?? null,
+    prescreen_prompt: bundle.prescreen_prompt ?? "",
+    coding_prompt: bundle.coding_prompt ?? "",
+    codebook: JSON.stringify(codebook),
+    created: "",
+    updated: "",
+  };
+  return { ...draftFor(asScheme), id: null };
+}
+
+function downloadJson(filename: string, data: unknown) {
+  const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = filename;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  // Revoke on a later tick: some browsers abort an in-flight download if the
+  // object URL is revoked in the same task as the synthetic click.
+  window.setTimeout(() => URL.revokeObjectURL(url), 0);
+}
+
+function roleSelect(
+  value: FieldRole | "",
+  onChange: (value: FieldRole | "") => void,
+  t: (key: string) => string,
+) {
+  return (
+    <Select
+      value={value}
+      onChange={(e) => onChange(normalizeRole(e.target.value))}
+      className="h-7 w-full text-xs"
+    >
+      <option value="">{t("meta.roleNone")}</option>
+      <optgroup label={t("meta.roleStudy")}>
+        {STUDY_ROLES.map((role) => (
+          <option key={role} value={role}>
+            {role}
+          </option>
+        ))}
+      </optgroup>
+      <optgroup label={t("meta.roleMetric")}>
+        {METRIC_ROLES.map((role) => (
+          <option key={role} value={role}>
+            {role}
+          </option>
+        ))}
+      </optgroup>
+    </Select>
+  );
 }
 
 export function MetaSchemeEditor({
@@ -172,23 +480,24 @@ export function MetaSchemeEditor({
   const toast = useToast();
   const [draft, setDraft] = useState<SchemeDraft>(EMPTY);
   const [pane, setPane] = useState<"field" | "prompts">("field");
-  const [selectedFieldId, setSelectedFieldId] = useState<string | null>(null);
+  const [selected, setSelected] = useState<{ scope: Scope; id: string } | null>(null);
   const [newGroup, setNewGroup] = useState("");
   const [busy, setBusy] = useState(false);
+  const fileRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
     if (!open) return;
     const next = schemes[0] ? draftFor(schemes[0]) : EMPTY;
     setDraft(next);
-    setSelectedFieldId(next.fields[0]?.id ?? null);
-    setPane(next.fields.length ? "field" : "prompts");
+    setSelected(next.fields[0] ? { scope: "field", id: next.fields[0].id } : null);
+    setPane(next.fields.length || next.metricsFields.length ? "field" : "prompts");
     // Reset only when the dialog opens — reloading the scheme list while the
     // editor is open must not discard in-progress edits.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
   const grouped = useMemo(() => {
-    const map = new Map<string, SchemeField[]>();
+    const map = new Map<string, FieldDraft[]>();
     for (const group of draft.groups) map.set(group, []);
     for (const field of draft.fields) {
       const group = field.group || draft.groups[0] || "Study";
@@ -198,34 +507,49 @@ export function MetaSchemeEditor({
     return [...map.entries()];
   }, [draft.groups, draft.fields]);
 
-  const selectedField = draft.fields.find((f) => f.id === selectedFieldId) ?? null;
+  const selectedField = selected
+    ? (selected.scope === "field" ? draft.fields : draft.metricsFields).find(
+        (f) => f.id === selected.id,
+      ) ?? null
+    : null;
 
-  const patchField = (id: string, patch: Partial<SchemeField>) =>
+  const fieldScopeKey = (scope: Scope): "fields" | "metricsFields" =>
+    scope === "field" ? "fields" : "metricsFields";
+
+  const patchField = (scope: Scope, id: string, patch: Partial<FieldDraft>) =>
+    setDraft((prev) => {
+      const key = fieldScopeKey(scope);
+      return { ...prev, [key]: prev[key].map((f) => (f.id === id ? { ...f, ...patch } : f)) };
+    });
+
+  const addField = (group: string, scope: Scope) => {
+    const field = blankField(scope === "metric" ? draft.metricsGroup || "Metrics" : group);
     setDraft((prev) => ({
       ...prev,
-      fields: prev.fields.map((f) => (f.id === id ? { ...f, ...patch } : f)),
+      [fieldScopeKey(scope)]: [...prev[fieldScopeKey(scope)], field],
     }));
-
-  const addField = (group: string) => {
-    const field = fieldOf({ group }, group);
-    setDraft((prev) => ({ ...prev, fields: [...prev.fields, field] }));
-    setSelectedFieldId(field.id);
+    setSelected({ scope, id: field.id });
     setPane("field");
   };
 
-  const removeField = (id: string) => {
-    setDraft((prev) => ({ ...prev, fields: prev.fields.filter((f) => f.id !== id) }));
-    if (selectedFieldId === id) setSelectedFieldId(null);
+  const removeField = (scope: Scope, id: string) => {
+    setDraft((prev) => {
+      const key = fieldScopeKey(scope);
+      return { ...prev, [key]: prev[key].filter((f) => f.id !== id) };
+    });
+    if (selected?.scope === scope && selected.id === id) setSelected(null);
   };
 
-  const moveField = (id: string, delta: number) => {
+  const moveField = (scope: Scope, id: string, delta: number) => {
     setDraft((prev) => {
-      const index = prev.fields.findIndex((f) => f.id === id);
+      const key = fieldScopeKey(scope);
+      const list = prev[key];
+      const index = list.findIndex((f) => f.id === id);
       const target = index + delta;
-      if (index < 0 || target < 0 || target >= prev.fields.length) return prev;
-      const fields = [...prev.fields];
-      [fields[index], fields[target]] = [fields[target], fields[index]];
-      return { ...prev, fields };
+      if (index < 0 || target < 0 || target >= list.length) return prev;
+      const next = [...list];
+      [next[index], next[target]] = [next[target], next[index]];
+      return { ...prev, [key]: next };
     });
   };
 
@@ -249,22 +573,72 @@ export function MetaSchemeEditor({
     setDraft((prev) => ({ ...prev, groups: prev.groups.filter((g) => g !== name) }));
   };
 
-  const optionRows = (id: string, options: string[]) => (
+  const toggleFamily = (family: MetaEffectFamily, checked: boolean) => {
+    setDraft((prev) => ({
+      ...prev,
+      effectFamilies: checked
+        ? [...new Set([...prev.effectFamilies, family])]
+        : prev.effectFamilies.filter((f) => f !== family),
+    }));
+  };
+
+  const addStandardFields = () => {
+    const families = draft.effectFamilies.filter(
+      (f): f is MetaEffectFamily => f in FAMILY_FIELDS,
+    );
+    if (families.length === 0) {
+      toast.error(t("meta.selectFamily"));
+      return;
+    }
+    setDraft((prev) => {
+      const existing = new Set(prev.metricsFields.map((f) => f.name));
+      const added: FieldDraft[] = [];
+      for (const family of families) {
+        for (const preset of FAMILY_FIELDS[family]) {
+          if (existing.has(preset.name)) continue;
+          existing.add(preset.name);
+          added.push({
+            id: uid(),
+            name: preset.name,
+            label: preset.label,
+            group: prev.metricsGroup || "Metrics",
+            type: preset.type,
+            editor: preset.editor,
+            description: "",
+            instruction: "",
+            required: false,
+            options: [],
+            columns: [],
+            role: preset.role,
+            moderator: true,
+          });
+        }
+      }
+      return { ...prev, metricsEnabled: true, metricsFields: [...prev.metricsFields, ...added] };
+    });
+    toast.success(t("meta.standardFieldsAdded"));
+  };
+
+  const optionRows = (scope: Scope, field: FieldDraft) => (
     <div className="space-y-1">
-      {options.map((option, i) => (
+      {field.options.map((option, i) => (
         <div key={i} className="flex items-center gap-1">
           <Input
             value={option}
             onChange={(e) =>
-              patchField(id, { options: options.map((o, j) => (j === i ? e.target.value : o)) })
+              patchField(scope, field.id, {
+                options: field.options.map((o, j) => (j === i ? e.target.value : o)),
+              })
             }
             className="h-7 min-w-0 flex-1 text-xs"
             aria-label={t("meta.optionPlaceholder")}
           />
           <IconButton
-            label={t("common.delete")}
+            label={t("meta.removeOption")}
             size="row"
-            onClick={() => patchField(id, { options: options.filter((_, j) => j !== i) })}
+            onClick={() =>
+              patchField(scope, field.id, { options: field.options.filter((_, j) => j !== i) })
+            }
           >
             <Trash2 size={12} aria-hidden />
           </IconButton>
@@ -273,9 +647,65 @@ export function MetaSchemeEditor({
       <Button
         variant="secondary"
         icon={<Plus size={12} aria-hidden />}
-        onClick={() => patchField(id, { options: [...options, ""] })}
+        onClick={() => patchField(scope, field.id, { options: [...field.options, ""] })}
       >
         {t("meta.addOption")}
+      </Button>
+    </div>
+  );
+
+  const columnRows = (scope: Scope, field: FieldDraft) => (
+    <div className="space-y-1">
+      {field.columns.map((column, i) => (
+        <div key={i} className="flex items-center gap-1">
+          <Input
+            value={column.name}
+            onChange={(e) =>
+              patchField(scope, field.id, {
+                columns: field.columns.map((c, j) =>
+                  j === i ? { ...c, name: e.target.value } : c,
+                ),
+              })
+            }
+            placeholder={t("meta.columnName")}
+            className="h-7 min-w-0 flex-1 text-xs"
+            aria-label={t("meta.columnName")}
+          />
+          <Select
+            value={column.type}
+            onChange={(e) =>
+              patchField(scope, field.id, {
+                columns: field.columns.map((c, j) =>
+                  j === i ? { ...c, type: e.target.value } : c,
+                ),
+              })
+            }
+            className="h-7 w-24 shrink-0 text-xs"
+            aria-label={t("meta.columnType")}
+          >
+            {FIELD_TYPES.map((ty) => (
+              <option key={ty} value={ty}>
+                {ty}
+              </option>
+            ))}
+          </Select>
+          <IconButton
+            label={t("meta.removeColumn")}
+            size="row"
+            onClick={() =>
+              patchField(scope, field.id, { columns: field.columns.filter((_, j) => j !== i) })
+            }
+          >
+            <Trash2 size={12} aria-hidden />
+          </IconButton>
+        </div>
+      ))}
+      <Button
+        variant="secondary"
+        icon={<Plus size={12} aria-hidden />}
+        onClick={() => patchField(scope, field.id, { columns: [...field.columns, { name: "", type: "string" }] })}
+      >
+        {t("meta.addColumn")}
       </Button>
     </div>
   );
@@ -283,7 +713,7 @@ export function MetaSchemeEditor({
   const openScheme = (id: number | null) => {
     if (id === null) {
       setDraft({ ...EMPTY, groups: [...EMPTY.groups] });
-      setSelectedFieldId(null);
+      setSelected(null);
       setPane("prompts");
       return;
     }
@@ -291,8 +721,8 @@ export function MetaSchemeEditor({
     if (!found) return;
     const next = draftFor(found);
     setDraft(next);
-    setSelectedFieldId(next.fields[0]?.id ?? null);
-    setPane(next.fields.length ? "field" : "prompts");
+    setSelected(next.fields[0] ? { scope: "field", id: next.fields[0].id } : null);
+    setPane(next.fields.length || next.metricsFields.length ? "field" : "prompts");
   };
 
   const save = async () => {
@@ -300,29 +730,13 @@ export function MetaSchemeEditor({
       toast.error(t("meta.schemeNameRequired"));
       return;
     }
-    const studyFields = draft.fields.map((f) => ({
-      name: f.name || slugifyName(f.label) || "field",
-      label: f.label || f.name,
-      group: f.group || draft.groups[0] || "Study",
-      type: f.type,
-      editor: f.editor,
-      description: f.description,
-      required: f.required,
-      options: f.options.filter((o) => o.trim() !== ""),
-    }));
     const body = {
       name: draft.name.trim(),
       label: draft.label || undefined,
       description: draft.description || undefined,
       prescreen_prompt: draft.prescreen,
       coding_prompt: draft.prompt,
-      codebook: {
-        category: draft.category || `Meta / ${draft.label || draft.name}`,
-        groups: draft.groups,
-        study_fields: studyFields,
-        fields: studyFields,
-        code_fields: splitList(draft.codeFields),
-      },
+      codebook: bundleFromDraft(draft).codebook as unknown as Record<string, unknown>,
     };
     setBusy(true);
     try {
@@ -356,13 +770,197 @@ export function MetaSchemeEditor({
     }
   };
 
-  const showOptions = selectedField?.editor === "select" || selectedField?.type === "list";
+  const clone = async () => {
+    if (draft.id === null) return;
+    try {
+      const name = t("meta.cloneSchemeName", { name: draft.name });
+      await api.metaCloneScheme(draft.id, { name });
+      toast.success(t("meta.schemeCloned"));
+      onChanged();
+    } catch (err) {
+      toast.error(errorMessage(err));
+    }
+  };
+
+  const exportScheme = async () => {
+    try {
+      const bundle = draft.id === null ? bundleFromDraft(draft) : await api.metaExportScheme(draft.id);
+      downloadJson(`${bundle.name || "scheme"}.json`, bundle);
+      toast.success(t("meta.schemeExported"));
+    } catch (err) {
+      toast.error(errorMessage(err));
+    }
+  };
+
+  const importScheme = async (file: File) => {
+    try {
+      const parsed = JSON.parse(await file.text()) as unknown;
+      const bundle: MetaSchemeExport =
+        parsed && typeof parsed === "object" && "codebook" in parsed
+          ? (parsed as MetaSchemeExport)
+          : { name: file.name.replace(/\.json$/i, ""), codebook: parsed as MetaSchemeCodebookV2 };
+      setDraft(draftFromBundle(bundle));
+      setSelected(null);
+      setPane("prompts");
+      toast.success(t("meta.schemeImported"));
+    } catch {
+      toast.error(t("meta.importInvalid"));
+    }
+  };
+
+  const showOptions =
+    selectedField?.editor === "select" ||
+    selectedField?.editor === "multiselect" ||
+    selectedField?.type === "list";
+  const showColumns = selectedField?.editor === "objectlist";
 
   const fieldInput = (label: string, control: ReactNode) => (
     <label className="block min-w-0">
       <span className="mb-1 block text-[11px] text-text-secondary">{label}</span>
       {control}
     </label>
+  );
+
+  const renderFieldEditor = (scope: Scope, field: FieldDraft) => (
+    <div className="space-y-3">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+        {fieldInput(
+          t("meta.fieldLabel"),
+          <Input
+            value={field.label}
+            onChange={(e) => {
+              const label = e.target.value;
+              const auto = !field.name || field.name === slugifyName(field.label);
+              patchField(scope, field.id, {
+                label,
+                ...(auto ? { name: slugifyName(label) } : {}),
+              });
+            }}
+            className="h-7 w-full text-xs"
+          />,
+        )}
+        {fieldInput(
+          t("meta.fieldName"),
+          <Input
+            value={field.name}
+            onChange={(e) => patchField(scope, field.id, { name: slugifyName(e.target.value) })}
+            className="h-7 w-full text-xs"
+          />,
+        )}
+        {fieldInput(
+          t("meta.fieldGroup"),
+          <Select
+            value={field.group}
+            onChange={(e) => patchField(scope, field.id, { group: e.target.value })}
+            className="h-7 w-full text-xs"
+          >
+            {[...new Set([...draft.groups, field.group].filter(Boolean))].map((g) => (
+              <option key={g} value={g}>
+                {g}
+              </option>
+            ))}
+          </Select>,
+        )}
+        {fieldInput(
+          t("meta.fieldType"),
+          <Select
+            value={field.type}
+            onChange={(e) => patchField(scope, field.id, { type: e.target.value })}
+            className="h-7 w-full text-xs"
+          >
+            {FIELD_TYPES.map((ty) => (
+              <option key={ty} value={ty}>
+                {ty}
+              </option>
+            ))}
+          </Select>,
+        )}
+        {fieldInput(
+          t("meta.fieldEditor"),
+          <Select
+            value={field.editor}
+            onChange={(e) => patchField(scope, field.id, { editor: e.target.value })}
+            className="h-7 w-full text-xs"
+          >
+            {EDITORS.map((ed) => (
+              <option key={ed} value={ed}>
+                {t(`meta.editor_${ed}`)}
+              </option>
+            ))}
+          </Select>,
+        )}
+        {fieldInput(t("meta.fieldRole"), roleSelect(field.role, (role) => patchField(scope, field.id, { role }), t))}
+        <div className="flex items-end">
+          <Toggle
+            checked={field.required}
+            onChange={() => patchField(scope, field.id, { required: !field.required })}
+            label={t("meta.required")}
+          />
+        </div>
+        <div className="flex items-end">
+          <label className="flex items-center gap-1.5 text-xs text-text-primary">
+            <input
+              type="checkbox"
+              checked={field.moderator}
+              onChange={(e) => patchField(scope, field.id, { moderator: e.target.checked })}
+              className="accent-accent"
+              aria-label={t("meta.useAsModerator")}
+            />
+            <span>{t("meta.useAsModerator")}</span>
+          </label>
+        </div>
+      </div>
+
+      {fieldInput(
+        t("meta.fieldDescription"),
+        <Textarea
+          value={field.description}
+          onChange={(e) => patchField(scope, field.id, { description: e.target.value })}
+          className="w-full text-xs"
+          rows={2}
+        />,
+      )}
+      {fieldInput(
+        t("meta.fieldInstruction"),
+        <Textarea
+          value={field.instruction}
+          onChange={(e) => patchField(scope, field.id, { instruction: e.target.value })}
+          className="w-full text-xs"
+          rows={2}
+        />,
+      )}
+
+      {showOptions && (
+        <div className="rounded-sm border border-border p-2">
+          <p className="mb-1 text-[11px] text-text-secondary">{t("meta.fieldOptions")}</p>
+          {optionRows(scope, field)}
+        </div>
+      )}
+
+      {showColumns && (
+        <div className="rounded-sm border border-border p-2">
+          <p className="mb-1 text-[11px] text-text-secondary">{t("meta.fieldColumns")}</p>
+          {columnRows(scope, field)}
+        </div>
+      )}
+
+      <div className="flex items-center gap-1 border-t border-border pt-3">
+        <IconButton label={t("meta.moveUp")} size="row" onClick={() => moveField(scope, field.id, -1)}>
+          <ChevronUp size={13} aria-hidden />
+        </IconButton>
+        <IconButton label={t("meta.moveDown")} size="row" onClick={() => moveField(scope, field.id, 1)}>
+          <ChevronDown size={13} aria-hidden />
+        </IconButton>
+        <span className="flex-1" />
+        <Button
+          variant="danger"
+          icon={<Trash2 size={12} aria-hidden />}
+          onClick={() => removeField(scope, field.id)}
+        >
+          {t("meta.removeField")}
+        </Button>
+      </div>
+    </div>
   );
 
   return (
@@ -373,7 +971,7 @@ export function MetaSchemeEditor({
       panelClassName="flex h-[86vh] w-[94vw] max-w-6xl flex-col"
     >
       <div className="flex min-h-0 flex-1">
-        {/* ── left pane: scheme picker, meta, groups, field list ── */}
+        {/* ── left pane: scheme picker, meta, groups, field + metric lists ── */}
         <aside className="flex w-72 min-w-0 shrink-0 flex-col border-r border-border">
           <div className="flex shrink-0 items-center gap-1.5 border-b border-border p-2">
             <Select
@@ -389,7 +987,7 @@ export function MetaSchemeEditor({
                 </option>
               ))}
             </Select>
-            <IconButton label={t("common.delete")} size="row" onClick={() => void remove()}>
+            <IconButton label={t("meta.deleteScheme")} size="row" onClick={() => void remove()}>
               <Trash2 size={12} aria-hidden />
             </IconButton>
           </div>
@@ -478,7 +1076,7 @@ export function MetaSchemeEditor({
                   <div key={group}>
                     <div className="flex items-center justify-between">
                       <span className="text-[11px] text-text-secondary">{group}</span>
-                      <IconButton label={t("meta.addField")} size="sm" onClick={() => addField(group)}>
+                      <IconButton label={t("meta.addField")} size="sm" onClick={() => addField(group, "field")}>
                         <Plus size={11} aria-hidden />
                       </IconButton>
                     </div>
@@ -488,11 +1086,11 @@ export function MetaSchemeEditor({
                           <button
                             type="button"
                             onClick={() => {
-                              setSelectedFieldId(field.id);
+                              setSelected({ scope: "field", id: field.id });
                               setPane("field");
                             }}
                             className={`flex w-full items-center gap-1 rounded-sm px-1.5 py-1 text-left text-xs qc-motion ${
-                              selectedFieldId === field.id
+                              selected?.scope === "field" && selected.id === field.id
                                 ? "bg-accent/10 text-accent"
                                 : "text-text-primary hover:bg-surface-higher"
                             }`}
@@ -515,10 +1113,141 @@ export function MetaSchemeEditor({
                 variant="secondary"
                 className="mt-2 w-full justify-center"
                 icon={<Plus size={12} aria-hidden />}
-                onClick={() => addField(draft.groups[0] ?? "Study")}
+                onClick={() => addField(draft.groups[0] ?? "Study", "field")}
               >
                 {t("meta.addField")}
               </Button>
+            </div>
+
+            {/* ── repeatable metrics / contrast section ── */}
+            <div className="rounded-sm border border-border p-2">
+              <Toggle
+                checked={draft.metricsEnabled}
+                onChange={() => setDraft({ ...draft, metricsEnabled: !draft.metricsEnabled })}
+                label={t("meta.metricsSection")}
+                hint={draft.metricsEnabled ? t("meta.metricsHint") : undefined}
+              />
+              {draft.metricsEnabled && (
+                <div className="mt-2 space-y-2">
+                  <div className="grid grid-cols-2 gap-1">
+                    {fieldInput(
+                      t("meta.metricsGroup"),
+                      <Input
+                        value={draft.metricsGroup}
+                        onChange={(e) => setDraft({ ...draft, metricsGroup: e.target.value })}
+                        className="h-7 w-full text-xs"
+                      />,
+                    )}
+                    {fieldInput(
+                      t("meta.metricsLabel"),
+                      <Input
+                        value={draft.metricsLabel}
+                        onChange={(e) => setDraft({ ...draft, metricsLabel: e.target.value })}
+                        className="h-7 w-full text-xs"
+                      />,
+                    )}
+                  </div>
+                  <ul className="space-y-0.5">
+                    {draft.metricsFields.map((field) => (
+                      <li key={field.id}>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setSelected({ scope: "metric", id: field.id });
+                            setPane("field");
+                          }}
+                          className={`flex w-full items-center gap-1 rounded-sm px-1.5 py-1 text-left text-xs qc-motion ${
+                            selected?.scope === "metric" && selected.id === field.id
+                              ? "bg-accent/10 text-accent"
+                              : "text-text-primary hover:bg-surface-higher"
+                          }`}
+                        >
+                          <span className="min-w-0 flex-1 truncate">
+                            {field.label || field.name || t("meta.fieldName")}
+                          </span>
+                          {field.role && (
+                            <span className="shrink-0 text-[10px] text-accent">{field.role}</span>
+                          )}
+                        </button>
+                      </li>
+                    ))}
+                    {draft.metricsFields.length === 0 && (
+                      <li className="px-1.5 text-[11px] text-text-secondary">{t("meta.noFields")}</li>
+                    )}
+                  </ul>
+                  <Button
+                    variant="secondary"
+                    className="w-full justify-center"
+                    icon={<Plus size={12} aria-hidden />}
+                    onClick={() => addField(draft.metricsGroup || "Metrics", "metric")}
+                  >
+                    {t("meta.addMetricField")}
+                  </Button>
+                </div>
+              )}
+
+              <div className="mt-2 space-y-1">
+                <p className="text-[11px] font-medium uppercase tracking-wide text-text-secondary">
+                  {t("meta.effectFamilies")}
+                </p>
+                {EFFECT_FAMILIES.map((family) => (
+                  <label key={family} className="flex items-center gap-1.5 text-xs text-text-primary">
+                    <input
+                      type="checkbox"
+                      checked={draft.effectFamilies.includes(family)}
+                      onChange={(e) => toggleFamily(family, e.target.checked)}
+                      className="accent-accent"
+                    />
+                    <span>{t(`meta.family_${family}`)}</span>
+                  </label>
+                ))}
+                <Button
+                  variant="secondary"
+                  className="w-full justify-center"
+                  icon={<Sparkles size={12} aria-hidden />}
+                  onClick={addStandardFields}
+                >
+                  {t("meta.addStandardFields")}
+                </Button>
+              </div>
+            </div>
+
+            {/* ── scheme clone / import / export ── */}
+            <div className="flex flex-wrap items-center gap-1 border-t border-border pt-2">
+              <Button
+                variant="secondary"
+                icon={<Copy size={12} aria-hidden />}
+                disabled={draft.id === null}
+                onClick={() => void clone()}
+              >
+                {t("meta.cloneScheme")}
+              </Button>
+              <Button
+                variant="secondary"
+                icon={<Upload size={12} aria-hidden />}
+                onClick={() => fileRef.current?.click()}
+              >
+                {t("meta.importScheme")}
+              </Button>
+              <Button
+                variant="secondary"
+                icon={<Download size={12} aria-hidden />}
+                onClick={() => void exportScheme()}
+              >
+                {t("meta.exportScheme")}
+              </Button>
+              <input
+                ref={fileRef}
+                type="file"
+                accept=".json,application/json"
+                className="hidden"
+                aria-label={t("meta.importScheme")}
+                onChange={(e) => {
+                  const file = e.target.files?.[0];
+                  e.target.value = "";
+                  if (file) void importScheme(file);
+                }}
+              />
             </div>
           </div>
         </aside>
@@ -553,129 +1282,10 @@ export function MetaSchemeEditor({
 
           <div className="qc-scroll min-h-0 flex-1 overflow-y-auto p-3">
             {pane === "field" ? (
-              selectedField === null ? (
+              selectedField === null || selected === null ? (
                 <p className="text-xs text-text-secondary">{t("meta.selectField")}</p>
               ) : (
-                <div className="space-y-3">
-                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                    {fieldInput(
-                      t("meta.fieldLabel"),
-                      <Input
-                        value={selectedField.label}
-                        onChange={(e) => {
-                          const label = e.target.value;
-                          const auto = !selectedField.name || selectedField.name === slugifyName(selectedField.label);
-                          patchField(selectedField.id, {
-                            label,
-                            ...(auto ? { name: slugifyName(label) } : {}),
-                          });
-                        }}
-                        className="h-7 w-full text-xs"
-                      />,
-                    )}
-                    {fieldInput(
-                      t("meta.fieldName"),
-                      <Input
-                        value={selectedField.name}
-                        onChange={(e) => patchField(selectedField.id, { name: slugifyName(e.target.value) })}
-                        className="h-7 w-full text-xs"
-                      />,
-                    )}
-                    {fieldInput(
-                      t("meta.fieldGroup"),
-                      <Select
-                        value={selectedField.group}
-                        onChange={(e) => patchField(selectedField.id, { group: e.target.value })}
-                        className="h-7 w-full text-xs"
-                      >
-                        {[...new Set([...draft.groups, selectedField.group].filter(Boolean))].map((g) => (
-                          <option key={g} value={g}>
-                            {g}
-                          </option>
-                        ))}
-                      </Select>,
-                    )}
-                    {fieldInput(
-                      t("meta.fieldType"),
-                      <Select
-                        value={selectedField.type}
-                        onChange={(e) => patchField(selectedField.id, { type: e.target.value })}
-                        className="h-7 w-full text-xs"
-                      >
-                        {FIELD_TYPES.map((ty) => (
-                          <option key={ty} value={ty}>
-                            {ty}
-                          </option>
-                        ))}
-                      </Select>,
-                    )}
-                    {fieldInput(
-                      t("meta.fieldEditor"),
-                      <Select
-                        value={selectedField.editor}
-                        onChange={(e) => patchField(selectedField.id, { editor: e.target.value })}
-                        className="h-7 w-full text-xs"
-                      >
-                        {EDITORS.map((ed) => (
-                          <option key={ed} value={ed}>
-                            {t(`meta.editor_${ed}`)}
-                          </option>
-                        ))}
-                      </Select>,
-                    )}
-                    <div className="flex items-end">
-                      <Toggle
-                        checked={selectedField.required}
-                        onChange={() =>
-                          patchField(selectedField.id, { required: !selectedField.required })
-                        }
-                        label={t("meta.required")}
-                      />
-                    </div>
-                  </div>
-
-                  {fieldInput(
-                    t("meta.fieldDescription"),
-                    <Textarea
-                      value={selectedField.description}
-                      onChange={(e) => patchField(selectedField.id, { description: e.target.value })}
-                      className="w-full text-xs"
-                      rows={2}
-                    />,
-                  )}
-
-                  {showOptions && (
-                    <div className="rounded-sm border border-border p-2">
-                      <p className="mb-1 text-[11px] text-text-secondary">{t("meta.fieldOptions")}</p>
-                      {optionRows(selectedField.id, selectedField.options)}
-                    </div>
-                  )}
-
-                  <div className="flex items-center gap-1 border-t border-border pt-3">
-                    <IconButton
-                      label={t("meta.moveUp")}
-                      size="row"
-                      onClick={() => moveField(selectedField.id, -1)}
-                    >
-                      <ChevronUp size={13} aria-hidden />
-                    </IconButton>
-                    <IconButton
-                      label={t("meta.moveDown")}
-                      size="row"
-                      onClick={() => moveField(selectedField.id, 1)}
-                    >
-                      <ChevronDown size={13} aria-hidden />
-                    </IconButton>
-                    <span className="flex-1" />
-                    <Button
-                      variant="danger"
-                      icon={<Trash2 size={12} aria-hidden />}
-                      onClick={() => removeField(selectedField.id)}
-                    >
-                      {t("common.delete")}
-                    </Button>
-                  </div>
-                </div>
+                renderFieldEditor(selected.scope, selectedField)
               )
             ) : (
               <div className="space-y-3">

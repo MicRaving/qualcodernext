@@ -1,0 +1,256 @@
+{
+  "name": "inoculation-sample",
+  "label": "Inoculation sample scheme",
+  "description": "Sample coding scheme used by the QCnext meta-analysis demo project.",
+  "codebook": {
+    "version": 2,
+    "category": "Meta",
+    "groups": [
+      {
+        "name": "Study",
+        "label": "Study"
+      },
+      {
+        "name": "Sample",
+        "label": "Sample"
+      },
+      {
+        "name": "Intervention",
+        "label": "Intervention"
+      }
+    ],
+    "fields": [
+      {
+        "name": "study_id",
+        "label": "Study ID",
+        "group": "Study",
+        "role": "study_id",
+        "required": true
+      },
+      {
+        "name": "title",
+        "label": "Title",
+        "group": "Study",
+        "role": "title",
+        "editor": "textarea"
+      },
+      {
+        "name": "authors",
+        "label": "Authors",
+        "group": "Study",
+        "role": "authors"
+      },
+      {
+        "name": "year",
+        "label": "Year",
+        "group": "Study",
+        "role": "year",
+        "type": "integer",
+        "editor": "number"
+      },
+      {
+        "name": "design",
+        "label": "Design",
+        "group": "Study",
+        "role": "design",
+        "editor": "select",
+        "options": [
+          "rct",
+          "quasi",
+          "field"
+        ]
+      },
+      {
+        "name": "open_data",
+        "label": "Open data",
+        "group": "Study",
+        "editor": "select",
+        "options": [
+          "yes",
+          "no"
+        ],
+        "moderator": true
+      },
+      {
+        "name": "internal_notes",
+        "label": "Internal notes",
+        "group": "Study",
+        "editor": "textarea",
+        "moderator": false,
+        "description": "Shown here to demonstrate hiding a variable from the moderators."
+      },
+      {
+        "name": "country",
+        "label": "Country",
+        "group": "Sample",
+        "role": "country",
+        "editor": "select",
+        "options": [
+          "US",
+          "UK",
+          "DE",
+          "NL",
+          "other"
+        ]
+      },
+      {
+        "name": "sample_n",
+        "label": "Sample size",
+        "group": "Sample",
+        "role": "sample_n",
+        "type": "integer",
+        "editor": "number"
+      },
+      {
+        "name": "setting",
+        "label": "Setting",
+        "group": "Sample",
+        "role": "setting",
+        "editor": "select",
+        "options": [
+          "lab",
+          "field",
+          "online"
+        ]
+      },
+      {
+        "name": "intervention_type",
+        "label": "Intervention type",
+        "group": "Intervention",
+        "role": "intervention_type",
+        "editor": "select",
+        "options": [
+          "inoculation",
+          "accuracy_prompt",
+          "media_literacy",
+          "lateral_reading",
+          "correction"
+        ]
+      }
+    ],
+    "metrics": {
+      "enabled": true,
+      "group": "Outcome",
+      "label": "Outcomes & effect sizes",
+      "fields": [
+        {
+          "name": "dv_name",
+          "label": "Outcome (DV)",
+          "role": "dv_name",
+          "required": true
+        },
+        {
+          "name": "dv_domain",
+          "label": "Domain",
+          "role": "dv_domain",
+          "editor": "select",
+          "options": [
+            "credibility",
+            "sharing_intention",
+            "technique_recognition"
+          ]
+        },
+        {
+          "name": "polarity",
+          "label": "Polarity",
+          "role": "polarity",
+          "editor": "select",
+          "options": [
+            "higher_is_better",
+            "higher_is_worse"
+          ]
+        },
+        {
+          "name": "contrast_type",
+          "label": "Contrast type",
+          "role": "contrast_type",
+          "editor": "select",
+          "options": [
+            "1",
+            "2",
+            "3"
+          ]
+        },
+        {
+          "name": "timepoint_1",
+          "label": "Timepoint",
+          "role": "timepoint_1",
+          "editor": "select",
+          "options": [
+            "post",
+            "followup"
+          ]
+        },
+        {
+          "name": "eligible_primary",
+          "label": "Primary contrast",
+          "role": "eligible_primary",
+          "type": "boolean"
+        },
+        {
+          "name": "n1",
+          "label": "n (group 1)",
+          "role": "n1",
+          "type": "integer",
+          "editor": "number"
+        },
+        {
+          "name": "m1",
+          "label": "M (group 1)",
+          "role": "m1",
+          "type": "number",
+          "editor": "number"
+        },
+        {
+          "name": "sd1",
+          "label": "SD (group 1)",
+          "role": "sd1",
+          "type": "number",
+          "editor": "number"
+        },
+        {
+          "name": "n2",
+          "label": "n (group 2)",
+          "role": "n2",
+          "type": "integer",
+          "editor": "number"
+        },
+        {
+          "name": "m2",
+          "label": "M (group 2)",
+          "role": "m2",
+          "type": "number",
+          "editor": "number"
+        },
+        {
+          "name": "sd2",
+          "label": "SD (group 2)",
+          "role": "sd2",
+          "type": "number",
+          "editor": "number"
+        },
+        {
+          "name": "coder_confidence",
+          "label": "Coder confidence",
+          "editor": "select",
+          "options": [
+            "high",
+            "medium",
+            "low"
+          ],
+          "moderator": true
+        }
+      ]
+    },
+    "effect_families": [
+      "descriptives"
+    ],
+    "code_fields": [
+      {
+        "name": "notes",
+        "label": "Coding notes",
+        "instruction": "Free-text rationale for this coding."
+      }
+    ]
+  }
+}

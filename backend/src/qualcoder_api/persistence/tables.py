@@ -620,6 +620,11 @@ OWNER_TABLES = [
     "code_set",
     "dictionary",
     "r_script",
+    # Meta-pipeline rows carry ``owner`` too; listing them keeps coder
+    # rename/delete/reassign consistent and lets meta-only coders surface in
+    # the roster. (Their sync capture stays opt-in — see the meta section.)
+    "meta_screening",
+    "meta_extraction",
 ]
 
 # Visibility views over the coding/annotation tables.
@@ -714,6 +719,14 @@ meta_criterion = Table(
     Column("key", String, nullable=False),
     Column("label", String, nullable=False),
     Column("prompt_text", Text, nullable=False),
+    # verdict | classify | number
+    Column("kind", String, nullable=False, server_default=text("'verdict'")),
+    Column("options", Text, nullable=False, server_default=text("'[]'")),
+    Column("pass_values", Text, nullable=False, server_default=text("'[\"yes\"]'")),
+    Column("exclude_reason", Text, nullable=False, server_default=text("''")),
+    # 0 = informational (never blocks inclusion)
+    Column("gating", Integer, nullable=False, server_default=text("1")),
+    Column("help", Text, nullable=False, server_default=text("''")),
     Column("created", String),
 )
 
@@ -734,9 +747,15 @@ meta_screening = Table(
     Column("origin", String, nullable=False, server_default=text("'manual'")),
     Column("model", String),
     Column("prompt_hash", String),
+    # abstract | fulltext
+    Column("stage", String, nullable=False, server_default=text("'abstract'")),
+    Column("reason", Text, nullable=False, server_default=text("''")),
     Column("created", String),
     Column("updated", String),
-    UniqueConstraint("hit_id", "owner", "run_id", name="u_meta_screening"),
+    # A screening verdict is per (hit, coder, run, stage): the same coder may
+    # hold both an abstract and a full-text verdict without one overwriting
+    # the other (v39).
+    UniqueConstraint("hit_id", "owner", "run_id", "stage", name="u_meta_screening"),
 )
 
 # Paper-retrieval state per hit (replaces the reference pipeline's
@@ -778,7 +797,11 @@ meta_extraction = Table(
     Column("missing_reason", Text),
     Column("created", String),
     Column("updated", String),
-    UniqueConstraint("hit_id", name="u_meta_extraction_hit"),
+    # Multiple coders may each hold their own extraction of the same paper, and
+    # the same coder may extract the paper under more than one scheme (v39).
+    UniqueConstraint(
+        "hit_id", "owner", "scheme", name="u_meta_extraction_hit_owner_scheme"
+    ),
 )
 
 # Coding schemes: the (generated) prescreen + coding prompts and the codebook

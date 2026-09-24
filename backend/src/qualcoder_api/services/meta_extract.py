@@ -2,10 +2,10 @@
 
 Adapted from the reference ``Inoculation_Meta/meta/core/extraction.py``: a
 cheap LLM prescreen gates full-text extraction; the full coding prompt is
-scheme-defined; DV metrics are normalized and validated against the metafor
-completeness rules; results flatten to one row per DV metric for export.
-Written for QCnext's stack (``source.fulltext``, ``MetaRepository``,
-``AiService``).
+scheme-defined; DV metrics are normalized and validated through the field
+**roles** (``meta_roles``) against the scheme's enabled ``effect_families``;
+results flatten to one row per DV metric for export. Written for QCnext's
+stack (``source.fulltext``, ``MetaRepository``, ``AiService``).
 """
 
 from __future__ import annotations
@@ -20,12 +20,28 @@ from sqlalchemy.ext.asyncio import async_sessionmaker
 from qualcoder_api.core.models import MetaHit, MetaScheme
 from qualcoder_api.persistence.repo.meta_repo import MetaRepository
 from qualcoder_api.services import ai_service
+from qualcoder_api.services.meta_effects import metric_status
 from qualcoder_api.services.meta_prompt import (
     build_extraction_messages,
     build_prescreen_messages,
     extract_json,
     scheme_prompt_hash,
     truncate_for_context,
+)
+from qualcoder_api.services.meta_roles import (
+    STUDY_ROLES,
+    metric_by_role,
+    role_map,
+    value_by_role,
+    write_role_value,
+)
+from qualcoder_api.services.meta_scheme import (
+    all_fields,
+    code_field_names,
+    enabled_families,
+    metrics_group,
+    normalise_codebook,
+    study_fields,
 )
 from qualcoder_api.services.user_settings import get_ai_settings
 
@@ -40,95 +56,105 @@ DEFAULT_MAX_INPUT_CHARS = 120_000
 PRESCREEN_MAX_CHARS = 60_000
 
 
-# ── DV metric normalization (ported from the reference pipeline) ─────────
+# ── role-driven metric normalization (ported from the reference pipeline) ─
 
-def _is_complete(values: list) -> bool:
-    return all(v is not None for v in values)
-
-
-def _copy_legacy_descriptive_aliases(metric: dict) -> None:
-    pairs = [
-        ("n1i", "n_t"), ("m1i", "m_t"), ("sd1i", "sd_t"),
-        ("n2i", "n_c"), ("m2i", "m_c"), ("sd2i", "sd_c"),
-    ]
-    for new, old in pairs:
-        if metric.get(new) is None and metric.get(old) is not None:
-            metric[new] = metric.get(old)
+def _num(value: Any) -> float | None:
+    if isinstance(value, bool) or value is None:
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    return None
 
 
-def _infer_balanced_group_sizes(metric: dict) -> None:
-    n_total = metric.get("n_total")
-    n1i = metric.get("n1i")
-    n2i = metric.get("n2i")
-    if n1i is None and n2i is None and isinstance(n_total, int) and n_total > 1:
-        metric["n1i"] = n_total // 2
-        metric["n2i"] = n_total - metric["n1i"]
+def _int(value: Any) -> int | None:
+    num = _num(value)
+    if num is None or num <= 0 or not num.is_integer():
+        return None
+    return int(num)
+
+
+def _infer_balanced_group_sizes(by_role: dict[str, Any]) -> None:
+    """Infer missing group sizes from ``n_total`` (role-level)."""
+    n_total = _int(by_role.get("n_total"))
+    n1 = _int(by_role.get("n1"))
+    n2 = _int(by_role.get("n2"))
+    if n1 is None and n2 is None and n_total is not None and n_total > 1:
+        by_role["n1"] = n_total // 2
+        by_role["n2"] = n_total - by_role["n1"]
         return
-    if n1i is None and isinstance(n_total, int) and isinstance(n2i, int):
-        metric["n1i"] = max(n_total - n2i, 0)
+    if n1 is None and n_total is not None and n2 is not None:
+        by_role["n1"] = max(n_total - n2, 0)
         return
-    if n2i is None and isinstance(n_total, int) and isinstance(n1i, int):
-        metric["n2i"] = max(n_total - n1i, 0)
+    if n2 is None and n_total is not None and n1 is not None:
+        by_role["n2"] = max(n_total - n1, 0)
 
 
-def _infer_effect_size_aliases(metric: dict) -> None:
-    if metric.get("yi") is None:
-        if metric.get("d_val") is not None:
-            metric["yi"] = metric.get("d_val")
-        elif metric.get("g_val") is not None:
-            metric["yi"] = metric.get("g_val")
-    yi = metric.get("yi")
+def _infer_effect_size_aliases(by_role: dict[str, Any]) -> None:
+    """``d``/``g`` → ``yi`` and derive ``vi``/``sei`` (role-level)."""
+    if by_role.get("yi") is None:
+        if by_role.get("d") is not None:
+            by_role["yi"] = by_role.get("d")
+        elif by_role.get("g") is not None:
+            by_role["yi"] = by_role.get("g")
+    yi = _num(by_role.get("yi"))
     if yi is None:
         return
-    n1i = metric.get("n1i")
-    n2i = metric.get("n2i")
-    if (
-        metric.get("vi") is None
-        and isinstance(n1i, int) and isinstance(n2i, int)
-        and n1i > 0 and n2i > 0
-    ):
-        total_n = n1i + n2i
-        metric["vi"] = (total_n / (n1i * n2i)) + ((yi * yi) / (2 * total_n))
-    vi = metric.get("vi")
-    sei = metric.get("sei")
-    if sei is None and isinstance(vi, (int, float)) and vi >= 0:
-        metric["sei"] = math.sqrt(vi)
+    n1 = _int(by_role.get("n1"))
+    n2 = _int(by_role.get("n2"))
+    if by_role.get("vi") is None and n1 and n2:
+        total_n = n1 + n2
+        by_role["vi"] = (total_n / (n1 * n2)) + ((yi * yi) / (2 * total_n))
+    vi = _num(by_role.get("vi"))
+    if by_role.get("sei") is None and vi is not None and vi >= 0:
+        by_role["sei"] = math.sqrt(vi)
 
 
-def normalize_metric(metric: Any) -> Any:
+_ROLES_WRITTEN_BACK = ("n1", "n2", "m1", "m2", "sd1", "sd2", "yi", "vi", "sei")
+
+
+def normalize_metric(
+    metric: Any, roles: dict[str, str] | None = None, families: list[str] | None = None
+) -> Any:
+    """Normalise a metric through its roles (aliases, balanced groups, d/g→yi)."""
     if not isinstance(metric, dict):
         return metric
-    _copy_legacy_descriptive_aliases(metric)
-    _infer_balanced_group_sizes(metric)
-    _infer_effect_size_aliases(metric)
+    by_role = metric_by_role(metric, roles)
+    _infer_balanced_group_sizes(by_role)
+    _infer_effect_size_aliases(by_role)
+    for role in _ROLES_WRITTEN_BACK:
+        if by_role.get(role) is not None:
+            write_role_value(metric, roles, role, by_role[role])
     return metric
 
 
-def metric_has_full_descriptives(metric: dict) -> bool:
-    return _is_complete(
-        [
-            metric.get("n1i"), metric.get("m1i"), metric.get("sd1i"),
-            metric.get("n2i"), metric.get("m2i"), metric.get("sd2i"),
-        ]
+def metric_has_full_descriptives(metric: dict, roles: dict[str, str] | None = None) -> bool:
+    """v1-compatibility helper: kept because the legacy unit tests import it."""
+    by_role = metric_by_role(metric, roles)
+    return all(
+        _num(by_role.get(role)) is not None
+        for role in ("n1", "m1", "sd1", "n2", "m2", "sd2")
     )
 
 
-def metric_has_metafor_fallback(metric: dict) -> bool:
-    n1i = metric.get("n1i")
-    n2i = metric.get("n2i")
-    return any(
-        [
-            _is_complete([metric.get("t_val"), n1i, n2i]),
-            _is_complete([metric.get("F_val"), metric.get("df_num"), metric.get("df_den"), n1i, n2i]),
-            _is_complete([metric.get("r_val"), metric.get("n_total")]),
-            _is_complete([metric.get("yi"), metric.get("vi")]),
-            _is_complete([metric.get("yi"), metric.get("sei")]),
-        ]
-    )
+def metric_has_metafor_fallback(
+    metric: dict, roles: dict[str, str] | None = None, families: list[str] | None = None
+) -> bool:
+    """v1-compatibility helper: kept because the legacy unit tests import it."""
+    status, _ = metric_status(metric_by_role(metric, roles), families)
+    return status == "fallback"
 
 
-def normalize_and_validate(response_json: Any) -> tuple[list[dict], list[dict]]:
-    """Normalize DV metrics; returns (records, missing_entries)."""
+def normalize_and_validate(
+    response_json: Any,
+    roles: dict[str, str] | None = None,
+    families: list[str] | None = None,
+) -> tuple[list[dict], list[dict]]:
+    """Normalize DV metrics; returns (records, missing_entries).
+
+    v1-compatibility helper (contract ``DV_Metrics`` response shape): retained
+    only because the legacy unit tests import it. New extraction writes go
+    through :func:`records_from_response` which returns the contract §4 shape.
+    """
     records = response_json if isinstance(response_json, list) else [response_json]
     records = [r for r in records if isinstance(r, dict)]
     missing: list[dict] = []
@@ -137,22 +163,155 @@ def normalize_and_validate(response_json: Any) -> tuple[list[dict], list[dict]]:
         if not isinstance(metrics, list):
             continue
         for i, metric in enumerate(metrics):
-            metric = normalize_metric(metric)
+            metric = normalize_metric(metric, roles, families)
             metrics[i] = metric
             if not isinstance(metric, dict):
                 continue
-            if not (metric_has_full_descriptives(metric) or metric_has_metafor_fallback(metric)):
-                if not metric.get("missing_metrics_reason"):
-                    metric["missing_metrics_reason"] = "Missing descriptive or fallback statistics."
+            status, default_reason = metric_status(metric_by_role(metric, roles), families)
+            if status == "incomplete":
+                reason = _role_value(metric, roles, "missing_reason")
+                if not reason:
+                    reason = default_reason
+                    _set_missing_reason(metric, roles, reason)
                 missing.append(
                     {
-                        "study_id": record.get("Study_ID"),
-                        "dv_name": metric.get("dv_name"),
-                        "comparison_label": metric.get("comparison_label"),
-                        "reason": metric["missing_metrics_reason"],
+                        "study_id": _role_value(record, roles, "study_id"),
+                        "dv_name": _role_value(metric, roles, "dv_name"),
+                        "comparison_label": _role_value(metric, roles, "comparison_label"),
+                        "reason": reason,
                     }
                 )
     return records, missing
+
+
+def _role_value(record: dict, roles: dict[str, str] | None, role: str) -> Any:
+    if roles:
+        found = value_by_role(record, roles, role)
+        if found is not None:
+            return found
+    return metric_by_role(record).get(role)
+
+
+def _set_missing_reason(metric: dict, roles: dict[str, str] | None, reason: str) -> None:
+    if not write_role_value(metric, roles, "missing_reason", reason):
+        metric["missing_metrics_reason"] = reason
+
+
+# ── extraction record model (contract §4) ────────────────────────────────
+
+def _split_response_record(raw: dict, group: str) -> tuple[dict, list]:
+    # Canonical manual-save shape: {"study": {...}, "metrics": [...]}.
+    study_in = raw.get("study")
+    if isinstance(study_in, dict):
+        metrics = raw.get("metrics")
+        return dict(study_in), metrics if isinstance(metrics, list) else []
+    metrics = raw.get(group)
+    if not isinstance(metrics, list):
+        metrics = raw.get("DV_Metrics")
+    if not isinstance(metrics, list):
+        metrics = raw.get("metrics")
+    metrics = metrics if isinstance(metrics, list) else []
+    study = {k: v for k, v in raw.items() if k not in (group, "DV_Metrics", "metrics")}
+    return study, metrics
+
+
+def records_from_response(
+    response_json: Any, codebook: dict | None
+) -> tuple[list[dict], list[dict]]:
+    """Normalise an LLM response to ``[{"study": {...}, "metrics": [...]}]``.
+
+    Returns ``(records, missing)`` where ``missing`` lists metric comparisons
+    that lack a complete statistic set (with the default reason applied).
+    """
+    book = normalise_codebook(codebook)
+    roles = role_map(all_fields(book))
+    families = enabled_families(book)
+    group = metrics_group(book)
+
+    raw_records = response_json if isinstance(response_json, list) else [response_json]
+    raw_records = [r for r in raw_records if isinstance(r, dict)]
+    records: list[dict] = []
+    missing: list[dict] = []
+    for raw in raw_records:
+        study, raw_metrics = _split_response_record(raw, group)
+        metrics: list[dict] = []
+        for metric in raw_metrics:
+            if not isinstance(metric, dict):
+                continue
+            metric = normalize_metric(dict(metric), roles, families)
+            metrics.append(metric)
+            status, default_reason = metric_status(metric_by_role(metric, roles), families)
+            if status == "incomplete":
+                reason = _role_value(metric, roles, "missing_reason")
+                if not reason:
+                    reason = default_reason
+                    _set_missing_reason(metric, roles, reason)
+                missing.append(
+                    {
+                        "study_id": _role_value(study, roles, "study_id"),
+                        "dv_name": _role_value(metric, roles, "dv_name"),
+                        "comparison_label": _role_value(metric, roles, "comparison_label"),
+                        "reason": reason,
+                    }
+                )
+        records.append({"study": study, "metrics": metrics})
+    return records, missing
+
+
+def refresh_dv_metrics(extraction: Any, codebook: dict | None) -> Any:
+    """Copy of ``extraction`` with ``dv_metrics`` re-derived from its records.
+
+    The persisted ``dv_metrics`` column is a cache: after a scheme role edit it
+    can disagree with what the live codebook would derive. Analysis and export
+    call this so they always read the current derivation; pass ``None`` to
+    leave the cached value untouched (e.g. a legacy extraction with no scheme).
+    """
+    if codebook is None:
+        return extraction
+    study_vars = (
+        extraction.get("study_vars")
+        if isinstance(extraction, dict)
+        else getattr(extraction, "study_vars", None)
+    )
+    records = study_vars.get("records") if isinstance(study_vars, dict) else None
+    if not isinstance(records, list):
+        return extraction
+    book = normalise_codebook(codebook)
+    dv_metrics = derive_dv_metrics(records, role_map(study_fields(book)))
+    if isinstance(extraction, dict):
+        return {**extraction, "dv_metrics": dv_metrics}
+    return extraction.model_copy(update={"dv_metrics": dv_metrics})
+
+
+def derive_dv_metrics(
+    records: list[dict], study_role_map: dict[str, str] | None = None
+) -> list[dict]:
+    """Flatten records to one row per metric (study role values merged in).
+
+    Each row carries a ``_record`` index so agreement/analysis can key back to
+    the experiment it came from.
+    """
+    role_map_values = set((study_role_map or {}).values())
+    has_study_roles = any(role in STUDY_ROLES for role in role_map_values)
+    out: list[dict] = []
+    for index, record in enumerate(records):
+        if not isinstance(record, dict):
+            continue
+        study = record.get("study")
+        study = study if isinstance(study, dict) else {}
+        merged_study: dict[str, Any] = {}
+        for name, value in study.items():
+            if isinstance(value, (dict, list)):
+                continue
+            if has_study_roles and (study_role_map or {}).get(name) not in STUDY_ROLES:
+                continue
+            merged_study[name] = value
+        metrics = record.get("metrics")
+        for metric in metrics if isinstance(metrics, list) else []:
+            if not isinstance(metric, dict):
+                continue
+            out.append({**merged_study, **metric, "_record": index})
+    return out
 
 
 # ── prescreen / extraction logic ─────────────────────────────────────────
@@ -211,6 +370,7 @@ async def extract_hit(
     source_text: str,
     model: str | None = None,
     max_chars: int = DEFAULT_MAX_INPUT_CHARS,
+    codebook: dict | None = None,
 ) -> tuple[list[dict], list[dict]]:
     """Run the scheme's full coding prompt; returns (records, missing)."""
     messages = build_extraction_messages(
@@ -222,27 +382,10 @@ async def extract_hit(
     response_json = extract_json(raw)
     if response_json is None:
         raise ValueError("No valid JSON found in model response.")
-    records, missing = normalize_and_validate(response_json)
+    records, missing = records_from_response(response_json, codebook)
     if not records:
         raise ValueError("Model returned no study records.")
     return records, missing
-
-
-def _split_records(records: list[dict]) -> tuple[list[dict], list[dict]]:
-    """Split records into (study-level rows, flattened DV metrics)."""
-    study_rows: list[dict] = []
-    metrics: list[dict] = []
-    for record in records:
-        dv_metrics = record.get("DV_Metrics") if isinstance(record, dict) else None
-        study = {k: v for k, v in record.items() if k != "DV_Metrics"} if isinstance(record, dict) else {}
-        study_rows.append(study)
-        if isinstance(dv_metrics, list):
-            for metric in dv_metrics:
-                if not isinstance(metric, dict):
-                    continue
-                flat = {"Study_ID": study.get("Study_ID"), **metric}
-                metrics.append(flat)
-    return study_rows, metrics
 
 
 async def _source_fulltext(session, source_id: int) -> str:
@@ -287,6 +430,13 @@ async def run_extraction(
         scheme = await repo.get_scheme(name=scheme_name)
         if scheme is None:
             raise ValueError(f"Unknown scheme '{scheme_name}' — create it first.")
+        codebook: dict = {}
+        if scheme.codebook:
+            try:
+                codebook = normalise_codebook(json.loads(scheme.codebook))
+            except (TypeError, ValueError):
+                codebook = normalise_codebook({})
+        study_role_map = role_map(study_fields(codebook))
         if hit_ids:
             # Explicit selection: honour the user's choice regardless of the
             # current screening/link state (they may be re-extracting).
@@ -356,21 +506,20 @@ async def run_extraction(
                     continue
                 included += 1
                 records, missing = await extract_hit(
-                    ai, scheme, hit, source_text, model=model, max_chars=max_input_chars
+                    ai, scheme, hit, source_text, model=model,
+                    max_chars=max_input_chars, codebook=codebook,
                 )
-                study_rows, metrics = _split_records(records)
+                dv_metrics = derive_dv_metrics(records, study_role_map)
                 missing_reason = (
-                    f"{len(missing)} DV comparisons lack full statistics"
-                    if missing
-                    else None
+                    f"{len(missing)} DV comparisons lack full statistics" if missing else None
                 )
                 await repo.upsert_extraction(
                     hit_id=hit.hit_id,
                     owner=owner,
                     scheme=scheme.name,
                     source_id=source_id,
-                    study_vars={"records": study_rows},
-                    dv_metrics=metrics,
+                    study_vars={"records": records},
+                    dv_metrics=dv_metrics,
                     prescreen=prescreen,
                     model=ai.get("model") or model,
                     prompt_hash=prompt_hash,
@@ -399,17 +548,37 @@ async def run_extraction(
 
 # ── export ───────────────────────────────────────────────────────────────
 
+def _study_of(record: Any) -> dict:
+    """Study dict from either a v2 ``{study, metrics}`` record or a v1 study."""
+    if isinstance(record, dict):
+        study = record.get("study")
+        if isinstance(study, dict):
+            return study
+        return record
+    return {}
+
+
+def _is_v2_records(ext) -> bool:
+    records = (ext.study_vars or {}).get("records") if isinstance(ext.study_vars, dict) else None
+    return isinstance(records, list) and any(
+        isinstance(r, dict) and "metrics" in r and "study" in r for r in records
+    )
+
+
 def flatten_to_rows(extractions: list) -> list[dict]:
     """One dict per DV metric (study vars merged in, minus nested lists)."""
     rows: list[dict] = []
     for ext in extractions:
-        study_rows = (ext.study_vars or {}).get("records", []) if isinstance(ext.study_vars, dict) else []
+        base = {"hit_id": ext.hit_id, "scheme": ext.scheme, "owner": ext.owner}
         metrics = ext.dv_metrics or []
-        base = {
-            "hit_id": ext.hit_id,
-            "scheme": ext.scheme,
-            "owner": ext.owner,
-        }
+        if _is_v2_records(ext):
+            for metric in metrics:
+                if not isinstance(metric, dict):
+                    continue
+                rows.append({**base, **_scalars(metric)})
+            continue
+        # v1 shape: study rows + metric-only dv_metrics (merge by Study_ID).
+        study_rows = (ext.study_vars or {}).get("records", []) if isinstance(ext.study_vars, dict) else []
         for metric in metrics:
             if not isinstance(metric, dict):
                 continue
@@ -427,7 +596,7 @@ def flatten_to_rows(extractions: list) -> list[dict]:
                     continue
                 row[k] = _scalar(v)
             for k, v in metric.items():
-                if k in ("cell_descriptives",) or isinstance(v, (dict, list)):
+                if k == "cell_descriptives" or isinstance(v, (dict, list)):
                     continue
                 row[f"DV_{k}"] = _scalar(v)
             rows.append(row)
@@ -435,13 +604,17 @@ def flatten_to_rows(extractions: list) -> list[dict]:
             for study in study_rows:
                 if not isinstance(study, dict):
                     continue
-                row = dict(base)
-                for k, v in study.items():
-                    if k == "DV_Metrics" or isinstance(v, (dict, list)):
-                        continue
-                    row[k] = _scalar(v)
-                rows.append(row)
+                rows.append({**base, **_scalars(study)})
     return rows
+
+
+def _scalars(record: dict) -> dict:
+    out: dict[str, Any] = {}
+    for key, value in record.items():
+        if key == "cell_descriptives" or isinstance(value, (dict, list)):
+            continue
+        out[key] = _scalar(value)
+    return out
 
 
 def _scalar(value: Any) -> Any:
@@ -472,7 +645,7 @@ def export_csv(rows: list[dict]) -> tuple[str, bytes]:
 def export_xlsx(rows: list[dict]) -> tuple[str, bytes]:
     import io
 
-    from openpyxl import Workbook  # type: ignore[import-untyped]
+    from openpyxl import Workbook
 
     wb = Workbook()
     ws = wb.active
@@ -498,7 +671,7 @@ async def publish_to_cases(
 ) -> dict:
     """Mirror the extracted study fields onto a case + case attributes.
 
-    Flat study-level fields (per ``codebook.study_fields``) become case
+    Flat study-level fields (per the codebook's study fields) become case
     attributes; a case is created per hit when it does not exist yet.
     Returns a summary of created entities.
     """
@@ -506,14 +679,16 @@ async def publish_to_cases(
     from qualcoder_api.persistence.repo.case_repo import CaseRepository
 
     repo = MetaRepository(session)
-    ext = await repo.get_extraction_for_hit(hit_id)
+    ext = await repo.get_extraction_for_hit(hit_id, owner)
     hit = await repo.get_hit(hit_id)
     if ext is None or hit is None:
         return {"caseid": None, "attributes": 0, "error": "no extraction for hit"}
 
+    book = normalise_codebook(codebook)
     study_rows = (ext.study_vars or {}).get("records", []) if isinstance(ext.study_vars, dict) else []
-    study = study_rows[0] if study_rows and isinstance(study_rows[0], dict) else {}
-    case_name = str(study.get("Study_ID") or hit.title or f"Hit {hit_id}")[:120]
+    study = _study_of(study_rows[0]) if study_rows else {}
+    study_id = _role_value(study, role_map(study_fields(book)), "study_id")
+    case_name = str(study_id or hit.title or f"Hit {hit_id}")[:120]
 
     case_repo = CaseRepository(session)
     cases = await case_repo.list_cases()
@@ -524,10 +699,13 @@ async def publish_to_cases(
         return {"caseid": None, "attributes": 0, "error": "case create failed"}
 
     attr_repo = AttributeRepository(session)
-    field_defs = {f["name"]: f for f in (codebook.get("study_fields") or [])}
+    field_defs = {f["name"]: f for f in study_fields(book) if f.get("name")}
     created = 0
     for field, value in study.items():
-        if field in ("Rationale_Notes",) or isinstance(value, (dict, list)):
+        field_def = field_defs.get(field) if field_defs else None
+        if field_def is not None and field_def.get("role") == "notes":
+            continue
+        if isinstance(value, (dict, list)):
             continue
         if field_defs and field not in field_defs:
             continue
@@ -561,16 +739,16 @@ async def publish_to_codes(
     from qualcoder_api.persistence.repo.code_repo import CodeRepository
 
     repo = MetaRepository(session)
-    ext = await repo.get_extraction_for_hit(hit_id)
+    ext = await repo.get_extraction_for_hit(hit_id, owner)
     hit = await repo.get_hit(hit_id)
     if ext is None or hit is None:
         return {"codes": 0, "error": "no extraction for hit"}
 
+    book = normalise_codebook(codebook)
     study_rows = (ext.study_vars or {}).get("records", []) if isinstance(ext.study_vars, dict) else []
-    study = study_rows[0] if study_rows and isinstance(study_rows[0], dict) else {}
-    rationale = str(study.get("Rationale_Notes") or "")
-    category_name = codebook.get("category") or "Meta"
-    code_fields = codebook.get("code_fields") or []
+    study = _study_of(study_rows[0]) if study_rows else {}
+    rationale = str(_role_value(study, role_map(study_fields(book)), "notes") or "")
+    category_name = book.get("category") or "Meta"
 
     code_repo = CodeRepository(session)
     cats = await code_repo.list_categories()
@@ -580,7 +758,7 @@ async def publish_to_codes(
 
     created = 0
     existing_names = {c.name for c in await code_repo.list_codes()}
-    for field in code_fields:
+    for field in code_field_names(book):
         value = study.get(field)
         if value is None or value == "":
             continue

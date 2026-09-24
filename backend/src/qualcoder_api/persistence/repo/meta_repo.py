@@ -43,6 +43,13 @@ def _json(value: Any) -> str | None:
     return json.dumps(value, ensure_ascii=False)
 
 
+def _json_list(value: Any) -> str:
+    """Encode a JSON list column, accepting an already-encoded string."""
+    if isinstance(value, str):
+        return value
+    return _json(value) or "[]"
+
+
 def _load_json(value: str | None, default: Any = None) -> Any:
     if not value:
         return default
@@ -50,6 +57,53 @@ def _load_json(value: str | None, default: Any = None) -> Any:
         return json.loads(value)
     except (TypeError, ValueError):
         return default
+
+
+def _dedupe_fold(text: Any) -> str:
+    """Fold text for dedupe: casefold and drop punctuation/whitespace."""
+    return "".join(ch for ch in str(text or "").casefold() if ch.isalnum())
+
+
+def hit_dedupe_key(*, doi: Any, title: Any, authors: Any) -> str | None:
+    """Stable dedupe key for a hit, or ``None`` when it cannot be deduped.
+
+    A DOI (normalised) is authoritative. Without one, the normalized
+    ``title|authors`` pair is used — but only when BOTH are present, so blank
+    or NULL bibliographic rows are never silently collapsed.
+    """
+    normalized_doi = _dedupe_fold(doi)
+    if normalized_doi:
+        return f"doi:{normalized_doi}"
+    normalized_title = _dedupe_fold(title)
+    normalized_authors = _dedupe_fold(authors)
+    if normalized_title and normalized_authors:
+        return f"ta:{normalized_title}|{normalized_authors}"
+    return None
+
+
+def _hit_field(hit: Any, name: str) -> Any:
+    if isinstance(hit, dict):
+        return hit.get(name)
+    return getattr(hit, name, None)
+
+
+def count_duplicate_hits(hits: list[Any]) -> int:
+    """Number of stored hits that repeat an earlier hit's dedupe key."""
+    seen: set[str] = set()
+    duplicates = 0
+    for hit in hits:
+        key = hit_dedupe_key(
+            doi=_hit_field(hit, "doi"),
+            title=_hit_field(hit, "title"),
+            authors=_hit_field(hit, "authors"),
+        )
+        if key is None:
+            continue
+        if key in seen:
+            duplicates += 1
+        else:
+            seen.add(key)
+    return duplicates
 
 
 class MetaRepository:
@@ -141,31 +195,40 @@ class MetaRepository:
         return MetaHit.model_validate(row._mapping)
 
     async def add_hits(self, hits: list[dict]) -> int:
-        """Batch-insert hits, skipping DOI collisions; returns inserted count.
+        """Batch-insert hits, skipping duplicates; returns inserted count.
 
-        ``hits`` is a list of column dicts. DOI collisions within the batch or
-        against existing rows are skipped (reference ``merge_included_file``
-        dedupe). Inserts run as a single executemany so an 11k-study import
-        stays fast.
+        ``hits`` is a list of column dicts. A hit is a duplicate when its DOI
+        (case-insensitively) matches an existing/batch hit, or — when it has no
+        DOI — when its normalized ``title|authors`` pair matches one. Blank
+        titles/authors are never deduped, so unstructured imports are not
+        silently collapsed. Inserts run as a single executemany so an 11k-study
+        import stays fast.
         """
         now = _now()
-        existing_dois = {
-            str(r[0]).lower()
-            for r in (
+        existing_keys = {
+            key
+            for doi, title, authors in (
                 await self.session.execute(
-                    select(tables.meta_hit.c.doi).where(tables.meta_hit.c.doi.is_not(None))
+                    select(
+                        tables.meta_hit.c.doi,
+                        tables.meta_hit.c.title,
+                        tables.meta_hit.c.authors,
+                    )
                 )
             ).all()
-            if r[0]
+            if (key := hit_dedupe_key(doi=doi, title=title, authors=authors))
         }
         rows: list[dict] = []
         for fields in hits:
-            doi = str(fields.get("doi") or "").strip()
-            if doi:
-                key = doi.lower()
-                if key in existing_dois:
+            key = hit_dedupe_key(
+                doi=fields.get("doi"),
+                title=fields.get("title"),
+                authors=fields.get("authors"),
+            )
+            if key is not None:
+                if key in existing_keys:
                     continue
-                existing_dois.add(key)
+                existing_keys.add(key)
             rows.append({**fields, "created": now, "updated": now})
         if rows:
             await self.session.execute(insert(tables.meta_hit), rows)
@@ -191,6 +254,12 @@ class MetaRepository:
         return await self.get_hit(hit_id)
 
     async def delete_hit(self, hit_id: int) -> bool:
+        """Delete a hit and its meta rows, unlinking any acquired source.
+
+        The imported source (if the paper was downloaded/assigned) is removed
+        in the same transaction so deleting a hit does not leave an orphaned
+        file sitting in the Sources list.
+        """
         row = (
             await self.session.execute(
                 select(tables.meta_hit.c.hit_id).where(tables.meta_hit.c.hit_id == hit_id)
@@ -198,6 +267,14 @@ class MetaRepository:
         ).first()
         if row is None:
             return False
+        doc = (
+            await self.session.execute(
+                select(tables.meta_document.c.source_id).where(
+                    tables.meta_document.c.hit_id == hit_id
+                )
+            )
+        ).first()
+        source_id = int(doc[0]) if doc is not None and doc[0] is not None else None
         for table in (tables.meta_screening, tables.meta_document, tables.meta_extraction):
             await self.session.execute(
                 delete(table).where(table.c.hit_id == hit_id)
@@ -205,6 +282,14 @@ class MetaRepository:
         await self.session.execute(
             delete(tables.meta_hit).where(tables.meta_hit.c.hit_id == hit_id)
         )
+        if source_id is not None:
+            # ``_delete_source_row`` is the non-committing half of
+            # ``SourceRepository.delete_source`` (it cascades codings,
+            # annotations and case links and journals the sync deletes); we
+            # commit once for the whole operation.
+            from qualcoder_api.persistence.repo.source_repo import SourceRepository
+
+            await SourceRepository(self.session)._delete_source_row(source_id)
         await self.session.commit()
         return True
 
@@ -239,21 +324,44 @@ class MetaRepository:
             out[model.hit_id] = model
         return out
 
-    async def latest_verdicts_for(self, hit_ids: list[int]) -> dict[int, dict]:
+    async def latest_verdicts_for(
+        self, hit_ids: list[int], stage: str | None = None
+    ) -> dict[int, dict]:
         """Latest verdicts per hit for a page of hit ids (avoids loading all
-        screening rows just to compute eligibility)."""
+        screening rows just to compute eligibility).
+
+        ``stage`` restricts the "latest" window to one screening stage (e.g.
+        ``"abstract"``), so full-text verdicts never leak into the abstract
+        pipeline lists; ``None`` keeps the legacy any-stage window."""
         if not hit_ids:
             return {}
-        stmt = text(
-            "SELECT hit_id, verdicts FROM meta_screening "
-            "WHERE id IN (SELECT MAX(id) FROM meta_screening GROUP BY hit_id) "
-            "AND hit_id IN :ids"
-        ).bindparams(bindparam("ids", expanding=True))
-        rows = await self.session.execute(stmt, {"ids": hit_ids})
+        if stage:
+            stmt = text(
+                "SELECT hit_id, verdicts FROM meta_screening "
+                "WHERE id IN (SELECT MAX(id) FROM meta_screening "
+                "WHERE stage = :stage GROUP BY hit_id) "
+                "AND hit_id IN :ids"
+            ).bindparams(bindparam("ids", expanding=True))
+            rows = await self.session.execute(stmt, {"ids": hit_ids, "stage": stage})
+        else:
+            stmt = text(
+                "SELECT hit_id, verdicts FROM meta_screening "
+                "WHERE id IN (SELECT MAX(id) FROM meta_screening GROUP BY hit_id) "
+                "AND hit_id IN :ids"
+            ).bindparams(bindparam("ids", expanding=True))
+            rows = await self.session.execute(stmt, {"ids": hit_ids})
         return {int(r[0]): (_load_json(r[1], {}) or {}) for r in rows}
 
-    async def tab_counts(self) -> dict[str, int]:
-        """Study counts per pipeline tab: all / included / acquired."""
+    async def tab_counts(
+        self, is_included: Any = None, stage: str | None = None
+    ) -> dict[str, int]:
+        """Study counts per pipeline tab: all / included / acquired.
+
+        ``is_included`` is an optional ``verdicts -> bool`` predicate so the
+        caller keeps the single ``evaluate_criteria`` inclusion rule (the repo
+        stays free of matching semantics). ``stage`` restricts the verdict
+        window to one screening stage (see :meth:`latest_verdicts_for`).
+        """
         total = int(
             (await self.session.execute(select(func.count()).select_from(tables.meta_hit))).scalar()
             or 0
@@ -270,12 +378,22 @@ class MetaRepository:
             or 0
         )
         verdict_rows = await self.session.execute(
-            text("SELECT verdicts FROM meta_screening WHERE id IN "
-                 "(SELECT MAX(id) FROM meta_screening GROUP BY hit_id)")
+            text(
+                "SELECT verdicts FROM meta_screening WHERE id IN "
+                "(SELECT MAX(id) FROM meta_screening "
+                + ("WHERE stage = :stage " if stage else "")
+                + "GROUP BY hit_id)"
+            ),
+            {"stage": stage} if stage else {},
         )
         for (raw,) in verdict_rows:
             verdicts = _load_json(raw, {}) or {}
-            if verdicts and all(
+            if not verdicts:
+                continue
+            if is_included is not None:
+                if is_included(verdicts):
+                    included += 1
+            elif all(
                 str(v.get("applies") or "").strip().lower() == "yes" for v in verdicts.values()
             ):
                 included += 1
@@ -315,10 +433,35 @@ class MetaRepository:
         ).first()
         return MetaCriterion.model_validate(row._mapping) if row else None
 
-    async def add_criterion(self, *, position: int, key: str, label: str, prompt_text: str) -> MetaCriterion:
+    async def add_criterion(
+        self,
+        *,
+        position: int,
+        key: str,
+        label: str,
+        prompt_text: str,
+        kind: str = "verdict",
+        options: Any = None,
+        pass_values: Any = None,
+        exclude_reason: str = "",
+        gating: int = 1,
+        help: str = "",
+    ) -> MetaCriterion:
         result = await self.session.execute(
             insert(tables.meta_criterion).values(
-                position=position, key=key, label=label, prompt_text=prompt_text, created=_now()
+                position=position,
+                key=key,
+                label=label,
+                prompt_text=prompt_text,
+                kind=kind,
+                options=_json_list(options) if options is not None else "[]",
+                pass_values=_json_list(pass_values)
+                if pass_values is not None
+                else _json(["yes"]),
+                exclude_reason=exclude_reason,
+                gating=int(gating),
+                help=help,
+                created=_now(),
             )
         )
         await self.session.commit()
@@ -331,8 +474,22 @@ class MetaRepository:
         return MetaCriterion.model_validate(row._mapping)
 
     async def update_criterion(self, criterion_id: int, **fields: Any) -> MetaCriterion | None:
-        allowed = {"position", "key", "label", "prompt_text"}
+        allowed = {
+            "position",
+            "key",
+            "label",
+            "prompt_text",
+            "kind",
+            "options",
+            "pass_values",
+            "exclude_reason",
+            "gating",
+            "help",
+        }
         values = {k: v for k, v in fields.items() if k in allowed}
+        for json_field in ("options", "pass_values"):
+            if json_field in values and not isinstance(values[json_field], str):
+                values[json_field] = _json(values[json_field])
         if values:
             await self.session.execute(
                 update(tables.meta_criterion)
@@ -343,20 +500,39 @@ class MetaRepository:
         return await self.get_criterion(criterion_id)
 
     async def replace_criteria(self, criteria: list[dict]) -> list[MetaCriterion]:
-        """Atomic replace of the criterion list (used by import / seed)."""
+        """Atomic replace of the criterion list (used by import / seed).
+
+        The delete and every insert share a single transaction: if any row is
+        malformed the whole replace rolls back and the previous criteria
+        survive, instead of the old delete-then-insert-per-row leaving the
+        project with no criteria.
+        """
+        now = _now()
+        rows = [
+            {
+                "position": int(c.get("position", i)),
+                "key": str(c["key"]),
+                "label": str(c["label"]),
+                "prompt_text": str(c["prompt_text"]),
+                "kind": str(c.get("kind") or "verdict"),
+                "options": _json_list(c.get("options"))
+                if c.get("options") is not None
+                else "[]",
+                "pass_values": _json_list(c.get("pass_values"))
+                if c.get("pass_values") is not None
+                else _json(["yes"]),
+                "exclude_reason": str(c.get("exclude_reason") or ""),
+                "gating": int(c.get("gating", 1)),
+                "help": str(c.get("help") or ""),
+                "created": now,
+            }
+            for i, c in enumerate(criteria)
+        ]
         await self.session.execute(delete(tables.meta_criterion))
+        if rows:
+            await self.session.execute(insert(tables.meta_criterion), rows)
         await self.session.commit()
-        created: list[MetaCriterion] = []
-        for i, c in enumerate(criteria):
-            created.append(
-                await self.add_criterion(
-                    position=int(c.get("position", i)),
-                    key=str(c["key"]),
-                    label=str(c["label"]),
-                    prompt_text=str(c["prompt_text"]),
-                )
-            )
-        return created
+        return await self.list_criteria()
 
     async def delete_criterion(self, criterion_id: int) -> bool:
         row = (
@@ -375,7 +551,11 @@ class MetaRepository:
     # ── screening ───────────────────────────────────────────────────────
 
     async def list_screening(
-        self, hit_id: int | None = None, owner: str | None = None, run_id: str | None = None
+        self,
+        hit_id: int | None = None,
+        owner: str | None = None,
+        run_id: str | None = None,
+        stage: str | None = None,
     ) -> list[MetaScreening]:
         query = "SELECT * FROM meta_screening WHERE 1=1"
         params: dict[str, Any] = {}
@@ -388,6 +568,9 @@ class MetaRepository:
         if run_id is not None:
             query += " AND run_id = :run"
             params["run"] = run_id
+        if stage:
+            query += " AND stage = :stage"
+            params["stage"] = stage
         query += " ORDER BY hit_id, owner, run_id"
         rows = await self.session.execute(text(query), params)
         out = []
@@ -424,14 +607,21 @@ class MetaRepository:
         origin: str = "manual",
         model: str | None = None,
         prompt_hash: str | None = None,
+        stage: str = "abstract",
+        reason: str = "",
     ) -> MetaScreening:
-        """Insert or replace the (hit, owner, run) verdict row."""
+        """Insert or replace the (hit, owner, run, stage) verdict row.
+
+        ``stage`` is part of the identity so a full-text verdict never
+        overwrites the abstract verdict of the same hit/run.
+        """
         existing = (
             await self.session.execute(
                 select(tables.meta_screening).where(
                     tables.meta_screening.c.hit_id == hit_id,
                     tables.meta_screening.c.owner == owner,
                     tables.meta_screening.c.run_id == run_id,
+                    tables.meta_screening.c.stage == stage,
                 )
             )
         ).first()
@@ -448,6 +638,8 @@ class MetaRepository:
                     origin=origin,
                     model=model,
                     prompt_hash=prompt_hash,
+                    stage=stage,
+                    reason=reason,
                     created=now,
                     updated=now,
                 )
@@ -472,6 +664,8 @@ class MetaRepository:
                 origin=origin,
                 model=model,
                 prompt_hash=prompt_hash,
+                stage=stage,
+                reason=reason,
                 updated=now,
             )
         )
@@ -486,16 +680,21 @@ class MetaRepository:
             update={"verdicts": _load_json(row._mapping.get("verdicts"), {}) or {}}
         )
 
-    async def screening_for_hit(self, hit_id: int, owner: str, run_id: str = "") -> MetaScreening | None:
-        row = (
-            await self.session.execute(
-                select(tables.meta_screening).where(
-                    tables.meta_screening.c.hit_id == hit_id,
-                    tables.meta_screening.c.owner == owner,
-                    tables.meta_screening.c.run_id == run_id,
-                )
-            )
-        ).first()
+    async def screening_for_hit(
+        self,
+        hit_id: int,
+        owner: str,
+        run_id: str = "",
+        stage: str | None = None,
+    ) -> MetaScreening | None:
+        stmt = select(tables.meta_screening).where(
+            tables.meta_screening.c.hit_id == hit_id,
+            tables.meta_screening.c.owner == owner,
+            tables.meta_screening.c.run_id == run_id,
+        )
+        if stage:
+            stmt = stmt.where(tables.meta_screening.c.stage == stage)
+        row = (await self.session.execute(stmt.order_by(tables.meta_screening.c.id.desc()))).first()
         if row is None:
             return None
         model = MetaScreening.model_validate(row._mapping)
@@ -592,13 +791,24 @@ class MetaRepository:
 
     # ── extractions ─────────────────────────────────────────────────────
 
-    async def list_extractions(self, hit_id: int | None = None) -> list[MetaExtraction]:
-        query = "SELECT * FROM meta_extraction"
+    async def list_extractions(
+        self,
+        hit_id: int | None = None,
+        owner: str | None = None,
+        scheme: str | None = None,
+    ) -> list[MetaExtraction]:
+        query = "SELECT * FROM meta_extraction WHERE 1=1"
         params: dict[str, Any] = {}
         if hit_id is not None:
-            query += " WHERE hit_id = :hit"
+            query += " AND hit_id = :hit"
             params["hit"] = hit_id
-        query += " ORDER BY hit_id"
+        if owner:
+            query += " AND owner = :owner"
+            params["owner"] = owner
+        if scheme:
+            query += " AND scheme = :scheme"
+            params["scheme"] = scheme
+        query += " ORDER BY hit_id, owner, scheme"
         rows = await self.session.execute(text(query), params)
         out = []
         for r in rows:
@@ -614,12 +824,22 @@ class MetaRepository:
             )
         return out
 
-    async def get_extraction_for_hit(self, hit_id: int) -> MetaExtraction | None:
-        row = (
-            await self.session.execute(
-                select(tables.meta_extraction).where(tables.meta_extraction.c.hit_id == hit_id)
-            )
-        ).first()
+    async def get_extraction_for_hit(
+        self, hit_id: int, owner: str | None = None, scheme: str | None = None
+    ) -> MetaExtraction | None:
+        """One extraction for a hit.
+
+        ``owner``/``scheme`` narrow the lookup; without them the most recently
+        written row wins. A coder may hold one extraction per scheme, so
+        callers that know the scheme should pass it to avoid ambiguity.
+        """
+        stmt = select(tables.meta_extraction).where(tables.meta_extraction.c.hit_id == hit_id)
+        if owner:
+            stmt = stmt.where(tables.meta_extraction.c.owner == owner)
+        if scheme:
+            stmt = stmt.where(tables.meta_extraction.c.scheme == scheme)
+        stmt = stmt.order_by(tables.meta_extraction.c.id.desc())
+        row = (await self.session.execute(stmt)).first()
         if row is None:
             return None
         mapping = row._mapping
@@ -649,7 +869,11 @@ class MetaRepository:
         now = _now()
         existing = (
             await self.session.execute(
-                select(tables.meta_extraction).where(tables.meta_extraction.c.hit_id == hit_id)
+                select(tables.meta_extraction).where(
+                    tables.meta_extraction.c.hit_id == hit_id,
+                    tables.meta_extraction.c.owner == owner,
+                    tables.meta_extraction.c.scheme == scheme,
+                )
             )
         ).first()
         if existing is None:
@@ -671,7 +895,9 @@ class MetaRepository:
                 )
             )
             await self.session.commit()
-            return await self.get_extraction_for_hit(hit_id) or MetaExtraction(hit_id=hit_id)
+            return await self.get_extraction_for_hit(hit_id, owner, scheme) or MetaExtraction(
+                hit_id=hit_id, owner=owner, scheme=scheme
+            )
         await self.session.execute(
             update(tables.meta_extraction)
             .where(tables.meta_extraction.c.id == existing.id)
@@ -690,7 +916,9 @@ class MetaRepository:
             )
         )
         await self.session.commit()
-        return await self.get_extraction_for_hit(hit_id) or MetaExtraction(hit_id=hit_id)
+        return await self.get_extraction_for_hit(hit_id, owner, scheme) or MetaExtraction(
+            hit_id=hit_id, owner=owner, scheme=scheme
+        )
 
     # ── schemes ─────────────────────────────────────────────────────────
 
@@ -759,6 +987,19 @@ class MetaRepository:
             )
             await self.session.commit()
         return await self.get_scheme(scheme_id=scheme_id)
+
+    async def count_extractions_for_scheme(self, name: str) -> int:
+        """Extractions still referencing a scheme by name (blocks deletion)."""
+        return int(
+            (
+                await self.session.execute(
+                    select(func.count())
+                    .select_from(tables.meta_extraction)
+                    .where(tables.meta_extraction.c.scheme == name)
+                )
+            ).scalar()
+            or 0
+        )
 
     async def delete_scheme(self, scheme_id: int) -> bool:
         row = (

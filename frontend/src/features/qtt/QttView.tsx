@@ -162,6 +162,7 @@ export function QttList() {
   return (
     <LeftBar
       className="h-full min-h-0"
+      scroll={false}
       header={
         <BarHeader
           title={<BarTitle icon={ScrollText} label={t("nav.qtt")} />}
@@ -180,7 +181,7 @@ export function QttList() {
         />
       }
     >
-      {/* Search — same pattern as the files/codes left bars. */}
+      {/* Search — fixed row, same pattern as the files/codes left bars. */}
       <div className="relative shrink-0 border-b border-border px-3 py-1.5">
         <Search
           size={14}
@@ -196,6 +197,8 @@ export function QttList() {
         />
       </div>
       {error && <ErrorBanner onClose={() => setError(null)}>{error}</ErrorBanner>}
+      {/* ONE scroll body: the list scrolls internally, never the page. */}
+      <div className="qc-scroll min-h-0 flex-1 overflow-x-hidden overflow-y-auto">
       {loading && sheets.length === 0 ? (
         <LoadingState>{t("qtt.loading")}</LoadingState>
       ) : sheets.length === 0 ? (
@@ -214,6 +217,7 @@ export function QttList() {
                     autoFocus
                     placeholder={t("qtt.namePlaceholder")}
                     aria-label={t("qtt.namePlaceholder")}
+                    className="w-full min-w-0"
                     onKeyDown={(e) => {
                       if (e.key === "Enter") {
                         e.preventDefault();
@@ -234,7 +238,7 @@ export function QttList() {
               );
             }
             return (
-              <div key={sheet.id} className="group flex items-center hover:shadow-sm">
+              <div key={sheet.id} className="group flex min-w-0 items-center overflow-hidden hover:shadow-sm">
                 <button
                   type="button"
                   onClick={() => setQttUi({ selectedId: sheet.id })}
@@ -242,7 +246,7 @@ export function QttList() {
                     e.preventDefault();
                     setRowMenu({ x: e.clientX, y: e.clientY, sheet });
                   }}
-                  className={`flex min-w-0 flex-1 items-center gap-1.5 px-3 py-2 text-left hover:bg-surface-higher ${
+                  className={`flex min-w-0 flex-1 items-center gap-1.5 overflow-hidden px-3 py-2 text-left hover:bg-surface-higher ${
                     qttUi.selectedId === sheet.id ? "bg-accent/10" : ""
                   }`}
                 >
@@ -251,17 +255,17 @@ export function QttList() {
                     className="shrink-0 text-text-secondary"
                     aria-hidden
                   />
-                  <span className="min-w-0 flex-1">
+                  <span className="min-w-0 flex-1 overflow-hidden">
                     <span className="block truncate text-sm text-text-primary">{sheet.name}</span>
-                    <span className="mt-0.5 flex items-center gap-1.5 text-xs text-text-secondary">
+                    <span className="mt-0.5 flex min-w-0 items-center gap-1.5 overflow-hidden text-xs text-text-secondary">
                       <span
-                        className={`rounded-sm px-1 py-px text-[10px] font-medium uppercase ${
+                        className={`shrink-0 rounded-sm px-1 py-px text-[10px] font-medium uppercase ${
                           sheet.kind === "mixed" ? "bg-accent/15 text-accent" : "bg-surface-higher"
                         }`}
                       >
                         {sheet.kind === "mixed" ? t("qtt.kindMixed") : t("qtt.kindQual")}
                       </span>
-                      <span className="truncate">
+                      <span className="min-w-0 truncate">
                         {count} {t("qtt.itemCount", { count })}
                       </span>
                     </span>
@@ -292,6 +296,7 @@ export function QttList() {
           })}
         </div>
       )}
+      </div>
 
       {rowMenu && (
         <RowContextMenu

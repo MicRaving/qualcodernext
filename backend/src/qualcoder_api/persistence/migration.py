@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import contextlib
 import logging
+import re
 
 import aiosqlite
 
@@ -72,6 +73,8 @@ class MigrationChain:
         applied += await self.migrate_v35(app_version)
         applied += await self.migrate_v36(app_version)
         applied += await self.migrate_v37(app_version)
+        applied += await self.migrate_v38(app_version)
+        applied += await self.migrate_v39(app_version)
         return applied
 
 
@@ -944,12 +947,14 @@ class MigrationChain:
         ``meta_screening``, ``meta_document``, ``meta_extraction`` and
         ``meta_scheme``.
 
-        Local-only in v1: the tables deliberately stay OUT of ``sync_log`` /
-        ``OWNER_TABLES`` so the collaboration engine, undo registry and
-        upstream-parity tests are untouched. Rows carry ``owner`` so a later
-        collaboration milestone can add capture + replay additively. No-op
-        when the tables are already present (fresh projects create them in
-        their schema).
+        Local-only in v1: the tables deliberately stay OUT of ``sync_log`` so
+        the collaboration engine, undo registry and upstream-parity tests are
+        untouched. Rows carry ``owner`` so a later collaboration milestone can
+        add capture + replay additively. (The owner columns ARE listed in
+        ``OWNER_TABLES`` so coder roster/rename/delete/reassign stay
+        consistent; the sync capture simply skips tables without an
+        ``ENTITY_PKS`` entry.) No-op when the tables are already present
+        (fresh projects create them in their schema).
         """
         if self.conn is None:
             return []
@@ -1024,4 +1029,302 @@ class MigrationChain:
             await self.conn.commit()
             return ["v37"]
         return []
+
+
+    async def migrate_v38(self, app_version: str) -> list[str]:
+        """v38: mature meta-coding fields.
+
+        * ``meta_criterion`` gains ``kind``/``options``/``pass_values``/
+          ``exclude_reason``/``gating``/``help``.
+        * ``meta_screening`` gains ``stage``/``reason``.
+        * ``meta_extraction``'s uniqueness moves from ``UNIQUE(hit_id)`` to
+          ``UNIQUE(hit_id, owner)`` so a second coder can hold their own
+          extraction (required for agreement). SQLite cannot alter a
+          constraint, so the table is rebuilt preserving every row.
+
+        Idempotent: each step probes for the column/constraint and is skipped
+        on a fresh v38 schema. Rows are local-only (never in ``sync_log``).
+        """
+        if self.conn is None:
+            return []
+        cur = await self.conn.cursor()
+        changed = False
+
+        if await self._has_table(cur, "meta_criterion"):
+            for column, sql in (
+                ("kind", "ALTER TABLE meta_criterion ADD kind text not null default 'verdict'"),
+                ("options", "ALTER TABLE meta_criterion ADD options text not null default '[]'"),
+                (
+                    "pass_values",
+                    "ALTER TABLE meta_criterion ADD pass_values text not null default '[\"yes\"]'",
+                ),
+                (
+                    "exclude_reason",
+                    "ALTER TABLE meta_criterion ADD exclude_reason text not null default ''",
+                ),
+                ("gating", "ALTER TABLE meta_criterion ADD gating integer not null default 1"),
+                ("help", "ALTER TABLE meta_criterion ADD help text not null default ''"),
+            ):
+                if not await self._has_column(cur, "meta_criterion", column):
+                    await cur.execute(sql)
+                    await self.conn.commit()
+                    changed = True
+
+        if await self._has_table(cur, "meta_screening"):
+            for column, sql in (
+                ("stage", "ALTER TABLE meta_screening ADD stage text not null default 'abstract'"),
+                ("reason", "ALTER TABLE meta_screening ADD reason text not null default ''"),
+            ):
+                if not await self._has_column(cur, "meta_screening", column):
+                    await cur.execute(sql)
+                    await self.conn.commit()
+                    changed = True
+
+        if await self._has_table(cur, "meta_extraction") and await self._unique_hit_only(
+            cur, "meta_extraction"
+        ):
+            await self._rebuild_meta_extraction(cur)
+            changed = True
+
+        if changed:
+            await cur.execute('update project set databaseversion="v38", about=?', [app_version])
+            await self.conn.commit()
+            return ["v38"]
+        # The target schema can already be present (a fresh project creates the
+        # v38 tables directly) while ``databaseversion`` still carries an older
+        # stamp. Stamp it so the project reports the schema it actually has —
+        # without reporting a migration step that did nothing.
+        await self._stamp_if_stale(cur, "v38")
+        return []
+
+
+    async def migrate_v39(self, app_version: str) -> list[str]:
+        """v39: unique-key fixes for the meta pipeline.
+
+        * ``meta_screening`` uniqueness moves from ``UNIQUE(hit_id, owner,
+          run_id)`` to ``UNIQUE(hit_id, owner, run_id, stage)`` so a full-text
+          verdict can never overwrite the abstract verdict of the same hit.
+        * ``meta_extraction`` uniqueness moves from ``UNIQUE(hit_id, owner)`` to
+          ``UNIQUE(hit_id, owner, scheme)`` so a second scheme never overwrites
+          the first coder's extraction of the same scheme.
+
+        SQLite cannot alter a constraint, so each table is rebuilt preserving
+        every row. The rebuild is wrapped in a savepoint and asserts the row
+        count is unchanged before releasing. Idempotent: a fresh v39 schema (or
+        a project already migrated) is a no-op that only refreshes a stale
+        version stamp. Rows remain local-only (never in ``sync_log``).
+        """
+        if self.conn is None:
+            return []
+        cur = await self.conn.cursor()
+        changed = False
+
+        if await self._has_table(cur, "meta_screening"):
+            # Defensive: a direct v39 call on a pre-v38 project still has the
+            # columns added before the rebuild touches them.
+            for column, sql in (
+                ("stage", "ALTER TABLE meta_screening ADD stage text not null default 'abstract'"),
+                ("reason", "ALTER TABLE meta_screening ADD reason text not null default ''"),
+            ):
+                if not await self._has_column(cur, "meta_screening", column):
+                    await cur.execute(sql)
+                    await self.conn.commit()
+            if not await self._unique_has(
+                cur, "meta_screening", ("hit_id", "owner", "run_id", "stage")
+            ):
+                await self._rebuild_meta_screening(cur)
+                changed = True
+
+        if await self._has_table(cur, "meta_extraction") and not await self._unique_has(
+            cur, "meta_extraction", ("hit_id", "owner", "scheme")
+        ):
+            await self._rebuild_meta_extraction_v39(cur)
+            changed = True
+
+        if changed:
+            await cur.execute('update project set databaseversion="v39", about=?', [app_version])
+            await self.conn.commit()
+            return ["v39"]
+        await self._stamp_if_stale(cur, "v39")
+        return []
+
+
+    @staticmethod
+    def _parse_version(value: object) -> int:
+        """Numeric part of a ``vNN`` stamp (``0`` when unparseable)."""
+        match = re.fullmatch(r"v(\d+)", str(value or "").strip())
+        return int(match.group(1)) if match else 0
+
+    async def _stamp_if_stale(self, cur: aiosqlite.Cursor, version: str) -> bool:
+        """Set ``project.databaseversion`` when it is behind ``version``.
+
+        Used when the schema already matches the target migration (a fresh
+        project creates the newest tables directly) but the stored stamp is
+        older. The migration is *not* reported as applied — nothing changed —
+        but the project must not keep reporting the old schema forever.
+        """
+        if self.conn is None:
+            return False
+        await cur.execute("SELECT databaseversion FROM project LIMIT 1")
+        row = await cur.fetchone()
+        if row is None or self._parse_version(row[0]) >= self._parse_version(version):
+            return False
+        await cur.execute("UPDATE project SET databaseversion = ?", (version,))
+        await self.conn.commit()
+        return True
+
+    async def _unique_has(
+        self, cur: aiosqlite.Cursor, table: str, columns: tuple[str, ...]
+    ) -> bool:
+        """True when ``table`` enforces ``UNIQUE`` on exactly ``columns``."""
+        wanted = tuple(columns)
+        return any(
+            found == wanted for found, _origin in await self._unique_columns(cur, table)
+        )
+
+    async def _unique_columns(
+        self, cur: aiosqlite.Cursor, table: str
+    ) -> list[tuple[tuple[str, ...], str]]:
+        """(columns, origin) for every UNIQUE index/constraint on ``table``."""
+        await cur.execute(f"PRAGMA index_list({table})")
+        out: list[tuple[tuple[str, ...], str]] = []
+        for row in await cur.fetchall():
+            if not row[2]:  # unique flag
+                continue
+            await cur.execute(f"PRAGMA index_info({row[1]})")
+            columns = tuple(info[2] for info in await cur.fetchall())
+            out.append((columns, str(row[3])))
+        return out
+
+
+    async def _unique_hit_only(self, cur: aiosqlite.Cursor, table: str) -> bool:
+        """True when the table still enforces ``UNIQUE(hit_id)`` alone."""
+        for columns, origin in await self._unique_columns(cur, table):
+            if origin != "pk" and columns == ("hit_id",):
+                return True
+        return False
+
+
+    async def _rebuild_meta_extraction(self, cur: aiosqlite.Cursor) -> None:
+        """Rebuild ``meta_extraction`` with ``UNIQUE(hit_id, owner)``."""
+        if self.conn is None:
+            return
+        await cur.execute("ALTER TABLE meta_extraction RENAME TO meta_extraction_v37")
+        # The named index follows the rename; drop it before re-creating below.
+        await cur.execute("DROP INDEX IF EXISTS idx_meta_extraction_hit")
+        await cur.execute(
+            "CREATE TABLE meta_extraction (id integer primary key autoincrement, "
+            "hit_id integer not null, source_id integer, owner text not null, scheme text not null, "
+            "study_vars text, dv_metrics text, prescreen text, model text, prompt_hash text, "
+            "status text not null default 'prescreen_pending', missing_reason text, created text, "
+            "updated text, unique(hit_id, owner))"
+        )
+        await cur.execute(
+            "INSERT INTO meta_extraction (id, hit_id, source_id, owner, scheme, study_vars, "
+            "dv_metrics, prescreen, model, prompt_hash, status, missing_reason, created, updated) "
+            "SELECT id, hit_id, source_id, owner, scheme, study_vars, dv_metrics, prescreen, "
+            "model, prompt_hash, status, missing_reason, created, updated FROM meta_extraction_v37"
+        )
+        await cur.execute("DROP TABLE meta_extraction_v37")
+        await cur.execute(
+            "CREATE INDEX IF NOT EXISTS idx_meta_extraction_hit ON meta_extraction(hit_id)"
+        )
+        await self.conn.commit()
+
+
+    async def _rebuild_meta_screening(self, cur: aiosqlite.Cursor) -> None:
+        """Rebuild ``meta_screening`` with ``UNIQUE(hit_id, owner, run_id, stage)``."""
+        if self.conn is None:
+            return
+        await self._assert_rebuild(
+            cur,
+            table="meta_screening",
+            create_sql=(
+                "CREATE TABLE meta_screening (id integer primary key autoincrement, "
+                "hit_id integer not null, owner text not null, run_id text not null default '', "
+                "verdicts text, intervention_type text, rationale text, "
+                "origin text not null default 'manual', model text, prompt_hash text, "
+                "created text, updated text, stage text not null default 'abstract', "
+                "reason text not null default '', unique(hit_id, owner, run_id, stage))"
+            ),
+            columns=(
+                "id", "hit_id", "owner", "run_id", "verdicts", "intervention_type",
+                "rationale", "origin", "model", "prompt_hash", "created", "updated",
+                "stage", "reason",
+            ),
+            index_sql=(
+                "CREATE INDEX IF NOT EXISTS idx_meta_screening_hit "
+                "ON meta_screening(hit_id)"
+            ),
+        )
+
+    async def _rebuild_meta_extraction_v39(self, cur: aiosqlite.Cursor) -> None:
+        """Rebuild ``meta_extraction`` with ``UNIQUE(hit_id, owner, scheme)``."""
+        if self.conn is None:
+            return
+        await self._assert_rebuild(
+            cur,
+            table="meta_extraction",
+            create_sql=(
+                "CREATE TABLE meta_extraction (id integer primary key autoincrement, "
+                "hit_id integer not null, source_id integer, owner text not null, "
+                "scheme text not null, study_vars text, dv_metrics text, prescreen text, "
+                "model text, prompt_hash text, status text not null default 'prescreen_pending', "
+                "missing_reason text, created text, updated text, unique(hit_id, owner, scheme))"
+            ),
+            columns=(
+                "id", "hit_id", "source_id", "owner", "scheme", "study_vars", "dv_metrics",
+                "prescreen", "model", "prompt_hash", "status", "missing_reason", "created",
+                "updated",
+            ),
+            index_sql=(
+                "CREATE INDEX IF NOT EXISTS idx_meta_extraction_hit "
+                "ON meta_extraction(hit_id)"
+            ),
+        )
+
+    async def _assert_rebuild(
+        self,
+        cur: aiosqlite.Cursor,
+        *,
+        table: str,
+        create_sql: str,
+        columns: tuple[str, ...],
+        index_sql: str,
+    ) -> None:
+        """Rename/recreate ``table`` with ``create_sql``, asserting row counts.
+
+        The whole rebuild runs inside a savepoint: on any error (including a
+        row-count mismatch) it is rolled back so the original table survives.
+        """
+        if self.conn is None:
+            return
+        await cur.execute(f"SELECT COUNT(*) FROM {table}")
+        before_row = await cur.fetchone()
+        before = int(before_row[0]) if before_row is not None else 0
+        savepoint = f"rebuild_{table}"
+        await cur.execute(f"SAVEPOINT {savepoint}")
+        try:
+            await cur.execute(f"ALTER TABLE {table} RENAME TO {table}_old")
+            await cur.execute(f"DROP INDEX IF EXISTS idx_{table}_hit")
+            await cur.execute(create_sql)
+            cols = ", ".join(columns)
+            await cur.execute(
+                f"INSERT INTO {table} ({cols}) SELECT {cols} FROM {table}_old"
+            )
+            await cur.execute(f"DROP TABLE {table}_old")
+            await cur.execute(index_sql)
+            await cur.execute(f"SELECT COUNT(*) FROM {table}")
+            after_row = await cur.fetchone()
+            after = int(after_row[0]) if after_row is not None else 0
+            if after != before:
+                raise RuntimeError(
+                    f"{table} rebuild changed the row count ({before} -> {after})"
+                )
+        except Exception:
+            await cur.execute(f"ROLLBACK TO {savepoint}")
+            await cur.execute(f"RELEASE {savepoint}")
+            raise
+        await cur.execute(f"RELEASE {savepoint}")
+        await self.conn.commit()
 

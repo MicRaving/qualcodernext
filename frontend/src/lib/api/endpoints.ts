@@ -5,7 +5,7 @@
  * transport.ts) and references types from types.ts.
  */
 
-import { apiBaseSync, request, uploadRequest } from "./transport";
+import { apiBaseSync, localRequestBlob, request, uploadRequest } from "./transport";
 import { AI_CHAT_TIMEOUT_MS } from "@/lib/config";
 import type {
   Annotation,
@@ -73,14 +73,40 @@ import type {
   MaintenanceSettings,
   MemoItem,
   MetaCriterion,
+  MetaConflictsResult,
   MetaDocument,
   MetaExtraction,
+  MetaExtractionSaveRequest,
+  MetaExtractionSaveResult,
   MetaHit,
   MetaImportPreview,
   MetaJob,
   MetaScheme,
   MetaScreening,
   MetaStatus,
+  MetaAgreementResult,
+  MetaAnalysisRequest,
+  MetaAuditResult,
+  MetaBayesRequest,
+  MetaBayesResult,
+  MetaConflictResolution,
+  MetaEggerResult,
+  MetaEffectFamily,
+  MetaForest,
+  MetaLeaveOneOutResult,
+  MetaModeratorRequest,
+  MetaModeratorResult,
+  MetaModerator,
+  MetaMultiverseRequest,
+  MetaMultiverseResult,
+  MetaPooledResult,
+  MetaPrismaCounts,
+  MetaPublicationBiasResult,
+  MetaReportRequest,
+  MetaSchemeExport,
+  MetaSubgroupRequest,
+  MetaSubgroupResult,
+  MetaSummaryResult,
   OpenProjectResult,
   ProjectSummary,
   Pseudonym,
@@ -168,6 +194,16 @@ function githubLocalSettings(): { github_token: string; github_repo: string } {
     }
   }
   return { github_token: token, github_repo: repo };
+}
+
+/** Query string for the analysis figure blobs (`scheme`/`owner`/`primary`). */
+function analysisFigureQuery(opts?: { scheme?: string; owner?: string; primary?: boolean }): string {
+  const q = new URLSearchParams();
+  if (opts?.scheme) q.set("scheme", opts.scheme);
+  if (opts?.owner) q.set("owner", opts.owner);
+  if (opts?.primary !== undefined) q.set("primary", opts.primary ? "true" : "false");
+  const suffix = q.toString();
+  return suffix ? `?${suffix}` : "";
 }
 
 function storeGithubLocalSettings(patch: { github_token?: string; github_repo?: string }): void {
@@ -1295,6 +1331,10 @@ export const api = {
     request<void>(`/meta/criteria/${criterionId}`, { method: "DELETE" }),
 
   metaSchemes: () => request<MetaScheme[]>("/meta/schemes"),
+  metaModerators: (scheme?: string) =>
+    request<MetaModerator[]>(
+      `/meta/moderators${scheme ? `?scheme=${encodeURIComponent(scheme)}` : ""}`,
+    ),
   metaCreateScheme: (body: {
     name: string;
     label?: string;
@@ -1324,12 +1364,25 @@ export const api = {
     }),
   metaDeleteScheme: (schemeId: number) =>
     request<void>(`/meta/schemes/${schemeId}`, { method: "DELETE" }),
+  metaCloneScheme: (schemeId: number, body?: { name?: string; label?: string }) =>
+    request<{ ok: boolean; id: number; name: string }>(`/meta/schemes/${schemeId}/clone`, {
+      method: "POST",
+      body: JSON.stringify(body ?? {}),
+    }),
+  metaExportScheme: (schemeId: number) =>
+    request<MetaSchemeExport>(`/meta/schemes/${schemeId}/export`),
+  metaImportScheme: (body: MetaSchemeExport) =>
+    request<{ ok: boolean; id: number; name: string }>("/meta/schemes/import", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
 
-  metaScreening: (opts?: { hit_id?: number; owner?: string; run_id?: string }) => {
+  metaScreening: (opts?: { hit_id?: number; owner?: string; run_id?: string; stage?: string }) => {
     const q = new URLSearchParams();
     if (opts?.hit_id !== undefined) q.set("hit_id", String(opts.hit_id));
     if (opts?.owner) q.set("owner", opts.owner);
     if (opts?.run_id !== undefined) q.set("run_id", opts.run_id);
+    if (opts?.stage) q.set("stage", opts.stage);
     const suffix = q.toString() ? `?${q.toString()}` : "";
     return request<MetaScreening[]>(`/meta/screening${suffix}`);
   },
@@ -1340,6 +1393,8 @@ export const api = {
     intervention_type?: string | null;
     rationale?: string | null;
     owner?: string;
+    stage?: string;
+    reason?: string;
   }) =>
     request<{ ok: boolean; id: number; hit_id: number; status: string }>("/meta/screening", {
       method: "PUT",
@@ -1354,6 +1409,41 @@ export const api = {
     method: "POST",
     body: JSON.stringify(body),
   }),
+  metaScreeningAgreement: (opts?: { run_id?: string; owner?: string; stage?: string }) => {
+    const q = new URLSearchParams();
+    if (opts?.run_id) q.set("run_id", opts.run_id);
+    if (opts?.owner) q.set("owner", opts.owner);
+    if (opts?.stage) q.set("stage", opts.stage);
+    const suffix = q.toString() ? `?${q.toString()}` : "";
+    return request<MetaAgreementResult>(`/meta/screening/agreement${suffix}`);
+  },
+  metaScreeningConflicts: (opts?: {
+    run_id?: string;
+    stage?: string;
+    master?: string;
+    field?: string;
+    status?: "open" | "settled" | "all";
+    study?: string;
+    limit?: number;
+    offset?: number;
+  }) => {
+    const q = new URLSearchParams();
+    if (opts?.run_id) q.set("run_id", opts.run_id);
+    if (opts?.stage) q.set("stage", opts.stage);
+    if (opts?.master) q.set("master", opts.master);
+    if (opts?.field) q.set("field", opts.field);
+    if (opts?.status) q.set("status", opts.status);
+    if (opts?.study) q.set("study", opts.study);
+    if (opts?.limit !== undefined) q.set("limit", String(opts.limit));
+    if (opts?.offset !== undefined) q.set("offset", String(opts.offset));
+    const suffix = q.toString() ? `?${q.toString()}` : "";
+    return request<MetaConflictsResult>(`/meta/screening/conflicts${suffix}`);
+  },
+  metaResolveScreeningConflict: (body: MetaConflictResolution) =>
+    request<{ ok: boolean; id?: number }>("/meta/screening/resolve", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
 
   metaDocuments: () => request<MetaDocument[]>("/meta/documents"),
   metaDownloadRun: (body: { hit_ids?: number[]; email?: string }) =>
@@ -1380,8 +1470,20 @@ export const api = {
     }>("/meta/downloads/assign-batch", form);
   },
 
-  metaExtractions: (hitId?: number) =>
-    request<MetaExtraction[]>(`/meta/extractions${hitId ? `?hit_id=${hitId}` : ""}`),
+  metaExtractions: (hitId?: number, owner?: string) => {
+    const q = new URLSearchParams();
+    if (hitId !== undefined) q.set("hit_id", String(hitId));
+    if (owner) q.set("owner", owner);
+    const suffix = q.toString() ? `?${q.toString()}` : "";
+    return request<MetaExtraction[]>(`/meta/extractions${suffix}`);
+  },
+  /** Manual extraction edit (contract §4/§10). The recomputed `dv_metrics`
+   *  and status come back with the saved row. */
+  metaSaveExtraction: (body: MetaExtractionSaveRequest) =>
+    request<MetaExtractionSaveResult>("/meta/extractions", {
+      method: "PUT",
+      body: JSON.stringify(body),
+    }),
   metaExtractRun: (body: {
     scheme: string;
     hit_ids?: number[];
@@ -1399,6 +1501,112 @@ export const api = {
       method: "POST",
       body: JSON.stringify(body),
     }),
+  metaExtractionAgreement: (opts?: { scheme?: string; owner?: string }) => {
+    const q = new URLSearchParams();
+    if (opts?.scheme) q.set("scheme", opts.scheme);
+    if (opts?.owner) q.set("owner", opts.owner);
+    const suffix = q.toString() ? `?${q.toString()}` : "";
+    return request<MetaAgreementResult>(`/meta/extraction/agreement${suffix}`);
+  },
+  metaExtractionConflicts: (opts?: {
+    scheme?: string;
+    master?: string;
+    field?: string;
+    status?: "open" | "settled" | "all";
+    study?: string;
+    limit?: number;
+    offset?: number;
+  }) => {
+    const q = new URLSearchParams();
+    if (opts?.scheme) q.set("scheme", opts.scheme);
+    if (opts?.master) q.set("master", opts.master);
+    if (opts?.field) q.set("field", opts.field);
+    if (opts?.status) q.set("status", opts.status);
+    if (opts?.study) q.set("study", opts.study);
+    if (opts?.limit !== undefined) q.set("limit", String(opts.limit));
+    if (opts?.offset !== undefined) q.set("offset", String(opts.offset));
+    const suffix = q.toString() ? `?${q.toString()}` : "";
+    return request<MetaConflictsResult>(`/meta/extraction/conflicts${suffix}`);
+  },
+  metaResolveExtractionConflict: (body: MetaConflictResolution) =>
+    request<{ ok: boolean; id?: number }>("/meta/extraction/resolve", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+
+  // --- Meta analysis & reporting (contract §6–§10) --------------------
+
+  metaAnalysisPooled: (body: MetaAnalysisRequest) =>
+    request<MetaPooledResult>("/meta/analysis/pooled", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  metaAnalysisModerator: (body: MetaModeratorRequest) =>
+    request<MetaModeratorResult>("/meta/analysis/moderator", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  metaAnalysisSubgroup: (body: MetaSubgroupRequest) =>
+    request<MetaSubgroupResult>("/meta/analysis/subgroup", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  metaAnalysisEgger: (body: MetaAnalysisRequest) =>
+    request<MetaEggerResult>("/meta/analysis/egger", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  metaAnalysisPublicationBias: (body: MetaAnalysisRequest) =>
+    request<MetaPublicationBiasResult>("/meta/analysis/publication-bias", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  metaAnalysisBayes: (body: MetaBayesRequest) =>
+    request<MetaBayesResult>("/meta/analysis/bayes", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  metaAnalysisLeaveOneOut: (body: MetaAnalysisRequest) =>
+    request<MetaLeaveOneOutResult>("/meta/analysis/leave-one-out", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  metaAnalysisForest: (opts?: { scheme?: string; domain?: string; families?: MetaEffectFamily[] }) => {
+    const q = new URLSearchParams();
+    if (opts?.scheme) q.set("scheme", opts.scheme);
+    if (opts?.domain) q.set("domain", opts.domain);
+    if (opts?.families?.length) q.set("families", opts.families.join(","));
+    const suffix = q.toString() ? `?${q.toString()}` : "";
+    return request<MetaForest>(`/meta/analysis/forest${suffix}`);
+  },
+  metaAnalysisForestPng: (opts?: { scheme?: string; owner?: string }) => {
+    const q = new URLSearchParams();
+    if (opts?.scheme) q.set("scheme", opts.scheme);
+    if (opts?.owner) q.set("owner", opts.owner);
+    const suffix = q.toString() ? `?${q.toString()}` : "";
+    return localRequestBlob(`/meta/analysis/forest.png${suffix}`);
+  },
+  metaAnalysisMultiverse: (body: MetaMultiverseRequest) =>
+    request<MetaMultiverseResult>("/meta/analysis/multiverse", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  metaAnalysisFunnelPng: (opts?: { scheme?: string; owner?: string; primary?: boolean }) =>
+    localRequestBlob(`/meta/analysis/funnel.png${analysisFigureQuery(opts)}`),
+  metaAnalysisSpecCurvePng: (opts?: { scheme?: string; owner?: string; primary?: boolean }) =>
+    localRequestBlob(`/meta/analysis/spec-curve.png${analysisFigureQuery(opts)}`),
+  metaAnalysisBayesPng: (opts?: { scheme?: string; owner?: string; primary?: boolean }) =>
+    localRequestBlob(`/meta/analysis/bayes.png${analysisFigureQuery(opts)}`),
+  metaAudit: (opts?: { scheme?: string }) =>
+    request<MetaAuditResult>(
+      `/meta/audit${opts?.scheme ? `?scheme=${encodeURIComponent(opts.scheme)}` : ""}`,
+    ),
+  metaPrisma: () => request<MetaPrismaCounts>("/meta/prisma"),
+  metaPrismaPng: () => localRequestBlob("/meta/prisma.png"),
+  metaSummary: (opts?: { scheme?: string }) =>
+    request<MetaSummaryResult>(`/meta/summary${opts?.scheme ? `?scheme=${encodeURIComponent(opts.scheme)}` : ""}`),
+  metaReport: (body: MetaReportRequest) =>
+    localRequestBlob("/meta/report", { method: "POST", body: JSON.stringify(body) }),
 
   metaJobs: (kind?: string) =>
     request<MetaJob[]>(`/meta/jobs${kind ? `?kind=${encodeURIComponent(kind)}` : ""}`),

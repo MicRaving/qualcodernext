@@ -1,0 +1,46 @@
+[
+  {
+    "key": "c1",
+    "label": "Misinformation intervention",
+    "kind": "verdict",
+    "pass_values": [
+      "Yes"
+    ],
+    "exclude_reason": "No misinformation intervention (C1)",
+    "gating": 1,
+    "prompt_text": "Does the study test a misinformation intervention (inoculation, media literacy, correction, accuracy prompt, labelling)?"
+  },
+  {
+    "key": "c2",
+    "label": "Control / comparison group",
+    "kind": "verdict",
+    "pass_values": [
+      "Yes"
+    ],
+    "exclude_reason": "No control/comparison group (C2)",
+    "gating": 1,
+    "prompt_text": "Does the study include a control or comparison condition?"
+  },
+  {
+    "key": "c3",
+    "label": "English language",
+    "kind": "verdict",
+    "pass_values": [
+      "Yes"
+    ],
+    "exclude_reason": "Not English (C3)",
+    "gating": 1,
+    "prompt_text": "Is the report written in English?"
+  },
+  {
+    "key": "c4",
+    "label": "Primary experimental study",
+    "kind": "verdict",
+    "pass_values": [
+      "Yes"
+    ],
+    "exclude_reason": "Not a primary experimental study (C4)",
+    "gating": 1,
+    "prompt_text": "Is this a primary experimental (randomised or quasi-experimental) study?"
+  }
+]

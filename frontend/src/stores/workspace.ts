@@ -8,7 +8,7 @@
  */
 import { create } from "zustand";
 import type { SortDir, SortKey } from "@/features/manage/files";
-import type { MetaHit } from "@/lib/api/types";
+import type { MetaDocument, MetaHit, MetaPoolModel } from "@/lib/api/types";
 import { useInspectorStore } from "./inspector";
 
 export type WorkspaceView =
@@ -100,28 +100,94 @@ interface WorkspaceState {
   metaUi: {
     tab: MetaTab;
     selectedHit: MetaHit | null;
+    /** Hits currently loaded in the left bar (keyboard next/previous). */
+    hits: MetaHit[];
     selectedIds: number[];
     scheme: string;
     email: string;
     importOpen: boolean;
     schemeOpen: boolean;
+    /** Full text linked to the focused study, shown in the Extract right bar. */
+    selectedDocument: MetaDocument | null;
+    /** Conflicts tab: whether screening verdicts or extraction cells disagree. */
+    agreementScope: MetaAgreementScope;
+    /** Conflicts tab: study key filter ("" = every study). */
+    agreementStudy: string;
+    /** Global coder/owner scope: "" = all coders, else a coder name. */
+    coderScope: string;
+    /** True once the user picked a coder scope explicitly; while false the
+     *  scope tracks the app's current coder (`useCoderStore.coderName`). */
+    coderScopeCustom: boolean;
+    /** Screening list filter (client-side over the loaded hits). */
+    screeningFilter: MetaScreeningFilter;
+    /** Screening stage the verdict editor records against. */
+    screeningStage: MetaScreeningStage;
+    /** Hide AI proposals while screening (blind review). */
+    blind: boolean;
+    /** Active section of the Analyze tab. */
+    analysisSection: MetaAnalysisSection;
+    /** Pooled-model switch driven by the Analyze menubar. */
+    analysisModel: MetaAnalysisModel;
+    /** Frequentist estimator (menubar); drives `POST /meta/analysis/pooled`. */
+    poolModel: MetaPoolModel;
+    /** Chosen subgroup/moderator field (Analyze menubar); "" = none picked. */
+    subgroupBy: string;
+    /** Moderator terms in the Analyze regression, primary term first. */
+    moderatorTerms: string[];
+    /** Moderator interaction pairs (`[a, b]`) in the Analyze regression. */
+    moderatorInteractions: [string, string][];
+    /** Bayesian µ prior SD: N(0, bayesMuSd²). */
+    bayesMuSd: number;
+    /** Bayesian τ prior choice, encoded as "family:scale". */
+    bayesTauKey: string;
     tick: number;
   };
   setMetaUi: (
     patch: Partial<{
       tab: MetaTab;
       selectedHit: MetaHit | null;
+      hits: MetaHit[];
       selectedIds: number[];
       scheme: string;
       email: string;
       importOpen: boolean;
       schemeOpen: boolean;
+      selectedDocument: MetaDocument | null;
+      agreementScope: MetaAgreementScope;
+      agreementStudy: string;
+      coderScope: string;
+      coderScopeCustom: boolean;
+      screeningFilter: MetaScreeningFilter;
+      screeningStage: MetaScreeningStage;
+      blind: boolean;
+      analysisSection: MetaAnalysisSection;
+      analysisModel: MetaAnalysisModel;
+      poolModel: MetaPoolModel;
+      subgroupBy: string;
+      moderatorTerms: string[];
+      moderatorInteractions: [string, string][];
+      bayesMuSd: number;
+      bayesTauKey: string;
       tick: number;
     }>,
   ) => void;
 }
 
-export type MetaTab = "screen" | "download" | "extract";
+export type MetaTab = "screen" | "download" | "extract" | "analyze" | "conflicts";
+export type MetaScreeningFilter = "all" | "todo" | "screened" | "included" | "excluded";
+export type MetaScreeningStage = "abstract" | "fulltext";
+/** Conflicts tab scope: screening verdict disagreements vs extraction cell disagreements. */
+export type MetaAgreementScope = "screening" | "extraction";
+/** Pooled-model switch: classic frequentist pooling vs a Bayesian fit. */
+export type MetaAnalysisModel = "frequentist" | "bayes";
+export type MetaAnalysisSection =
+  | "pooled"
+  | "subgroup"
+  | "multiverse"
+  | "prisma"
+  | "audit"
+  | "summary"
+  | "report";
 
 export const useWorkspaceStore = create<WorkspaceState>((set) => ({
   view: { kind: "dashboard" },
@@ -157,12 +223,41 @@ export const useWorkspaceStore = create<WorkspaceState>((set) => ({
   metaUi: {
     tab: "screen",
     selectedHit: null,
+    hits: [],
     selectedIds: [],
     scheme: "",
     email: "",
     importOpen: false,
     schemeOpen: false,
+    selectedDocument: null,
+    agreementScope: "screening",
+    agreementStudy: "",
+    coderScope: "default",
+    coderScopeCustom: false,
+    screeningFilter: "all",
+    screeningStage: "abstract",
+    blind: false,
+    analysisSection: "pooled",
+    analysisModel: "frequentist",
+    poolModel: "dl",
+    subgroupBy: "",
+    moderatorTerms: [],
+    moderatorInteractions: [],
+    bayesMuSd: 1,
+    bayesTauKey: "half-normal:0.5",
     tick: 0,
   },
-  setMetaUi: (patch) => set((s) => ({ metaUi: { ...s.metaUi, ...patch } })),
+  setMetaUi: (patch) =>
+    set((s) => {
+      const next = { ...s.metaUi, ...patch };
+      // The menubar's "Subgroup by" drives the first/primary moderator term so
+      // the quick picker and the Analyze builder stay in sync (moved to the
+      // front, never duplicated).
+      if ("subgroupBy" in patch) {
+        const primary = patch.subgroupBy ?? "";
+        const rest = next.moderatorTerms.filter((term) => term !== primary);
+        next.moderatorTerms = primary ? [primary, ...rest] : rest;
+      }
+      return { metaUi: next };
+    }),
 }));

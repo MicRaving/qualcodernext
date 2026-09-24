@@ -43,6 +43,11 @@ OWNER_TABLES = (
     ("code_set", "owner"),
     ("dictionary", "owner"),
     ("r_script", "owner"),
+    # Meta-pipeline owner columns: keeps coder rename/delete/reassign
+    # consistent and surfaces meta-only coders in the roster. Their rows are
+    # local-only, so the sync capture below simply skips them.
+    ("meta_screening", "owner"),
+    ("meta_extraction", "owner"),
 )
 
 

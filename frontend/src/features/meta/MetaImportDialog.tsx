@@ -5,7 +5,7 @@
  * row, columns and a sample, then map each column to a meta field before
  * importing. Structured formats (XML/RIS) import as-is.
  */
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Upload } from "lucide-react";
 import { api } from "@/lib/api";
 import type { MetaImportPreview } from "@/lib/api/types";
@@ -34,7 +34,25 @@ export function MetaImportDialog({
   const [sheet, setSheet] = useState("");
   const [headerRow, setHeaderRow] = useState(0);
   const [columnField, setColumnField] = useState<Record<number, string>>({});
+  const [searchRuns, setSearchRuns] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
+
+  // Offer the existing search runs as datalist suggestions when the dialog opens.
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const runs = await api.metaSearchRuns();
+        if (!cancelled) setSearchRuns(Array.isArray(runs) ? runs : []);
+      } catch {
+        if (!cancelled) setSearchRuns([]);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [open]);
 
   const applyPreview = (p: MetaImportPreview) => {
     setPreview(p);
@@ -130,7 +148,7 @@ export function MetaImportDialog({
 
   return (
     <Modal open={open} onClose={onClose} size="xl" title={t("meta.importTitle")}>
-      <div className="max-h-[75vh] space-y-3 overflow-auto p-3 text-xs">
+      <div className="qc-scroll max-h-[75vh] space-y-3 overflow-auto p-3 text-xs">
         <div className="flex flex-wrap items-center gap-2">
           <Button variant="secondary" icon={<Upload size={13} aria-hidden />} onClick={() => fileRef.current?.click()}>
             {t("meta.chooseFile")}
@@ -144,7 +162,13 @@ export function MetaImportDialog({
             placeholder={t("meta.searchRun")}
             className="h-7 w-36 text-xs"
             aria-label={t("meta.searchRun")}
+            list="meta-search-runs"
           />
+          <datalist id="meta-search-runs">
+            {searchRuns.map((run) => (
+              <option key={run} value={run} />
+            ))}
+          </datalist>
           <input
             ref={fileRef}
             type="file"
@@ -191,6 +215,7 @@ export function MetaImportDialog({
               </label>
             </div>
 
+            <div className="overflow-auto rounded-sm border border-border">
             <table className="w-full text-left">
               <thead className="sticky top-0 bg-surface">
                 <tr>
@@ -225,6 +250,7 @@ export function MetaImportDialog({
                 ))}
               </tbody>
             </table>
+            </div>
           </>
         )}
 

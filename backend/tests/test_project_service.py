@@ -73,7 +73,9 @@ async def test_open_project_roundtrip(project_dir: Path, app_version: str):
     assert opener.project_name == project_dir.name
     header = await opener._get_header()
     assert header is not None
-    assert header.databaseversion == "v31"
+    # The schema already matches the newest migration; opening it stamps the
+    # version (without reporting a migration step).
+    assert header.databaseversion == "v39"
     await opener.close_project()
 
 
@@ -121,7 +123,7 @@ async def test_open_project_migrates_legacy(tmp_path, app_version: str):
     conn = await aiosqlite.connect(legacy / "data.qda")
     cur = await conn.cursor()
     await cur.execute("SELECT databaseversion FROM project")
-    assert (await cur.fetchone())[0] == "v37"
+    assert (await cur.fetchone())[0] == "v39"
     await conn.close()
     await svc.close_project()
 

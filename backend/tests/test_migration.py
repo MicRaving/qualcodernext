@@ -34,7 +34,7 @@ LEGACY_TABLES = [
     "CREATE TABLE journal (jid integer primary key, name text, jentry text, date text, owner text)",
 ]
 
-ALL_VERSIONS = [f"v{v}" for v in range(2, 32)] + ["v34", "v35", "v36", "v37"]
+ALL_VERSIONS = [f"v{v}" for v in range(2, 32)] + ["v34", "v35", "v36", "v37", "v38", "v39"]
 
 
 @pytest.fixture
@@ -98,7 +98,7 @@ async def test_full_chain_sets_final_version(v2_db):
     cur = await v2_db.cursor()
     await cur.execute("SELECT databaseversion, about FROM project")
     row = await cur.fetchone()
-    assert row[0] == "v37"
+    assert row[0] == "v39"
     assert row[1] == "4.0-test"
 
 
@@ -420,7 +420,7 @@ async def test_v34_adds_ai_chat_tables(tmp_path):
     )
     assert await cur.fetchone() is not None
     await cur.execute("SELECT databaseversion FROM project")
-    assert (await cur.fetchone())[0] == "v37"
+    assert (await cur.fetchone())[0] == "v39"
     await conn.close()
 
     # Fresh schema: tables already exist → v34, v35 and v36 are no-ops.
@@ -430,4 +430,175 @@ async def test_v34_adds_ai_chat_tables(tmp_path):
     applied = await MigrationChain(conn).run_all("4.0-test", "tester")
     assert "v34" not in applied
     assert applied == []
+    await conn.close()
+
+
+_V37_META_DDL = [
+    "CREATE TABLE project (databaseversion text, date text, memo text, about text)",
+    "CREATE TABLE meta_criterion (id integer primary key autoincrement, position integer not null default 0, "
+    "key text not null, label text not null, prompt_text text not null, created text)",
+    "CREATE TABLE meta_screening (id integer primary key autoincrement, hit_id integer not null, "
+    "owner text not null, run_id text not null default '', verdicts text, intervention_type text, "
+    "rationale text, origin text not null default 'manual', model text, prompt_hash text, "
+    "created text, updated text, unique(hit_id, owner, run_id))",
+    "CREATE TABLE meta_extraction (id integer primary key autoincrement, hit_id integer not null, "
+    "source_id integer, owner text not null, scheme text not null, study_vars text, dv_metrics text, "
+    "prescreen text, model text, prompt_hash text, status text not null default 'prescreen_pending', "
+    "missing_reason text, created text, updated text, unique(hit_id))",
+]
+
+
+async def _unique_columns(conn: aiosqlite.Connection, table: str) -> set[tuple[str, ...]]:
+    cur = await conn.cursor()
+    await cur.execute(f"PRAGMA index_list({table})")
+    out: set[tuple[str, ...]] = set()
+    for row in await cur.fetchall():
+        if not row[2]:
+            continue
+        await cur.execute(f"PRAGMA index_info({row[1]})")
+        out.add(tuple(info[2] for info in await cur.fetchall()))
+    return out
+
+
+async def test_v38_migrates_v37_meta_schema(tmp_path):
+    """A v37 project gains the v2 criterion/screening columns and the
+    ``UNIQUE(hit_id, owner)`` extraction constraint, preserving rows."""
+    db = tmp_path / "v37.qda"
+    conn = await aiosqlite.connect(db)
+    cur = await conn.cursor()
+    for sql in _V37_META_DDL:
+        await cur.execute(sql)
+    await cur.execute("INSERT INTO project VALUES ('v37', '2020-01-01', '', 'QualCoder 4.0')")
+    await cur.execute(
+        "INSERT INTO meta_criterion (position, key, label, prompt_text, created) "
+        "VALUES (0, 'c1', 'Intervention', 'Targets misinformation?', '')"
+    )
+    await cur.execute(
+        "INSERT INTO meta_screening (hit_id, owner, run_id, verdicts, created, updated) "
+        "VALUES (1, 'anna', '', '{\"c1\": {\"applies\": \"Yes\"}}', '', '')"
+    )
+    await cur.execute(
+        "INSERT INTO meta_extraction (hit_id, owner, scheme, study_vars, dv_metrics, status, created, updated) "
+        "VALUES (1, 'anna', 'scheme1', '{\"records\": []}', '[]', 'extracted', '', '')"
+    )
+    await conn.commit()
+
+    applied = await MigrationChain(conn).migrate_v38("4.0-test")
+    assert applied == ["v38"]
+
+    cur = await conn.cursor()
+    await cur.execute("SELECT databaseversion FROM project")
+    assert (await cur.fetchone())[0] == "v38"
+
+    criterion_cols = await _columns(conn, "meta_criterion")
+    assert {"kind", "options", "pass_values", "exclude_reason", "gating", "help"} <= criterion_cols
+    screening_cols = await _columns(conn, "meta_screening")
+    assert {"stage", "reason"} <= screening_cols
+
+    # Rows preserved, defaults applied.
+    await cur.execute("SELECT kind, pass_values, gating FROM meta_criterion WHERE key='c1'")
+    assert await cur.fetchone() == ("verdict", '["yes"]', 1)
+    await cur.execute("SELECT stage, reason FROM meta_screening WHERE hit_id=1")
+    assert await cur.fetchone() == ("abstract", "")
+
+    # The extraction row survived and the constraint now allows a second owner.
+    assert ("hit_id", "owner") in await _unique_columns(conn, "meta_extraction")
+    await cur.execute("SELECT COUNT(*) FROM meta_extraction WHERE hit_id=1")
+    assert (await cur.fetchone())[0] == 1
+    await cur.execute(
+        "INSERT INTO meta_extraction (hit_id, owner, scheme, status) "
+        "VALUES (1, 'bob', 'scheme1', 'extracted')"
+    )
+    await conn.commit()
+    await cur.execute("SELECT COUNT(DISTINCT owner) FROM meta_extraction WHERE hit_id=1")
+    assert (await cur.fetchone())[0] == 2
+
+    # Idempotent: a second run is a no-op.
+    assert await MigrationChain(conn).migrate_v38("4.0-test") == []
+    await conn.close()
+
+
+_V38_META_DDL = [
+    "CREATE TABLE project (databaseversion text, date text, memo text, about text)",
+    "CREATE TABLE meta_screening (id integer primary key autoincrement, hit_id integer not null, "
+    "owner text not null, run_id text not null default '', verdicts text, intervention_type text, "
+    "rationale text, origin text not null default 'manual', model text, prompt_hash text, "
+    "created text, updated text, stage text not null default 'abstract', "
+    "reason text not null default '', unique(hit_id, owner, run_id))",
+    "CREATE TABLE meta_extraction (id integer primary key autoincrement, hit_id integer not null, "
+    "source_id integer, owner text not null, scheme text not null, study_vars text, dv_metrics text, "
+    "prescreen text, model text, prompt_hash text, status text not null default 'prescreen_pending', "
+    "missing_reason text, created text, updated text, unique(hit_id, owner))",
+]
+
+
+async def test_v39_rebuilds_meta_uniqueness_preserving_rows(tmp_path):
+    """v39 moves screening uniqueness to include stage and extraction
+    uniqueness to include scheme, preserving every row."""
+    db = tmp_path / "v38.qda"
+    conn = await aiosqlite.connect(db)
+    cur = await conn.cursor()
+    for sql in _V38_META_DDL:
+        await cur.execute(sql)
+    await cur.execute("INSERT INTO project VALUES ('v38', '2020-01-01', '', 'QualCoder 4.0')")
+    await cur.execute(
+        "INSERT INTO meta_screening (hit_id, owner, run_id, verdicts, stage, created, updated) "
+        "VALUES (1, 'anna', 'r1', '{}', 'abstract', '', '')"
+    )
+    await cur.execute(
+        "INSERT INTO meta_extraction (hit_id, owner, scheme, status, created, updated) "
+        "VALUES (1, 'anna', 'scheme1', 'extracted', '', '')"
+    )
+    await conn.commit()
+
+    applied = await MigrationChain(conn).migrate_v39("4.0-test")
+    assert applied == ["v39"]
+
+    cur = await conn.cursor()
+    await cur.execute("SELECT databaseversion FROM project")
+    assert (await cur.fetchone())[0] == "v39"
+    assert ("hit_id", "owner", "run_id", "stage") in await _unique_columns(
+        conn, "meta_screening"
+    )
+    assert ("hit_id", "owner", "scheme") in await _unique_columns(conn, "meta_extraction")
+
+    # Rows preserved...
+    await cur.execute("SELECT COUNT(*) FROM meta_screening")
+    assert (await cur.fetchone())[0] == 1
+    await cur.execute("SELECT COUNT(*) FROM meta_extraction")
+    assert (await cur.fetchone())[0] == 1
+
+    # ...and the new constraints permit the previously-colliding inserts.
+    await cur.execute(
+        "INSERT INTO meta_screening (hit_id, owner, run_id, verdicts, stage, created, updated) "
+        "VALUES (1, 'anna', 'r1', '{}', 'fulltext', '', '')"
+    )
+    await cur.execute(
+        "INSERT INTO meta_extraction (hit_id, owner, scheme, status, created, updated) "
+        "VALUES (1, 'anna', 'scheme2', 'extracted', '', '')"
+    )
+    await conn.commit()
+    await cur.execute("SELECT COUNT(*) FROM meta_screening")
+    assert (await cur.fetchone())[0] == 2
+    await cur.execute("SELECT COUNT(*) FROM meta_extraction")
+    assert (await cur.fetchone())[0] == 2
+
+    # Idempotent: a second run is a no-op.
+    assert await MigrationChain(conn).migrate_v39("4.0-test") == []
+    await conn.close()
+
+
+async def test_fresh_schema_is_stamped_v39_without_migrations(tmp_path):
+    """A fresh schema already matches v39; the chain stamps the version
+    without reporting any migration step as applied."""
+    from qualcoder_api.persistence.schema import create_new_project_schema
+
+    db = tmp_path / "fresh.qda"
+    conn = await aiosqlite.connect(db)
+    await create_new_project_schema(conn, app_version="4.0-test", codername="tester")
+    applied = await MigrationChain(conn).run_all("4.0-test", "tester")
+    assert applied == []
+    cur = await conn.cursor()
+    await cur.execute("SELECT databaseversion FROM project")
+    assert (await cur.fetchone())[0] == "v39"
     await conn.close()

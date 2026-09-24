@@ -12,6 +12,11 @@ import hashlib
 import json
 
 from qualcoder_api.core.models import MetaCriterion
+from qualcoder_api.services.meta_scheme import (
+    all_fields,
+    field_listing,
+    normalise_codebook,
+)
 
 
 def extract_json(text: str | None):
@@ -60,11 +65,28 @@ def truncate_for_context(text: str, max_chars: int) -> str:
 
 def criteria_prompt_hash(criteria: list[MetaCriterion]) -> str:
     blob = json.dumps(
-        [{"key": c.key, "label": c.label, "prompt_text": c.prompt_text} for c in criteria],
+        [
+            {
+                "key": c.key,
+                "label": c.label,
+                "prompt_text": c.prompt_text,
+                "kind": c.kind,
+                "options": list(c.options or []),
+                "pass_values": list(c.pass_values or []),
+                "gating": c.gating,
+            }
+            for c in criteria
+        ],
         ensure_ascii=False,
         sort_keys=True,
     )
     return hashlib.sha256(blob.encode("utf-8")).hexdigest()
+
+
+def role_aware_field_listing(codebook: dict | None) -> str:
+    """Field listing (with roles) for a codebook, v1 or v2."""
+    book = normalise_codebook(codebook)
+    return field_listing(all_fields(book), include_role=True)
 
 
 def scheme_prompt_hash(scheme_name: str, coding_prompt: str, prescreen_prompt: str) -> str:
@@ -72,15 +94,28 @@ def scheme_prompt_hash(scheme_name: str, coding_prompt: str, prescreen_prompt: s
     return hashlib.sha256(blob.encode("utf-8")).hexdigest()
 
 
+def _criterion_instruction(criterion: MetaCriterion) -> str:
+    """Kind-specific answer instruction for one criterion."""
+    kind = (criterion.kind or "verdict").strip().lower()
+    if kind == "classify":
+        options = ", ".join(str(o) for o in (criterion.options or [])) or "(no options configured)"
+        return f'choose exactly one of: {options}'
+    if kind == "number":
+        return "give a single numeric value"
+    return '"Yes", "No", or "Unsure"'
+
+
 def build_screening_system_prompt(criteria: list[MetaCriterion]) -> str:
     """System prompt for one screening cluster (all configured criteria)."""
     criterion_lines = "\n".join(
-        f"{i + 1}. {c.label}: {c.prompt_text}" for i, c in enumerate(criteria)
+        f"{i + 1}. {c.label} ({_criterion_instruction(c)}): {c.prompt_text}"
+        + (f" Help: {c.help}" if getattr(c, "help", "") else "")
+        for i, c in enumerate(criteria)
     )
     verdict_keys = "\n".join(
-        f'  - "criterion{i}_applies": "Yes", "No", or "Unsure"\n'
+        f'  - "criterion{i}_applies": {_criterion_instruction(c)}\n'
         f'  - "criterion{i}_certainty": "High", "Medium", or "Low"'
-        for i in range(1, len(criteria) + 1)
+        for i, c in enumerate(criteria, start=1)
     )
     return f"""You are an expert research assistant screening studies for a meta-analysis.
 Analyze each abstract against the inclusion criteria and respond with a single
@@ -136,13 +171,39 @@ def build_cluster_messages(
 
 
 def build_prescreen_messages(prescreen_prompt: str, paper_text: str, title: str = "") -> list[dict]:
-    content = prescreen_prompt
+    """Build the message list for the scheme's prescreen prompt.
+
+    The configured ``prescreen_prompt`` is embedded in the user content (it
+    carries the scheme-specific screening instructions), followed by the paper
+    text so the model can actually apply them.
+    """
     header = f"Paper: {title}\n\n" if title else ""
-    content = f"Read the paper below and apply the screening instructions.\n\n{header}{paper_text}"
+    instructions = (prescreen_prompt or "").strip() or (
+        "Apply the study's inclusion criteria and report a JSON object with a "
+        '"rationale" and one boolean flag per criterion.'
+    )
+    content = (
+        "Read the paper below and apply the screening instructions.\n\n"
+        f"Screening instructions:\n{instructions}\n\n"
+        f"Paper:\n{header}{paper_text}"
+    )
     return [{"role": "user", "content": content}]
 
 
 def build_extraction_messages(coding_prompt: str, paper_text: str, title: str = "") -> list[dict]:
+    """Build the message list for the scheme's full coding prompt.
+
+    The configured ``coding_prompt`` becomes the system message so every field
+    and coding rule configured by the scheme reaches the model; the user message
+    carries only the paper.
+    """
     header = f"Paper: {title}\n\n" if title else ""
+    system = (coding_prompt or "").strip() or (
+        "You are an expert research assistant extracting data for a "
+        "meta-analysis. Return only the requested JSON."
+    )
     content = f"Read the paper below and apply the coding scheme.\n\n{header}{paper_text}"
-    return [{"role": "user", "content": content}]
+    return [
+        {"role": "system", "content": system},
+        {"role": "user", "content": content},
+    ]

@@ -14,8 +14,7 @@ import {
   type ReactNode,
 } from "react";
 import { useAsyncEffect } from "@/lib/useAsync";
-import * as pdfjsLib from "pdfjs-dist";
-import type { PDFDocumentProxy, RenderTask } from "pdfjs-dist";
+import { usePdfViewer } from "@/features/pdf/usePdfViewer";
 import {
   ChevronLeft,
   ChevronRight,
@@ -32,7 +31,6 @@ import {
 } from "lucide-react";
 import {
   api,
-  fetchSourceFile,
   type Annotation,
   type CodeTreeItem,
   type Coding,
@@ -77,35 +75,11 @@ import { useCoderStore } from "@/stores/coder";
 import { usePrefsStore } from "@/stores/prefs";
 import { useProjectStore } from "@/stores/project";
 
-pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
-  "pdfjs-dist/build/pdf.worker.min.mjs",
-  import.meta.url,
-).toString();
-
 const DRAG_MIN_SIZE = 5;
-
-/** Download a source's PDF bytes for pdf.js.
- *
- *  `fetchSourceFile` builds the URL from the RESOLVED base — the App boot
- *  gate holds the UI until `initApiBase()` settles, and on a transport
- *  failure (backend still booting / restarted on an ephemeral port) the
- *  helper drops the cached base, re-resolves it and retries once — so a
- *  stale base can never surface as a spurious "Failed to fetch". HTTP
- *  errors become `ApiError`s carrying the backend's JSON `detail`, so the
- *  document pane shows the real message. */
-async function fetchPdfBytes(sourceId: number): Promise<ArrayBuffer> {
-  const res = await fetchSourceFile(sourceId);
-  return res.arrayBuffer();
-}
 
 /** PATCH a segment row's memo/important (text or image) — the shared
  *  codingApi helper covers both kinds with the same retry semantics. */
 const patchCodingRow = patchCodingRowMeta;
-
-interface PageSize {
-  width: number;
-  height: number;
-}
 
 /** One pdf.js text item in PDF (unscaled) units — used to hit-test and
  *  select text over the rendered page, and to reconstruct the plain-text
@@ -396,18 +370,34 @@ export function PdfCoder({ source }: { source: Source }) {
   const [reloadTick, setReloadTick] = useState(0);
   const [errMsg, setErrMsg] = useState<string | null>(null);
 
-  const [pdf, setPdf] = useState<PDFDocumentProxy | null>(null);
-  const [pdfError, setPdfError] = useState<string | null>(null);
-  const [pdfReloadTick, setPdfReloadTick] = useState(0);
-  const [pageSizes, setPageSizes] = useState<Map<number, PageSize>>(new Map());
+  // The pdf.js pipeline (lazy worker import, bytes fetch, page geometry/text
+  // items, canvas rendering, fit-to-width) lives in the shared viewer; this
+  // component only owns the coding overlays and the split-pane layout.
+  const {
+    pdf,
+    error: pdfError,
+    reload: reloadPdf,
+    pageSizes,
+    textItems,
+    scale,
+    zoom,
+    setZoom,
+    continuous,
+    setContinuous,
+    currentPage,
+    setCurrentPage,
+    numPages,
+    pageNumbers,
+    containerRef,
+    setCanvasRef,
+    clampPage,
+  } = usePdfViewer({
+    sourceId: source.id,
+    active: pdfVisible,
+    loadErrorFallback: t("pdfCoder.loadDocumentError"),
+    onRenderError: setErrMsg,
+  });
 
-  const [continuous, setContinuous] = useState(true);
-  const [currentPage, setCurrentPage] = useState(1);
-  const [zoom, setZoom] = useState<number | "fit">("fit");
-  const [fittedScale, setFittedScale] = useState(1);
-
-  /** pdf.js text items per page (PDF units) — enables text marking. */
-  const [textItems, setTextItems] = useState<Map<number, TextItemData[]>>(new Map());
   const [drag, setDrag] = useState<
     | { pageNumber: number; start: PagePoint; current: PagePoint; mode: "region" | "text" }
     | null
@@ -430,8 +420,6 @@ export function PdfCoder({ source }: { source: Source }) {
   const [measureTick, setMeasureTick] = useState(0);
   const [gutterVisible, toggleGutter] = useGutterVisible();
 
-  const containerRef = useRef<HTMLDivElement | null>(null);
-  const canvasRefs = useRef(new Map<number, HTMLCanvasElement>());
   const dragRef = useRef(drag);
   const pendingRectRef = useRef(pendingRect);
   const pendingActionRef = useRef<PendingAction | null>(null);
@@ -456,9 +444,6 @@ export function PdfCoder({ source }: { source: Source }) {
   const textW = resize.size;
   const textDragging = resize.dragging;
   const startTextResize = resize.onDown;
-
-  const numPages = pdf?.numPages ?? 0;
-  const scale = zoom === "fit" ? fittedScale : zoom;
 
   /* ------------------------------------------------- linked position sync */
 
@@ -594,7 +579,7 @@ export function PdfCoder({ source }: { source: Source }) {
       window.clearTimeout(retryTimer);
       textEl?.removeEventListener("scroll", onTextScroll);
     };
-  }, [autoSync, pdfVisible, plainVisible, pageCharOffsets]);
+  }, [autoSync, pdfVisible, plainVisible, pageCharOffsets, containerRef]);
 
   /* ---------------------------------------------------------------- load */
 
@@ -651,151 +636,15 @@ export function PdfCoder({ source }: { source: Source }) {
     }
   }, [source.id, reloadTick, t]);
 
-  useAsyncEffect(async (signal) => {
-    setPdf(null);
-    setPdfError(null);
-    setPageSizes(new Map());
-    setTextItems(new Map());
-    setFittedScale(1);
-    try {
-      // Fetch the raw bytes ourselves (with a timeout) and hand them to
-      // pdf.js as `data` — this avoids Range/streaming/mixed-content
-      // quirks of `url` loading inside WebView2/Tauri custom protocols.
-      // fetchPdfBytes resolves the API base first and retries transport
-      // failures once, so a still-booting/ephemeral-port backend cannot
-      // surface as a spurious "Failed to fetch".
-      const data = await fetchPdfBytes(source.id);
-      signal.throwIfAborted();
-      const task = pdfjsLib.getDocument({ data });
-      const doc = await task.promise;
-      signal.throwIfAborted();
-      setPdf(doc);
-      const sizes = new Map<number, PageSize>();
-      const items = new Map<number, TextItemData[]>();
-      for (let p = 1; p <= doc.numPages; p++) {
-        const page = await doc.getPage(p);
-        const vp = page.getViewport({ scale: 1 });
-        sizes.set(p, { width: vp.width, height: vp.height });
-        const content = await page.getTextContent();
-        const list: TextItemData[] = [];
-        for (const item of content.items) {
-          if (!("str" in item) || item.str === "") continue;
-          const tr = item.transform;
-          // pdf.js reports PDF units with y growing UPWARD; flip to the
-          // screen convention (top-left origin) for hit-testing.
-          list.push({
-            x: tr[4],
-            y: vp.height - (tr[5] + item.height),
-            w: item.width,
-            h: item.height,
-            str: item.str,
-            fontName: "fontName" in item ? (item as { fontName?: string }).fontName : undefined,
-          });
-        }
-        items.set(p, list);
-      }
-      signal.throwIfAborted();
-      setPageSizes(sizes);
-      setTextItems(items);
-      // Overlays (and thus gutter anchors) can now be built — re-measure.
-      setMeasureTick((n) => n + 1);
-    } catch (e) {
-      signal.throwIfAborted();
-      setPdfError(errorMessage(e, t("pdfCoder.loadDocumentError")));
-    }
-  }, [source.id, pdfReloadTick, t]);
-
-  /* ------------------------------------------------------------ pdf render */
-
-  useEffect(() => {
-    if (!pdf) return;
-    const tasks: RenderTask[] = [];
-    let cancelled = false;
-    const targets: number[] = [];
-    if (continuous) {
-      for (let p = 1; p <= pdf.numPages; p++) targets.push(p);
-    } else {
-      targets.push(currentPage);
-    }
-    for (const p of targets) {
-      const canvas = canvasRefs.current.get(p);
-      if (!canvas) continue;
-      void (async () => {
-        try {
-          if (cancelled) return;
-          const page = await pdf.getPage(p);
-          if (cancelled) return;
-          const viewport = page.getViewport({ scale });
-          canvas.width = viewport.width;
-          canvas.height = viewport.height;
-          canvas.style.width = `${viewport.width}px`;
-          canvas.style.height = `${viewport.height}px`;
-          const task = page.render({ canvas, viewport });
-          tasks.push(task);
-          // Await the render: a failed render must be visible, not a silent
-          // black page (unhandled rejections left canvases blank before).
-          await task.promise;
-        } catch (e) {
-          if (!cancelled) {
-            setErrMsg(errorMessage(e, t("pdfCoder.loadDocumentError")));
-          }
-        }
-      })();
-    }
-    return () => {
-      cancelled = true;
-      for (const t of tasks) {
-        try {
-          t.cancel();
-        } catch {
-          /* render already finished */
-        }
-      }
-    };
-    // Re-render whenever the view (re)mounts — including toggling back to the
-    // PDF pane, which unmounts the page canvases.
-  }, [pdf, scale, currentPage, continuous, pdfVisible, t]);
-
-  // Zoom / pane-layout changes move the overlays — re-measure gutter anchors.
+  // Zoom / pane-layout changes move the overlays — re-measure gutter anchors;
+  // `pageSizes` changes once the shared viewer has read the page geometry.
   useEffect(() => {
     setMeasureTick((n) => n + 1);
-  }, [scale, continuous, currentPage, pdfVisible]);
-
-  /* ---------------------------------------------------------------- fit */
-
-  const applyFit = useCallback(async () => {
-    const doc = pdf;
-    const el = containerRef.current;
-    if (!doc || !el) return;
-    const page = await doc.getPage(1);
-    const vp = page.getViewport({ scale: 1 });
-    const avail = el.clientWidth - 48;
-    setFittedScale(Math.max(0.25, avail / vp.width));
-  }, [pdf]);
-
-  useEffect(() => {
-    if (zoom !== "fit" || !pdf) return;
-    void applyFit();
-    const el = containerRef.current;
-    if (!el) return;
-    const ro = new ResizeObserver(() => void applyFit());
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, [zoom, pdf, applyFit, pdfVisible]);
+  }, [scale, continuous, currentPage, pdfVisible, pageSizes]);
 
   /* ------------------------------------------------------------ derived */
 
   const { byId, colorByCid } = useCodeIndex(codes);
-
-  const pageNumbers = useMemo(() => {
-    const out: number[] = [];
-    if (continuous) {
-      for (let p = 1; p <= numPages; p++) out.push(p);
-    } else {
-      out.push(currentPage);
-    }
-    return out;
-  }, [continuous, numPages, currentPage]);
 
   const selectedCoding = useMemo(
     () => (selectedImid != null ? codings.find((c) => c.imid === selectedImid) ?? null : null),
@@ -1178,7 +1027,7 @@ export function PdfCoder({ source }: { source: Source }) {
       if (flashTextTimer.current) clearTimeout(flashTextTimer.current);
       flashTextTimer.current = setTimeout(() => setFlashTextCtid(null), 2000);
     },
-    [textItems],
+    [textItems, containerRef],
   );
 
   useEffect(
@@ -1196,21 +1045,12 @@ export function PdfCoder({ source }: { source: Source }) {
     void refreshCodes();
   });
 
-  function clampPage(p: number): number {
-    return Math.min(Math.max(1, p), Math.max(1, numPages));
-  }
-
   /** Close the details bubble (pure client state — nothing is fetched or
    *  written). */
   function clearSelection() {
     setSelectedImid(null);
     setSelectedTextCtid(null);
     setEditDraft(null);
-  }
-
-  function setCanvasRef(pageNumber: number, el: HTMLCanvasElement | null) {
-    if (el) canvasRefs.current.set(pageNumber, el);
-    else canvasRefs.current.delete(pageNumber);
   }
 
   /** Toggle a pane on/off; never allow both off (fall back to PDF only). */
@@ -1572,7 +1412,7 @@ export function PdfCoder({ source }: { source: Source }) {
             <CircleAlert size={16} aria-hidden />
             {pdfError}
           </p>
-          <Button variant="secondary" className="mt-3" onClick={() => setPdfReloadTick((t) => t + 1)}>
+          <Button variant="secondary" className="mt-3" onClick={reloadPdf}>
             {t("common.retry")}
           </Button>
         </div>

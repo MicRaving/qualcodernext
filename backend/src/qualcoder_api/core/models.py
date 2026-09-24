@@ -280,11 +280,40 @@ class MetaCriterion(BaseModel):
     key: str = ""
     label: str = ""
     prompt_text: str = ""
+    #: ``verdict`` (Yes/No/Unsure) | ``classify`` (choose an option) | ``number``.
+    kind: str = "verdict"
+    #: Choices for classify/number criteria.
+    options: list = []
+    #: Values that PASS this criterion (default a single ``yes``).
+    pass_values: list = ["yes"]
+    #: PRISMA reason label used when the criterion fails.
+    exclude_reason: str = ""
+    #: 0 = informational (reported but never blocks inclusion).
+    gating: int = 1
+    help: str = ""
     created: str = ""
+
+    @field_validator("options", "pass_values", mode="before")
+    @classmethod
+    def _json_list(cls, v: object) -> object:
+        """Accept a JSON-encoded string (persisted column) or a list."""
+        if v is None or v == "":
+            return []
+        if isinstance(v, str):
+            try:
+                parsed = json.loads(v)
+            except ValueError:
+                return []
+            return parsed if isinstance(parsed, list) else []
+        return v
 
 
 class MetaScreening(BaseModel):
-    """A per-coder screening verdict (``meta_screening`` row)."""
+    """A per-coder screening verdict (``meta_screening`` row).
+
+    Identity is ``(hit_id, owner, run_id, stage)`` so an abstract and a
+    full-text verdict for the same hit/run coexist (v39).
+    """
 
     model_config = ConfigDict(frozen=True)
 
@@ -298,6 +327,10 @@ class MetaScreening(BaseModel):
     origin: str = "manual"
     model: str | None = None
     prompt_hash: str | None = None
+    #: ``abstract`` | ``fulltext``.
+    stage: str = "abstract"
+    #: Structured exclusion reason (derived from the failing criterion if empty).
+    reason: str = ""
     created: str = ""
     updated: str = ""
 
@@ -330,7 +363,11 @@ class MetaDocument(BaseModel):
 
 
 class MetaExtraction(BaseModel):
-    """A scheme-driven extraction result (``meta_extraction`` row)."""
+    """A scheme-driven extraction result (``meta_extraction`` row).
+
+    Identity is ``(hit_id, owner, scheme)``: a coder may hold one extraction
+    per scheme for the same paper (v39).
+    """
 
     model_config = ConfigDict(frozen=True)
 
@@ -352,6 +389,8 @@ class MetaExtraction(BaseModel):
     @field_validator("study_vars", mode="before")
     @classmethod
     def _study_vars(cls, v: object) -> object:
+        if v is None or v == "":
+            return {}
         if isinstance(v, str):
             try:
                 return json.loads(v)
@@ -362,6 +401,8 @@ class MetaExtraction(BaseModel):
     @field_validator("dv_metrics", mode="before")
     @classmethod
     def _dv_metrics(cls, v: object) -> object:
+        if v is None or v == "":
+            return []
         if isinstance(v, str):
             try:
                 return json.loads(v)

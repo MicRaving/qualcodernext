@@ -15,6 +15,29 @@
 - Scheme-driven extraction with metafor-completeness validation, optional publish to cases/codes and CSV/Excel export.
 - Streamlined Meta layout: abstract screening in the center, per-tab actions in the menubar and study left bar, batch PDF import, multi-select autocoding and an in-app PDF viewer.
 - Reworked coding-scheme editor with group, type and editor selectors and a dropdown-option list editor.
+- Meta-analysis: editor-creatable screening criteria (verdict/classify/number, pass values, exclusion reasons, gating) with stage, filters, progress and blind screening.
+- Meta-analysis: editor-creatable extraction schema — typed fields, multiselect/object-list/key-value editors, repeatable contrast metrics and role-based effect sizes, plus a scheme-driven edit form.
+- Meta-analysis: multi-coder reliability (Gwet AC1/AC2) with conflict resolution for screening and extraction.
+- Meta-analysis: pooled random-effects analysis (heterogeneity, subgroup/moderator, Egger, leave-one-out, forest), PRISMA counts, level summaries and Markdown/DOCX reports.
+- Meta-analysis: Bayesian random-effects pooling with Bayes factors and prior sensitivity, plus PET-PEESE, trim-and-fill and p-curve publication-bias diagnostics.
+- Meta-analysis: PRISMA and forest figures, and a PowerPoint (PPTX) report export.
+- Meta-analysis: specification multiverse (spec table + spec curve), funnel and posterior figures, and an extraction-variable audit.
+- Meta-analysis bugfixes: scheme prompts are now actually sent to the AI; full-text screening no longer overwrites abstract verdicts; per-scheme extractions no longer overwrite; analysis model/domain/family filters work; agreement, PRISMA, summary and moderator screens render reliably.
+- Meta-analysis controls: CSV export, hit deletion and pagination, job pause/resume, keyboard screening, import search-run suggestions and extraction input controls.
+- Meta-analysis: the Analyze menubar now holds the frequentist/Bayes switch and estimator, Analyze no longer picks a scheme, and every coded variable is available as a moderator (with a per-field "use as moderator" toggle in the scheme editor).
+- Meta-analysis: a ready-to-open sample project with import files, criteria, scheme, screening, extractions and PDFs under `samples/meta/`.
+- Meta-analysis: quick coding — `Y`/`N`/`U` (and `Tab`/`Shift+Tab`) for screening, level-number/`Enter`/`Tab` entry for extraction fields.
+- Meta-analysis: the Extract tab is a three-pane workspace (study list, coding form, linked paper in the right bar) with the schema editor in the menubar; conflict settling is now an Agreement tab.
+- Meta-analysis: analyses now combine all coders into a consensus (unresolved conflicts excluded and counted); the Analyze left bar has no coder picker.
+- Meta-analysis: the Extraction tab shows full-text exclusion criteria per project criterion with reasons; the Screening left bar has no Agreement shortcut.
+- Meta-analysis: Screening records abstract verdicts while full-text exclusion moved to an Extraction dropdown; blind screening moved to the menubar.
+- Meta-analysis: moderators are picked from collapsible per-group checklists; the report preview renders markdown; the Analyze left bar explains each section.
+- Meta-analysis: the Agreement left bar uses one row of switches; the Extract menubar exports Excel only.
+- Fixed the Crafter (QTT) left bar spilling over the window; it now scrolls internally like the other left bars.
+- Meta-analysis: moderator interactions (`A * B`) plus a multi-term moderator builder; the Analyze menubar holds the model switch, estimator and subgroup selector; aligned tables and left bar, select-all on Screen, and progress on Download/Extract.
+- Meta-analysis: the linked paper now uses the app's themed PDF viewer and opens in the right bar from both Download and Extract.
+- Meta-analysis: coding follows the app's current coder; the Extract left bar no longer carries coder/scheme pickers (the scheme moved to the menubar), and the Agreement tab sits between Extract and Analyze.
+- Meta-analysis: the PRISMA diagram's "other methods" title no longer overflows its box.
 
 **Full Changelog**: https://github.com/MicRaving/qualcodernext/compare/v0.1.17...v0.2.0
 
