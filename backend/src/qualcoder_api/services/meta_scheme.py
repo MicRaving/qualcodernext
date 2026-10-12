@@ -59,6 +59,13 @@ def _normalise_field(raw: object, fallback_group: str) -> dict[str, Any]:
         "options": raw.get("options") if isinstance(raw.get("options"), list) else [],
         "columns": raw.get("columns") if isinstance(raw.get("columns"), list) else [],
         "role": normalise_role(raw.get("role")),
+        #: Module identity for module-routed fields (``None`` for common/DV
+        #: fields). Collision fields keep their first occurrence's ``options``
+        #: and expose the per-module option lists here so an editor can honour
+        #: the record's module without renaming the field (which would break
+        #: the importer's by-name merge).
+        "module": raw.get("module") if isinstance(raw.get("module"), str) and raw.get("module") else None,
+        "module_options": raw.get("module_options") if isinstance(raw.get("module_options"), dict) else {},
         #: Whether the field may be chosen as an analysis moderator. Default
         #: True so every coded variable is offered unless the user hid it.
         "moderator": bool(raw.get("moderator", True)),
@@ -147,6 +154,14 @@ def normalise_codebook(raw: object) -> dict[str, Any]:
         "metrics": metrics,
         "effect_families": families,
         "code_fields": _normalise_code_fields(book.get("code_fields")),
+        #: Intervention type -> module keys, preserved so a reader can derive
+        #: which module fields apply to a record from its ``Intervention_Type``.
+        "intervention_type_modules": (
+            {str(k): [str(m) for m in v] for k, v in book["intervention_type_modules"].items()
+             if isinstance(v, list)}
+            if isinstance(book.get("intervention_type_modules"), dict)
+            else {}
+        ),
     }
     return normalised
 

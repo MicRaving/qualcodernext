@@ -7,7 +7,7 @@
      include (first releases have no base tag, so no link). Add a section
      like "## 0.1.1 (2026-08-31)" at the TOP of the file. -->
 
-## 0.2.0 (2026-09-09)
+## 0.2.0 (2026-10-12)
 
 - New Meta-analysis workspace: search-hit table with abstract screening, paper download and data extraction, each optionally automated with the AI backend.
 - Screening verdicts per criterion/coder with certainty and rationale; configurable inclusion criteria.
@@ -30,6 +30,15 @@
 - Meta-analysis: the Extract tab is a three-pane workspace (study list, coding form, linked paper in the right bar) with the schema editor in the menubar; conflict settling is now an Agreement tab.
 - Meta-analysis: analyses now combine all coders into a consensus (unresolved conflicts excluded and counted); the Analyze left bar has no coder picker.
 - Meta-analysis: the Extraction tab shows full-text exclusion criteria per project criterion with reasons; the Screening left bar has no Agreement shortcut.
+- Meta-analysis: the Extract tab now uses the Coding split view (scheme form left, canvas PDF right); the full-text panel is collapsed and never auto-fills; progress matches the To-screen/Screened filters; the menubar Agreement shortcuts are gone.
+- Meta-analysis: import a CodingStudio project folder (hits, abstract + full-text screening, scheme, extractions and PDFs), idempotently.
+- Meta-analysis: paper retrieval tries every open-access candidate (repository mirrors first, Europe PMC) and reports why a download failed; the Download tab shows a downloaded/failed indicator.
+- Meta-analysis: CodingStudio import covers the current v3.1 schema — new roles, module fields as moderators, controlled vocabularies, per-coder full-text and the workbook base rater.
+- Meta-analysis: CodingStudio import keys accession-less workbook rows as `row-N` (matching the reference) so their screening rows import, reports unmatched PDFs, and caps the error list.
+- Meta-analysis: multi-label study fields (intervention types, countries, publication types) are now usable as subgroup/moderator variables, exploded per label.
+- Meta-analysis: the PDF viewer renders crisp on HiDPI displays and lazily (no re-render on scroll, no per-page text extraction), fixing blurry/slow rendering.
+- Meta-analysis: large analyses run off the request loop with a 120 s client budget, so the app stays responsive and no longer reports "Backend unreachable"; analysis loading is much faster (extracted rows only, per-scheme codebook reuse, off-loop JSON decode).
+- Meta-analysis: the right side bar now resizes up to two-thirds of the window; the CodingStudio import button reads "CS-Import".
 - Meta-analysis: Screening records abstract verdicts while full-text exclusion moved to an Extraction dropdown; blind screening moved to the menubar.
 - Meta-analysis: moderators are picked from collapsible per-group checklists; the report preview renders markdown; the Analyze left bar explains each section.
 - Meta-analysis: the Agreement left bar uses one row of switches; the Extract menubar exports Excel only.

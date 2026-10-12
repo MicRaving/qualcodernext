@@ -87,6 +87,7 @@ beforeEach(() => {
       email: "",
       importOpen: false,
       schemeOpen: false,
+      codingStudioOpen: false,
       selectedDocument: null,
       agreementScope: "screening",
       agreementStudy: "",
@@ -494,6 +495,37 @@ describe("MetaView analyze tab", () => {
     expect(document.body.textContent).toContain("model=FE");
     expect(document.body.textContent).toContain("0.350");
     expect(document.body.textContent).toContain("100.0%");
+  });
+
+  it("shows a computing state while a figure is still rendering", async () => {
+    apiMock.fns.metaAnalysisPooled = vi.fn(async () => ({
+      k: 1,
+      estimate: 0.4,
+      se: 0.1,
+      ci_low: 0.2,
+      ci_high: 0.6,
+      tau2: 0,
+      q: 0,
+      q_df: 0,
+      q_p: 1,
+      i2: 0,
+      p: 1,
+      n_studies: 1,
+    }));
+    apiMock.fns.metaAnalysisForest = vi.fn(async () => ({ rows: [] }));
+    apiMock.fns.metaAnalysisLeaveOneOut = vi.fn(async () => ({ rows: [] }));
+    // A long-running figure stays pending: the view must read as "computing"
+    // rather than a frozen/empty state.
+    apiMock.fns.metaAnalysisFunnelPng = vi.fn(() => new Promise<Blob>(() => {}));
+    apiMock.fns.metaAnalysisBayesPng = vi.fn(() => new Promise<Blob>(() => {}));
+
+    await render();
+    await click(buttonByText(tr("meta.tabAnalyze")));
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(document.body.textContent).toContain(tr("meta.computing"));
   });
 
   it("renders the variable audit coverage table and an issue", async () => {
@@ -1662,7 +1694,7 @@ describe("MetaView workspace UI batch", () => {
     });
   });
 
-  it("screens full text per criterion with a reason and re-includes", async () => {
+  it("starts collapsed and only sends the criteria the user sets", async () => {
     apiMock.fns.metaCriteria = vi.fn(async () => [
       {
         id: 1,
@@ -1702,36 +1734,56 @@ describe("MetaView workspace UI batch", () => {
       await Promise.resolve();
     });
 
-    // The menubar exclusion dropdown is gone; the criteria panel lists every
-    // project criterion with Include/Exclude plus a reason field.
-    expect(
-      document.querySelector(`select[aria-label="${tr("meta.fulltextExclusion")}"]`),
-    ).toBeNull();
-    expect(document.body.textContent).toContain(tr("meta.fulltextTitle"));
-    expect(document.body.textContent).toContain("Randomised");
-    expect(document.body.textContent).toContain("Control group");
+    // The panel opens collapsed and invents no verdicts.
+    const header = document.querySelector(
+      `button[aria-label="${tr("meta.fulltextTitle")}"]`,
+    ) as HTMLButtonElement | null;
+    expect(header).not.toBeNull();
+    expect(header?.getAttribute("aria-expanded")).toBe("false");
+    expect(buttonByText(tr("meta.fulltextInclude"))).toBeNull();
+    expect(header?.textContent).toBe(tr("meta.fulltextTitle"));
+
+    await click(header);
     expect(buttonByText(tr("meta.fulltextInclude"))).not.toBeNull();
-    expect(buttonByText(tr("meta.fulltextExclude"))).not.toBeNull();
+    // Nothing was answered yet: no header badge and no write on open.
+    expect(header?.textContent).toBe(tr("meta.fulltextTitle"));
+    expect((buttonByText(tr("meta.saveVerdict")) as HTMLButtonElement).disabled).toBe(true);
+    expect(apiMock.fns.metaSaveScreening).not.toHaveBeenCalled();
+
+    // Answer only the first criterion; the second stays unset.
+    const excludeButtons = Array.from(document.querySelectorAll("button")).filter(
+      (b) => b.textContent === tr("meta.fulltextExclude"),
+    );
+    expect(excludeButtons.length).toBe(2);
+    await click(excludeButtons[0]);
+
     const reason = document.querySelector(
       `input[aria-label="Randomised — ${tr("meta.fulltextReason")}"]`,
     ) as HTMLInputElement | null;
     expect(reason).not.toBeNull();
-
     await act(async () => {
       setInput(reason, "quasi-experimental only");
     });
+
+    // The badge reflects the explicit choice only.
+    expect(header?.textContent).toContain(tr("meta.fulltextExclude"));
     await click(buttonByText(tr("meta.saveVerdict")));
 
     expect(apiMock.fns.metaSaveScreening).toHaveBeenCalledTimes(1);
-    expect(apiMock.fns.metaSaveScreening.mock.calls[0][0]).toMatchObject({
+    const saved = apiMock.fns.metaSaveScreening.mock.calls[0][0] as {
+      verdicts: Record<string, unknown>;
+      reason: string;
+    };
+    expect(saved).toMatchObject({
       hit_id: 7,
       stage: "fulltext",
       verdicts: {
         c1: { applies: "No", certainty: "Medium", reason: "quasi-experimental only" },
-        c2: { applies: "No", certainty: "Medium" },
       },
       reason: "Randomised: quasi-experimental only",
     });
+    // The untouched criterion is never sent.
+    expect(saved.verdicts).not.toHaveProperty("c2");
 
     // Re-include clears the full-text row.
     await click(buttonByText(tr("meta.fulltextReinclude")));
@@ -1823,8 +1875,9 @@ describe("MetaView workspace UI batch", () => {
   });
 
   it("renders the report preview as markdown instead of raw text", async () => {
-    const localBlob = vi.mocked(localRequestBlob);
-    localBlob.mockResolvedValue({ text: async () => "# Results\n\nPooled **effect**." } as Blob);
+    apiMock.fns.metaReport = vi.fn(
+      async () => new Blob(["# Results\n\nPooled **effect**."], { type: "text/markdown" }),
+    );
 
     await render();
     await click(buttonByText(tr("meta.tabAnalyze")));
@@ -1834,6 +1887,7 @@ describe("MetaView workspace UI batch", () => {
       await Promise.resolve();
     });
 
+    expect(apiMock.fns.metaReport).toHaveBeenCalledWith({ scheme: undefined, format: "md" });
     expect(document.querySelector("pre")).toBeNull();
     expect(document.body.textContent).toContain("Results");
     expect(document.body.textContent).toContain("effect");
@@ -1920,5 +1974,339 @@ describe("MetaView consensus analysis", () => {
     expect(
       document.querySelector(`button[title="${tr("meta.agreementTitle")}"]`),
     ).toBeNull();
+  });
+});
+
+describe("MetaView progress consistency", () => {
+  it("uses screened_hits (not by_status) for the progress bar", async () => {
+    // The backend now reports the distinct screened hits; by_status would tally
+    // 10 here even though only 4 studies have a screening row.
+    apiMock.fns.metaStatus = vi.fn(async () => ({
+      hits: 10,
+      criteria: 1,
+      schemes: 1,
+      eligible: 0,
+      documents_done: 0,
+      extracted: 0,
+      screened_hits: 4,
+      by_status: { included: 5, excluded: 5, screened: 0 },
+    }));
+
+    await render();
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(document.body.textContent).toContain(
+      tr("meta.screenedProgress", { done: 4, total: 10 }),
+    );
+    expect(document.body.textContent).not.toContain(
+      tr("meta.screenedProgress", { done: 10, total: 10 }),
+    );
+  });
+});
+
+describe("MetaView download progress", () => {
+  it("shows downloaded/total and the failed count from status.documents", async () => {
+    apiMock.fns.metaStatus = vi.fn(async () => ({
+      hits: 10,
+      criteria: 1,
+      schemes: 1,
+      eligible: 6,
+      documents_done: 2,
+      extracted: 0,
+      documents: {
+        done: 3,
+        failed: 2,
+        pending: 1,
+        working: 0,
+        unretrievable: 0,
+        total: 6,
+      },
+    }));
+    apiMock.fns.metaDocuments = vi.fn(async () => [
+      { id: 1, hit_id: 7, source_id: 3, status: "done", title: "Paper 7", created: "", updated: "" },
+    ]);
+
+    await render();
+    await click(buttonByText(tr("meta.tabDownload")));
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    // The Download left bar reports the backend's document tally…
+    expect(document.body.textContent).toContain(
+      tr("meta.documentsProgress", { done: 3, total: 6 }),
+    );
+    // …together with the non-zero failure count.
+    expect(document.body.textContent).toContain(tr("meta.documentsFailed", { count: 2 }));
+    // The screening bar is not reused on the Download tab.
+    expect(document.body.textContent).not.toContain(
+      tr("meta.screenedProgress", { done: 0, total: 10 }),
+    );
+  });
+
+  it("falls back to the eligible-hits count when documents counts are absent", async () => {
+    apiMock.fns.metaStatus = vi.fn(async () => ({
+      hits: 10,
+      criteria: 1,
+      schemes: 1,
+      eligible: 5,
+      documents_done: 1,
+      extracted: 0,
+    }));
+
+    await render();
+    await click(buttonByText(tr("meta.tabDownload")));
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(document.body.textContent).toContain(
+      tr("meta.documentsProgress", { done: 1, total: 5 }),
+    );
+    // No failures reported, so the danger chip stays hidden.
+    expect(document.body.textContent).not.toContain(tr("meta.documentsFailed", { count: 0 }));
+  });
+});
+
+describe("MetaView agreement shortcut", () => {
+  it("drops the Agreement menubar button on Extract/Download/Analyze", async () => {
+    await render();
+    for (const tabKey of ["meta.tabDownload", "meta.tabExtract", "meta.tabAnalyze"]) {
+      await click(buttonByText(tr(tabKey)));
+      await act(async () => {
+        await Promise.resolve();
+      });
+      // The old menubar shortcut carried the "Coder agreement" title; the
+      // pipeline tab is labelled "Agreement" too, so it is the only match.
+      expect(
+        document.querySelector(`button[title="${tr("meta.agreementTitle")}"]`),
+      ).toBeNull();
+      expect(
+        Array.from(document.querySelectorAll("button")).filter(
+          (b) => b.textContent === tr("meta.agreement"),
+        ).length,
+      ).toBe(1);
+    }
+    // The Agreement tab itself stays.
+    expect(buttonByText(tr("meta.tabConflicts"))).not.toBeNull();
+  });
+});
+
+describe("MetaView extract split", () => {
+  const codebook = {
+    version: 2,
+    category: "Meta",
+    groups: [{ name: "Study", label: "Study" }],
+    fields: [
+      {
+        name: "notes",
+        label: "Coder notes",
+        group: "Study",
+        type: "string",
+        editor: "text",
+        required: false,
+        description: "",
+        role: null,
+      },
+    ],
+    metrics: { enabled: false, group: "Metrics", label: "Effect sizes", fields: [] },
+    effect_families: [],
+    code_fields: [],
+  };
+
+  function schemesMock() {
+    apiMock.fns.metaSchemes = vi.fn(async () => [
+      {
+        id: 1,
+        name: "instruct",
+        label: "Instruct",
+        codebook: JSON.stringify(codebook),
+        created: "",
+        updated: "",
+      },
+    ]);
+  }
+
+  it("renders the form beside the empty paper state with a divider", async () => {
+    schemesMock();
+    apiMock.fns.metaDocuments = vi.fn(async () => []);
+    apiMock.fns.metaHits = vi.fn(async () => ({
+      hits: [{ hit_id: 7, title: "Paper 7", status: "included", created: "", updated: "" }],
+      total: 1,
+      limit: 100,
+      offset: 0,
+    }));
+
+    await render();
+    await click(buttonByText(tr("meta.tabExtract")));
+    await click(document.querySelector('button[title="Paper 7"]'));
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(document.querySelector('[role="separator"]')).not.toBeNull();
+    expect(document.body.textContent).toContain(tr("meta.rawView"));
+    expect(document.body.textContent).toContain(tr("meta.noPdfLinked"));
+  });
+
+  it("shows the linked paper beside the form when a PDF is linked", async () => {
+    schemesMock();
+    apiMock.fns.metaDocuments = vi.fn(async () => [
+      { id: 1, hit_id: 7, source_id: 3, status: "done", title: "Paper 7", created: "", updated: "" },
+    ]);
+    apiMock.fns.metaHits = vi.fn(async () => ({
+      hits: [{ hit_id: 7, title: "Paper 7", status: "included", created: "", updated: "" }],
+      total: 1,
+      limit: 100,
+      offset: 0,
+    }));
+
+    await render();
+    await click(buttonByText(tr("meta.tabExtract")));
+    await click(document.querySelector('button[title="Paper 7"]'));
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(document.querySelector('[role="separator"]')).not.toBeNull();
+    expect(document.body.textContent).toContain(tr("meta.rawView"));
+    // The viewer (not the empty state) occupies the right pane.
+    expect(document.body.textContent).not.toContain(tr("meta.noPdfLinked"));
+  });
+});
+
+describe("MetaView CodingStudio folder import", () => {
+  function previewMock() {
+    return vi.fn(async () => ({
+      folder: "C:/proj",
+      exists: true,
+      papers: 12,
+      texts: 5,
+      extraction_files: 3,
+      study_count: 7,
+      screenings: [{ coder: "alice", rows: 14 }],
+      workbook: { rows: 42, path: "extraction.xlsx" },
+      schema_version: "2.1",
+      sample_studies: [{ key: "s1", title: "Study One", doi: "10.1/a", records: 2 }],
+      errors: [],
+    }));
+  }
+
+  it("opens the CodingStudio dialog from the Screen left bar", async () => {
+    await render();
+
+    const openButton = buttonByText(tr("meta.codingStudioImport"));
+    expect(openButton).not.toBeNull();
+    await click(openButton);
+
+    expect(useWorkspaceStore.getState().metaUi.codingStudioOpen).toBe(true);
+    const input = document.querySelector(
+      `input[aria-label="${tr("meta.codingStudioFolder")}"]`,
+    ) as HTMLInputElement | null;
+    expect(input).not.toBeNull();
+  });
+
+  it("labels the import button CS-Import with a CodingStudio tooltip", async () => {
+    await render();
+
+    const openButton = buttonByText(tr("meta.codingStudioImport"));
+    expect(openButton?.textContent).toBe("CS-Import");
+    expect(openButton?.getAttribute("title")).toBe(tr("meta.codingStudioTitle"));
+  });
+
+  it("previews the folder and shows the summary counts", async () => {
+    apiMock.fns.metaCodingStudioPreview = previewMock();
+    await render();
+    await click(buttonByText(tr("meta.codingStudioImport")));
+
+    const input = document.querySelector(
+      `input[aria-label="${tr("meta.codingStudioFolder")}"]`,
+    ) as HTMLInputElement | null;
+    await act(async () => {
+      setInput(input, "C:/proj");
+    });
+    await click(buttonByText(tr("meta.codingStudioPreview")));
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(apiMock.fns.metaCodingStudioPreview).toHaveBeenCalledWith("C:/proj");
+    expect(document.body.textContent).toContain("12");
+    expect(document.body.textContent).toContain(tr("meta.codingStudioWorkbookRows", { rows: 42 }));
+    expect(document.body.textContent).toContain("alice: 14");
+    expect(document.body.textContent).toContain("Study One");
+    expect(document.body.textContent).toContain("2.1");
+  });
+
+  it("imports with the chosen flags and shows the result counts", async () => {
+    apiMock.fns.metaCodingStudioPreview = previewMock();
+    apiMock.fns.metaCodingStudioImport = vi.fn(async () => ({
+      ok: true,
+      scheme: "codingstudio",
+      hits_imported: 12,
+      hits_skipped: 1,
+      screening_rows: 14,
+      extractions_imported: 3,
+      pdfs_linked: 2,
+      errors: [],
+    }));
+    await render();
+    await click(buttonByText(tr("meta.codingStudioImport")));
+
+    const input = document.querySelector(
+      `input[aria-label="${tr("meta.codingStudioFolder")}"]`,
+    ) as HTMLInputElement | null;
+    await act(async () => {
+      setInput(input, "C:/proj");
+    });
+    await click(buttonByText(tr("meta.codingStudioPreview")));
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    // Set an owner and turn "Link PDFs" off; the other flags stay on.
+    const owner = document.querySelector(
+      `input[aria-label="${tr("meta.codingStudioOwner")}"]`,
+    ) as HTMLInputElement | null;
+    await act(async () => {
+      setInput(owner, "bob");
+    });
+    const linkBox = document.querySelector(
+      `input[type="checkbox"][aria-label="${tr("meta.codingStudioLinkPdfs")}"]`,
+    ) as HTMLInputElement | null;
+    expect(linkBox?.checked).toBe(true);
+    await act(async () => {
+      linkBox?.click();
+    });
+
+    const runButton = document.querySelector(
+      `button[aria-label="${tr("meta.codingStudioRun")}"]`,
+    ) as HTMLButtonElement | null;
+    expect(runButton).not.toBeNull();
+    await click(runButton);
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(apiMock.fns.metaCodingStudioImport).toHaveBeenCalledTimes(1);
+    expect(apiMock.fns.metaCodingStudioImport.mock.calls[0][0]).toMatchObject({
+      folder: "C:/proj",
+      owner: "bob",
+      import_hits: true,
+      import_screening: true,
+      import_extractions: true,
+      link_pdfs: false,
+    });
+    expect(document.body.textContent).toContain(
+      tr("meta.codingStudioDone", {
+        hits: "12",
+        skipped: "1",
+        screening: "14",
+        extractions: "3",
+        pdfs: "2",
+      }),
+    );
   });
 });

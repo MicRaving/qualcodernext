@@ -8,6 +8,7 @@ inter-rater reliability. ``python-docx`` is available; no other new deps.
 
 from __future__ import annotations
 
+import asyncio
 import io
 import json
 import math
@@ -24,6 +25,7 @@ from qualcoder_api.services import (
     meta_prisma,
     meta_summary,
 )
+from qualcoder_api.services.meta_extract import refresh_dv_metrics
 from qualcoder_api.services.meta_scheme import normalise_codebook
 
 
@@ -59,10 +61,11 @@ def _ci(low: Any, high: Any, digits: int = 2) -> str:
 
 # ── context assembly ─────────────────────────────────────────────────────
 
-async def _resolve_scheme(repo: MetaRepository, extractions: list[Any], scheme: str | None) -> tuple[str, Any]:
+def _resolve_scheme(
+    schemes: dict[str, Any], extractions: list[Any], scheme: str | None
+) -> tuple[str, Any]:
     if scheme:
-        row = await repo.get_scheme(name=scheme)
-        return scheme, row
+        return scheme, schemes.get(scheme)
     counts: Counter = Counter(
         str(_get(ext, "scheme", ""))
         for ext in extractions
@@ -71,7 +74,7 @@ async def _resolve_scheme(repo: MetaRepository, extractions: list[Any], scheme: 
     if not counts:
         return "", None
     name = counts.most_common(1)[0][0]
-    return name, await repo.get_scheme(name=name)
+    return name, schemes.get(name)
 
 
 def _get(obj: Any, key: str, default: Any = None) -> Any:
@@ -87,6 +90,18 @@ def _codebook_of(scheme_row: Any) -> dict[str, Any]:
         return normalise_codebook(json.loads(scheme_row.codebook))
     except (TypeError, ValueError):
         return normalise_codebook({})
+
+
+def _refresh_metrics(ext: Any, schemes: dict[str, Any]) -> Any:
+    """Re-derive one extraction's ``dv_metrics`` under its live scheme codebook.
+
+    No-op when the extraction's scheme (or its codebook) is unknown, so a
+    legacy/v1 row keeps the cached column it was imported with.
+    """
+    row = schemes.get(str(_get(ext, "scheme", "") or ""))
+    if row is None or not row.codebook:
+        return ext
+    return refresh_dv_metrics(ext, _codebook_of(row))
 
 
 def _risk_paragraphs(criteria: list[Any]) -> list[str]:
@@ -119,7 +134,9 @@ async def build_report(
     """Gather the report context from the meta pipeline.
 
     ``owner`` scopes the extraction and screening numbers to one coder so a
-    per-rater report never mixes in other coders' rows.
+    per-rater report never mixes in other coders' rows. The CPU-heavy context
+    assembly (consensus, pooling, Bayes, multiverse, reliability) runs in a
+    worker thread; only the row loads await on the event loop.
     """
     repo = MetaRepository(session)
     hits = await repo.list_hits()
@@ -127,7 +144,37 @@ async def build_report(
     screenings = await repo.list_screening(owner=owner)
     documents = await repo.list_documents()
     extractions = await repo.list_extractions(owner=owner)
-    scheme_name, scheme_row = await _resolve_scheme(repo, extractions, scheme)
+    schemes = {scheme_row.name: scheme_row for scheme_row in await repo.list_schemes()}
+    return await asyncio.to_thread(
+        _assemble_report,
+        hits,
+        criteria,
+        screenings,
+        documents,
+        extractions,
+        schemes,
+        title=title,
+        scheme=scheme,
+        primary=primary,
+        owner=owner,
+    )
+
+
+def _assemble_report(
+    hits: list[Any],
+    criteria: list[Any],
+    screenings: list[Any],
+    documents: list[Any],
+    extractions: list[Any],
+    schemes: dict[str, Any],
+    *,
+    title: str | None = None,
+    scheme: str | None = None,
+    primary: bool = True,
+    owner: str | None = None,
+) -> dict[str, Any]:
+    """CPU-only report assembly (see :func:`build_report`)."""
+    scheme_name, scheme_row = _resolve_scheme(schemes, extractions, scheme)
     codebook = _codebook_of(scheme_row)
 
     prisma = meta_prisma.prisma_counts(
@@ -161,7 +208,7 @@ async def build_report(
         for ext in selected:
             by_scheme.setdefault(str(_get(ext, "scheme", "")), []).append(ext)
         for group_scheme in sorted(by_scheme):
-            group_book = _codebook_of(await repo.get_scheme(name=group_scheme))
+            group_book = _codebook_of(schemes.get(group_scheme))
             group_rows, group_report = meta_consensus.build_consensus_rows(
                 by_scheme[group_scheme], group_book or None
             )
@@ -171,6 +218,10 @@ async def build_report(
             merged.extend(group_rows)
         consensus["n_hits"] = len({str(_get(ext, "hit_id", "")) for ext in selected})
         selected = merged
+    # The persisted ``dv_metrics`` column is a cache that can lag a scheme role
+    # edit; re-derive under the live codebook so the report's pooled estimate
+    # matches the Analyze tab instead of a stale column.
+    selected = [_refresh_metrics(ext, schemes) for ext in selected]
     effects = meta_analysis.build_effects(selected, codebook or None)
     pooling_rows = meta_analysis.primary_effects(effects) if primary else effects
     pooled = meta_analysis.pool_dl(pooling_rows)

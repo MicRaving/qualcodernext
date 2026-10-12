@@ -107,7 +107,10 @@ interface WorkspaceState {
     email: string;
     importOpen: boolean;
     schemeOpen: boolean;
-    /** Full text linked to the focused study, shown in the Extract right bar. */
+    /** Opens the CodingStudio folder-import dialog from the Screen left bar. */
+    codingStudioOpen: boolean;
+    /** Full text linked to the clicked (or focused) study, shown in the
+     *  Download tab's right bar (the Extract tab renders its paper inline). */
     selectedDocument: MetaDocument | null;
     /** Conflicts tab: whether screening verdicts or extraction cells disagree. */
     agreementScope: MetaAgreementScope;
@@ -152,6 +155,7 @@ interface WorkspaceState {
       email: string;
       importOpen: boolean;
       schemeOpen: boolean;
+      codingStudioOpen: boolean;
       selectedDocument: MetaDocument | null;
       agreementScope: MetaAgreementScope;
       agreementStudy: string;
@@ -229,6 +233,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set) => ({
     email: "",
     importOpen: false,
     schemeOpen: false,
+    codingStudioOpen: false,
     selectedDocument: null,
     agreementScope: "screening",
     agreementStudy: "",

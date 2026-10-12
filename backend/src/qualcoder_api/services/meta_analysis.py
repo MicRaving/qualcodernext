@@ -196,12 +196,22 @@ def _get(obj: Any, key: str, default: Any = None) -> Any:
     return getattr(obj, key, default)
 
 
+def _is_scalar(value: Any) -> bool:
+    """JSON scalar (bool/int/float/str) — the values a moderator may carry."""
+    return isinstance(value, (bool, int, float, str))
+
+
+def _is_scalar_list(value: Any) -> bool:
+    """A list whose every entry is a JSON scalar (a multi-label value)."""
+    return isinstance(value, list) and all(_is_scalar(item) for item in value)
+
+
 def _json_roles(by_role: dict[str, Any]) -> dict[str, Any]:
-    """Role values worth keeping on an effect row (JSON scalars only)."""
+    """Role values worth keeping on an effect row (JSON scalars/label lists)."""
     return {
         key: value
         for key, value in by_role.items()
-        if isinstance(value, (bool, int, float, str))
+        if _is_scalar(value) or _is_scalar_list(value)
     }
 
 
@@ -213,18 +223,19 @@ def _role_value(by_role: dict[str, Any], role: str) -> Any:
 
 
 def _scalar_fields(metric: dict[str, Any]) -> dict[str, Any]:
-    """Scalar ``name → value`` pairs of a flattened metric row.
+    """Scalar (or multi-label list) ``name → value`` pairs of a flat metric row.
 
     This is the by-field-name view the moderator resolver reads, so any coded
-    variable (not just fields carrying a role) can act as a moderator. Nested
-    structures (``roles``/``fields``/lists/objects) and the ``_record`` index
-    are excluded.
+    variable (not just fields carrying a role) can act as a moderator. List
+    values whose entries are all scalars are kept (multi-label moderators);
+    nested structures (``roles``/``fields``/objects and lists of objects) and
+    the ``_record`` index are excluded.
     """
     out: dict[str, Any] = {}
     for name, value in metric.items():
         if name in ("_record", "roles", "fields"):
             continue
-        if isinstance(value, (bool, int, float, str)):
+        if _is_scalar(value) or _is_scalar_list(value):
             out[name] = value
     return out
 
@@ -621,7 +632,8 @@ def _moderator_value(row: dict[str, Any], key: str) -> Any:
 
     Lookup order: the effect row's flattened ``fields`` map (field name), then
     its ``roles`` map (role id), then the row's own keys (derived columns such
-    as ``domain``/``dv_name`` or test-constructed rows).
+    as ``domain``/``dv_name`` or test-constructed rows). A stored list value
+    (multi-label field) is passed through unchanged.
     """
     fields = row.get("fields")
     if isinstance(fields, dict) and key in fields:
@@ -640,21 +652,50 @@ def _norm(value: Any) -> str:
     return str(value or "").strip()
 
 
+def _label_entries(value: Any) -> list[tuple[str, str]]:
+    """``(normalised, display)`` label pairs a moderator value carries.
+
+    A scalar yields one pair; a list is multi-label and yields one pair per
+    distinct scalar entry (first-seen order, non-scalar entries ignored). An
+    absent/empty value yields nothing.
+    """
+    items = value if isinstance(value, list) else [value]
+    out: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for item in items:
+        if not _is_scalar(item):
+            continue
+        label = _norm(item)
+        if not label or label in seen:
+            continue
+        seen.add(label)
+        out.append((label, str(item)))
+    return out
+
+
+def _is_missing(value: Any) -> bool:
+    """True when a moderator value carries no usable label (None/""/[])."""
+    if value is None or value == "":
+        return True
+    return not _label_entries(value)
+
+
 def subgroup(rows: list[dict[str, Any]], key: str) -> dict[str, Any]:
-    """Pool the effects separately at each level of ``key`` (role or column)."""
+    """Pool the effects separately at each level of ``key`` (role or column).
+
+    A list-valued ``key`` is multi-label: the row joins **every** label's group
+    so each label's statistics include all rows carrying it. Rows whose value
+    is empty (``None``/``""``/``[]``) are skipped.
+    """
     groups: dict[str, list[dict[str, Any]]] = {}
     labels: dict[str, str] = {}
     for row in rows if isinstance(rows, list) else []:
         if not isinstance(row, dict):
             continue
-        raw = _moderator_value(row, key)
-        if raw in (None, ""):
-            continue
-        value = _norm(raw)
-        if not value:
-            continue
-        groups.setdefault(value, []).append(row)
-        labels.setdefault(value, str(raw))
+        entries = _label_entries(_moderator_value(row, key))
+        for value, label in entries:
+            groups.setdefault(value, []).append(row)
+            labels.setdefault(value, label)
 
     out = [
         {
@@ -720,11 +761,14 @@ def _design(
 ) -> tuple[np.ndarray, list[str], list[str]]:
     """Design matrix ``X`` (intercept first) and column labels for ``terms``.
 
-    Each term contributes its own base column(s) — a centred numeric column or
-    a set of dummies whose most common level is the reference. Each interaction
-    pair ``[a, b]`` then contributes the elementwise product of every base
-    column of ``a`` with every base column of ``b``, labelled ``"<col_a> *
-    <col_b>"``. Pairs whose components produced no base column are skipped.
+    Each term contributes its own base column(s) — a centred numeric column, a
+    set of dummies whose most common level is the reference, or, for a
+    list-valued (multi-label) term, one indicator column per distinct label
+    (``1`` when the row's list contains it, else ``0``; labels sorted for a
+    deterministic design). Each interaction pair ``[a, b]`` then contributes the
+    elementwise product of every base column of ``a`` with every base column of
+    ``b``, labelled ``"<col_a> * <col_b>"``. Pairs whose components produced no
+    base column are skipped.
     """
     n = len(rows)
     columns: list[np.ndarray] = [np.ones(n, dtype=float)]
@@ -734,7 +778,26 @@ def _design(
     for term in terms:
         base: list[int] = []
         raw = [_moderator_value(row, term) for row in rows]
-        clean = [value for value in raw if value not in (None, "")]
+        if any(isinstance(value, list) for value in raw):
+            # Multi-label term: one indicator column per distinct label, so a
+            # row carrying ["a", "b"] is 1 in both the ``a`` and ``b`` columns.
+            row_labels = [
+                {value for value, _ in _label_entries(item)} for item in raw
+            ]
+            levels = sorted({level for labels in row_labels for level in labels})
+            if len(levels) < 2:
+                term_columns[term] = base
+                continue
+            for level in levels:
+                base.append(len(columns))
+                columns.append(
+                    np.array([1.0 if level in labels else 0.0 for labels in row_labels])
+                )
+                names.append(f"{term}:{level}")
+            used.append(term)
+            term_columns[term] = base
+            continue
+        clean = [value for value in raw if not _is_missing(value)]
         numeric = bool(clean) and all(_num(value) is not None for value in clean)
         if numeric and len({_num(value) for value in clean}) >= 2:
             xs = np.array([_num(value) if _num(value) is not None else 0.0 for value in raw])
@@ -858,7 +921,9 @@ def moderator(
         kept_rows = [
             row
             for row in clean_rows
-            if all(_moderator_value(row, term) not in (None, "") for term in required)
+            if all(
+                not _is_missing(_moderator_value(row, term)) for term in required
+            )
         ]
     else:
         kept_rows = clean_rows

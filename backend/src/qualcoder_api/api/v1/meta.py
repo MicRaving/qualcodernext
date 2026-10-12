@@ -228,6 +228,22 @@ class SchemeImport(BaseModel):
     overwrite: bool = False
 
 
+class CodingStudioPreviewRequest(BaseModel):
+    #: Absolute path of a reference CodingStudio project folder (read-only).
+    folder: str
+
+
+class CodingStudioImportRequest(BaseModel):
+    folder: str
+    owner: str = "codingstudio"
+    run_id: str = "codingstudio"
+    import_hits: bool = True
+    import_screening: bool = True
+    import_extractions: bool = True
+    link_pdfs: bool = True
+    scheme_name: str = "codingstudio"
+
+
 def _hit_payload(hit: MetaHit, eligible: bool, screened: bool) -> dict:
     data = hit.model_dump()
     data["eligible"] = eligible
@@ -385,14 +401,16 @@ async def meta_status(db: DbDep) -> dict:
     tabs = await repo.tab_counts(lambda verdicts: evaluate_criteria(criteria, verdicts)["eligible"], stage="abstract")
     return {
         "hits": tabs["screening"],
-        "criteria": len(await repo.list_criteria()),
+        "criteria": len(criteria),
         "schemes": len(await repo.list_schemes()),
         "screening_rows": await repo.count_screening(),
+        "screened_hits": await repo.count_screened_hits("abstract"),
         "eligible": tabs["downloads"],
         "documents_done": tabs["extraction"],
         "extracted": await repo.count_extractions("extracted"),
         "tabs": tabs,
         "by_status": await repo.status_counts(),
+        "documents": await repo.document_status_counts(),
     }
 
 
@@ -627,7 +645,7 @@ async def llm_screen(svc: OpenProjectDep, db: DbDep, body: LlmScreenRequest) -> 
 async def list_documents(db: DbDep) -> list[dict]:
     repo = MetaRepository(db)
     docs = await repo.list_documents()
-    hits = {h.hit_id: h for h in await repo.list_hits()}
+    hits = {h.hit_id: h for h in await repo.list_hits_by_ids([d.hit_id for d in docs])}
     return [
         {
             **d.model_dump(),
@@ -807,7 +825,7 @@ async def list_extractions(
 ) -> list[dict]:
     repo = MetaRepository(db)
     extras = await repo.list_extractions(hit_id=hit_id, owner=owner, scheme=scheme)
-    hits = {h.hit_id: h for h in await repo.list_hits()}
+    hits = {h.hit_id: h for h in await repo.list_hits_by_ids([e.hit_id for e in extras])}
     schemes = {s.name: s for s in await repo.list_schemes()}
     return [
         {
@@ -932,7 +950,7 @@ async def publish_extraction(db: DbDep, body: PublishRequest) -> dict:
 @router.get("/extract/export")
 async def export_extractions(db: DbDep, fmt: str = "csv") -> Response:
     repo = MetaRepository(db)
-    extras = [e for e in await repo.list_extractions() if e.status == "extracted"]
+    extras = await repo.list_extractions(status="extracted")
     # Re-derive dv_metrics under each scheme's live codebook: the persisted
     # column is a cache and can lag behind a scheme role edit.
     schemes = {s.name: s for s in await repo.list_schemes()}
@@ -969,11 +987,8 @@ def _exclude_set(raw: str | None) -> set[str]:
     return {part.strip() for part in (raw or "").split(",") if part.strip()}
 
 
-async def _extraction_codebook(repo: MetaRepository, scheme: str | None) -> dict:
-    name = scheme
-    if not name:
-        extras = await repo.list_extractions()
-        name = next((e.scheme for e in extras if e.scheme), None)
+async def _codebook_for_scheme(repo: MetaRepository, name: str | None) -> dict:
+    """Parsed codebook of one scheme (``{}`` when unknown/unreadable)."""
     if not name:
         return {}
     row = await repo.get_scheme(name=name)
@@ -984,6 +999,14 @@ async def _extraction_codebook(repo: MetaRepository, scheme: str | None) -> dict
     except ValueError:
         return {}
     return loaded if isinstance(loaded, dict) else {}
+
+
+async def _extraction_codebook(repo: MetaRepository, scheme: str | None) -> dict:
+    name = scheme
+    if not name:
+        extras = await repo.list_extractions(include_dv_metrics=False)
+        name = next((e.scheme for e in extras if e.scheme), None)
+    return await _codebook_for_scheme(repo, name)
 
 
 @router.get("/screening/agreement", response_model=dict)
@@ -1181,6 +1204,108 @@ def _merge_consensus_report(into: dict[str, Any], part: dict[str, Any]) -> None:
             into[key] = into.get(key, 0) + value
 
 
+def _parse_codebook(row: Any) -> dict | None:
+    """Parsed codebook JSON of a scheme row (``None`` when absent/unreadable)."""
+    if row is None or not row.codebook:
+        return None
+    try:
+        return json.loads(row.codebook)
+    except (json.JSONDecodeError, TypeError):
+        return None
+
+
+def _derive_analysis_rows(
+    extractions: list[Any],
+    scheme: str | None,
+    owner: str | None,
+    primary: bool,
+    domain: str | None,
+    families: list[str] | None,
+    codebooks: dict[str, dict | None],
+) -> tuple[list[dict], int, dict[str, Any] | None]:
+    """CPU-only half of :func:`_analysis_rows` (runs in a worker thread).
+
+    ``extractions`` are already status/scheme filtered and ``codebooks`` maps
+    every extraction's scheme name to its parsed codebook, so this never
+    touches the database (no event-loop blocking, no per-row queries).
+    """
+
+    def codebook_for(name: str | None) -> dict | None:
+        return codebooks.get(name) if name else None
+
+    consensus: dict[str, Any] | None = None
+    chosen: dict[Any, Any] = {}
+    if owner:
+        extractions = [e for e in extractions if e.owner == owner]
+        preferred = owner
+        for ext in extractions:
+            key: Any = (ext.hit_id, ext.scheme) if scheme else ext.hit_id
+            current = chosen.get(key)
+            if current is None or _rank_extraction(ext, preferred) >= _rank_extraction(
+                current, preferred
+            ):
+                chosen[key] = ext
+        selected_rows: list[Any] = list(chosen.values())
+    else:
+        # Consensus path: merge each scheme's rows separately (each scheme has
+        # its own codebook), then keep one row per key exactly as above so
+        # scheme-free pooling never double-counts a hit.
+        by_scheme: dict[str, list[Any]] = {}
+        for ext in extractions:
+            by_scheme.setdefault(ext.scheme, []).append(ext)
+        consensus = {
+            "n_hits": 0,
+            "n_groups": 0,
+            "n_single_owner": 0,
+            "n_consensus_units": 0,
+            "n_fields_unanimous": 0,
+            "n_master_resolved": 0,
+            "n_dropped_conflicts": 0,
+            "n_dropped_metrics": 0,
+        }
+        merged: list[Any] = []
+        for group_scheme in sorted(by_scheme):
+            group_codebook = codebook_for(group_scheme)
+            group_rows, group_report = meta_consensus.build_consensus_rows(
+                by_scheme[group_scheme], group_codebook
+            )
+            _merge_consensus_report(consensus, group_report)
+            merged.extend(group_rows)
+        consensus["n_hits"] = len(
+            {
+                e.hit_id if not isinstance(e, dict) else e.get("hit_id")
+                for e in extractions
+            }
+        )
+        for ext in merged:
+            hit_id = ext.get("hit_id") if isinstance(ext, dict) else ext.hit_id
+            ext_scheme = ext.get("scheme") if isinstance(ext, dict) else ext.scheme
+            key = (hit_id, ext_scheme) if scheme else hit_id
+            current = chosen.get(key)
+            if current is None or _extraction_id(ext) >= _extraction_id(current):
+                chosen[key] = ext
+        selected_rows = list(chosen.values())
+
+    # Group by scheme so each codebook is normalised once, not once per row.
+    effects_by_scheme: dict[str, list[dict]] = {}
+    for ext in selected_rows:
+        ext_scheme = ext.get("scheme") if isinstance(ext, dict) else ext.scheme
+        codebook = codebook_for(ext_scheme)
+        selected = refresh_dv_metrics(ext, codebook)
+        effects_by_scheme.setdefault(ext_scheme or "", []).append(selected)
+
+    rows: list[dict] = []
+    for ext_scheme, selected in effects_by_scheme.items():
+        rows.extend(
+            meta_analysis.build_effects(selected, codebook_for(ext_scheme))
+        )
+    rows = _filter_effects(rows, domain, families)
+    total = len(rows)
+    if primary:
+        rows = meta_analysis.primary_effects(rows)
+    return rows, total, consensus
+
+
 async def _analysis_rows(
     repo: MetaRepository,
     scheme: str | None,
@@ -1209,86 +1334,31 @@ async def _analysis_rows(
     multi-scheme projects pool correctly. ``domain``/``families`` then filter
     the derived rows; ``primary`` keeps only flagged primary effects (falling
     back to all rows when none are flagged).
+
+    Only ``status == "extracted"`` extractions are loaded (the excluded and
+    pending rows contribute nothing), and the parse/derive work runs in a
+    worker thread so an analysis over tens of thousands of effect rows never
+    blocks the event loop.
     """
-    extractions = [e for e in await repo.list_extractions() if e.status == "extracted"]
+    extractions = await repo.list_extractions(
+        status="extracted", include_dv_metrics=False
+    )
     if scheme:
         extractions = [e for e in extractions if e.scheme == scheme]
-
-    codebooks: dict[str, dict | None] = {}
-
-    async def codebook_for(name: str | None) -> dict | None:
-        if not name:
-            return None
-        if name not in codebooks:
-            row = await repo.get_scheme(name=name)
-            loaded: dict | None = None
-            if row is not None and row.codebook:
-                try:
-                    loaded = json.loads(row.codebook)
-                except ValueError:
-                    loaded = None
-            codebooks[name] = loaded
-        return codebooks[name]
-
-    consensus: dict[str, Any] | None = None
-    chosen: dict[Any, Any] = {}
-    if owner:
-        extractions = [e for e in extractions if e.owner == owner]
-        preferred = owner or get_codername()
-        for ext in extractions:
-            key: Any = (ext.hit_id, ext.scheme) if scheme else ext.hit_id
-            current = chosen.get(key)
-            if current is None or _rank_extraction(ext, preferred) >= _rank_extraction(
-                current, preferred
-            ):
-                chosen[key] = ext
-        selected_rows: list[Any] = list(chosen.values())
-    else:
-        # Consensus path: merge each scheme's rows separately (each scheme has
-        # its own codebook), then keep one row per key exactly as above so
-        # scheme-free pooling never double-counts a hit.
-        by_scheme: dict[str, list[Any]] = {}
-        for ext in extractions:
-            by_scheme.setdefault(ext.scheme, []).append(ext)
-        consensus = {
-            "n_hits": 0,
-            "n_groups": 0,
-            "n_single_owner": 0,
-            "n_consensus_units": 0,
-            "n_fields_unanimous": 0,
-            "n_master_resolved": 0,
-            "n_dropped_conflicts": 0,
-            "n_dropped_metrics": 0,
-        }
-        merged: list[Any] = []
-        for group_scheme in sorted(by_scheme):
-            group_codebook = await codebook_for(group_scheme)
-            group_rows, group_report = meta_consensus.build_consensus_rows(
-                by_scheme[group_scheme], group_codebook
-            )
-            _merge_consensus_report(consensus, group_report)
-            merged.extend(group_rows)
-        consensus["n_hits"] = len({e.hit_id if not isinstance(e, dict) else e.get("hit_id") for e in extractions})
-        for ext in merged:
-            hit_id = ext.get("hit_id") if isinstance(ext, dict) else ext.hit_id
-            ext_scheme = ext.get("scheme") if isinstance(ext, dict) else ext.scheme
-            key = (hit_id, ext_scheme) if scheme else hit_id
-            current = chosen.get(key)
-            if current is None or _extraction_id(ext) >= _extraction_id(current):
-                chosen[key] = ext
-        selected_rows = list(chosen.values())
-
-    rows: list[dict] = []
-    for ext in selected_rows:
-        ext_scheme = ext.get("scheme") if isinstance(ext, dict) else ext.scheme
-        codebook = await codebook_for(ext_scheme)
-        selected = refresh_dv_metrics(ext, codebook)
-        rows.extend(meta_analysis.build_effects([selected], codebook))
-    rows = _filter_effects(rows, domain, families)
-    total = len(rows)
-    if primary:
-        rows = meta_analysis.primary_effects(rows)
-    return rows, total, consensus
+    codebooks: dict[str, dict | None] = {
+        name: _parse_codebook(await repo.get_scheme(name=name))
+        for name in {e.scheme for e in extractions if e.scheme}
+    }
+    return await asyncio.to_thread(
+        _derive_analysis_rows,
+        extractions,
+        scheme,
+        owner,
+        primary,
+        domain,
+        families,
+        codebooks,
+    )
 
 
 @router.post("/analysis/pooled", response_model=dict)
@@ -1315,11 +1385,11 @@ async def analysis_pooled(db: DbDep, body: AnalysisRequest) -> dict:
     )
     model = (body.model or "dl").strip().lower()
     if model == "two_level":
-        result = meta_analysis.pool_two_level(rows)
+        result = await asyncio.to_thread(meta_analysis.pool_two_level, rows)
     elif model == "fixed":
-        result = _pool_fixed(rows)
+        result = await asyncio.to_thread(_pool_fixed, rows)
     else:
-        result = meta_analysis.pool_dl(rows)
+        result = await asyncio.to_thread(meta_analysis.pool_dl, rows)
     result["k_total"] = total
     result["primary"] = body.primary
     result["model"] = model
@@ -1334,7 +1404,9 @@ async def analysis_moderator(db: DbDep, body: ModeratorRequest) -> dict:
         MetaRepository(db), body.scheme, body.owner, body.primary, body.domain, body.families
     )
     key = body.field or body.role
-    result = meta_analysis.moderator(rows, key, body.terms, body.interactions)
+    result = await asyncio.to_thread(
+        meta_analysis.moderator, rows, key, body.terms, body.interactions
+    )
     # Echo the resolved key under both names so a field-name moderator and a
     # legacy role-id moderator are equally readable to the client.
     result["field"] = key
@@ -1349,7 +1421,7 @@ async def analysis_subgroup(db: DbDep, body: SubgroupRequest) -> dict:
         MetaRepository(db), body.scheme, body.owner, body.primary, body.domain, body.families
     )
     key = body.field or body.key
-    result = meta_analysis.subgroup(rows, key)
+    result = await asyncio.to_thread(meta_analysis.subgroup, rows, key)
     result["field"] = key
     result["k_total"] = total
     return result
@@ -1360,7 +1432,7 @@ async def analysis_egger(db: DbDep, body: AnalysisRequest) -> dict:
     rows, total, _consensus = await _analysis_rows(
         MetaRepository(db), body.scheme, body.owner, body.primary, body.domain, body.families
     )
-    result = meta_analysis.egger(rows)
+    result = await asyncio.to_thread(meta_analysis.egger, rows)
     result["k_total"] = total
     return result
 
@@ -1420,7 +1492,8 @@ async def analysis_publication_bias(db: DbDep, body: AnalysisRequest) -> dict:
     rows, total, _consensus = await _analysis_rows(
         MetaRepository(db), body.scheme, body.owner, body.primary, body.domain, body.families
     )
-    return _publication_bias_response(meta_analysis.publication_bias(rows), total)
+    bias = await asyncio.to_thread(meta_analysis.publication_bias, rows)
+    return _publication_bias_response(bias, total)
 
 
 @router.post("/analysis/bayes", response_model=dict)
@@ -1428,11 +1501,15 @@ async def analysis_bayes(db: DbDep, body: BayesRequest) -> dict:
     rows, total, _consensus = await _analysis_rows(
         MetaRepository(db), body.scheme, body.owner, body.primary, body.domain, body.families
     )
-    result = meta_bayes.bayes_pool(
-        rows, mu_sd=body.mu_sd, tau_prior=body.tau_prior, tau_scale=body.tau_scale
+    result = await asyncio.to_thread(
+        meta_bayes.bayes_pool,
+        rows,
+        mu_sd=body.mu_sd,
+        tau_prior=body.tau_prior,
+        tau_scale=body.tau_scale,
     )
     result["k_total"] = total
-    result["sensitivity"] = meta_bayes.bayes_sensitivity(rows)
+    result["sensitivity"] = await asyncio.to_thread(meta_bayes.bayes_sensitivity, rows)
     return result
 
 
@@ -1441,9 +1518,25 @@ async def analysis_leave_one_out(db: DbDep, body: LeaveOneOutRequest) -> dict:
     rows, total, _consensus = await _analysis_rows(
         MetaRepository(db), body.scheme, body.owner, body.primary, body.domain, body.families
     )
-    result = meta_analysis.leave_one_out(rows, by=body.by)
+    result = await asyncio.to_thread(meta_analysis.leave_one_out, rows, by=body.by)
     result["k_total"] = total
     return result
+
+
+def _forest_png(rows: list[dict]) -> bytes:
+    return meta_figures.forest_png(meta_analysis.forest(rows))
+
+
+def _funnel_png(rows: list[dict]) -> bytes:
+    return meta_figures.funnel_png(rows)
+
+
+def _spec_curve_png(rows: list[dict]) -> bytes:
+    return meta_figures.spec_curve_png(meta_multiverse.multiverse(rows))
+
+
+def _bayes_png(rows: list[dict]) -> bytes:
+    return meta_figures.bayes_png(meta_bayes.bayes_pool(rows))
 
 
 @router.get("/analysis/forest", response_model=dict)
@@ -1458,7 +1551,7 @@ async def analysis_forest(
     rows, total, _consensus = await _analysis_rows(
         MetaRepository(db), scheme, owner, primary, domain, _split_families(families)
     )
-    result = meta_analysis.forest(rows)
+    result = await asyncio.to_thread(meta_analysis.forest, rows)
     result["k_total"] = total
     return result
 
@@ -1475,7 +1568,7 @@ async def analysis_forest_png(
     rows, _, _consensus = await _analysis_rows(
         MetaRepository(db), scheme, owner, primary, domain, _split_families(families)
     )
-    content = meta_figures.forest_png(meta_analysis.forest(rows))
+    content = await asyncio.to_thread(_forest_png, rows)
     return Response(
         content=content,
         media_type="image/png",
@@ -1493,7 +1586,9 @@ async def analysis_multiverse(db: DbDep, body: MultiverseRequest) -> dict:
     rows, _, _consensus = await _analysis_rows(
         MetaRepository(db), body.scheme, body.owner, False, body.domain, body.families
     )
-    return meta_multiverse.multiverse(rows, max_specs=body.max_specs)
+    return await asyncio.to_thread(
+        meta_multiverse.multiverse, rows, max_specs=body.max_specs
+    )
 
 
 @router.get("/analysis/funnel.png")
@@ -1508,7 +1603,7 @@ async def analysis_funnel_png(
     rows, _, _consensus = await _analysis_rows(
         MetaRepository(db), scheme, owner, primary, domain, _split_families(families)
     )
-    content = meta_figures.funnel_png(rows)
+    content = await asyncio.to_thread(_funnel_png, rows)
     return Response(
         content=content,
         media_type="image/png",
@@ -1530,7 +1625,7 @@ async def analysis_spec_curve_png(
     rows, _, _consensus = await _analysis_rows(
         MetaRepository(db), scheme, owner, False, domain, _split_families(families)
     )
-    content = meta_figures.spec_curve_png(meta_multiverse.multiverse(rows))
+    content = await asyncio.to_thread(_spec_curve_png, rows)
     return Response(
         content=content,
         media_type="image/png",
@@ -1550,7 +1645,7 @@ async def analysis_bayes_png(
     rows, _, _consensus = await _analysis_rows(
         MetaRepository(db), scheme, owner, primary, domain, _split_families(families)
     )
-    content = meta_figures.bayes_png(meta_bayes.bayes_pool(rows))
+    content = await asyncio.to_thread(_bayes_png, rows)
     return Response(
         content=content,
         media_type="image/png",
@@ -1566,8 +1661,9 @@ async def meta_prisma_counts(db: DbDep) -> dict:
 @router.get("/prisma.png")
 async def meta_prisma_png(db: DbDep) -> Response:
     counts = await meta_prisma.build_prisma(db)
+    content = await asyncio.to_thread(meta_figures.prisma_png, counts)
     return Response(
-        content=meta_figures.prisma_png(counts),
+        content=content,
         media_type="image/png",
         headers={"Content-Disposition": 'inline; filename="prisma.png"'},
     )
@@ -1576,18 +1672,20 @@ async def meta_prisma_png(db: DbDep) -> Response:
 @router.get("/summary", response_model=dict)
 async def meta_categorical_summary(db: DbDep, scheme: str | None = None) -> dict:
     repo = MetaRepository(db)
-    extractions = await repo.list_extractions()
-    codebook = await _extraction_codebook(repo, scheme)
-    return meta_summary.build_summary(extractions, codebook)
+    extractions = await repo.list_extractions(include_dv_metrics=False)
+    scheme_name = scheme or next((e.scheme for e in extractions if e.scheme), None)
+    codebook = await _codebook_for_scheme(repo, scheme_name)
+    return await asyncio.to_thread(meta_summary.build_summary, extractions, codebook)
 
 
 @router.get("/audit", response_model=dict)
 async def meta_variable_audit(db: DbDep, scheme: str | None = None) -> dict:
     """Extraction-variable coverage and role-integrity audit (see ``meta_audit``)."""
     repo = MetaRepository(db)
-    extractions = await repo.list_extractions()
-    codebook = await _extraction_codebook(repo, scheme)
-    return meta_audit.variable_audit(extractions, codebook)
+    extractions = await repo.list_extractions(include_dv_metrics=False)
+    scheme_name = scheme or next((e.scheme for e in extractions if e.scheme), None)
+    codebook = await _codebook_for_scheme(repo, scheme_name)
+    return await asyncio.to_thread(meta_audit.variable_audit, extractions, codebook)
 
 
 @router.post("/report")
@@ -1601,17 +1699,18 @@ async def meta_report_file(db: DbDep, body: ReportRequest) -> Response:
     )
     fmt = (body.format or "docx").strip().lower()
     if fmt == "md":
-        content = meta_report.render_markdown(context).encode("utf-8")
+        content = await asyncio.to_thread(meta_report.render_markdown, context)
+        payload = content.encode("utf-8")
         media_type = "text/markdown; charset=utf-8"
         filename = "meta_report.md"
     elif fmt == "docx":
-        content = meta_report.render_docx_bytes(context)
+        payload = await asyncio.to_thread(meta_report.render_docx_bytes, context)
         media_type = (
             "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
         )
         filename = "meta_report.docx"
     elif fmt == "pptx":
-        content = meta_report.render_pptx_bytes(context)
+        payload = await asyncio.to_thread(meta_report.render_pptx_bytes, context)
         media_type = (
             "application/vnd.openxmlformats-officedocument.presentationml.presentation"
         )
@@ -1619,7 +1718,7 @@ async def meta_report_file(db: DbDep, body: ReportRequest) -> Response:
     else:
         raise HTTPException(status_code=422, detail="format must be 'md', 'docx' or 'pptx'")
     return Response(
-        content=content,
+        content=payload,
         media_type=media_type,
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
@@ -1706,6 +1805,49 @@ async def import_scheme(db: DbDep, body: SchemeImport) -> dict:
         codebook=codebook_json,
     )
     return {"ok": True, "id": scheme.id, "name": scheme.name, "overwritten": False}
+
+
+# ── CodingStudio folder import ───────────────────────────────────────────
+
+@router.post("/codingstudio/preview", response_model=dict)
+async def codingstudio_preview(svc: OpenProjectDep, body: CodingStudioPreviewRequest) -> dict:
+    """Describe a CodingStudio project folder (read-only, nothing imported).
+
+    Always answers 200: a missing folder is reported through ``exists`` /
+    ``errors`` so the dialog can render it (the import then refuses 422).
+    """
+    from qualcoder_api.services.meta_codingstudio import preview_codingstudio
+
+    return await asyncio.to_thread(preview_codingstudio, body.folder)
+
+
+@router.post("/codingstudio/import", response_model=dict)
+async def codingstudio_import(svc: OpenProjectDep, body: CodingStudioImportRequest) -> dict:
+    """Import hits, screening, the scheme, extractions and PDFs from a folder.
+
+    Idempotent: re-running the import never duplicates hits, screening rows,
+    extractions or linked PDFs. 422 when the folder carries neither a
+    ``master_dataset.xlsx`` nor ``Extraction/*.json``.
+    """
+    from qualcoder_api.services.meta_codingstudio import import_codingstudio
+
+    if svc.session_factory is None or not svc.project_path:
+        raise HTTPException(status_code=409, detail="no project is open")
+    try:
+        return await import_codingstudio(
+            svc.session_factory,
+            svc.project_path,
+            body.folder,
+            owner=body.owner,
+            run_id=body.run_id,
+            import_hits=body.import_hits,
+            import_screening=body.import_screening,
+            import_extractions=body.import_extractions,
+            link_pdfs=body.link_pdfs,
+            scheme_name=body.scheme_name,
+        )
+    except ValueError as err:
+        raise HTTPException(status_code=422, detail=str(err)) from err
 
 
 # ── jobs ─────────────────────────────────────────────────────────────────

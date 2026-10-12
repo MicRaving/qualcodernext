@@ -2220,6 +2220,48 @@ export interface MetaImportPreview {
   fields: string[];
 }
 
+/** Scan of a CodingStudio project folder (preview before import). */
+export interface MetaCodingStudioPreview {
+  folder: string;
+  exists: boolean;
+  papers: number;
+  texts: number;
+  extraction_files: number;
+  study_count: number;
+  screenings: { coder: string; rows: number }[];
+  workbook: { rows: number; path: string } | null;
+  schema_version: string | null;
+  sample_studies: { key: string; title: string; doi: string; records: number }[];
+  errors: string[];
+}
+
+/** Result counts from importing a CodingStudio project folder. */
+export interface MetaCodingStudioImportResult {
+  ok: boolean;
+  scheme: string;
+  hits_imported: number;
+  hits_skipped: number;
+  screening_rows: number;
+  extractions_imported: number;
+  pdfs_linked: number;
+  errors: string[];
+}
+
+/** Per-status paper counts for the download stage — the `documents` block of
+ *  `GET /meta/status`, grouped from `meta_document.status`. Drives the
+ *  Download left bar's progress indicator. */
+export interface MetaDocumentCounts {
+  done: number;
+  failed: number;
+  pending: number;
+  working: number;
+  unretrievable: number;
+  /** Documents being tracked (sum of the status buckets). */
+  total: number;
+  /** The backend may report further buckets (e.g. `skipped`). */
+  [key: string]: number;
+}
+
 export interface MetaStatus {
   hits: number;
   criteria: number;
@@ -2228,6 +2270,12 @@ export interface MetaStatus {
   eligible: number;
   documents_done: number;
   extracted: number;
+  /** Distinct hits with an abstract screening row (matches the To-screen /
+   *  Screened filters); `hits` is the denominator. */
+  screened_hits?: number;
+  /** Per-status paper counts for the Download tab indicator; absent on older
+   *  backends, which only expose the flat `documents_done`. */
+  documents?: MetaDocumentCounts;
   tabs?: { screening: number; downloads: number; extraction: number };
   by_status: Record<string, number>;
 }

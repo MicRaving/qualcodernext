@@ -217,7 +217,12 @@ export function DashboardView() {
     <div className="flex h-full flex-col bg-bg">
       <ViewHeader
         back={false}
-        title={projectOpen ? projectName : t("app.name")}
+        title={
+          <span className="flex items-center gap-2">
+            <img src="/logo.png" alt="" aria-hidden className="h-6 w-6 shrink-0 rounded-sm" />
+            <span>{projectOpen ? projectName : t("app.name")}</span>
+          </span>
+        }
         meta={
           projectOpen && summary
             ? `Database version ${summary.databaseversion} · created ${summary.project_date}`

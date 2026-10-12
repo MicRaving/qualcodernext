@@ -16,8 +16,8 @@ import {
   ClipboardCheck,
   FileText,
   FlaskConical,
+  FolderOpen,
   Grid3x3,
-  Handshake,
   Layers,
   Sigma,
   Table2,
@@ -233,18 +233,16 @@ export function MetaList() {
   }, [hits, query, tab, screeningFilter]);
 
   const screenedCount = useMemo(() => {
-    const byStatus = status?.by_status;
-    if (byStatus && typeof byStatus === "object") {
-      const done =
-        (byStatus.included ?? 0) + (byStatus.excluded ?? 0) + (byStatus.screened ?? 0);
-      if (done > 0) return done;
-    }
+    // `screened_hits` counts distinct hits with an abstract screening row, so
+    // it matches the To-screen/Screened filters (the old `by_status` hit-status
+    // tally disagreed with the list, e.g. "0 to screen" but "4/10 screened").
+    if (typeof status?.screened_hits === "number") return status.screened_hits;
     return hits.filter((h) => h.screened).length;
   }, [status, hits]);
   const progressTotal = status?.hits ?? total;
   const progressPct = progressTotal ? Math.min(100, Math.round((screenedCount / progressTotal) * 1000) / 10) : 0;
 
-  // Screening progress — shared by the Screen, Download and Extract left bars.
+  // Screening progress — shared by the Screen and Extract left bars.
   const progress = (
     <div className="flex items-center gap-2">
       <div className="flex-1">
@@ -254,6 +252,38 @@ export function MetaList() {
         </div>
         <div className="h-1 w-full overflow-hidden rounded-full bg-surface-higher">
           <div className="h-full rounded-full bg-accent" style={{ width: `${progressPct}%` }} />
+        </div>
+      </div>
+    </div>
+  );
+
+  // Documents progress — the Download left bar's own indicator, distinct from
+  // screening. `total` is the backend's document tally when present, else the
+  // eligible-hits count (so the bar still reads before the first download).
+  const docCounts = status?.documents;
+  const docsDone = docCounts?.done ?? status?.documents_done ?? 0;
+  const docsFailed = docCounts?.failed ?? 0;
+  const eligibleTotal = status?.eligible || status?.tabs?.downloads || 0;
+  const docsTotal =
+    typeof docCounts?.total === "number" && docCounts.total > 0 ? docCounts.total : eligibleTotal;
+  const docsPct = docsTotal ? Math.min(100, Math.round((docsDone / docsTotal) * 1000) / 10) : 0;
+
+  const documentsProgress = (
+    <div className="flex items-center gap-2">
+      <div className="flex-1">
+        <div className="mb-0.5 flex items-center justify-between text-[10px] text-text-secondary">
+          <span>{t("meta.documentsProgress", { done: docsDone, total: docsTotal })}</span>
+          <span className="flex items-center gap-1.5">
+            {docsFailed > 0 ? (
+              <span className="text-danger" title={t("meta.documentsFailed", { count: docsFailed })}>
+                {t("meta.documentsFailed", { count: docsFailed })}
+              </span>
+            ) : null}
+            <span>{docsPct}%</span>
+          </span>
+        </div>
+        <div className="h-1 w-full overflow-hidden rounded-full bg-surface-higher">
+          <div className="h-full rounded-full bg-accent" style={{ width: `${docsPct}%` }} />
         </div>
       </div>
     </div>
@@ -348,22 +378,27 @@ export function MetaList() {
       scroll={false}
       header={
         <BarHeader
-          title={
-            <BarTitle
-              icon={tab === "conflicts" ? Handshake : FlaskConical}
-              label={tab === "conflicts" ? t("meta.agreementTitle") : t("meta.listTitle")}
-            />
-          }
+          title={<BarTitle icon={FlaskConical} label={t("meta.listTitle")} />}
           count={tab === "analyze" ? undefined : tab === "conflicts" ? conflicts?.total : total}
         >
           {tab === "screen" && (
-            <Button
-              variant="secondary"
-              icon={<Upload size={12} aria-hidden />}
-              onClick={() => setMetaUi({ importOpen: true })}
-            >
-              {t("meta.importSearch")}
-            </Button>
+            <>
+              <Button
+                variant="secondary"
+                icon={<Upload size={12} aria-hidden />}
+                onClick={() => setMetaUi({ importOpen: true })}
+              >
+                {t("meta.importSearch")}
+              </Button>
+              <Button
+                variant="secondary"
+                icon={<FolderOpen size={12} aria-hidden />}
+                title={t("meta.codingStudioTitle")}
+                onClick={() => setMetaUi({ codingStudioOpen: true })}
+              >
+                {t("meta.codingStudioImport")}
+              </Button>
+            </>
           )}
           {tab === "download" && (
             <>
@@ -435,7 +470,11 @@ export function MetaList() {
         </div>
       )}
 
-      {(tab === "download" || tab === "extract") && (
+      {tab === "download" && (
+        <div className="shrink-0 border-b border-border px-2 py-1.5">{documentsProgress}</div>
+      )}
+
+      {tab === "extract" && (
         <div className="shrink-0 border-b border-border px-2 py-1.5">{progress}</div>
       )}
 

@@ -6,7 +6,7 @@
  */
 
 import { apiBaseSync, localRequestBlob, request, uploadRequest } from "./transport";
-import { AI_CHAT_TIMEOUT_MS } from "@/lib/config";
+import { AI_CHAT_TIMEOUT_MS, ANALYSIS_TIMEOUT_MS } from "@/lib/config";
 import type {
   Annotation,
   AppSettings,
@@ -72,6 +72,8 @@ import type {
   Journal,
   MaintenanceSettings,
   MemoItem,
+  MetaCodingStudioImportResult,
+  MetaCodingStudioPreview,
   MetaCriterion,
   MetaConflictsResult,
   MetaDocument,
@@ -1324,6 +1326,29 @@ export const api = {
   metaDeleteHit: (hitId: number) =>
     request<void>(`/meta/hits/${hitId}`, { method: "DELETE" }),
 
+  /** CodingStudio folder importer: scan a project folder before importing. */
+  metaCodingStudioPreview: (folder: string) =>
+    request<MetaCodingStudioPreview>("/meta/codingstudio/preview", {
+      method: "POST",
+      body: JSON.stringify({ folder }),
+    }),
+  /** Import a CodingStudio project folder (can take minutes for big folders). */
+  metaCodingStudioImport: (body: {
+    folder: string;
+    owner?: string;
+    run_id?: string;
+    import_hits?: boolean;
+    import_screening?: boolean;
+    import_extractions?: boolean;
+    link_pdfs?: boolean;
+    scheme_name?: string;
+  }) =>
+    request<MetaCodingStudioImportResult>(
+      "/meta/codingstudio/import",
+      { method: "POST", body: JSON.stringify(body) },
+      ANALYSIS_TIMEOUT_MS,
+    ),
+
   metaCriteria: () => request<MetaCriterion[]>("/meta/criteria"),
   metaReplaceCriteria: (criteria: MetaCriterion[]) =>
     request<MetaCriterion[]>("/meta/criteria", { method: "PUT", body: JSON.stringify(criteria) }),
@@ -1537,76 +1562,102 @@ export const api = {
   // --- Meta analysis & reporting (contract §6–§10) --------------------
 
   metaAnalysisPooled: (body: MetaAnalysisRequest) =>
-    request<MetaPooledResult>("/meta/analysis/pooled", {
-      method: "POST",
-      body: JSON.stringify(body),
-    }),
+    request<MetaPooledResult>(
+      "/meta/analysis/pooled",
+      { method: "POST", body: JSON.stringify(body) },
+      ANALYSIS_TIMEOUT_MS,
+    ),
   metaAnalysisModerator: (body: MetaModeratorRequest) =>
-    request<MetaModeratorResult>("/meta/analysis/moderator", {
-      method: "POST",
-      body: JSON.stringify(body),
-    }),
+    request<MetaModeratorResult>(
+      "/meta/analysis/moderator",
+      { method: "POST", body: JSON.stringify(body) },
+      ANALYSIS_TIMEOUT_MS,
+    ),
   metaAnalysisSubgroup: (body: MetaSubgroupRequest) =>
-    request<MetaSubgroupResult>("/meta/analysis/subgroup", {
-      method: "POST",
-      body: JSON.stringify(body),
-    }),
+    request<MetaSubgroupResult>(
+      "/meta/analysis/subgroup",
+      { method: "POST", body: JSON.stringify(body) },
+      ANALYSIS_TIMEOUT_MS,
+    ),
   metaAnalysisEgger: (body: MetaAnalysisRequest) =>
-    request<MetaEggerResult>("/meta/analysis/egger", {
-      method: "POST",
-      body: JSON.stringify(body),
-    }),
+    request<MetaEggerResult>(
+      "/meta/analysis/egger",
+      { method: "POST", body: JSON.stringify(body) },
+      ANALYSIS_TIMEOUT_MS,
+    ),
   metaAnalysisPublicationBias: (body: MetaAnalysisRequest) =>
-    request<MetaPublicationBiasResult>("/meta/analysis/publication-bias", {
-      method: "POST",
-      body: JSON.stringify(body),
-    }),
+    request<MetaPublicationBiasResult>(
+      "/meta/analysis/publication-bias",
+      { method: "POST", body: JSON.stringify(body) },
+      ANALYSIS_TIMEOUT_MS,
+    ),
   metaAnalysisBayes: (body: MetaBayesRequest) =>
-    request<MetaBayesResult>("/meta/analysis/bayes", {
-      method: "POST",
-      body: JSON.stringify(body),
-    }),
+    request<MetaBayesResult>(
+      "/meta/analysis/bayes",
+      { method: "POST", body: JSON.stringify(body) },
+      ANALYSIS_TIMEOUT_MS,
+    ),
   metaAnalysisLeaveOneOut: (body: MetaAnalysisRequest) =>
-    request<MetaLeaveOneOutResult>("/meta/analysis/leave-one-out", {
-      method: "POST",
-      body: JSON.stringify(body),
-    }),
+    request<MetaLeaveOneOutResult>(
+      "/meta/analysis/leave-one-out",
+      { method: "POST", body: JSON.stringify(body) },
+      ANALYSIS_TIMEOUT_MS,
+    ),
   metaAnalysisForest: (opts?: { scheme?: string; domain?: string; families?: MetaEffectFamily[] }) => {
     const q = new URLSearchParams();
     if (opts?.scheme) q.set("scheme", opts.scheme);
     if (opts?.domain) q.set("domain", opts.domain);
     if (opts?.families?.length) q.set("families", opts.families.join(","));
     const suffix = q.toString() ? `?${q.toString()}` : "";
-    return request<MetaForest>(`/meta/analysis/forest${suffix}`);
+    return request<MetaForest>(`/meta/analysis/forest${suffix}`, undefined, ANALYSIS_TIMEOUT_MS);
   },
   metaAnalysisForestPng: (opts?: { scheme?: string; owner?: string }) => {
     const q = new URLSearchParams();
     if (opts?.scheme) q.set("scheme", opts.scheme);
     if (opts?.owner) q.set("owner", opts.owner);
     const suffix = q.toString() ? `?${q.toString()}` : "";
-    return localRequestBlob(`/meta/analysis/forest.png${suffix}`);
+    return localRequestBlob(`/meta/analysis/forest.png${suffix}`, undefined, ANALYSIS_TIMEOUT_MS);
   },
   metaAnalysisMultiverse: (body: MetaMultiverseRequest) =>
-    request<MetaMultiverseResult>("/meta/analysis/multiverse", {
-      method: "POST",
-      body: JSON.stringify(body),
-    }),
+    request<MetaMultiverseResult>(
+      "/meta/analysis/multiverse",
+      { method: "POST", body: JSON.stringify(body) },
+      ANALYSIS_TIMEOUT_MS,
+    ),
   metaAnalysisFunnelPng: (opts?: { scheme?: string; owner?: string; primary?: boolean }) =>
-    localRequestBlob(`/meta/analysis/funnel.png${analysisFigureQuery(opts)}`),
+    localRequestBlob(
+      `/meta/analysis/funnel.png${analysisFigureQuery(opts)}`,
+      undefined,
+      ANALYSIS_TIMEOUT_MS,
+    ),
   metaAnalysisSpecCurvePng: (opts?: { scheme?: string; owner?: string; primary?: boolean }) =>
-    localRequestBlob(`/meta/analysis/spec-curve.png${analysisFigureQuery(opts)}`),
+    localRequestBlob(
+      `/meta/analysis/spec-curve.png${analysisFigureQuery(opts)}`,
+      undefined,
+      ANALYSIS_TIMEOUT_MS,
+    ),
   metaAnalysisBayesPng: (opts?: { scheme?: string; owner?: string; primary?: boolean }) =>
-    localRequestBlob(`/meta/analysis/bayes.png${analysisFigureQuery(opts)}`),
+    localRequestBlob(
+      `/meta/analysis/bayes.png${analysisFigureQuery(opts)}`,
+      undefined,
+      ANALYSIS_TIMEOUT_MS,
+    ),
   metaAudit: (opts?: { scheme?: string }) =>
     request<MetaAuditResult>(
       `/meta/audit${opts?.scheme ? `?scheme=${encodeURIComponent(opts.scheme)}` : ""}`,
+      undefined,
+      ANALYSIS_TIMEOUT_MS,
     ),
-  metaPrisma: () => request<MetaPrismaCounts>("/meta/prisma"),
-  metaPrismaPng: () => localRequestBlob("/meta/prisma.png"),
+  metaPrisma: () => request<MetaPrismaCounts>("/meta/prisma", undefined, ANALYSIS_TIMEOUT_MS),
+  metaPrismaPng: () => localRequestBlob("/meta/prisma.png", undefined, ANALYSIS_TIMEOUT_MS),
   metaSummary: (opts?: { scheme?: string }) =>
-    request<MetaSummaryResult>(`/meta/summary${opts?.scheme ? `?scheme=${encodeURIComponent(opts.scheme)}` : ""}`),
+    request<MetaSummaryResult>(
+      `/meta/summary${opts?.scheme ? `?scheme=${encodeURIComponent(opts.scheme)}` : ""}`,
+      undefined,
+      ANALYSIS_TIMEOUT_MS,
+    ),
   metaReport: (body: MetaReportRequest) =>
-    localRequestBlob("/meta/report", { method: "POST", body: JSON.stringify(body) }),
+    localRequestBlob("/meta/report", { method: "POST", body: JSON.stringify(body) }, ANALYSIS_TIMEOUT_MS),
 
   metaJobs: (kind?: string) =>
     request<MetaJob[]>(`/meta/jobs${kind ? `?kind=${encodeURIComponent(kind)}` : ""}`),

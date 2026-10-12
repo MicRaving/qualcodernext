@@ -22,7 +22,17 @@ import { ChevronLeft, ChevronRight } from "lucide-react";
 import { BarWidthContext } from "@/components/ui/barWidth";
 
 const MIN_BAR = 200;
-const MAX_BAR = 520;
+const MAX_BAR = 960;
+/** Fraction of the window a bar may occupy when the window resizes. The right
+ *  bar (details/PDF) may grow much wider than the list on the left. */
+const LEFT_MAX_FRACTION = 1 / 3;
+const RIGHT_MAX_FRACTION = 2 / 3;
+
+/** The widest a given side's bar may be for the current window. */
+function barMax(side: "left" | "right") {
+  const fraction = side === "left" ? LEFT_MAX_FRACTION : RIGHT_MAX_FRACTION;
+  return Math.max(MIN_BAR, Math.min(MAX_BAR, Math.round(window.innerWidth * fraction)));
+}
 /** Dragging a bar past this width snaps it shut (hidden state). */
 const HIDE_BAR_BELOW = 140;
 /** Edge tab width when a bar is hidden (recall arrow). */
@@ -56,7 +66,7 @@ export function WorkspaceLayout({
   useEffect(() => {
     const onOpen = () => {
       setRightHidden(false);
-      setRightW(Math.min(MAX_BAR, lastRightW.current));
+      setRightW(Math.min(barMax("right"), lastRightW.current));
     };
     window.addEventListener("qc:rightbar-open", onOpen);
     return () => window.removeEventListener("qc:rightbar-open", onOpen);
@@ -96,7 +106,7 @@ export function WorkspaceLayout({
         else setRightHidden(true);
         return;
       }
-      const clamped = Math.min(MAX_BAR, Math.max(MIN_BAR, Math.round(next)));
+      const clamped = Math.min(barMax(drag.side), Math.max(MIN_BAR, Math.round(next)));
       if (drag.side === "left") {
         setLeftHidden(false);
         lastLeftW.current = clamped;
@@ -123,9 +133,8 @@ export function WorkspaceLayout({
   // swallow more than a third of the viewport.
   useEffect(() => {
     const clamp = () => {
-      const max = Math.max(MIN_BAR, Math.round(window.innerWidth / 3));
-      setLeftW((w) => Math.min(max, Math.max(MIN_BAR, w)));
-      setRightW((w) => Math.min(max, Math.max(MIN_BAR, w)));
+      setLeftW((w) => Math.min(barMax("left"), Math.max(MIN_BAR, w)));
+      setRightW((w) => Math.min(barMax("right"), Math.max(MIN_BAR, w)));
     };
     window.addEventListener("resize", clamp);
     return () => window.removeEventListener("resize", clamp);
@@ -133,11 +142,11 @@ export function WorkspaceLayout({
 
   const restoreLeft = () => {
     setLeftHidden(false);
-    setLeftW(Math.min(MAX_BAR, lastLeftW.current));
+    setLeftW(Math.min(barMax("left"), lastLeftW.current));
   };
   const restoreRight = () => {
     setRightHidden(false);
-    setRightW(Math.min(MAX_BAR, lastRightW.current));
+    setRightW(Math.min(barMax("right"), lastRightW.current));
   };
 
   return (

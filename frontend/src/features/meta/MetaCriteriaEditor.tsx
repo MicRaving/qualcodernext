@@ -28,10 +28,6 @@ export interface MetaCriterionDraft {
 
 const KINDS: MetaCriterionKind[] = ["verdict", "classify", "number"];
 
-function uid(): string {
-  return Math.random().toString(36).slice(2, 10);
-}
-
 function slugify(value: string): string {
   const slug = value
     .toLowerCase()
@@ -133,7 +129,7 @@ export function MetaCriteriaEditor({
           const showOptions = criterion.kind === "classify" || criterion.kind === "number";
           return (
             <div
-              key={criterion.id ?? criterion.key ?? uid()}
+              key={criterion.id ?? criterion.key ?? i}
               className="flex items-start gap-2 rounded-sm border border-border p-2"
             >
               <span className="mt-1.5 w-5 shrink-0 text-xs text-text-secondary">{i + 1}.</span>

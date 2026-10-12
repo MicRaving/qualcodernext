@@ -966,10 +966,10 @@ export function ProjectShell() {
           <HistoryView />
         ) : rightPane === "creative" ? (
           <CreativePanel />
-        ) : view.kind === "meta" && (metaUi.tab === "extract" || metaUi.tab === "download") ? (
-          // The Extract/Download tabs' right bar is the paper linked to the
-          // focused (or clicked) study (the app's shared PDF viewer); closing
-          // AI/Settings/History/Creative returns here.
+        ) : view.kind === "meta" && metaUi.tab === "download" ? (
+          // The Download tab's right bar is the paper linked to the clicked
+          // (or focused) study — the Extract tab shows its paper inline; the
+          // app's shared PDF viewer returns here when AI/Settings/etc. close.
           <MetaPdfPane />
         ) : view.kind === "analyze" && analyzeUi.selectedId === "graphs" ? (
           // The graph details inspector opens automatically; closing the

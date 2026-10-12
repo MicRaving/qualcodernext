@@ -33,23 +33,29 @@ AI backend.
    `↑`/`↓` between studies. The **Blind** toggle sits in the center menubar and
    hides the AI proposals.
 3. **Downloads** — the left bar's **Download** button runs the automatic
-   retrieval chain for included hits: OpenAlex → Unpaywall → Crossref landing
-   page, then a running local Zotero for PDFs the user already have. The
-   Unpaywall contact e-mail is set in the center menubar. **Import PDFs**
+   retrieval chain for included hits. It collects every open-access candidate
+   (OpenAlex locations, Unpaywall `oa_locations`, Europe PMC) and tries them
+   **repository mirrors first**, then the publisher PDF, the Crossref landing
+   page and the DOI resolver, so one blocked source no longer sinks the paper;
+   a running local Zotero remains a best-effort reuse source. The Download left
+   bar shows a **downloaded / total** indicator with a failed count, each row
+   keeps its status pill, and a failure message names the reason (e.g.
+   `all 3 sources blocked (last: HTTP 403)`) or `no open-access copy found`.
+   The Unpaywall contact e-mail is set in the center menubar. **Import PDFs**
    batch-imports a folder of PDFs, matching each filename to a hit by DOI or
    title; files assigned per row remain possible too. Zotero has no public
    machine API to "find a PDF for a DOI" — QCnext reimplements the resolver
    semantics natively and treats Zotero as a best-effort reuse source.
    Clicking a row opens its paper in the app right bar, using the same themed
    PDF viewer as the coding center.
-4. **Extraction** — a three-pane workspace: the acquired-study list in the left
-   bar, the selected study's scheme-driven coding form in the center, and its
-   linked paper in the app right bar. The scheme `<Select>` and the
-   **Schema editor** button sit in the center menubar; the Extract left bar is
-   just the study list. A collapsible **Full-text screening** section above the
-   coding form shows every project criterion with Include/Exclude plus a reason
-   (the meta-repo `Fulltext_Verdict` + exclusion-criterion + reason model),
-   with re-include when a reason is recorded. Tick the
+4. **Extraction** — a Coding-style split view: the scheme-driven coding form on
+   the left (a collapsible full-text screening panel above it) and the study's
+   linked paper on the right, with the same draggable divider as the Coding
+   panels (reusing `useSplitResize` and the canvas PDF viewer). The scheme
+   `<Select>` and the **Schema editor** button sit in the center menubar; the
+   Extract left bar is just the study list. The full-text panel starts
+   collapsed and never pre-fills verdicts — a criterion is only recorded once
+   you answer it. Tick the
    papers to process and **Autocode selected**, or code by hand — typing a level
    number (`1..9`) picks that option for a categorical field and advances,
    `Enter` advances from a number field, and `Tab`/`Shift+Tab` move between
@@ -136,7 +142,29 @@ any coded variables and supports **interaction terms** (`A * B`).
 Effect sizes are derived from each metric's roles (`yi`/`vi`, `d`/`g`,
 descriptives, `t`, `F`, `r`, odds ratio, partial eta², β or χ²); `polarity`
 flips `higher_is_worse` outcomes and `eligible_primary` restricts the primary
-pool. Everything is computed locally in pure Python/numpy.
+pool. Everything is computed locally in pure Python/numpy, with the heavy work
+run off the request loop so a long analysis leaves the app responsive instead of
+timing out.
+
+## Importing a CodingStudio project
+
+The Screen left bar's **Import CodingStudio** action imports a reference
+CodingStudio project folder (the layout used by the inoculation-meta coder):
+`master_dataset.xlsx` (bibliographic rows + full-text verdicts), `Extraction/*.json`
+(multi-experiment records with `DV_Metrics`), `Screening/*.json` (per-coder
+abstract verdicts), `Scripts/coding_web/schema.json` (used to build the coding
+scheme), and `Papers/*.pdf` (linked to the matching hits). The dialog previews
+the folder first, then imports hits, abstract + full-text screening, the scheme,
+extractions and PDFs. It is idempotent — re-running skips existing hits and
+overwrites the same `(hit, coder, scheme)` rows instead of duplicating. CodingStudio
+`DV_Metrics` field names map to QCnext roles through the legacy aliases, so the
+imported effects flow straight into the Analyze tab. The importer covers the
+current v3.1 specification: it derives field editors and option lists from the
+schema's controlled vocabularies, keeps each module field's identity (and its
+per-module option levels where a field name repeats across modules), imports the
+workbook's C1–C4 base verdicts as an `LLM/base` rater alongside the per-coder
+full-text decisions, skips harmonizer/variant `Codings/` files, and makes every
+coded field available as a moderator (free-text/identifier fields are excluded).
 
 ## Sample project
 

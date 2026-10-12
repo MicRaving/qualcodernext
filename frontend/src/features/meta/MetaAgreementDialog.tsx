@@ -14,7 +14,6 @@
  * `field_name` + record/metric coordinates (extraction).
  */
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Handshake } from "lucide-react";
 import { api } from "@/lib/api";
 import type {
   MetaAgreementField,
@@ -23,24 +22,16 @@ import type {
   MetaConflictsResult,
   MetaLlmExcludedRow,
 } from "@/lib/api/types";
-import { Button, EmptyState, ErrorBanner, LoadingState, TableHead } from "@/components/ui/orchestrator";
+import { Button, ErrorBanner, LoadingState, TableHead } from "@/components/ui/orchestrator";
 import { useI18n } from "@/lib/i18n";
 import { useToast } from "@/lib/toast";
 import { errorMessage } from "@/lib/utils";
 import { useCoderStore } from "@/stores/coder";
 import { useWorkspaceStore } from "@/stores/workspace";
+import { asArray, asObject } from "@/features/meta/metaUtils";
 
 const TD = "border-b border-border px-3 py-1.5 text-sm align-top";
 const NUM = `${TD} text-right tabular-nums`;
-
-function asObject<T>(value: unknown): T | null {
-  if (value && typeof value === "object" && !Array.isArray(value)) return value as T;
-  return null;
-}
-
-function asArray<T>(value: unknown): T[] {
-  return Array.isArray(value) ? (value as T[]) : [];
-}
 
 function acClass(value: number | null | undefined): string {
   if (value === null || value === undefined || !Number.isFinite(Number(value))) return "text-text-secondary";
@@ -339,9 +330,4 @@ export function MetaAgreementPanel() {
       ) : null}
     </div>
   );
-}
-
-/** Kept for callers that want the same empty affordance as the analyze tab. */
-export function AgreementEmpty() {
-  return <EmptyState icon={<Handshake size={24} aria-hidden />}>—</EmptyState>;
 }

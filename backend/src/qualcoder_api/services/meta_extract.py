@@ -29,7 +29,6 @@ from qualcoder_api.services.meta_prompt import (
     truncate_for_context,
 )
 from qualcoder_api.services.meta_roles import (
-    STUDY_ROLES,
     metric_by_role,
     role_map,
     value_by_role,
@@ -265,6 +264,10 @@ def refresh_dv_metrics(extraction: Any, codebook: dict | None) -> Any:
     can disagree with what the live codebook would derive. Analysis and export
     call this so they always read the current derivation; pass ``None`` to
     leave the cached value untouched (e.g. a legacy extraction with no scheme).
+
+    ``derive_dv_metrics`` keys its merge by field name, so the codebook only
+    gates *whether* to re-derive — normalising it here just to build an unused
+    role map would repeat that work for every extraction on the analysis path.
     """
     if codebook is None:
         return extraction
@@ -276,23 +279,42 @@ def refresh_dv_metrics(extraction: Any, codebook: dict | None) -> Any:
     records = study_vars.get("records") if isinstance(study_vars, dict) else None
     if not isinstance(records, list):
         return extraction
-    book = normalise_codebook(codebook)
-    dv_metrics = derive_dv_metrics(records, role_map(study_fields(book)))
+    dv_metrics = derive_dv_metrics(records)
     if isinstance(extraction, dict):
         return {**extraction, "dv_metrics": dv_metrics}
     return extraction.model_copy(update={"dv_metrics": dv_metrics})
 
 
+def _scalar_list(value: list) -> list | None:
+    """Copy of ``value`` when every entry is a JSON scalar, else ``None``.
+
+    Multi-label study fields (intervention types, countries, …) are first-class
+    moderators; a list built from nested objects/lists (``factor_levels``) is a
+    container, not a set of labels, and stays dropped. Empty lists carry no
+    label either, so they are treated like a missing value.
+    """
+    if not value or not all(isinstance(item, (bool, int, float, str)) for item in value):
+        return None
+    return list(value)
+
+
 def derive_dv_metrics(
     records: list[dict], study_role_map: dict[str, str] | None = None
 ) -> list[dict]:
-    """Flatten records to one row per metric (study role values merged in).
+    """Flatten records to one row per metric (study values merged in).
 
-    Each row carries a ``_record`` index so agreement/analysis can key back to
-    the experiment it came from.
+    **Every** scalar study field is merged by name — not just the fields that
+    carry a role — so the importer's data is fully moderatable by field name
+    through the scheme's ``fields`` map. Module fields (``Correction_Source``,
+    ``WEIRD_*``, ``Publication``, …) therefore reach analysis/agreement the
+    same way role-mapped fields do. List-valued fields whose entries are all
+    scalars (``Intervention_Type``, ``Country``, ``score_types``) are kept as
+    lists so multi-label moderators survive; nested containers are dropped.
+    ``study_role_map`` is retained for callers that still pass it; merge is
+    keyed by field name, so role values are merged unchanged. Each row carries
+    a ``_record`` index so agreement/analysis can key back to the experiment
+    it came from.
     """
-    role_map_values = set((study_role_map or {}).values())
-    has_study_roles = any(role in STUDY_ROLES for role in role_map_values)
     out: list[dict] = []
     for index, record in enumerate(records):
         if not isinstance(record, dict):
@@ -301,9 +323,14 @@ def derive_dv_metrics(
         study = study if isinstance(study, dict) else {}
         merged_study: dict[str, Any] = {}
         for name, value in study.items():
-            if isinstance(value, (dict, list)):
+            if name == "DV_Metrics":
                 continue
-            if has_study_roles and (study_role_map or {}).get(name) not in STUDY_ROLES:
+            if isinstance(value, list):
+                labels = _scalar_list(value)
+                if labels is not None:
+                    merged_study[name] = labels
+                continue
+            if isinstance(value, dict):
                 continue
             merged_study[name] = value
         metrics = record.get("metrics")

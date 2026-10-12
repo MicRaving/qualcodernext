@@ -189,26 +189,30 @@ def prisma_counts(
     }
 
 
-async def build_prisma(session: Any) -> dict[str, Any]:
-    """Load the meta pipeline and compute PRISMA counts."""
-    repo = MetaRepository(session)
-    hits = await repo.list_hits()
-    criteria = await repo.list_criteria()
-    screenings = await repo.list_screening()
-    documents = await repo.list_documents()
-    extractions = await repo.list_extractions()
+def _prisma_snapshot(
+    hits: list[Any],
+    criteria: list[Any],
+    screenings: list[Any],
+    documents: list[Any],
+    extractions: list[Any],
+    schemes: list[Any],
+) -> dict[str, Any]:
+    """CPU-only half of :func:`build_prisma` (runs in a worker thread).
 
-    schemes = {scheme.name: scheme for scheme in await repo.list_schemes()}
+    Codebook normalisation and the duplicate/study-id scans are the expensive
+    part; the rows are passed in already loaded so this never touches the
+    database. ``schemes`` is the preloaded ``MetaScheme`` list.
+    """
+    import json
+
     codebooks: dict[str, dict[str, Any]] = {}
-    for name, scheme in schemes.items():
+    for scheme in schemes:
         if not scheme.codebook:
             continue
-        import json
-
         try:
-            codebooks[name] = normalise_codebook(json.loads(scheme.codebook))
+            codebooks[scheme.name] = normalise_codebook(json.loads(scheme.codebook))
         except (TypeError, ValueError):
-            codebooks[name] = normalise_codebook({})
+            codebooks[scheme.name] = normalise_codebook({})
     study_ids: dict[tuple[Any, str], str] = {}
     for ext in extractions:
         codebook = codebooks.get(str(_get(ext, "scheme", "") or ""))
@@ -225,4 +229,20 @@ async def build_prisma(session: Any) -> dict[str, Any]:
             )
     return prisma_counts(
         hits, criteria, screenings, documents, extractions, study_ids=study_ids
+    )
+
+
+async def build_prisma(session: Any) -> dict[str, Any]:
+    """Load the meta pipeline and compute PRISMA counts (off the event loop)."""
+    import asyncio
+
+    repo = MetaRepository(session)
+    hits = await repo.list_hits()
+    criteria = await repo.list_criteria()
+    screenings = await repo.list_screening()
+    documents = await repo.list_documents()
+    extractions = await repo.list_extractions(include_dv_metrics=False)
+    schemes = await repo.list_schemes()
+    return await asyncio.to_thread(
+        _prisma_snapshot, hits, criteria, screenings, documents, extractions, schemes
     )

@@ -788,7 +788,7 @@ async def extraction_reliability(
     scheme: str | None = None,
 ) -> dict[str, Any]:
     repo = MetaRepository(session)
-    rows = await repo.list_extractions(owner=owner, scheme=scheme)
+    rows = await repo.list_extractions(owner=owner, scheme=scheme, include_dv_metrics=False)
     fields, case_maps = extraction_case_maps(rows, codebook)
     return reliability(fields, case_maps, exclude=exclude, reference="extraction")
 
@@ -803,7 +803,7 @@ async def extraction_conflicts(
     **kwargs: Any,
 ) -> dict[str, Any]:
     repo = MetaRepository(session)
-    rows = await repo.list_extractions(owner=owner, scheme=scheme)
+    rows = await repo.list_extractions(owner=owner, scheme=scheme, include_dv_metrics=False)
     fields, case_maps = extraction_case_maps(rows, codebook)
     case_meta = extraction_case_meta(rows, codebook)
     result = conflicts(fields, case_maps, case_meta=case_meta, master=master, **kwargs)

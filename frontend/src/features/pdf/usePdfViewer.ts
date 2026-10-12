@@ -72,6 +72,9 @@ export interface UsePdfViewerOptions {
   loadErrorFallback?: string;
   /** Forwarded a render failure (a failed canvas render is never silent). */
   onRenderError?: (message: string) => void;
+  /** Extract per-page text items (needed only for coding overlays; a plain
+   *  viewer skips it — a large PDF extracts far faster without it). */
+  extractText?: boolean;
 }
 
 export interface UsePdfViewerResult extends PdfViewerContext {
@@ -100,9 +103,13 @@ export function usePdfViewer({
   active = true,
   loadErrorFallback = DEFAULT_LOAD_ERROR,
   onRenderError,
+  extractText = true,
 }: UsePdfViewerOptions): UsePdfViewerResult {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const canvasRefs = useRef(new Map<number, HTMLCanvasElement>());
+  /** page -> "<scale>|<dpr>" already drawn, so re-running the effect (scroll,
+   *  unrelated state) never re-renders a page that is already crisp. */
+  const renderedRef = useRef(new Map<number, string>());
 
   const [pdf, setPdf] = useState<PDFDocumentProxy | null>(null);
   const [loading, setLoading] = useState(true);
@@ -135,6 +142,7 @@ export function usePdfViewer({
       setPageSizes(new Map());
       setTextItems(new Map());
       setFittedScale(1);
+      renderedRef.current.clear();
       try {
         const pdfjsLib = await import("pdfjs-dist");
         pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
@@ -153,6 +161,7 @@ export function usePdfViewer({
           const page = await doc.getPage(p);
           const vp = page.getViewport({ scale: 1 });
           sizes.set(p, { width: vp.width, height: vp.height });
+          if (!extractText) continue;
           const content = await page.getTextContent();
           const list: PdfTextItem[] = [];
           for (const item of content.items) {
@@ -183,46 +192,88 @@ export function usePdfViewer({
         setLoading(false);
       }
     },
-    [sourceId, reloadTick, loadErrorFallback],
+    [sourceId, reloadTick, loadErrorFallback, extractText],
   );
 
-  // Render the page canvases whenever the document/view changes. Re-running
-  // when `active` flips back on re-draws pages whose canvases were unmounted.
+  // HiDPI: render the canvas backing store at devicePixelRatio so pages are
+  // sharp; re-measure when the window moves between displays.
+  const [dpr, setDpr] = useState(() =>
+    typeof window === "undefined" ? 1 : Math.max(1, window.devicePixelRatio || 1),
+  );
+  useEffect(() => {
+    const update = () => setDpr(Math.max(1, window.devicePixelRatio || 1));
+    window.addEventListener("resize", update);
+    return () => window.removeEventListener("resize", update);
+  }, []);
+
+  // Render the page canvases whenever the document/view changes. Pages are
+  // drawn at `scale * dpr` (sharp), cached per page, and — in continuous mode —
+  // only when they scroll near the viewport, so a big PDF neither blocks the
+  // first paint nor re-renders on every scroll.
+  const singlePage = continuous ? null : currentPage;
   useEffect(() => {
     if (!pdf || !active) return;
+    const token = `${scale.toFixed(4)}|${dpr}`;
     const tasks: RenderTask[] = [];
     let cancelled = false;
-    const targets: number[] = [];
-    if (continuous) {
-      for (let p = 1; p <= pdf.numPages; p++) targets.push(p);
-    } else {
-      targets.push(currentPage);
-    }
-    for (const p of targets) {
-      const canvas = canvasRefs.current.get(p);
-      if (!canvas) continue;
-      void (async () => {
-        try {
-          if (cancelled) return;
-          const page = await pdf.getPage(p);
-          if (cancelled) return;
-          const viewport = page.getViewport({ scale });
-          canvas.width = viewport.width;
-          canvas.height = viewport.height;
-          canvas.style.width = `${viewport.width}px`;
-          canvas.style.height = `${viewport.height}px`;
-          const task = page.render({ canvas, viewport });
-          tasks.push(task);
-          await task.promise;
-        } catch (e) {
-          if (!cancelled) {
-            onRenderErrorRef.current?.(errorMessage(e, loadErrorFallback));
-          }
+    let observer: IntersectionObserver | null = null;
+
+    const renderPage = async (pageNumber: number) => {
+      const canvas = canvasRefs.current.get(pageNumber);
+      if (!canvas || cancelled) return;
+      if (renderedRef.current.get(pageNumber) === token) return;
+      const size = pageSizes.get(pageNumber);
+      if (size) {
+        // Reserve the CSS box immediately so the scroll layout is stable and an
+        // unrendered page is still observable.
+        canvas.style.width = `${size.width * scale}px`;
+        canvas.style.height = `${size.height * scale}px`;
+      }
+      try {
+        const page = await pdf.getPage(pageNumber);
+        if (cancelled) return;
+        const viewport = page.getViewport({ scale: scale * dpr });
+        canvas.width = Math.floor(viewport.width);
+        canvas.height = Math.floor(viewport.height);
+        canvas.style.width = `${viewport.width / dpr}px`;
+        canvas.style.height = `${viewport.height / dpr}px`;
+        const task = page.render({ canvas, viewport });
+        tasks.push(task);
+        await task.promise;
+        if (!cancelled) renderedRef.current.set(pageNumber, token);
+      } catch (e) {
+        if (!cancelled) {
+          onRenderErrorRef.current?.(errorMessage(e, loadErrorFallback));
         }
+      }
+    };
+
+    const root = containerRef.current;
+    if (singlePage !== null) {
+      void renderPage(singlePage);
+    } else if (typeof IntersectionObserver === "undefined" || !root) {
+      void (async () => {
+        for (let p = 1; p <= pdf.numPages && !cancelled; p++) await renderPage(p);
       })();
+    } else {
+      observer = new IntersectionObserver(
+        (entries) => {
+          for (const entry of entries) {
+            if (!entry.isIntersecting) continue;
+            const pageNumber = Number((entry.target as HTMLElement).dataset.pdfPage);
+            if (pageNumber) void renderPage(pageNumber);
+          }
+        },
+        { root, rootMargin: "800px 0px" },
+      );
+      for (let p = 1; p <= pdf.numPages; p++) {
+        const canvas = canvasRefs.current.get(p);
+        if (canvas) observer.observe(canvas);
+      }
     }
     return () => {
       cancelled = true;
+      observer?.disconnect();
       for (const t of tasks) {
         try {
           t.cancel();
@@ -231,7 +282,56 @@ export function usePdfViewer({
         }
       }
     };
-  }, [pdf, scale, currentPage, continuous, active, loadErrorFallback]);
+  }, [pdf, scale, dpr, singlePage, active, pageSizes, loadErrorFallback]);
+
+  // Continuous mode: keep `currentPage` in step with the top-visible page and
+  // bring a requested page into view. Without this the prev/next buttons and
+  // the jump-to-page input only moved the counter while the stack of pages
+  // stayed where it was.
+  useEffect(() => {
+    if (!pdf || !active || !continuous) return;
+    const root = containerRef.current;
+    if (!root) return;
+    let raf = 0;
+    const syncFromScroll = () => {
+      if (raf) return;
+      raf = window.requestAnimationFrame(() => {
+        raf = 0;
+        const cTop = root.getBoundingClientRect().top;
+        let best = 1;
+        let bestDist = Number.POSITIVE_INFINITY;
+        for (const el of root.querySelectorAll<HTMLElement>("[data-page]")) {
+          const p = Number(el.dataset.page);
+          if (!Number.isFinite(p) || p < 1) continue;
+          const dist = Math.abs(el.getBoundingClientRect().top - cTop);
+          if (dist < bestDist) {
+            bestDist = dist;
+            best = p;
+          }
+        }
+        setCurrentPage((prev) => (prev === best ? prev : best));
+      });
+    };
+    root.addEventListener("scroll", syncFromScroll, { passive: true });
+    return () => {
+      root.removeEventListener("scroll", syncFromScroll);
+      if (raf) window.cancelAnimationFrame(raf);
+    };
+  }, [pdf, active, continuous]);
+
+  // Bring the requested page into view when the controls change it, but leave
+  // an already-visible page alone so a manual scroll never snaps.
+  useEffect(() => {
+    if (!pdf || !active || !continuous) return;
+    const root = containerRef.current;
+    if (!root) return;
+    const el = root.querySelector<HTMLElement>(`[data-page="${currentPage}"]`);
+    if (!el) return;
+    const pageRect = el.getBoundingClientRect();
+    const rootRect = root.getBoundingClientRect();
+    if (pageRect.bottom > rootRect.top && pageRect.top < rootRect.bottom) return;
+    root.scrollTo({ top: root.scrollTop + (pageRect.top - rootRect.top), behavior: "smooth" });
+  }, [pdf, active, continuous, currentPage]);
 
   const applyFit = useCallback(async () => {
     const doc = pdf;
@@ -269,8 +369,16 @@ export function usePdfViewer({
   }, [continuous, numPages, currentPage]);
 
   const setCanvasRef = useCallback((page: number, el: HTMLCanvasElement | null) => {
-    if (el) canvasRefs.current.set(page, el);
-    else canvasRefs.current.delete(page);
+    if (el) {
+      el.dataset.pdfPage = String(page);
+      // A remounted canvas (page unmount/remount, active toggle) has no pixels
+      // even though the page was drawn before — invalidate its cache.
+      if (canvasRefs.current.get(page) !== el) renderedRef.current.delete(page);
+      canvasRefs.current.set(page, el);
+    } else {
+      canvasRefs.current.delete(page);
+      renderedRef.current.delete(page);
+    }
   }, []);
 
   const reload = useCallback(() => setReloadTick((n) => n + 1), []);

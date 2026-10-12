@@ -8,7 +8,7 @@
  * `usePdfViewer` (lazy module/worker import), which `PdfCoder` consumes
  * directly for its overlay/gutter layout.
  */
-import { useState, type CSSProperties, type ReactNode } from "react";
+import { useCallback, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { ChevronLeft, ChevronRight, CircleAlert, LoaderCircle } from "lucide-react";
 import { Button, LoadingState, Select } from "@/components/ui/orchestrator";
 import { useI18n } from "@/lib/i18n";
@@ -58,6 +58,9 @@ export function PdfCanvasViewer({
   const viewer = usePdfViewer({
     sourceId,
     initialPage,
+    // A plain viewer needs no per-page text items — skipping the extraction is
+    // a large load-time win on big PDFs (the coding view keeps them).
+    extractText: false,
     loadErrorFallback: t("pdfCoder.loadDocumentError"),
     onRenderError: (message) => {
       setRenderError(message);
@@ -66,6 +69,23 @@ export function PdfCanvasViewer({
   });
 
   const context: PdfViewerContext = viewer;
+
+  // Stable per-page canvas refs: an inline `(el) => setCanvasRef(p, el)` gets a
+  // fresh identity every render, so React detaches and re-attaches the ref —
+  // which invalidates the hook's per-page render cache on every render.
+  const { setCanvasRef } = viewer;
+  const canvasSetters = useRef(new Map<number, (el: HTMLCanvasElement | null) => void>());
+  const canvasRefFor = useCallback(
+    (page: number) => {
+      let setter = canvasSetters.current.get(page);
+      if (!setter) {
+        setter = (el) => setCanvasRef(page, el);
+        canvasSetters.current.set(page, setter);
+      }
+      return setter;
+    },
+    [setCanvasRef],
+  );
 
   const pageStack = (
     <div
@@ -91,7 +111,7 @@ export function PdfCanvasViewer({
                   : undefined
               }
             >
-              <canvas ref={(el) => viewer.setCanvasRef(p, el)} className="block qc-pdf-canvas" />
+              <canvas ref={canvasRefFor(p)} className="block qc-pdf-canvas" />
               {renderOverlay?.(p, context)}
               {!size && (
                 <div className="absolute inset-0 flex items-center justify-center gap-2 text-xs text-text-secondary">

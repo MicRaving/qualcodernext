@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -1591,3 +1592,235 @@ async def test_fulltext_verdicts_do_not_leak_into_screening_list(client, tmp_pat
     row = next(h for h in hits if h["hit_id"] == hit_id)
     assert row["screened"] is True
     assert row["eligible"] is True
+
+
+# ── CodingStudio folder import ───────────────────────────────────────────
+
+_CS_SCHEMA = {
+    "schema_version": "3.1",
+    "groups": ["Metadata & Identification", "Sample"],
+    "common_fields": [
+        {"name": "Study_ID", "group": "Metadata & Identification", "type": "string", "editor": "text"},
+        {"name": "Title", "group": "Metadata & Identification", "type": "string", "editor": "text"},
+        {"name": "DOI", "group": "Metadata & Identification", "type": "string|null", "editor": "text"},
+        {"name": "Authors", "group": "Metadata & Identification", "type": "string", "editor": "text"},
+        {"name": "Year", "group": "Metadata & Identification", "type": "integer", "editor": "number"},
+        {"name": "N_Analyzed", "group": "Sample", "type": "integer|null", "editor": "number"},
+    ],
+    "dv_fields": [
+        {"name": "dv_name", "group": "Other", "type": "string", "editor": "text"},
+        {"name": "n1i", "group": "Other", "type": "number", "editor": "number"},
+        {"name": "n2i", "group": "Other", "type": "number", "editor": "number"},
+        {"name": "yi", "group": "Other", "type": "number", "editor": "number"},
+        {"name": "vi", "group": "Other", "type": "number", "editor": "number"},
+    ],
+    "modules": {},
+    "intervention_type_modules": {},
+    "vocabularies": {"intervention_types": ["inoculation"]},
+}
+
+_CS_HEADER = [
+    "an", "title", "abstract", "authors", "doi", "year", "source", "language",
+    "C1_verdict", "C1_certainty", "C1_rationale", "C2_verdict", "C3_verdict", "C4_verdict",
+    "Intervention_verdict", "Fulltext_Verdict", "Fulltext_Exclusion_Criterion", "Fulltext_Reason",
+]
+
+
+def _cs_record(study_id: str, title: str, doi: str) -> dict:
+    return {
+        "Study_ID": study_id,
+        "Title": title,
+        "DOI": doi,
+        "Authors": "Doe, J",
+        "Year": 2020,
+        "N_Analyzed": 62,
+        "DV_Metrics": [{"dv_name": "Accuracy", "n1i": 30, "n2i": 32, "yi": 0.25, "vi": 0.02}],
+    }
+
+
+def _write_cs_folder(root: Path) -> Path:
+    from openpyxl import Workbook
+
+    for sub in ("Papers", "Extraction", "Screening", "Scripts/coding_web"):
+        (root / sub).mkdir(parents=True, exist_ok=True)
+    (root / "Scripts/coding_web/schema.json").write_text(json.dumps(_CS_SCHEMA), encoding="utf-8")
+    (root / "Extraction/Study A.json").write_text(
+        json.dumps([_cs_record("A2020_Exp1", "Study A: inoculation", "10.1000/aaaa")]),
+        encoding="utf-8",
+    )
+    (root / "Screening/MF.json").write_text(
+        json.dumps(
+            {
+                "an-a": {
+                    "an": "an-a",
+                    "criteria": {
+                        "C1": {"verdict": "Yes", "certainty": "High", "rationale": ""},
+                        "C2": {"verdict": "Yes", "certainty": "High", "rationale": ""},
+                        "C3": {"verdict": "Yes", "certainty": "High", "rationale": ""},
+                        "C4": {"verdict": "Yes", "certainty": "High", "rationale": ""},
+                        "Intervention": {"verdict": "inoculation", "certainty": "High", "rationale": ""},
+                    },
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Sheet1"
+    ws.append(_CS_HEADER)
+    ws.append(["an-a", "Study A: inoculation", "Abstract A.", "Doe, J", "10.1000/aaaa", 2020, "J. Test", "eng",
+               "Yes", "High", "", "Yes", "Yes", "Yes", "inoculation", "Include", "", ""])
+    ws.append(["an-c", "Study C", "Abstract C.", "Poe, T", "10.1000/cccc", 2022, "J. Test", "eng",
+               "Yes", "High", "", "Yes", "Yes", "Yes", "generic", "Exclude",
+               "Not a primary experimental study (C4)", "observational"])
+    wb.save(root / "master_dataset.xlsx")
+    (root / "Papers/Study A.pdf").write_bytes(
+        b"%PDF-1.4\n1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n"
+        b"2 0 obj<</Type/Pages/Kids[3 0 R]/Count 1>>endobj\n"
+        b"3 0 obj<</Type/Page/Parent 2 0 R/MediaBox[0 0 200 200]>>endobj\n"
+        b"trailer<</Size 4/Root 1 0 R>>\n%%EOF\n"
+    )
+    return root
+
+
+async def test_codingstudio_preview_and_import(client, tmp_path):
+    await _open_project(client, tmp_path, "meta_cs.qda")
+    folder = _write_cs_folder(tmp_path / "cs")
+
+    res = await client.post("/api/v1/meta/codingstudio/preview", json={"folder": str(folder)})
+    assert res.status_code == 200, res.text
+    preview = res.json()
+    assert preview["exists"] is True
+    assert preview["papers"] == 1
+    assert preview["extraction_files"] == 1
+    assert preview["workbook"]["rows"] == 2
+    assert preview["schema_version"] == "3.1"
+    assert preview["screenings"] == [{"coder": "MF", "rows": 1}]
+
+    res = await client.post("/api/v1/meta/codingstudio/import", json={"folder": str(folder)})
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert body["hits_imported"] == 2
+    assert body["extractions_imported"] == 1
+    assert body["pdfs_linked"] == 1
+    assert body["errors"] == []
+
+    status = (await client.get("/api/v1/meta/status")).json()
+    assert status["hits"] == 2
+    assert status["screening_rows"] == 5  # 1 coder abstract + 2 base abstract + 2 full-text
+    assert status["schemes"] == 1
+
+    # Idempotent: nothing new appears on a second import.
+    body2 = (await client.post("/api/v1/meta/codingstudio/import", json={"folder": str(folder)})).json()
+    assert body2["hits_imported"] == 0
+    assert body2["pdfs_linked"] == 0
+    status2 = (await client.get("/api/v1/meta/status")).json()
+    assert status2["hits"] == 2
+    assert status2["screening_rows"] == 5
+    assert status2["extracted"] == 1
+
+    # A folder that does not exist previews as ``exists: false`` (200) but
+    # cannot be imported (422).
+    missing = str(tmp_path / "nowhere")
+    preview_missing = await client.post("/api/v1/meta/codingstudio/preview", json={"folder": missing})
+    assert preview_missing.status_code == 200
+    assert preview_missing.json()["exists"] is False
+    assert (await client.post("/api/v1/meta/codingstudio/import", json={"folder": missing})).status_code == 422
+
+    # A folder with no workbook and no extractions is unusable (422).
+    empty = tmp_path / "empty_cs"
+    empty.mkdir()
+    assert (await client.post("/api/v1/meta/codingstudio/import", json={"folder": str(empty)})).status_code == 422
+
+
+# ── query-shape regressions (audit: redundant / unbounded loads) ──────────
+
+
+async def test_status_loads_criteria_once(client, tmp_path, monkeypatch):
+    """``/meta/status`` must not re-query the criteria it already holds."""
+    await _open_project(client, tmp_path, "meta_status_once.qda")
+    await client.put(
+        "/api/v1/meta/criteria",
+        json=[{"position": 0, "key": "c1", "label": "C1", "prompt_text": "p"}],
+    )
+    calls = {"n": 0}
+    original = MetaRepository.list_criteria
+
+    async def counted(self, *args, **kwargs):
+        calls["n"] += 1
+        return await original(self, *args, **kwargs)
+
+    monkeypatch.setattr(MetaRepository, "list_criteria", counted)
+    res = await client.get("/api/v1/meta/status")
+    assert res.status_code == 200, res.text
+    assert res.json()["criteria"] == 1
+    assert calls["n"] == 1
+
+
+async def test_extraction_export_filters_status_in_query(client, tmp_path, monkeypatch):
+    """Export restricts to extracted rows at the query, not after loading all."""
+    await _open_project(client, tmp_path, "meta_export_status.qda")
+    seen: dict = {}
+    original = MetaRepository.list_extractions
+
+    async def spy(self, *args, **kwargs):
+        seen.update(kwargs)
+        return await original(self, *args, **kwargs)
+
+    monkeypatch.setattr(MetaRepository, "list_extractions", spy)
+    res = await client.get("/api/v1/meta/extract/export", params={"fmt": "csv"})
+    assert res.status_code == 200, res.text
+    assert seen.get("status") == "extracted"
+
+
+async def test_documents_and_extractions_do_not_load_every_hit(client, tmp_path, monkeypatch):
+    """Titles are attached by id, never by loading the whole hit table."""
+    await _open_project(client, tmp_path, "meta_no_full_hits.qda")
+    await _create_scheme(client)
+    await _import_two_hits(client, tmp_path)
+    hit_id = (await client.get("/api/v1/meta/hits")).json()["hits"][0]["hit_id"]
+    await _seed_extraction(hit_id, "anna", _records("S1", "X", "a", 5.0, 4.0))
+
+    async def boom(self, *args, **kwargs):  # pragma: no cover - regression guard
+        raise AssertionError("list_hits() must not be called for a page of rows")
+
+    monkeypatch.setattr(MetaRepository, "list_hits", boom)
+
+    res = await client.get("/api/v1/meta/extractions")
+    assert res.status_code == 200, res.text
+    rows = res.json()
+    assert rows and rows[0]["title"].startswith("Study A")
+
+    res = await client.get("/api/v1/meta/documents")
+    assert res.status_code == 200, res.text
+    assert res.json() == []
+
+
+async def test_report_rederives_stale_dv_metrics(client, tmp_path):
+    """The report re-derives effects under the live codebook, not the cache.
+
+    A stale (empty) ``dv_metrics`` column must not zero the report's synthesis:
+    the persisted column can lag a scheme role edit, exactly as it can for the
+    Analyze tab.
+    """
+    await _open_project(client, tmp_path, "meta_report_refresh.qda")
+    await _create_scheme(client)
+    records = _records("S1", "X", "a", 5.0, 4.0)
+    async with service.session_factory() as session:
+        await MetaRepository(session).upsert_extraction(
+            hit_id=1,
+            owner="anna",
+            scheme="meta",
+            study_vars={"records": records},
+            dv_metrics=[],  # stale cache
+            status="extracted",
+        )
+
+    from qualcoder_api.services import meta_report
+
+    async with service.session_factory() as session:
+        ctx = await meta_report.build_report(session, scheme="meta")
+    assert ctx["pooled"]["k"] == 1
+    assert ctx["pooled"]["estimate"] is not None
+

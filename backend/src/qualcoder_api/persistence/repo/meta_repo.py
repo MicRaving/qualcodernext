@@ -8,6 +8,7 @@ replay and undo additively without a schema change.
 
 from __future__ import annotations
 
+import asyncio
 import json
 from typing import Any
 
@@ -57,6 +58,32 @@ def _load_json(value: str | None, default: Any = None) -> Any:
         return json.loads(value)
     except (TypeError, ValueError):
         return default
+
+
+def _decode_extraction(mapping: Any, include_dv_metrics: bool = True) -> MetaExtraction:
+    metrics = _load_json(mapping.get("dv_metrics"), []) if include_dv_metrics else []
+    return MetaExtraction.model_validate(mapping).model_copy(
+        update={
+            "study_vars": _load_json(mapping.get("study_vars"), {}) or {},
+            "dv_metrics": metrics or [],
+            "prescreen": _load_json(mapping.get("prescreen"), None),
+        }
+    )
+
+
+def _decode_extractions(
+    mappings: list[Any], include_dv_metrics: bool = True
+) -> list[MetaExtraction]:
+    """Decode extraction rows off the event loop (JSON columns can be huge).
+
+    ``include_dv_metrics=False`` skips the (only-cached) ``dv_metrics`` JSON,
+    which callers that re-derive from ``study_vars`` do not read; the column can
+    be hundreds of MB on a large project and halving the parse keeps the loop
+    responsive.
+    """
+    return [
+        _decode_extraction(mapping, include_dv_metrics) for mapping in mappings
+    ]
 
 
 def _dedupe_fold(text: Any) -> str:
@@ -183,6 +210,22 @@ class MetaRepository:
             )
         ).first()
         return MetaHit.model_validate(row._mapping) if row else None
+
+    async def list_hits_by_ids(self, hit_ids: list[int]) -> list[MetaHit]:
+        """Hits for an explicit id set (chunked so the IN stays parameter-safe).
+
+        Used to attach a title/DOI to a page of documents/extractions without
+        loading every hit in an 11k-study project.
+        """
+        unique = list(dict.fromkeys(int(hit_id) for hit_id in hit_ids))
+        out: list[MetaHit] = []
+        for start in range(0, len(unique), 900):
+            chunk = unique[start : start + 900]
+            rows = await self.session.execute(
+                select(tables.meta_hit).where(tables.meta_hit.c.hit_id.in_(chunk))
+            )
+            out.extend(MetaHit.model_validate(r._mapping) for r in rows)
+        return out
 
     async def add_hit(self, **fields: Any) -> MetaHit:
         now = _now()
@@ -404,6 +447,15 @@ class MetaRepository:
             (await self.session.execute(select(func.count()).select_from(tables.meta_screening))).scalar()
             or 0
         )
+
+    async def count_screened_hits(self, stage: str = "abstract") -> int:
+        """Distinct hits with a screening row at ``stage`` (drives progress)."""
+        stmt = (
+            select(func.count(func.distinct(tables.meta_screening.c.hit_id)))
+            .select_from(tables.meta_screening)
+            .where(tables.meta_screening.c.stage == stage)
+        )
+        return int((await self.session.execute(stmt)).scalar() or 0)
 
     async def count_extractions(self, status: str | None = None) -> int:
         stmt = select(func.count()).select_from(tables.meta_extraction)
@@ -789,6 +841,13 @@ class MetaRepository:
         )
         await self.session.commit()
 
+    async def document_status_counts(self) -> dict[str, int]:
+        """Counts of ``meta_document`` rows per retrieval status."""
+        rows = await self.session.execute(
+            text("SELECT status, COUNT(*) FROM meta_document GROUP BY status")
+        )
+        return {str(s or "pending"): int(n) for s, n in rows}
+
     # ── extractions ─────────────────────────────────────────────────────
 
     async def list_extractions(
@@ -796,6 +855,8 @@ class MetaRepository:
         hit_id: int | None = None,
         owner: str | None = None,
         scheme: str | None = None,
+        status: str | None = None,
+        include_dv_metrics: bool = True,
     ) -> list[MetaExtraction]:
         query = "SELECT * FROM meta_extraction WHERE 1=1"
         params: dict[str, Any] = {}
@@ -808,21 +869,17 @@ class MetaRepository:
         if scheme:
             query += " AND scheme = :scheme"
             params["scheme"] = scheme
+        if status:
+            query += " AND status = :status"
+            params["status"] = status
         query += " ORDER BY hit_id, owner, scheme"
         rows = await self.session.execute(text(query), params)
-        out = []
-        for r in rows:
-            mapping = r._mapping
-            out.append(
-                MetaExtraction.model_validate(mapping).model_copy(
-                    update={
-                        "study_vars": _load_json(mapping.get("study_vars"), {}) or {},
-                        "dv_metrics": _load_json(mapping.get("dv_metrics"), []) or [],
-                        "prescreen": _load_json(mapping.get("prescreen"), None),
-                    }
-                )
-            )
-        return out
+        # The JSON columns (study_vars/dv_metrics) can run to hundreds of MB;
+        # decode them in a worker thread so the event loop stays responsive.
+        mappings = [r._mapping for r in rows]
+        return await asyncio.to_thread(
+            _decode_extractions, mappings, include_dv_metrics
+        )
 
     async def get_extraction_for_hit(
         self, hit_id: int, owner: str | None = None, scheme: str | None = None

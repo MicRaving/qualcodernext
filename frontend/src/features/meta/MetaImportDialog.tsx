@@ -28,6 +28,8 @@ export function MetaImportDialog({
   const { t } = useI18n();
   const toast = useToast();
   const fileRef = useRef<HTMLInputElement>(null);
+  /** Guards against out-of-order preview responses (rapid sheet switches). */
+  const previewSeq = useRef(0);
   const [file, setFile] = useState<File | null>(null);
   const [searchRun, setSearchRun] = useState("");
   const [preview, setPreview] = useState<MetaImportPreview | null>(null);
@@ -66,14 +68,18 @@ export function MetaImportDialog({
   };
 
   const loadPreview = async (f: File, sheetName?: string) => {
+    const seq = ++previewSeq.current;
     setBusy(true);
     try {
-      applyPreview(await api.metaPreviewHits(f, sheetName));
+      const p = await api.metaPreviewHits(f, sheetName);
+      if (seq === previewSeq.current) applyPreview(p);
     } catch (err) {
-      setPreview(null);
-      toast.error(errorMessage(err));
+      if (seq === previewSeq.current) {
+        setPreview(null);
+        toast.error(errorMessage(err));
+      }
     } finally {
-      setBusy(false);
+      if (seq === previewSeq.current) setBusy(false);
     }
   };
 

@@ -15,6 +15,13 @@ export const REQUEST_TIMEOUT_MS = 15_000;
 /** Timeout for raw source-file fetches (large PDFs, images). */
 export const SOURCE_TIMEOUT_MS = 60_000;
 
+/** Timeout (ms) for heavy meta-analysis computations (pooled models, Bayes
+ *  fits, multiverse sweeps, report rendering, CodingStudio imports). These
+ *  legitimately run for minutes on large projects, so they must not be gated
+ *  by the 15 s default (which aborted, retried and then surfaced a bogus
+ *  "Backend unreachable"). */
+export const ANALYSIS_TIMEOUT_MS = 120_000;
+
 /** Project-open timeout (ms) — opening legitimately takes a minute or more
  *  (migrations, shared-folder sandbox rebuilds, cloud-drive latency), so it
  *  gets far longer than a normal call. Never gate it with a shorter race. */

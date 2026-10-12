@@ -9,8 +9,8 @@
  * crashing the view.
  */
 import { useEffect, useMemo, useState } from "react";
-import { Download, FileText, Plus, Sigma, X } from "lucide-react";
-import { api, localRequestBlob } from "@/lib/api";
+import { Download, FileText, LoaderCircle, Plus, Sigma, X } from "lucide-react";
+import { api } from "@/lib/api";
 import type {
   MetaAnalysisRequest,
   MetaAuditField,
@@ -44,6 +44,7 @@ import {
   Select,
 } from "@/components/ui/orchestrator";
 import { cardCls, tdCls, thCls } from "@/features/analyze/reportData";
+import { asArray, asObject } from "@/features/meta/metaUtils";
 import { Markdown } from "@/components/ui/Markdown";
 import { useI18n } from "@/lib/i18n";
 import { useToast } from "@/lib/toast";
@@ -66,16 +67,7 @@ const TAU_PRIORS = [
   { value: "half-cauchy:1", prior: "half-cauchy", scale: 1, labelKey: "meta.tauHalfCauchy" },
 ] as const;
 
-/** The default mock / a missing endpoint returns [] — treat as "no data". */
-function asObject<T>(value: unknown): T | null {
-  if (value && typeof value === "object" && !Array.isArray(value)) return value as T;
-  return null;
-}
-
-function asArray<T>(value: unknown): T[] {
-  return Array.isArray(value) ? (value as T[]) : [];
-}
-
+/** Number → fixed-decimal string; null/NaN become an em dash. */
 function fmt(value: number | null | undefined, digits = 3): string {
   if (value === null || value === undefined || !Number.isFinite(Number(value))) return "–";
   return Number(value).toFixed(digits);
@@ -177,10 +169,14 @@ function PngFigure({
 }) {
   const toast = useToast();
   const [url, setUrl] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [downloading, setDownloading] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
     let objectUrl: string | null = null;
+    setUrl(null);
+    setLoading(true);
     void (async () => {
       try {
         const blob = await load();
@@ -189,6 +185,8 @@ function PngFigure({
         setUrl(objectUrl);
       } catch {
         /* the figure is optional */
+      } finally {
+        if (!cancelled) setLoading(false);
       }
     })();
     return () => {
@@ -199,12 +197,16 @@ function PngFigure({
   }, [queryKey]);
 
   const download = async () => {
+    if (downloading) return;
+    setDownloading(true);
     try {
       const blob = await load();
       if (!(blob instanceof Blob)) return;
       dlBlob(blob, filename);
     } catch (err) {
       toast.error(errorMessage(err));
+    } finally {
+      setDownloading(false);
     }
   };
 
@@ -214,7 +216,14 @@ function PngFigure({
         <div className="text-[11px] font-medium text-text-secondary">{label}</div>
         <Button
           variant="secondary"
-          icon={<Download size={13} aria-hidden />}
+          disabled={downloading}
+          icon={
+            downloading ? (
+              <LoaderCircle size={13} className="animate-spin" aria-hidden />
+            ) : (
+              <Download size={13} aria-hidden />
+            )
+          }
           onClick={() => void download()}
         >
           {downloadLabel}
@@ -226,6 +235,11 @@ function PngFigure({
           alt={label}
           className="max-h-80 w-auto max-w-full rounded-sm border border-border bg-surface"
         />
+      ) : loading ? (
+        <p className="flex items-center gap-1.5 text-xs text-text-secondary">
+          <LoaderCircle size={12} className="animate-spin" aria-hidden />
+          {t("meta.computing")}
+        </p>
       ) : (
         <p className="text-xs text-text-secondary">{t("meta.figureEmpty")}</p>
       )}
@@ -320,6 +334,7 @@ function PooledView({
   const [forest, setForest] = useState<MetaForest | null>(null);
   const [loo, setLoo] = useState<MetaLeaveOneOutResult | null>(null);
   const [pubBias, setPubBias] = useState<MetaPublicationBiasResult | null>(null);
+  const [pubBiasLoading, setPubBiasLoading] = useState(true);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [bayes, setBayes] = useState<MetaBayesResult | null>(null);
@@ -359,12 +374,15 @@ function PooledView({
   // blanking the whole pooled view.
   useEffect(() => {
     let cancelled = false;
+    setPubBiasLoading(true);
     void (async () => {
       try {
         const pb = await api.metaAnalysisPublicationBias(request);
         if (!cancelled) setPubBias(asObject<MetaPublicationBiasResult>(pb));
       } catch {
         if (!cancelled) setPubBias(null);
+      } finally {
+        if (!cancelled) setPubBiasLoading(false);
       }
     })();
     return () => {
@@ -433,6 +451,12 @@ function PooledView({
   }>((pooled as Record<string, unknown>).consensus);
   return (
     <div className="space-y-5">
+      {loading ? (
+        <p className="flex items-center gap-1.5 text-xs text-text-secondary" role="status">
+          <LoaderCircle size={12} className="animate-spin text-accent" aria-hidden />
+          {t("meta.computing")}
+        </p>
+      ) : null}
       {consensus ? (
         <p className="text-[11px] text-text-secondary">
           {t("meta.consensusNote", {
@@ -760,6 +784,11 @@ function PooledView({
               </div>
             ) : null}
           </div>
+        ) : pubBiasLoading ? (
+          <p className="flex items-center gap-1.5 text-xs text-text-secondary" role="status">
+            <LoaderCircle size={12} className="animate-spin text-accent" aria-hidden />
+            {t("meta.computing")}
+          </p>
         ) : (
           <p className="text-xs text-text-secondary">{t("meta.analysisEmpty")}</p>
         )}
@@ -1160,6 +1189,12 @@ function MultiverseView({
   const nSpecs = Number(summary?.n_specs ?? result.n_specs ?? specs.length);
   return (
     <div className="space-y-5">
+      {loading ? (
+        <p className="flex items-center gap-1.5 text-xs text-text-secondary" role="status">
+          <LoaderCircle size={12} className="animate-spin text-accent" aria-hidden />
+          {t("meta.computing")}
+        </p>
+      ) : null}
       <p className="text-xs text-text-secondary">{t("meta.multiverseHint")}</p>
 
       <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
@@ -1342,6 +1377,8 @@ function PrismaView({ t }: { t: (key: string) => string }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [pngUrl, setPngUrl] = useState<string | null>(null);
+  const [pngLoading, setPngLoading] = useState(true);
+  const [pngDownloading, setPngDownloading] = useState(false);
   useEffect(() => {
     let cancelled = false;
     void (async () => {
@@ -1366,6 +1403,8 @@ function PrismaView({ t }: { t: (key: string) => string }) {
   useEffect(() => {
     let cancelled = false;
     let url: string | null = null;
+    setPngUrl(null);
+    setPngLoading(true);
     void (async () => {
       try {
         const blob = await api.metaPrismaPng();
@@ -1374,6 +1413,8 @@ function PrismaView({ t }: { t: (key: string) => string }) {
         setPngUrl(url);
       } catch {
         /* the figure is optional */
+      } finally {
+        if (!cancelled) setPngLoading(false);
       }
     })();
     return () => {
@@ -1383,11 +1424,15 @@ function PrismaView({ t }: { t: (key: string) => string }) {
   }, []);
 
   const downloadPng = async () => {
+    if (pngDownloading) return;
+    setPngDownloading(true);
     try {
       const blob = await api.metaPrismaPng();
       dlBlob(blob, "prisma.png");
     } catch (err) {
       toast.error(errorMessage(err));
+    } finally {
+      setPngDownloading(false);
     }
   };
 
@@ -1450,7 +1495,14 @@ function PrismaView({ t }: { t: (key: string) => string }) {
         <div className="flex flex-wrap items-center justify-end">
           <Button
             variant="secondary"
-            icon={<Download size={13} aria-hidden />}
+            disabled={pngDownloading}
+            icon={
+              pngDownloading ? (
+                <LoaderCircle size={13} className="animate-spin" aria-hidden />
+              ) : (
+                <Download size={13} aria-hidden />
+              )
+            }
             onClick={() => void downloadPng()}
           >
             {t("meta.downloadPng")}
@@ -1462,6 +1514,11 @@ function PrismaView({ t }: { t: (key: string) => string }) {
             alt={t("meta.prismaFigure")}
             className="max-h-96 w-auto max-w-full rounded-sm border border-border bg-surface"
           />
+        ) : pngLoading ? (
+          <p className="flex items-center gap-1.5 text-xs text-text-secondary" role="status">
+            <LoaderCircle size={12} className="animate-spin text-accent" aria-hidden />
+            {t("meta.computing")}
+          </p>
         ) : (
           <p className="text-xs text-text-secondary">{t("meta.figureEmpty")}</p>
         )}
@@ -1579,10 +1636,7 @@ function ReportView({
     setPreviewLoading(true);
     setPreviewError(null);
     try {
-      const blob = await localRequestBlob("/meta/report", {
-        method: "POST",
-        body: JSON.stringify({ scheme: request.scheme, format: "md" }),
-      });
+      const blob = await api.metaReport({ scheme: request.scheme, format: "md" });
       setPreview(await blob.text());
     } catch (err) {
       setPreviewError(errorMessage(err));

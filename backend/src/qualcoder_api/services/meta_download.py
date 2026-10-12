@@ -1,13 +1,14 @@
-"""Meta-analysis paper download — native OA resolver chain + Zotero reuse.
+"""Meta-analysis paper download — native OA candidate resolver + Zotero reuse.
 
 Zotero has no public machine API to "find a PDF for a DOI" — its retrieval is
 internal (an Unpaywall data mirror plus custom resolver prefs run inside the
-client). This module therefore reimplements the resolver semantics natively
-(OpenAlex → Unpaywall → Crossref landing page), adapted from the reference
-``Inoculation_Meta/meta/core/downloader.py`` but async and Selenium-free, and
-additionally tries a running local Zotero (localhost:23119) for PDFs the user
-already has. Anything the chain misses is handled by manual assignment in the
-UI.
+client). This module therefore reimplements the resolver semantics natively,
+adapted from the reference ``Inoculation_Meta`` acquisition scripts but async
+and Selenium-free: it builds an ordered candidate list from OpenAlex, Unpaywall,
+Europe PMC, the Crossref landing page and finally the DOI resolver, preferring
+repository/OA mirrors over publisher PDFs, and attempts each until a PDF is
+retrieved. Anything the chain misses falls back to a running local Zotero
+(localhost:23119) and then to manual assignment in the UI.
 """
 
 from __future__ import annotations
@@ -28,8 +29,12 @@ logger = logging.getLogger(__name__)
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (compatible; QCnextMeta/1.0; +https://github.com/ccsb-scripps/QualCoder)"
 }
+#: Offered on every download so publishers that gate on the Accept header still
+#: serve the PDF (an HTML landing page is rejected by the magic-byte check).
+DOWNLOAD_ACCEPT = "application/pdf,application/octet-stream,*/*"
 HTTP_TIMEOUT = 45
 ZOTERO_API = "http://localhost:23119"
+EUROPEPMC_SEARCH = "https://www.ebi.ac.uk/europepmc/webservices/rest/search"
 #: Hard ceiling for a downloaded paper. A paywalled/redirected response can be
 #: arbitrarily large (HTML, media); buffering it whole would exhaust memory.
 MAX_PDF_BYTES = 40 * 1024 * 1024
@@ -44,34 +49,190 @@ def _is_pdf(content_type: str, chunk: bytes) -> bool:
 
 # ── resolvers ────────────────────────────────────────────────────────────
 
-async def resolve_openalex(client: httpx.AsyncClient, doi: str) -> str | None:
-    """Direct PDF URL from OpenAlex ``best_oa_location``."""
+def _note_unpaywall_email(info: dict | None, reason: str) -> None:
+    """Record that Unpaywall could not be queried for want of a valid email.
+
+    A placeholder/invalid email makes Unpaywall answer HTTP 422 (not 200 with
+    an empty body), so the caller surfaces it once as an actionable hint
+    instead of silently discarding the source.
+    """
+    if info is None or info.get("unpaywall_email"):
+        return
+    logger.info("Unpaywall email unavailable (%s) — add one for more OA sources", reason)
+    info["unpaywall_email"] = True
+
+
+async def _openalex_candidates(
+    client: httpx.AsyncClient, doi: str, found: list[dict]
+) -> None:
+    """Candidate PDFs from every OpenAlex location (each location's PDF or a
+    landing-page PDF), carrying the source type so repositories sort first."""
     try:
         resp = await client.get(f"https://api.openalex.org/works/doi:{doi}")
-        if resp.status_code != 200:
-            return None
-        work = resp.json()
-        for loc in (work.get("best_oa_location"), work.get("primary_location")):
-            if loc and loc.get("pdf_url"):
-                return loc["pdf_url"]
     except httpx.HTTPError:
-        return None
-    return None
+        return
+    if resp.status_code != 200:
+        return
+    try:
+        work = resp.json()
+    except ValueError:
+        return
+    locations = work.get("locations")
+    if not isinstance(locations, list):
+        locations = []
+    # ``best_oa_location`` is a reference to one of ``locations`` on recent
+    # records, but older payloads may not echo it — include it defensively.
+    best = work.get("best_oa_location")
+    if isinstance(best, dict) and best not in locations:
+        locations = [*locations, best]
+    for loc in locations:
+        if not isinstance(loc, dict):
+            continue
+        source = loc.get("source")
+        host_type = str(source.get("type") or "") if isinstance(source, dict) else ""
+        pdf_url = loc.get("pdf_url")
+        landing = loc.get("landing_page_url")
+        if pdf_url:
+            found.append({"url": pdf_url, "method": "openalex", "host_type": host_type})
+        elif landing and (loc.get("is_oa") or host_type == "repository"):
+            resolved = await resolve_landing_page(client, str(landing))
+            if resolved:
+                found.append(
+                    {"url": resolved, "method": "openalex-landing", "host_type": host_type}
+                )
 
 
-async def resolve_unpaywall(client: httpx.AsyncClient, doi: str, email: str) -> str | None:
-    """Direct PDF URL from Unpaywall ``best_oa_location``."""
+async def _unpaywall_candidates(
+    client: httpx.AsyncClient, doi: str, email: str, info: dict | None, found: list[dict]
+) -> None:
+    """Candidate PDFs from every Unpaywall ``oa_locations`` entry."""
     if not email:
-        return None
+        _note_unpaywall_email(info, "no email configured")
+        return
     try:
         resp = await client.get(f"https://api.unpaywall.org/v2/{doi}?email={email}")
-        if resp.status_code != 200:
-            return None
-        best = resp.json().get("best_oa_location") or {}
-        return best.get("url_for_pdf") or best.get("url")
     except httpx.HTTPError:
-        return None
-    return None
+        return
+    if resp.status_code != 200:
+        if resp.status_code == 422:
+            _note_unpaywall_email(info, "email rejected (HTTP 422)")
+        return
+    try:
+        data = resp.json()
+    except ValueError:
+        return
+    locations = data.get("oa_locations")
+    if not isinstance(locations, list) or not locations:
+        best = data.get("best_oa_location")
+        locations = [best] if isinstance(best, dict) else []
+    for loc in locations:
+        if not isinstance(loc, dict):
+            continue
+        url = loc.get("url_for_pdf") or loc.get("url")
+        if not url:
+            continue
+        found.append(
+            {
+                "url": url,
+                "method": "unpaywall",
+                "host_type": str(loc.get("host_type") or ""),
+            }
+        )
+
+
+async def _europepmc_candidates(
+    client: httpx.AsyncClient, doi: str, found: list[dict]
+) -> None:
+    """Europe PMC's rendered-PDF link for the DOI's PMCID, when one exists."""
+    url = f'{EUROPEPMC_SEARCH}?query=DOI:"{doi}"&format=json'
+    try:
+        resp = await client.get(url)
+    except httpx.HTTPError:
+        return
+    if resp.status_code != 200:
+        return
+    try:
+        data = resp.json()
+    except ValueError:
+        return
+    results = (data.get("resultList") or {}).get("result")
+    if not isinstance(results, list):
+        return
+    for item in results:
+        if not isinstance(item, dict):
+            continue
+        pmcid = item.get("pmcid")
+        if pmcid:
+            found.append(
+                {
+                    "url": f"https://europepmc.org/articles/{pmcid}?pdf=render",
+                    "method": "europepmc",
+                    "host_type": "repository",
+                }
+            )
+            return
+
+
+def _crossref_candidates(metadata: dict | None, doi: str, found: list[dict]) -> None:
+    """Crossref registration landing URL, then the bare DOI resolver."""
+    landing = (metadata or {}).get("url")
+    if landing:
+        found.append(
+            {"url": landing, "method": "crossref-landing", "host_type": "publisher"}
+        )
+    if doi:
+        found.append({"url": f"https://doi.org/{doi}", "method": "resolver", "host_type": ""})
+
+
+def _candidate_rank(candidate: dict) -> int:
+    """Sort key: repository OA mirrors, then other OA PDFs, then landing URLs."""
+    if candidate.get("host_type") == "repository":
+        return 0
+    method = candidate.get("method")
+    if method == "crossref-landing":
+        return 2
+    if method == "resolver":
+        return 3
+    return 1
+
+
+async def resolve_candidates(
+    client: httpx.AsyncClient, doi: str, email: str, *, info: dict | None = None
+) -> list[dict]:
+    """Ordered, unique download candidates for ``doi``.
+
+    Sources are queried OpenAlex → Unpaywall → Europe PMC → Crossref → DOI
+    resolver, then stable-sorted so repository/OA mirrors precede publisher
+    PDFs and landing/resolver URLs. Each candidate is
+    ``{"url", "method", "host_type"}``.
+
+    ``info`` is an optional out-dict the caller may pass to learn why a source
+    contributed nothing (currently ``unpaywall_email`` and ``crossref``).
+    """
+    found: list[dict] = []
+    await _openalex_candidates(client, doi, found)
+    await _unpaywall_candidates(client, doi, email, info, found)
+    await _europepmc_candidates(client, doi, found)
+    metadata = await resolve_crossref(client, doi)
+    _crossref_candidates(metadata, doi, found)
+    if info is not None:
+        info["crossref"] = metadata
+
+    ordered: list[dict] = []
+    seen: set[str] = set()
+    for candidate in sorted(found, key=_candidate_rank):
+        url = str(candidate.get("url") or "")
+        if not url or url in seen:
+            continue
+        seen.add(url)
+        ordered.append(
+            {
+                "url": url,
+                "method": str(candidate.get("method") or ""),
+                "host_type": str(candidate.get("host_type") or ""),
+            }
+        )
+    return ordered
 
 
 async def resolve_crossref(client: httpx.AsyncClient, doi: str) -> dict | None:
@@ -127,18 +288,35 @@ async def resolve_landing_page(client: httpx.AsyncClient, url: str) -> str | Non
     return None
 
 
-async def download_pdf(client: httpx.AsyncClient, url: str, dest: Path) -> bool:
+async def download_pdf(
+    client: httpx.AsyncClient, url: str, dest: Path, *, detail: dict | None = None
+) -> bool:
     """Download ``url`` into ``dest`` if it looks like a PDF; True on success.
 
     The first five bytes are validated as soon as they are available (before
     the rest of the body is buffered) and the download is aborted past
     ``MAX_PDF_BYTES`` so a hostile or misdirected response cannot exhaust
-    memory.
+    memory. When ``detail`` is passed it is filled with ``status`` /
+    ``content_type`` / ``reason`` describing why a failed attempt was rejected.
     """
+    def _fail(reason: str, status: int | None = None, content_type: str = "") -> bool:
+        if detail is not None:
+            if status is not None:
+                detail["status"] = status
+            if content_type:
+                detail["content_type"] = content_type
+            detail["reason"] = reason
+        return False
+
     try:
-        async with client.stream("GET", url, follow_redirects=True, headers=HEADERS) as resp:
+        async with client.stream(
+            "GET",
+            url,
+            follow_redirects=True,
+            headers={**HEADERS, "Accept": DOWNLOAD_ACCEPT},
+        ) as resp:
             if resp.status_code != 200:
-                return False
+                return _fail(f"HTTP {resp.status_code}", status=resp.status_code)
             content_type = resp.headers.get("content-type", "")
             first: bytes = b""
             total = 0
@@ -150,18 +328,22 @@ async def download_pdf(client: httpx.AsyncClient, url: str, dest: Path) -> bool:
                     first = (first + chunk)[:5]
                     # Validate immediately once the magic block is present.
                     if len(first) >= 5 and not _is_pdf(content_type, first):
-                        return False
+                        return _fail("not a PDF response", status=200, content_type=content_type)
                 total += len(chunk)
                 if total > MAX_PDF_BYTES:
                     logger.warning("Download aborted (> %d bytes): %s", MAX_PDF_BYTES, url)
-                    return False
+                    return _fail(
+                        f"file too large (> {MAX_PDF_BYTES} bytes)",
+                        status=200,
+                        content_type=content_type,
+                    )
                 out.append(chunk)
             if not _is_pdf(content_type, first):
-                return False
+                return _fail("not a PDF response", status=200, content_type=content_type)
             dest.write_bytes(b"".join(out))
             return True
-    except httpx.HTTPError:
-        return False
+    except httpx.HTTPError as err:
+        return _fail(f"request failed ({err.__class__.__name__})")
 
 
 # ── Zotero reuse (best-effort) ───────────────────────────────────────────
@@ -238,20 +420,17 @@ async def try_zotero_pdf(client: httpx.AsyncClient, doi: str, dest: Path) -> tup
 async def resolve_pdf_chain(
     client: httpx.AsyncClient, doi: str, email: str
 ) -> tuple[str | None, str | None, dict | None]:
-    """Try OpenAlex → Unpaywall → Crossref landing page. Returns
-    (pdf_url, method, metadata)."""
-    metadata = await resolve_crossref(client, doi)
-    landing = (metadata or {}).get("url")
-    pdf_url = await resolve_openalex(client, doi)
-    if pdf_url:
-        return pdf_url, "openalex", metadata
-    pdf_url = await resolve_unpaywall(client, doi, email)
-    if pdf_url:
-        return pdf_url, "unpaywall", metadata
-    pdf_url = await resolve_landing_page(client, landing or f"https://doi.org/{doi}")
-    if pdf_url:
-        return pdf_url, "landing", metadata
-    return None, None, metadata
+    """Backward-compatible wrapper: the first candidate's URL/method + metadata.
+
+    Prefer :func:`resolve_candidates` when every fallback should be attempted.
+    """
+    info: dict = {}
+    candidates = await resolve_candidates(client, doi, email, info=info)
+    metadata = info.get("crossref")
+    if not candidates:
+        return None, None, metadata
+    first = candidates[0]
+    return first["url"], first["method"], metadata
 
 
 def _sanitize(name: str) -> str:
@@ -333,22 +512,34 @@ async def run_downloads(
                     progress_cb(done, total, hit.title)
                     continue
 
-                pdf_url, method, metadata = await resolve_pdf_chain(client, doi, email)
+                info: dict = {}
+                candidates = await resolve_candidates(client, doi, email, info=info)
+                metadata = info.get("crossref")
                 target = Path(project_path) / ".meta" / "downloads"
                 target.mkdir(parents=True, exist_ok=True)
                 dest = target / build_target_filename(hit, metadata)
                 dest.unlink(missing_ok=True)
 
                 downloaded = False
-                if pdf_url:
-                    downloaded = await download_pdf(client, pdf_url, dest)
-                    if not downloaded:
-                        pdf_url = None
-                if not pdf_url or not downloaded:
-                    # Zotero reuse (best-effort).
+                method: str | None = None
+                pdf_url: str | None = None
+                last_detail: dict = {}
+                for candidate in candidates:
+                    detail: dict = {}
+                    if await download_pdf(client, candidate["url"], dest, detail=detail):
+                        downloaded = True
+                        method = candidate["method"]
+                        pdf_url = candidate["url"]
+                        break
+                    if detail:
+                        last_detail = detail
+                if not downloaded:
+                    # Zotero reuse (best-effort), tried only once every OA
+                    # candidate has been exhausted.
                     zotero_ok, _ = await try_zotero_pdf(client, doi, dest)
                     if zotero_ok:
                         method = "zotero"
+                        pdf_url = f"https://doi.org/{doi}"
                         downloaded = True
 
                 if downloaded and dest.exists() and dest.stat().st_size > 0:
@@ -375,9 +566,16 @@ async def run_downloads(
                         await _link_study_case(session, hit=hit, source_id=source.id, owner=owner)
                         ok += 1
                 else:
-                    await repo.patch_document_status(
-                        hit.hit_id, "failed", "automated retrieval failed — assign manually"
-                    )
+                    if not candidates:
+                        status = "unretrievable"
+                        message = f"no open-access copy found (DOI {doi})"
+                    else:
+                        reason = str(last_detail.get("reason") or "unknown error")
+                        status = "failed"
+                        message = f"all {len(candidates)} sources blocked (last: {reason})"
+                    if info.get("unpaywall_email"):
+                        message = f"{message}; add an Unpaywall email to broaden retrieval"
+                    await repo.patch_document_status(hit.hit_id, status, message)
                     failed += 1
                 done += 1
                 progress_cb(done, total, hit.title)

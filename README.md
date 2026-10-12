@@ -1,11 +1,11 @@
-# QCnext - A Rework of Qualcoder
+# QCnext - A Software for Qualitative Data Analysis
 
-This is a rework of [QualCoder](https://github.com/ccbogel/QualCoder), an awesome open-source qualitative data analysis (QDA) tool. The central focus of the software is to load text and multimedia files for qualitative coding. It can transcribe audio/video files, organize codes and files, generate reports like coding graphs and coder comparisons, and integrates LLMs to explore the data, support coding, and analyze the results.
+The central focus of the software is to load text and multimedia files for qualitative coding. It can transcribe audio/video files, organize codes and files, generate reports like coding graphs and coder comparisons, and integrates LLMs to explore the data, support coding, and analyze the results.
 
-> \[!NOTE]
+> \\\\\\\[!NOTE]
 > This software is currently in beta. While I consider it mostly feature-complete and use it as my daily driver, you may encounter bugs, visual quirks, etc. Please report any issues and suggestions for improvements!
 
-![Active Project Dashboard](docs/screenshots/dashboard.jpg)
+!\[Active Project Dashboard](docs/screenshots/dashboard.jpg)
 
 QCnext uses a single-window **Workspace Layout** organized into
 
@@ -14,14 +14,14 @@ QCnext uses a single-window **Workspace Layout** organized into
 * a **center view** for the main information, and
 * a **right bar** for additional information or an active side-pane (AI Chat, Settings, Audit History, Creative Scratchpad).
 
-This rework is loosely based on the QualCoder 4.0 beta source code (\~2% copied, \~12% adapted) with the following major goals (full [changelog](Changelog.md)):
+This rework is loosely based on the [QualCoder](https://github.com/ccbogel/QualCoder) 4.0 source code (\~2% copied, \~12% adapted) with the following major goals (full [changelog](Changelog.md)):
 
 * **Simplified UI**: The rework tries to simplify and reorganize the UI as much as possible while retaining full functionality.
 * **Simultaneous collaboration** (experimental): Simultaneous collaboration is now possible by saving the project in a shared folder and enabling collaboration in the coder flyout.
 * **Reduce architectural debt**: The rework tried to make the codebase more modular and sleaker to eliminate the old, monolithic scripts to reduce redundancy and make maintaining easier.
 * **Increase responsiveness**: The startup time is reduced from \~30s to to \~2s, the memory footprint is roughly cut in half (from 450mb to 200mb)
 * **Full compatibility**: All of these changes do not break compatibility with your existing projects.
-* **Minor features**: Undo/redo with a full project history. More reports and additional interrater agreements like Fleiss Kappa. A dashboard for quick access. Easier file management with multiselect etc.
+* **Minor features**: Undo/redo with a full project history. More reports and additional interrater agreements like Fleiss Kappa. A dashboard for quick access. Easier file management with multiselect etc. Tools for conducting meta-analyses (experimental).
 * **(Future) Web apps**: The rework prepared to allow for a client-server structure with full web apps, although future iterations will always retain offline functionality.
 
 ## Installation
@@ -61,6 +61,7 @@ The typical workflow will look similar to this:
 This is a non-exhaustive, unsorted list of planned features:
 
 * Expand the rudimentary Creative Coding and Crafter
+* Expand and improve the experimental meta-analysis tab
 * Working web app and server
 * Further improvements for collaboration and AI (particularly MCP)
 * Further refine the UI
@@ -74,3 +75,4 @@ QualCoder is distributed under the [GNU LGPL-3.0](LICENSE.txt), QCnext follows t
 ## Authors
 
 QCnext is a rework by Marvin Fendt ([Ludwig Maximilians University Munich](https://www.lmu.de/psy/de/personen/kontaktseite/marvin-fendt-b5fc2511.html)). It is based on the QualCoder 4.0 beta source code by [**Dr. Colin Curtain**](https://www.utas.edu.au/profiles/staff/umore/colin-curtain), [**Dr. rer. soc. Kai Dröge,**](https://www.hslu.ch/de-ch/hochschule-luzern/ueber-uns/personensuche/profile/?pid=823), [**Dr. Justin Missaghieh--Poncet**](https://www.univ-pau.fr/fr/index.html), and [**Dr. Lorenzo Salomón**](https://www.uas.edu.mx/).
+

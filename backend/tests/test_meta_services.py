@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import math
 from pathlib import Path
 
@@ -27,6 +28,13 @@ from qualcoder_api.services import (
     meta_prisma,
     meta_report,
     meta_summary,
+)
+from qualcoder_api.services.meta_codingstudio import (
+    DEFAULT_INTERVENTION_TYPES,
+    MAX_ERRORS,
+    import_codingstudio,
+    preview_codingstudio,
+    schema_codebook,
 )
 from qualcoder_api.services.meta_effects import (
     ALL_FAMILIES,
@@ -594,6 +602,56 @@ async def test_upsert_extraction_per_owner(session):
     again = await repo.upsert_extraction(hit_id=1, owner="anna", scheme="s", status="extracted")
     assert again.id == anna.id
     assert len(await repo.list_extractions(hit_id=1)) == 2
+
+
+async def test_list_extractions_filters_status_and_defers_dv_metrics(session):
+    repo = MetaRepository(session)
+    records = [{"study": {"sid": "S1"}, "metrics": [{"eff": 0.3}]}]
+    await repo.upsert_extraction(
+        hit_id=1, owner="anna", scheme="s",
+        study_vars={"records": records}, dv_metrics=[{"eff": 0.3}], status="extracted",
+    )
+    await repo.upsert_extraction(
+        hit_id=1, owner="bob", scheme="s",
+        study_vars={"records": []}, dv_metrics=[{"eff": 9.9}], status="excluded",
+    )
+
+    extracted = await repo.list_extractions(status="extracted")
+    assert [e.owner for e in extracted] == ["anna"]
+    assert extracted[0].dv_metrics == [{"eff": 0.3}]
+
+    # Analysis re-derives from study_vars, so the cached column is skipped.
+    slim = await repo.list_extractions(status="extracted", include_dv_metrics=False)
+    assert len(slim) == 1
+    assert slim[0].dv_metrics == []
+    assert slim[0].study_vars["records"][0]["study"]["sid"] == "S1"
+
+
+async def test_list_hits_by_ids_returns_only_requested(session):
+    repo = MetaRepository(session)
+    first = await repo.add_hit(title="A", doi="10.1/a")
+    second = await repo.add_hit(title="B", doi="10.1/b")
+    await repo.add_hit(title="C", doi="10.1/c")
+
+    got = await repo.list_hits_by_ids([first.hit_id, second.hit_id, 99999])
+    assert {h.hit_id for h in got} == {first.hit_id, second.hit_id}
+    # Duplicate ids do not duplicate rows.
+    assert len(await repo.list_hits_by_ids([first.hit_id, first.hit_id])) == 1
+    assert await repo.list_hits_by_ids([]) == []
+
+
+def test_refresh_dv_metrics_rederives_from_records():
+    from qualcoder_api.services.meta_extract import refresh_dv_metrics
+
+    extraction = {
+        "study_vars": {"records": [{"study": {"sid": "S1"}, "metrics": [{"eff": 0.3}]}]},
+        "dv_metrics": [{"stale": True}],
+    }
+    codebook = {"fields": [{"name": "sid", "role": "study_id"}]}
+    refreshed = refresh_dv_metrics(extraction, codebook)
+    assert refreshed["dv_metrics"] == [{"sid": "S1", "eff": 0.3, "_record": 0}]
+    # A missing scheme leaves the cached column untouched.
+    assert refresh_dv_metrics(extraction, None) is extraction
 
 
 # ── analysis (§6) ────────────────────────────────────────────────────────
@@ -1814,3 +1872,803 @@ def test_consensus_single_coder_metric_survives_alignment():
     assert report["n_dropped_conflicts"] == 0
     dvs = [m["dv"] for m in rows[0]["study_vars"]["records"][0]["metrics"]]
     assert dvs == ["X", "Y"]
+
+
+# ── CodingStudio folder importer ─────────────────────────────────────────
+
+_CODINGSTUDIO_SCHEMA = {
+    "schema_version": "3.1",
+    "groups": ["Metadata & Identification", "Sample"],
+    "common_fields": [
+        {"name": "Study_ID", "group": "Metadata & Identification", "type": "string", "editor": "text", "required": True},
+        {"name": "Title", "group": "Metadata & Identification", "type": "string", "editor": "text"},
+        {"name": "DOI", "group": "Metadata & Identification", "type": "string|null", "editor": "text"},
+        {"name": "Authors", "group": "Metadata & Identification", "type": "string", "editor": "text"},
+        {"name": "Year", "group": "Metadata & Identification", "type": "integer", "editor": "number"},
+        {"name": "N_Analyzed", "group": "Sample", "type": "integer|null", "editor": "number"},
+        {"name": "Study_Description", "group": "Sample", "type": "string|null", "editor": "textarea"},
+        {"name": "data_url", "group": "Sample", "type": "string|null", "editor": "text"},
+        {"name": "factor_levels", "group": "Sample", "type": "list", "editor": "chips"},
+    ],
+    "dv_fields": [
+        {"name": "dv_name", "group": "Other", "type": "string", "editor": "text"},
+        {"name": "n1i", "group": "Other", "type": "number", "editor": "number"},
+        {"name": "n2i", "group": "Other", "type": "number", "editor": "number"},
+        {"name": "m1i", "group": "Other", "type": "number", "editor": "number"},
+        {"name": "m2i", "group": "Other", "type": "number", "editor": "number"},
+        {"name": "sd1i", "group": "Other", "type": "number", "editor": "number"},
+        {"name": "sd2i", "group": "Other", "type": "number", "editor": "number"},
+        {"name": "yi", "group": "Other", "type": "number", "editor": "number"},
+        {"name": "vi", "group": "Other", "type": "number", "editor": "number"},
+        {"name": "d_val", "group": "Other", "type": "number", "editor": "number"},
+    ],
+    "modules": {},
+    "intervention_type_modules": {},
+    "vocabularies": {"intervention_types": ["inoculation", "lateral_reading", "other"]},
+}
+
+_WORKBOOK_HEADER = [
+    "an", "title", "abstract", "authors", "doi", "year", "source", "language",
+    "C1_verdict", "C1_certainty", "C1_rationale",
+    "C2_verdict", "C3_verdict", "C4_verdict", "Intervention_verdict",
+    "Fulltext_Verdict", "Fulltext_Exclusion_Criterion", "Fulltext_Reason",
+]
+
+
+def _cs_record(study_id: str, title: str, doi: str) -> dict:
+    return {
+        "Study_ID": study_id,
+        "Title": title,
+        "DOI": doi,
+        "Authors": "Doe, J",
+        "Year": 2020,
+        "N_Analyzed": 62,
+        "Study_Description": "A short study description.",
+        "data_url": "https://osf.io/abcde",
+        "factor_levels": [{"factor": "condition", "levels": ["treatment", "control"]}],
+        "DV_Metrics": [
+            {
+                "dv_name": "Accuracy",
+                "n1i": 30, "n2i": 32, "m1i": 0.8, "m2i": 0.5,
+                "sd1i": 1.0, "sd2i": 1.1, "yi": 0.25, "vi": 0.02,
+            }
+        ],
+    }
+
+
+def _cs_screening() -> dict:
+    def block(verdicts: dict) -> dict:
+        criteria = {}
+        for key, value in verdicts.items():
+            criteria[key] = {"verdict": value, "certainty": "High", "rationale": ""}
+        return {"coder": "MF", "criteria": criteria}
+
+    return {
+        "an-a": {"an": "an-a", **block({"C1": "Yes", "C2": "Yes", "C3": "Yes", "C4": "Yes", "Intervention": "inoculation"})},
+        "an-b": {"an": "an-b", **block({"C1": "No", "C2": "Yes", "C3": "Yes", "C4": "No", "Intervention": "none"})},
+    }
+
+
+def _tiny_pdf() -> bytes:
+    return (
+        b"%PDF-1.4\n"
+        b"1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n"
+        b"2 0 obj<</Type/Pages/Kids[3 0 R]/Count 1>>endobj\n"
+        b"3 0 obj<</Type/Page/Parent 2 0 R/MediaBox[0 0 200 200]>>endobj\n"
+        b"trailer<</Size 4/Root 1 0 R>>\n%%EOF\n"
+    )
+
+
+def _write_codingstudio_folder(root: Path, *, workbook: bool = True, schema: bool = True) -> Path:
+    from openpyxl import Workbook
+
+    for sub in ("Papers", "Text", "Extraction", "Screening", "Codings", "Scripts/coding_web"):
+        (root / sub).mkdir(parents=True, exist_ok=True)
+    if schema:
+        (root / "Scripts/coding_web/schema.json").write_text(
+            json.dumps(_CODINGSTUDIO_SCHEMA), encoding="utf-8"
+        )
+    (root / "Extraction/Study A.json").write_text(
+        json.dumps([_cs_record("A2020_Exp1", "Study A: inoculation", "10.1000/aaaa")]),
+        encoding="utf-8",
+    )
+    (root / "Extraction/Study B.json").write_text(
+        json.dumps([_cs_record("B2021_Exp1", "Study B: media literacy", "10.1000/bbbb")]),
+        encoding="utf-8",
+    )
+    (root / "Screening/MF.json").write_text(json.dumps(_cs_screening()), encoding="utf-8")
+    # Per-coder full-text decisions are keyed by **study key** (not ``an``).
+    (root / "Screening/fulltext - MF.json").write_text(
+        json.dumps(
+            {
+                "Study A": {"exclude": False, "criterion": "", "note": "kept"},
+                "Study B": {
+                    "exclude": True,
+                    "criterion": "C4",
+                    "criterion_label": "Not a primary experimental study (C4)",
+                    "note": "observational",
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    # A real extra coder plus files the importer must skip (harmonizer overrides
+    # and Space-Bunny variant/route/restored drafts).
+    (root / "Codings/Study A - MF.json").write_text(
+        json.dumps([_cs_record("A2020_Exp1", "Study A: inoculation", "10.1000/aaaa")]),
+        encoding="utf-8",
+    )
+    (root / "Codings/Study A - harmonizer - MF.json").write_text("{}", encoding="utf-8")
+    (root / "Codings/Study A - SB (restored).json").write_text("[]", encoding="utf-8")
+    (root / "Codings/Study A - SB (route 2).json").write_text("[]", encoding="utf-8")
+    (root / "Papers/Study A.pdf").write_bytes(_tiny_pdf())
+    (root / "Text/Study A.txt").write_text("full text", encoding="utf-8")
+
+    if workbook:
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "Sheet1"
+        ws.append(_WORKBOOK_HEADER)
+        ws.append(["an-a", "Study A: inoculation", "Abstract A.", "Doe, J", "10.1000/aaaa", 2020, "J. Test", "eng",
+                   "Yes", "High", "", "Yes", "Yes", "Yes", "inoculation", "Include", "", ""])
+        ws.append(["an-b", "Study B: media literacy", "Abstract B.", "Roe, S", "10.1000/bbbb", 2021, "J. Test", "eng",
+                   "No", "High", "", "Yes", "Yes", "No", "none", "Exclude",
+                   "Not a primary experimental study (C4)", "observational design"])
+        ws.append(["an-c", "Study C: no extraction", "Abstract C.", "Poe, T", "10.1000/cccc", 2022, "J. Test", "eng",
+                   "Yes", "High", "", "Yes", "Yes", "Yes", "generic", "Include", "", ""])
+        wb.save(root / "master_dataset.xlsx")
+    return root
+
+
+async def _open_codingstudio_project(tmp_path: Path):
+    project_dir = tmp_path / "project.qda"
+    (project_dir / "documents").mkdir(parents=True)
+    engine = create_project_engine(project_dir / "data.qda")
+    await create_all_tables(engine)
+    factory = create_session_factory(engine)
+    async with factory() as session:
+        await session.execute(
+            text(
+                "INSERT INTO project (databaseversion, date, memo, about, bookmarkfile, "
+                "bookmarkpos, codername, recently_used_codes) "
+                "VALUES ('v39', '2026-01-01', '', 'QualCoder 4.0-test', 0, 0, 'default', '')"
+            )
+        )
+        await session.commit()
+    return engine, factory, project_dir
+
+
+def test_legacy_aliases_resolve_codingstudio_fields():
+    resolved = metric_by_role(
+        {"N_Analyzed": 1572, "Study_Description": "desc", "data_url": "https://osf.io/x"}
+    )
+    assert resolved["sample_n"] == 1572
+    assert resolved["description"] == "desc"
+    assert resolved["dataset_url"] == "https://osf.io/x"
+    # ``N_Recruited`` falls back too, and a present ``N_Analyzed`` wins.
+    assert metric_by_role({"N_Recruited": 30})["sample_n"] == 30
+    assert metric_by_role({"N_Analyzed": 20, "N_Recruited": 30})["sample_n"] == 20
+
+
+def test_new_roles_and_aliases_resolve():
+    from qualcoder_api.services.meta_roles import METRIC_ROLES, STUDY_ROLES
+
+    assert {"publication", "fully_within", "intervention_id"} <= STUDY_ROLES
+    assert {
+        "veracity", "contrast_role", "beta_ci_low", "beta_ci_high",
+        "source_location", "source_quote",
+    } <= METRIC_ROLES
+
+    # ``Publication`` wins over the legacy fallbacks; either fallback resolves.
+    assert metric_by_role({"Publication": "preprint"})["publication"] == "preprint"
+    assert metric_by_role(
+        {"Publication": "preprint", "Publication_Type": "paper"}
+    )["publication"] == "preprint"
+    assert metric_by_role({"Publication_Type": "thesis"})["publication"] == "thesis"
+    assert metric_by_role({"Publication_Category": "report"})["publication"] == "report"
+    assert metric_by_role({"Fully_Within": True})["fully_within"] is True
+    assert metric_by_role({"Intervention_ID": "iv-1"})["intervention_id"] == "iv-1"
+
+    by_role = metric_by_role(
+        {
+            "veracity": "false",
+            "contrast_role": 3,
+            "beta_ci_low": 0.1,
+            "beta_ci_high": 0.4,
+            "source_location": "Table 2",
+            "source_quote": "p < .05",
+        }
+    )
+    assert by_role["veracity"] == "false"
+    assert by_role["contrast_role"] == 3
+    assert by_role["beta_ci_low"] == 0.1
+    assert by_role["beta_ci_high"] == 0.4
+    assert by_role["source_location"] == "Table 2"
+    assert by_role["source_quote"] == "p < .05"
+
+    fields = [
+        {"name": "Publication", "role": "publication"},
+        {"name": "source_quote", "role": "source_quote"},
+    ]
+    assert role_map(fields) == {"Publication": "publication", "source_quote": "source_quote"}
+
+
+def test_derive_dv_metrics_merges_all_scalar_study_fields():
+    codebook = {
+        "fields": [
+            {"name": "sid", "role": "study_id"},
+            {"name": "Publication", "role": "publication"},
+            {"name": "Correction_Source"},           # module field, no role
+            {"name": "WEIRD_Western"},               # module-ish field, no role
+            {"name": "Country"},                     # multi-label: kept
+        ],
+        "metrics": {"enabled": True, "group": "metrics", "fields": [
+            {"name": "eff", "role": "yi"},
+        ]},
+        "effect_families": ["yi"],
+    }
+    response = [
+        {
+            "sid": "S1",
+            "Publication": "preprint",
+            "Correction_Source": 1,
+            "WEIRD_Western": 1,
+            "Country": ["USA"],
+            # A list of objects is a container, not a set of labels.
+            "factor_levels": [{"factor": "condition", "levels": ["t", "c"]}],
+            "metrics": [{"eff": 0.2}],
+        }
+    ]
+    records, _ = records_from_response(response, codebook)
+    flat = derive_dv_metrics(records, role_map(study_fields(codebook)))
+    assert flat[0]["sid"] == "S1"
+    assert flat[0]["Publication"] == "preprint"
+    assert flat[0]["Correction_Source"] == 1
+    assert flat[0]["WEIRD_Western"] == 1
+    assert flat[0]["eff"] == 0.2
+    # Multi-label study fields survive as lists so they can be moderators.
+    assert flat[0]["Country"] == ["USA"]
+    assert "factor_levels" not in flat[0]
+    assert flat[0]["_record"] == 0
+
+
+def test_effects_from_metrics_keeps_scalar_list_fields():
+    rows = meta_analysis.effects_from_metrics(
+        [
+            {
+                "_record": 0,
+                "dv_name": "x",
+                "yi": 0.2,
+                "vi": 0.04,
+                "Country": ["US", "UK"],
+                "factor_levels": [{"factor": "condition"}],
+            }
+        ]
+    )
+    assert rows[0]["fields"]["Country"] == ["US", "UK"]
+    # Nested containers are not label sets and stay out of the field map.
+    assert "factor_levels" not in rows[0]["fields"]
+
+
+def test_subgroup_multilabel_row_joins_every_label():
+    rows = meta_analysis.effects_from_metrics(
+        [
+            {"_record": 0, "Study_ID": "S1", "dv_name": "x", "yi": 0.2, "vi": 0.04,
+             "Intervention_Type": ["a", "b"]},
+            {"_record": 1, "Study_ID": "S2", "dv_name": "y", "yi": 0.5, "vi": 0.05,
+             "Intervention_Type": ["b"]},
+            {"_record": 2, "Study_ID": "S3", "dv_name": "z", "yi": 0.8, "vi": 0.04,
+             "Intervention_Type": ["a"]},
+            {"_record": 3, "Study_ID": "S4", "dv_name": "w", "yi": 0.7, "vi": 0.04,
+             "Intervention_Type": []},
+        ]
+    )
+    result = meta_analysis.subgroup(rows, "Intervention_Type")
+    by_value = {g["value"]: g for g in result["groups"]}
+    # A row carrying ["a", "b"] counts toward both label pools.
+    assert set(by_value) == {"a", "b"}
+    assert by_value["a"]["k"] == 2
+    assert by_value["a"]["n_studies"] == 2
+    assert by_value["b"]["k"] == 2
+    assert by_value["b"]["n_studies"] == 2
+    assert result["k_groups"] == 2
+
+
+def test_moderator_multilabel_expands_per_label_terms():
+    rows = meta_analysis.effects_from_metrics(
+        [
+            {"_record": 0, "Study_ID": "S1", "dv_name": "x", "yi": 0.1, "vi": 0.04,
+             "Intervention_Type": ["a"]},
+            {"_record": 1, "Study_ID": "S2", "dv_name": "x", "yi": 0.2, "vi": 0.04,
+             "Intervention_Type": ["a", "b"]},
+            {"_record": 2, "Study_ID": "S3", "dv_name": "y", "yi": 0.9, "vi": 0.04,
+             "Intervention_Type": ["b"]},
+            {"_record": 3, "Study_ID": "S4", "dv_name": "y", "yi": 1.0, "vi": 0.04,
+             "Intervention_Type": ["b"]},
+            {"_record": 4, "Study_ID": "S5", "dv_name": "z", "yi": 0.5, "vi": 0.04,
+             "Intervention_Type": []},
+        ]
+    )
+    result = meta_analysis.moderator(
+        rows, "Intervention_Type", ["Intervention_Type"]
+    )
+    # The empty-list row carries no label and is dropped from the model.
+    assert result["k"] == 4
+    assert result["n_dropped"] == 1
+    terms = [c["term"] for c in result["coefficients"]]
+    assert "Intervention_Type:a" in terms
+    assert "Intervention_Type:b" in terms
+    assert all(
+        c["estimate"] is None or math.isfinite(c["estimate"])
+        for c in result["coefficients"]
+    )
+
+
+def test_subgroup_and_moderator_scalar_behaviour_unchanged():
+    rows = meta_analysis.effects_from_metrics(
+        [
+            {"_record": 0, "Study_ID": "S1", "dv_name": "x", "yi": 0.1, "vi": 0.04,
+             "format": "print"},
+            {"_record": 1, "Study_ID": "S2", "dv_name": "x", "yi": 0.2, "vi": 0.04,
+             "format": "print"},
+            {"_record": 2, "Study_ID": "S3", "dv_name": "y", "yi": 0.9, "vi": 0.04,
+             "format": "video"},
+            {"_record": 3, "Study_ID": "S4", "dv_name": "y", "yi": 1.0, "vi": 0.04,
+             "format": "video"},
+        ]
+    )
+    grouped = meta_analysis.subgroup(rows, "format")
+    by_value = {g["value"]: g for g in grouped["groups"]}
+    assert set(by_value) == {"print", "video"}
+    assert by_value["print"]["k"] == 2
+    assert by_value["video"]["k"] == 2
+
+    fit = meta_analysis.moderator(rows, "format", ["format"])
+    assert fit["k"] == 4
+    # A scalar categorical term still contributes its dummies (most common
+    # level is the reference), not per-label indicator columns for a list.
+    assert any(c["term"].startswith("format:") for c in fit["coefficients"])
+
+
+_CS_SCHEMA_V31 = {
+    "schema_version": "3.1",
+    "groups": ["Metadata & Identification", "Other"],
+    "common_fields": [
+        {"name": "Study_ID", "type": "string", "editor": "text"},
+        {"name": "Title", "type": "string", "editor": "text"},
+        {"name": "Author_1", "type": "string", "editor": "text"},
+        {"name": "Rationale_Notes", "type": "string", "editor": "textarea"},
+        {"name": "Publication", "type": "string|null", "editor": "select",
+         "options": [{"value": "preprint", "label": "Preprint"},
+                     {"value": "report", "label": "Report"}]},
+    ],
+    "dv_fields": [
+        {"name": "dv_domain", "type": "list", "editor": "multiselect"},
+        {"name": "contrast_type", "type": "integer|null", "editor": "select",
+         "options": [{"value": 1, "label": "Primary treatment vs no-treatment control"}]},
+        {"name": "source_quote", "type": "string", "editor": "text"},
+    ],
+    "modules": {
+        "lateral_reading_and_verification": {"fields": [
+            {"name": "Assessment_Paradigm", "module": "lateral_reading_and_verification",
+             "type": "integer|null", "editor": "select",
+             "options": [{"value": 1, "label": "Technique-adoption paradigm"}]},
+        ]},
+        "fact_checking_training": {"fields": [
+            {"name": "Assessment_Paradigm", "module": "fact_checking_training",
+             "type": "integer|null", "editor": "select",
+             "options": [{"value": 1, "label": "Claim-verification accuracy task"}]},
+        ]},
+    },
+    "intervention_type_modules": {"inoculation": ["inoculation"]},
+    "vocabularies": {
+        "dv_domains": ["technique_recognition", "credibility"],
+        "contrast_types": {
+            "1": "primary_treatment_vs_no_treatment",
+            "2": "treatment_vs_active_or_placebo",
+        },
+        "publication_types": ["preprint", "report"],
+        "intervention_types": ["inoculation", "other"],
+        "module_field_levels": {"Assessment_Paradigm": {
+            "lateral_reading_and_verification": {"1": "Technique-adoption paradigm"},
+            "fact_checking_training": {
+                "1": "Claim-verification accuracy task",
+                "2": "Discernment (true vs false)",
+            },
+        }},
+    },
+}
+
+
+def test_schema_codebook_reads_vocabularies_and_moderator_hygiene():
+    book = schema_codebook(_CS_SCHEMA_V31)
+    by_name = {f["name"]: f for f in book["fields"]}
+    dv = {f["name"]: f for f in book["metrics"]["fields"]}
+
+    # Vocabulary-driven editors/options.
+    assert by_name["Publication"]["editor"] == "select"
+    assert by_name["Publication"]["options"] == ["Preprint", "Report"]
+    assert dv["dv_domain"]["editor"] == "multiselect"
+    assert dv["dv_domain"]["options"] == ["technique_recognition", "credibility"]
+    assert dv["contrast_type"]["options"] == [
+        "Primary treatment vs no-treatment control",
+        "treatment_vs_active_or_placebo",
+    ]
+
+    # Moderator hygiene: free text / identifiers are not moderators.
+    for name in ("Study_ID", "Title", "Author_1", "Rationale_Notes"):
+        assert by_name[name]["moderator"] is False, name
+    assert by_name["Publication"]["moderator"] is True
+    assert dv["source_quote"]["moderator"] is False
+
+    # Retired intervention types are dropped.
+    assert "none" not in DEFAULT_INTERVENTION_TYPES
+    assert "generic" not in DEFAULT_INTERVENTION_TYPES
+    assert "other" in DEFAULT_INTERVENTION_TYPES
+
+
+def test_schema_codebook_module_collision_keeps_one_field_with_overrides():
+    book = schema_codebook(_CS_SCHEMA_V31)
+    names = [f["name"] for f in book["fields"]]
+    assert names.count("Assessment_Paradigm") == 1
+    par = next(f for f in book["fields"] if f["name"] == "Assessment_Paradigm")
+    assert par["module"] == "lateral_reading_and_verification"
+    assert par["options"] == ["Technique-adoption paradigm"]
+    assert par["module_options"]["lateral_reading_and_verification"] == [
+        "Technique-adoption paradigm"
+    ]
+    assert par["module_options"]["fact_checking_training"] == [
+        "Claim-verification accuracy task",
+        "Discernment (true vs false)",
+    ]
+    assert book["intervention_type_modules"] == {"inoculation": ["inoculation"]}
+
+
+def test_schema_codebook_module_identity_survives_normalisation():
+    book = normalise_codebook(schema_codebook(_CS_SCHEMA_V31))
+    par = next(f for f in book["fields"] if f["name"] == "Assessment_Paradigm")
+    assert par["module"] == "lateral_reading_and_verification"
+    assert par["module_options"]["fact_checking_training"] == [
+        "Claim-verification accuracy task",
+        "Discernment (true vs false)",
+    ]
+    assert book["intervention_type_modules"] == {"inoculation": ["inoculation"]}
+
+
+def test_codingstudio_preview_counts(tmp_path: Path):
+    folder = _write_codingstudio_folder(tmp_path / "cs")
+    preview = preview_codingstudio(str(folder))
+    assert preview["exists"] is True
+    assert preview["papers"] == 1
+    assert preview["texts"] == 1
+    assert preview["extraction_files"] == 2
+    assert preview["study_count"] == 2
+    assert preview["screenings"] == [
+        {"coder": "MF", "rows": 2},
+        {"coder": "MF", "rows": 2},
+    ]
+    assert preview["workbook"]["rows"] == 3
+    assert preview["schema_version"] == "3.1"
+    assert preview["sample_studies"][0]["key"] == "Study A"
+    assert preview["errors"] == []
+
+    missing = preview_codingstudio(str(tmp_path / "nope"))
+    assert missing["exists"] is False
+
+
+async def test_codingstudio_import_creates_and_is_idempotent(tmp_path: Path):
+    folder = _write_codingstudio_folder(tmp_path / "cs")
+    engine, factory, project_dir = await _open_codingstudio_project(tmp_path)
+    try:
+        first = await import_codingstudio(factory, str(project_dir), str(folder))
+        assert first["ok"] is True
+        assert first["hits_imported"] == 3
+        assert first["hits_skipped"] == 0
+        assert first["extractions_imported"] == 3
+        assert first["pdfs_linked"] == 1
+        assert first["screening_rows"] == 10
+        assert first["screening_by_stage"] == {"abstract": 5, "fulltext": 5}
+        assert first["errors"] == []
+
+        async with factory() as session:
+            repo = MetaRepository(session)
+            assert len(await repo.list_hits()) == 3
+            abstract = await repo.list_screening(stage="abstract")
+            fulltext = await repo.list_screening(stage="fulltext")
+            assert len(abstract) == 5
+            assert len(fulltext) == 5
+            assert {row.owner for row in abstract} == {"MF", "LLM/base"}
+            # The workbook's C1..C4 columns import as the base rater, with its
+            # explicit decision stored as the reason.
+            base = next(
+                row
+                for row in abstract
+                if row.owner == "LLM/base" and row.verdicts["C4"]["applies"] == "No"
+            )
+            assert base.reason == "Exclude"
+            excluded = next(row for row in fulltext if row.owner == "codingstudio" and row.verdicts["C4"]["applies"] == "No")
+            assert excluded.reason == "observational design"
+            # Per-coder full text is keyed by study key and imported under MF.
+            mf_fulltext = next(
+                row
+                for row in fulltext
+                if row.owner == "MF" and row.verdicts["C4"]["applies"] == "No"
+            )
+            assert mf_fulltext.reason == "observational"
+
+            extractions = await repo.list_extractions()
+            assert len(extractions) == 3
+            flat = extractions[0].dv_metrics[0]
+            assert flat["yi"] == 0.25
+            assert flat["vi"] == 0.02
+            assert flat["n1i"] == 30
+            assert flat["_record"] == 0
+            assert extractions[0].status == "extracted"
+
+            documents = await repo.list_documents()
+            assert len(documents) == 1
+            assert documents[0].source_id is not None
+
+            scheme = await repo.get_scheme(name="codingstudio")
+            assert scheme is not None
+            book = json.loads(scheme.codebook)
+            assert book["version"] == 2
+            assert book["metrics"]["group"] == "DV_Metrics"
+            assert {"descriptives", "yi", "d_g"} <= set(book["effect_families"])
+            roles = {
+                field["name"]: field["role"]
+                for field in [*book["fields"], *book["metrics"]["fields"]]
+            }
+            assert roles["Study_ID"] == "study_id"
+            assert roles["N_Analyzed"] == "sample_n"
+            assert roles["data_url"] == "dataset_url"
+            assert roles["yi"] == "yi"
+
+        second = await import_codingstudio(factory, str(project_dir), str(folder))
+        assert second["hits_imported"] == 0
+        assert second["pdfs_linked"] == 0
+        async with factory() as session:
+            repo = MetaRepository(session)
+            assert len(await repo.list_hits()) == 3
+            assert await repo.count_screening() == 10
+            assert len(await repo.list_extractions()) == 3
+            assert len(await repo.list_documents()) == 1
+    finally:
+        await dispose_engine(engine)
+
+
+async def test_codingstudio_import_without_workbook_falls_back_to_extractions(tmp_path: Path):
+    folder = _write_codingstudio_folder(
+        tmp_path / "cs_minimal", workbook=False, schema=False
+    )
+    engine, factory, project_dir = await _open_codingstudio_project(tmp_path)
+    try:
+        result = await import_codingstudio(factory, str(project_dir), str(folder))
+        assert result["hits_imported"] == 2
+        assert result["extractions_imported"] == 3
+        async with factory() as session:
+            repo = MetaRepository(session)
+            hits = await repo.list_hits()
+            assert {hit.doi for hit in hits} == {"10.1000/aaaa", "10.1000/bbbb"}
+            scheme = await repo.get_scheme(name="codingstudio")
+            assert scheme is not None
+            book = json.loads(scheme.codebook)
+            assert book["metrics"]["group"] == "DV_Metrics"
+            roles = {
+                field["name"]: field["role"]
+                for field in [*book["fields"], *book["metrics"]["fields"]]
+            }
+            assert roles["N_Analyzed"] == "sample_n"
+    finally:
+        await dispose_engine(engine)
+
+
+def _cs_simple_verdicts() -> dict:
+    """C1..C4 all ``Yes`` for one abstract screening entry."""
+    return {
+        key: {"verdict": "Yes", "certainty": "High", "rationale": ""}
+        for key in ("C1", "C2", "C3", "C4")
+    }
+
+
+def _write_workbook(root: Path, rows: list[list]) -> None:
+    """Write a ``master_dataset.xlsx`` with ``rows`` after a fixed header."""
+    from openpyxl import Workbook
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Sheet1"
+    ws.append(_WORKBOOK_HEADER)
+    for row in rows:
+        ws.append(row)
+    wb.save(root / "master_dataset.xlsx")
+
+
+async def test_codingstudio_workbook_row_key_resolves_blank_accession(tmp_path: Path):
+    """A blank ``an`` keys its workbook row as ``row-<worksheet row>``.
+
+    The reference's ``Screening/*.json`` stores such rows as ``row-N`` (N is
+    the 1-based worksheet row: the header is row 1, so the first data row is
+    2). Row 3 below has a blank ``an`` and must resolve for the ``row-3``
+    screening entry.
+    """
+    folder = tmp_path / "cs_rowkey"
+    (folder / "Screening").mkdir(parents=True)
+    _write_workbook(
+        folder,
+        [
+            # Worksheet row 2: has an accession.
+            ["an-x", "Study X", "Abstract X", "Doe, J", "10.1000/xx", 2020, "J", "eng"],
+            # Worksheet row 3: blank ``an`` -> keyed ``row-3``.
+            ["", "Study Y", "Abstract Y", "Roe, S", "10.1000/yy", 2021, "J", "eng"],
+        ],
+    )
+    (folder / "Screening/MF.json").write_text(
+        json.dumps(
+            {
+                "an-x": {"an": "an-x", "criteria": _cs_simple_verdicts()},
+                "row-3": {"an": "", "criteria": _cs_simple_verdicts()},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    engine, factory, project_dir = await _open_codingstudio_project(tmp_path)
+    try:
+        result = await import_codingstudio(factory, str(project_dir), str(folder))
+        assert result["errors"] == []
+        assert result["hits_imported"] == 2
+        # Both the an-keyed and the row-3 entry import (2 abstract rows).
+        assert result["screening_rows"] == 2
+        assert result["screening_by_stage"] == {"abstract": 2, "fulltext": 0}
+
+        async with factory() as session:
+            repo = MetaRepository(session)
+            hits = {hit.title: hit for hit in await repo.list_hits()}
+            screening = await repo.list_screening(stage="abstract")
+            assert {row.hit_id for row in screening} == {
+                hits["Study X"].hit_id,
+                hits["Study Y"].hit_id,
+            }
+
+        # Re-importing stays stable (no duplicate screening rows).
+        await import_codingstudio(factory, str(project_dir), str(folder))
+        async with factory() as session:
+            repo = MetaRepository(session)
+            assert await repo.count_screening() == 2
+    finally:
+        await dispose_engine(engine)
+
+
+async def test_codingstudio_title_only_hit_is_idempotent(tmp_path: Path):
+    """A hit with neither DOI nor authors is not re-inserted on re-import.
+
+    ``add_hits`` cannot dedupe such a row (no key), so the sidecar must keep
+    the study from being imported twice.
+    """
+    folder = tmp_path / "cs_title_only"
+    folder.mkdir()
+    _write_workbook(
+        folder,
+        # No DOI, no authors: only the title would be there to dedupe on.
+        [["an-a", "Title only", "Abstract", "", "", 2020, "J", "eng"]],
+    )
+
+    engine, factory, project_dir = await _open_codingstudio_project(tmp_path)
+    try:
+        first = await import_codingstudio(factory, str(project_dir), str(folder))
+        assert first["hits_imported"] == 1
+        second = await import_codingstudio(factory, str(project_dir), str(folder))
+        assert second["hits_imported"] == 0
+        async with factory() as session:
+            repo = MetaRepository(session)
+            assert len(await repo.list_hits()) == 1
+    finally:
+        await dispose_engine(engine)
+
+
+async def test_codingstudio_stage_counts_match_stored_rows(tmp_path: Path):
+    """``screening_by_stage`` reports stored (deduped) rows, not attempts.
+
+    Two workbook rows share a DOI, so they dedupe to one hit and the base
+    rater would attempt two identical abstract rows. The summary must report
+    the single stored row so ``abstract + fulltext == screening_rows``.
+    """
+    folder = tmp_path / "cs_stage"
+    folder.mkdir()
+    _write_workbook(
+        folder,
+        [
+            ["an-1", "Dup", "Abstract 1", "Doe, J", "10.1000/dup", 2020, "J", "eng",
+             "Yes", "High", "", "Yes", "Yes", "Yes", "inoculation", "", "", ""],
+            ["an-2", "Dup", "Abstract 2", "Doe, J", "10.1000/dup", 2020, "J", "eng",
+             "Yes", "High", "", "Yes", "Yes", "Yes", "inoculation", "", "", ""],
+            ["an-3", "Unique", "Abstract 3", "Roe, S", "10.1000/uniq", 2021, "J", "eng",
+             "Yes", "High", "", "Yes", "Yes", "Yes", "inoculation", "", "", ""],
+        ],
+    )
+
+    engine, factory, project_dir = await _open_codingstudio_project(tmp_path)
+    try:
+        result = await import_codingstudio(factory, str(project_dir), str(folder))
+        # Two rows dedupe to one hit; the base rater's third row is distinct.
+        assert result["hits_imported"] == 2
+        assert result["screening_rows"] == 2
+        assert result["screening_by_stage"] == {"abstract": 2, "fulltext": 0}
+        assert (
+            result["screening_by_stage"]["abstract"]
+            + result["screening_by_stage"]["fulltext"]
+            == result["screening_rows"]
+        )
+        async with factory() as session:
+            repo = MetaRepository(session)
+            assert await repo.count_screening() == result["screening_rows"]
+    finally:
+        await dispose_engine(engine)
+
+
+async def test_codingstudio_pdf_matches_by_first_author_and_year(tmp_path: Path):
+    """A PDF whose stem is not the study key falls back to first-author+year."""
+    folder = tmp_path / "cs_pdf"
+    (folder / "Papers").mkdir(parents=True)
+    (folder / "Extraction").mkdir(parents=True)
+    (folder / "Extraction/Paper A.json").write_text(
+        json.dumps(
+            [
+                {
+                    "Study_ID": "Smith2020",
+                    "Title": "Workbook title for Smith",
+                    "Authors": "Smith, John",
+                    "Year": 2020,
+                    "DOI": "",
+                    "DV_Metrics": [{"dv_name": "Accuracy", "yi": 0.2, "vi": 0.04}],
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+    _write_workbook(
+        folder,
+        [
+            ["an-a", "Workbook title for Smith", "Abstract", "Smith, John", "", 2020, "J", "eng"],
+        ],
+    )
+    (folder / "Papers/Smith (2020).pdf").write_bytes(_tiny_pdf())
+
+    engine, factory, project_dir = await _open_codingstudio_project(tmp_path)
+    try:
+        result = await import_codingstudio(factory, str(project_dir), str(folder))
+        assert result["pdfs_linked"] == 1
+        assert result["pdfs_unmatched"] == 0
+        assert result["errors"] == []
+    finally:
+        await dispose_engine(engine)
+
+
+async def test_codingstudio_errors_are_capped(tmp_path: Path):
+    """Unmatchable screening keys cannot flood ``errors``; the cap is reported."""
+    folder = tmp_path / "cs_errors"
+    (folder / "Screening").mkdir(parents=True)
+    _write_workbook(
+        folder,
+        [["an-a", "Study A", "Abstract A", "Doe, J", "10.1000/aa", 2020, "J", "eng"]],
+    )
+    (folder / "Screening/MF.json").write_text(
+        json.dumps(
+            {
+                f"missing-{i}": {"an": f"missing-{i}", "criteria": _cs_simple_verdicts()}
+                for i in range(MAX_ERRORS + 10)
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    engine, factory, project_dir = await _open_codingstudio_project(tmp_path)
+    try:
+        result = await import_codingstudio(factory, str(project_dir), str(folder))
+        assert len(result["errors"]) == MAX_ERRORS
+        assert result["errors_truncated"] == 10
+        assert all("no study for key" in line for line in result["errors"])
+    finally:
+        await dispose_engine(engine)
+

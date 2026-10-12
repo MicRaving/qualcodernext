@@ -4,7 +4,7 @@
  * in the center menubar and the study left bar; the center shows the work for
  * the focused (or selected) study: its abstract + verdicts, the download
  * table, the scheme-driven coding form, or the reliability/conflict panel.
- * The Extract tab's right bar shows the study's linked paper.
+ * The Extract tab shows the study's linked paper inline next to the form.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -12,9 +12,10 @@ import {
   Check,
   ChevronDown,
   ChevronUp,
+  ExternalLink,
   FilePlus2,
   FileSpreadsheet,
-  Handshake,
+  FileText,
   LoaderCircle,
   Pause,
   Play,
@@ -24,10 +25,11 @@ import {
   Trash2,
   X,
 } from "lucide-react";
-import { api, localRequestBlob } from "@/lib/api";
+import { api, localRequestBlob, sourceFileUrl } from "@/lib/api";
 import type {
   MetaCriterion,
   MetaDocument,
+  MetaDocumentCounts,
   MetaExtraction,
   MetaHit,
   MetaJob,
@@ -51,10 +53,11 @@ import {
 } from "@/components/ui/orchestrator";
 import { useI18n } from "@/lib/i18n";
 import { useToast } from "@/lib/toast";
-import { errorMessage } from "@/lib/utils";
+import { cn, errorMessage } from "@/lib/utils";
 import { useWorkspaceStore, type MetaTab } from "@/stores/workspace";
 import { useCoderStore } from "@/stores/coder";
 import { MetaImportDialog } from "@/features/meta/MetaImportDialog";
+import { MetaCodingStudioDialog } from "@/features/meta/MetaCodingStudioDialog";
 import { MetaSchemeEditor } from "@/features/meta/MetaSchemeEditor";
 import { MetaCriteriaEditor, type MetaCriterionDraft } from "@/features/meta/MetaCriteriaEditor";
 import { MetaExtractionForm } from "@/features/meta/MetaExtractionForm";
@@ -62,6 +65,8 @@ import { MetaFulltextPanel } from "@/features/meta/MetaFulltextPanel";
 import { MetaAgreementPanel } from "@/features/meta/MetaAgreementDialog";
 import { MetaAnalyze } from "@/features/meta/MetaAnalyze";
 import { useMetaCoderScope } from "@/features/meta/useMetaCoderScope";
+import { PdfCanvasViewer } from "@/features/pdf/PdfCanvasViewer";
+import { useSplitResize } from "@/features/coding/shared/useSplitResize";
 
 const VERDICT_CHOICES = ["Yes", "No", "Unsure"] as const;
 const CERTAINTY_CHOICES = ["High", "Medium", "Low"] as const;
@@ -211,6 +216,7 @@ export function MetaView() {
   const scheme = useWorkspaceStore((s) => s.metaUi.scheme);
   const email = useWorkspaceStore((s) => s.metaUi.email);
   const importOpen = useWorkspaceStore((s) => s.metaUi.importOpen);
+  const codingStudioOpen = useWorkspaceStore((s) => s.metaUi.codingStudioOpen);
   const schemeOpen = useWorkspaceStore((s) => s.metaUi.schemeOpen);
   const screeningStage = useWorkspaceStore((s) => s.metaUi.screeningStage);
   const blind = useWorkspaceStore((s) => s.metaUi.blind);
@@ -246,10 +252,24 @@ export function MetaView() {
     eligible: number;
     documents_done: number;
     extracted: number;
+    documents?: MetaDocumentCounts;
   } | null>(null);
   const [jobs, setJobs] = useState<MetaJob[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+
+  // Extract tab: the coding form / PDF split reuses the Coding view's drag
+  // resize (left pane = form, right pane = the focused study's paper).
+  const centerRef = useRef<HTMLDivElement | null>(null);
+  const extractResize = useSplitResize({
+    axis: "x",
+    min: 280,
+    max: Number.POSITIVE_INFINITY,
+    initial: 420,
+    containerSize: () => centerRef.current?.clientWidth,
+  });
+  const textW = extractResize.size;
+  const textDragging = extractResize.dragging;
 
   // Screening controls (center menubar).
   const [runId, setRunId] = useState("");
@@ -696,16 +716,31 @@ export function MetaView() {
     [documents, selectedHit],
   );
 
-  // The Extraction tab's center shows the focused study's form; the right bar
-  // shows its full text. Mirror that document into the store and open the bar
-  // when the tab becomes active with a paper linked. The Download tab lets a
-  // row click choose the document, so a focused-study change never overwrites
-  // that choice (and the selection is not nulled while on Download).
+  // Download table summary chips (done/failed) — prefer the backend's grouped
+  // counts, falling back to the loaded document rows.
+  const downloadSummary = useMemo(() => {
+    const counts = status?.documents;
+    if (counts) {
+      return {
+        done: counts.done ?? status?.documents_done ?? 0,
+        failed: counts.failed ?? 0,
+        total: counts.total || documents.length,
+      };
+    }
+    return {
+      done: documents.filter((d) => d.status === "done" || d.status === "downloaded").length,
+      failed: documents.filter((d) => d.status === "failed" || d.status === "unretrievable").length,
+      total: documents.length,
+    };
+  }, [status, documents]);
+
+  // The Extract tab shows the paper inline (split view), so the shared right
+  // bar only mirrors a document on the Download tab. A row click there still
+  // chooses the document and opens the bar; a focused-study change never
+  // overwrites that choice.
   const currentSourceId = currentDocument?.source_id ?? null;
   useEffect(() => {
-    if (tab === "extract") {
-      setMetaUi({ selectedDocument: currentDocument });
-    } else if (tab === "download") {
+    if (tab === "download") {
       if (!useWorkspaceStore.getState().metaUi.selectedDocument) {
         setMetaUi({ selectedDocument: currentDocument });
       }
@@ -713,11 +748,6 @@ export function MetaView() {
       setMetaUi({ selectedDocument: null });
     }
   }, [tab, currentDocument, setMetaUi]);
-
-  useEffect(() => {
-    if ((tab !== "extract" && tab !== "download") || !currentSourceId) return;
-    window.dispatchEvent(new Event("qc:rightbar-open"));
-  }, [tab, currentSourceId]);
 
   /** Show a download row's linked paper in the shared right-bar viewer. */
   const openDocument = (doc: MetaDocument) => {
@@ -859,7 +889,17 @@ export function MetaView() {
       <ViewHeader
         back={false}
         collapseTitle
-        title={t("nav.meta")}
+        title={
+          <span className="flex items-center gap-2">
+            {t("nav.meta")}
+            <span
+              className="shrink-0 rounded-sm border border-warning/40 bg-warning/10 px-1.5 py-px text-[10px] font-semibold uppercase tracking-wide text-warning"
+              title={t("meta.experimentalHint")}
+            >
+              {t("meta.experimental")}
+            </span>
+          </span>
+        }
         leading={pipelineTabs}
         actions={
           <div className="flex items-center gap-2">
@@ -1052,17 +1092,6 @@ export function MetaView() {
                   </Select>
                 ) : null}
               </div>
-            )}
-
-            {tab !== "screen" && tab !== "conflicts" && (
-              <Button
-                variant="secondary"
-                icon={<Handshake size={13} aria-hidden />}
-                onClick={() => setMetaUi({ tab: "conflicts" })}
-                title={t("meta.agreementTitle")}
-              >
-                {t("meta.agreement")}
-              </Button>
             )}
           </div>
         }
@@ -1411,6 +1440,23 @@ export function MetaView() {
             {documents.length === 0 ? (
               <EmptyState icon={<ArrowDownToLine size={24} aria-hidden />}>{t("meta.noEligible")}</EmptyState>
             ) : (
+              <>
+              <div className="mb-2 flex items-center gap-2">
+                <span className="rounded-sm bg-surface-higher px-1.5 py-px text-[10px] font-medium text-text-secondary">
+                  {t("meta.documentsProgress", {
+                    done: downloadSummary.done,
+                    total: downloadSummary.total,
+                  })}
+                </span>
+                {downloadSummary.failed > 0 ? (
+                  <span
+                    className="rounded-sm bg-danger/10 px-1.5 py-px text-[10px] font-medium text-danger"
+                    title={t("meta.documentsFailed", { count: downloadSummary.failed })}
+                  >
+                    {t("meta.documentsFailed", { count: downloadSummary.failed })}
+                  </span>
+                ) : null}
+              </div>
               <div className="overflow-auto rounded-sm border border-border">
               <table className="w-full text-left">
                 <thead className="sticky top-0 bg-surface">
@@ -1483,34 +1529,82 @@ export function MetaView() {
                 </tbody>
               </table>
               </div>
+              </>
             )}
           </div>
         </div>
       )}
 
-      {/* ── EXTRACTION (full-text screening + scheme-driven form) ── */}
+      {/* ── EXTRACTION (coding form | linked paper split) ── */}
       {tab === "extract" && (
-        <div className="qc-scroll min-h-0 flex-1 overflow-auto p-4">
+        <div ref={centerRef} className="flex min-h-0 flex-1">
           {!selectedHit ? (
-            <EmptyState icon={<Search size={24} aria-hidden />}>{t("meta.selectStudy")}</EmptyState>
+            <div className="qc-scroll min-h-0 flex-1 overflow-auto p-4">
+              <EmptyState icon={<Search size={24} aria-hidden />}>{t("meta.selectStudy")}</EmptyState>
+            </div>
           ) : (
             <>
-              <MetaFulltextPanel
-                key={`${selectedHit.hit_id}|${writeOwner}`}
-                hit={selectedHit}
-                criteria={criteria}
-                screening={fulltextScreening}
-                owner={writeOwner}
-                onSaved={() => refresh()}
-              />
-              {formExtraction ? (
-                <MetaExtractionForm
-                  extraction={formExtraction}
-                  scheme={schemes.find((s) => s.name === formExtraction.scheme) ?? null}
+              <div
+                className="qc-scroll min-h-0 h-full shrink-0 overflow-auto p-4"
+                style={{ width: textW }}
+              >
+                <MetaFulltextPanel
+                  key={`${selectedHit.hit_id}|${writeOwner}`}
+                  hit={selectedHit}
+                  criteria={criteria}
+                  screening={fulltextScreening}
                   owner={writeOwner}
                   onSaved={() => refresh()}
                 />
-              ) : null}
+                {formExtraction ? (
+                  <MetaExtractionForm
+                    extraction={formExtraction}
+                    scheme={schemes.find((s) => s.name === formExtraction.scheme) ?? null}
+                    owner={writeOwner}
+                    onSaved={() => refresh()}
+                  />
+                ) : null}
+              </div>
+              <div
+                onMouseDown={extractResize.onDown}
+                className={cn(
+                  "w-1 shrink-0 cursor-col-resize border-l border-border",
+                  textDragging ? "bg-accent/40" : "bg-surface hover:bg-accent/40",
+                )}
+                role="separator"
+                aria-orientation="vertical"
+                aria-label={t("meta.resizeExtractSplit")}
+                title={t("meta.resizeExtractSplit")}
+              />
+              <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-bg">
+                {currentSourceId ? (
+                  <PdfCanvasViewer
+                    key={currentSourceId}
+                    sourceId={currentSourceId}
+                    title={currentDocument?.title ?? t("meta.linkedPaper")}
+                    controls="minimal"
+                    loadingLabel={t("meta.loadingPdf")}
+                    className="min-h-0 flex-1"
+                    errorAction={
+                      <Button
+                        variant="secondary"
+                        icon={<ExternalLink size={12} aria-hidden />}
+                        onClick={() =>
+                          window.open(
+                            sourceFileUrl(currentSourceId),
+                            "_blank",
+                            "noopener,noreferrer",
+                          )
+                        }
+                      >
+                        {t("meta.openInNewTab")}
+                      </Button>
+                    }
+                  />
+                ) : (
+                  <EmptyState icon={<FileText size={24} aria-hidden />}>{t("meta.noPdfLinked")}</EmptyState>
+                )}
+              </div>
             </>
           )}
         </div>
@@ -1525,6 +1619,11 @@ export function MetaView() {
       <MetaImportDialog
         open={importOpen}
         onClose={() => setMetaUi({ importOpen: false })}
+        onImported={() => refresh()}
+      />
+      <MetaCodingStudioDialog
+        open={codingStudioOpen}
+        onClose={() => setMetaUi({ codingStudioOpen: false })}
         onImported={() => refresh()}
       />
       <MetaSchemeEditor

@@ -9,6 +9,10 @@
  * (per-criterion reasons travel inside their verdict entry; the row's
  * top-level reason carries the first failing criterion). Re-include clears
  * the full-text row. The Screening tab stays abstract-only.
+ *
+ * The panel opens collapsed and never invents a verdict: untouched criteria
+ * stay unset, only the criteria the user explicitly answers travel on save,
+ * and the header badge appears only once something was chosen.
  */
 import { useMemo, useState } from "react";
 import { ChevronDown, ChevronUp } from "lucide-react";
@@ -37,6 +41,11 @@ interface RowState {
   reason: string;
 }
 
+/** A criterion counts as answered only once a verdict was explicitly chosen. */
+function isSet(row: RowState | undefined): row is RowState {
+  return !!row && row.applies.trim() !== "";
+}
+
 export function MetaFulltextPanel({
   hit,
   criteria,
@@ -52,13 +61,14 @@ export function MetaFulltextPanel({
 }) {
   const { t } = useI18n();
   const toast = useToast();
-  const [open, setOpen] = useState(true);
+  const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [rows, setRows] = useState<Record<string, RowState> | null>(null);
 
   // The verdicts of the latest full-text row seed the panel; touching a
   // control snapshots every criterion so unsaved edits survive reloads until
-  // saved (the parent remounts the panel per study via `key`).
+  // saved (the parent remounts the panel per study via `key`). Criteria
+  // without a stored verdict stay unset — no default "No" is invented.
   const effective = useMemo<Record<string, RowState>>(() => {
     if (rows) return rows;
     const next: Record<string, RowState> = {};
@@ -67,20 +77,22 @@ export function MetaFulltextPanel({
         | { applies?: string; reason?: string }
         | undefined;
       next[c.key] = {
-        applies:
-          typeof entry?.applies === "string"
-            ? entry.applies
-            : c.kind === "classify"
-              ? ""
-              : "No",
+        applies: typeof entry?.applies === "string" ? entry.applies : "",
         reason: typeof entry?.reason === "string" ? entry.reason : "",
       };
     }
     return next;
   }, [rows, criteria, screening]);
 
+  const answered = useMemo(
+    () => criteria.filter((c) => isSet(effective[c.key])),
+    [criteria, effective],
+  );
   const failing = useMemo(
-    () => criteria.filter((c) => isGating(c) && !criterionPasses(c, effective[c.key]?.applies)),
+    () =>
+      criteria.filter(
+        (c) => isGating(c) && isSet(effective[c.key]) && !criterionPasses(c, effective[c.key].applies),
+      ),
     [criteria, effective],
   );
   const verdict = failing.length === 0 ? "include" : "exclude";
@@ -92,12 +104,15 @@ export function MetaFulltextPanel({
     });
 
   const save = async () => {
-    if (busy) return;
+    if (busy || answered.length === 0) return;
     setBusy(true);
     try {
+      // Only the criteria the user explicitly set are sent; untouched ones are
+      // left out so a save never writes a verdict on their behalf.
       const verdicts: Record<string, { applies: string; certainty: string; reason?: string }> = {};
       for (const c of criteria) {
-        const row = effective[c.key] ?? { applies: "No", reason: "" };
+        const row = effective[c.key];
+        if (!isSet(row)) continue;
         const entry: { applies: string; certainty: string; reason?: string } = {
           applies: row.applies,
           certainty: "Medium",
@@ -161,7 +176,7 @@ export function MetaFulltextPanel({
       >
         {open ? <ChevronUp size={13} aria-hidden /> : <ChevronDown size={13} aria-hidden />}
         <span className="text-xs font-semibold text-text-primary">{t("meta.fulltextTitle")}</span>
-        {screening && Object.keys(screening.verdicts ?? {}).length > 0 ? (
+        {answered.length > 0 ? (
           <span
             className={`rounded-sm px-1.5 py-px text-[10px] font-medium ${
               verdict === "include" ? "bg-success/10 text-success" : "bg-danger/10 text-danger"
@@ -177,14 +192,15 @@ export function MetaFulltextPanel({
             <p className="text-xs text-text-secondary">{t("meta.noCriteriaHint")}</p>
           ) : (
             criteria.map((c) => {
-              const row = effective[c.key] ?? { applies: "No", reason: "" };
-              const passes = criterionPasses(c, row.applies);
+              const row = effective[c.key] ?? { applies: "", reason: "" };
+              const set = isSet(row);
+              const passes = set && criterionPasses(c, row.applies);
               const gating = isGating(c);
               return (
                 <div
                   key={c.key}
                   className={`rounded-sm border p-2 qc-motion ${
-                    gating && !passes ? "border-danger/40" : "border-border"
+                    gating && set && !passes ? "border-danger/40" : "border-border"
                   }`}
                 >
                   <div className="mb-1 flex flex-wrap items-center gap-1.5">
@@ -199,15 +215,15 @@ export function MetaFulltextPanel({
                     ) : null}
                   </div>
                   {c.kind === "classify" ? (
-                    <div className="flex flex-wrap gap-1">
+                    <div className="flex flex-wrap items-center gap-1">
                       {(c.options ?? []).map((option) => (
                         <button
                           key={option}
                           type="button"
                           onClick={() => setRow(c.key, { applies: option })}
-                          aria-pressed={row.applies === option}
+                          aria-pressed={set && row.applies === option}
                           className={`rounded-sm border px-2 py-0.5 text-xs qc-motion ${
-                            row.applies === option
+                            set && row.applies === option
                               ? "border-accent bg-accent/10 text-accent"
                               : "border-border text-text-primary hover:bg-surface-higher"
                           }`}
@@ -218,22 +234,30 @@ export function MetaFulltextPanel({
                       {(c.options ?? []).length === 0 ? (
                         <span className="text-[11px] text-text-secondary">—</span>
                       ) : null}
+                      {!set ? (
+                        <span className="text-[10px] text-text-secondary">{t("meta.notSet")}</span>
+                      ) : null}
                     </div>
                   ) : c.kind === "number" ? (
-                    <Input
-                      value={row.applies}
-                      onChange={(e) => setRow(c.key, { applies: e.target.value })}
-                      className="h-7 w-32 text-xs"
-                      aria-label={c.label}
-                    />
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <Input
+                        value={row.applies}
+                        onChange={(e) => setRow(c.key, { applies: e.target.value })}
+                        className="h-7 w-32 text-xs"
+                        aria-label={c.label}
+                      />
+                      {!set ? (
+                        <span className="text-[10px] text-text-secondary">{t("meta.notSet")}</span>
+                      ) : null}
+                    </div>
                   ) : (
                     <div className="flex flex-wrap items-center gap-1.5">
                       <button
                         type="button"
                         onClick={() => setRow(c.key, { applies: "Yes" })}
-                        aria-pressed={passes}
+                        aria-pressed={set && passes}
                         className={`rounded-sm border px-2 py-0.5 text-xs qc-motion ${
-                          passes
+                          set && passes
                             ? "border-accent bg-accent/10 text-accent"
                             : "border-border text-text-primary hover:bg-surface-higher"
                         }`}
@@ -243,16 +267,19 @@ export function MetaFulltextPanel({
                       <button
                         type="button"
                         onClick={() => setRow(c.key, { applies: "No" })}
-                        aria-pressed={!passes}
+                        aria-pressed={set && !passes}
                         className={`rounded-sm border px-2 py-0.5 text-xs qc-motion ${
-                          !passes
+                          set && !passes
                             ? "border-danger bg-danger/10 text-danger"
                             : "border-border text-text-primary hover:bg-surface-higher"
                         }`}
                       >
                         {t("meta.fulltextExclude")}
                       </button>
-                      {!passes && c.exclude_reason ? (
+                      {!set ? (
+                        <span className="text-[10px] text-text-secondary">{t("meta.notSet")}</span>
+                      ) : null}
+                      {set && !passes && c.exclude_reason ? (
                         <span className="text-[10px] text-danger">
                           {t("meta.exclusionReasonShort", { reason: c.exclude_reason })}
                         </span>
@@ -282,7 +309,7 @@ export function MetaFulltextPanel({
             </Button>
             <Button
               variant="primary"
-              disabled={busy || criteria.length === 0}
+              disabled={busy || criteria.length === 0 || answered.length === 0}
               onClick={() => void save()}
             >
               {t("meta.saveVerdict")}
