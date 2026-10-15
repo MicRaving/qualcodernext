@@ -14,6 +14,9 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
+# NOTE: `tauri build` refuses to run unless each @tauri-apps/* JS package and
+# its Rust crate share a major.minor. The JS side is therefore pinned with `~`
+# in frontend/package.json; bump the crate here and the JS pin together.
 tauri = { version = "2", features = ["tray-icon"] }
 tauri-plugin-shell = "2"
 tauri-plugin-dialog = "2"
