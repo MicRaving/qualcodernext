@@ -1,4 +1,4 @@
-# Notes, Crafter \& Creative Coding
+# Notes, Crafter & Creative Coding
 
 Qualitative research extends far beyond attaching labels to text. QCnext provides three complementary layers for analytical writing and synthesis:
 
@@ -7,23 +7,23 @@ Qualitative research extends far beyond attaching labels to text. QCnext provide
 3. **Crafter**: Structured workspaces for gathering quotes, charts, notes, and links under research questions to build final analytical arguments.
 
 
-## Notes: Journal, Annotations \& Memos
+## Notes: Journal, Annotations & Memos
 
 Access the Notes workspace by clicking **Journal** in the ribbon.
 
-![Notes \& Journal Workspace](screenshots/journal.jpg)
+![Notes & Journal Workspace](screenshots/journal.jpg)
 
-### 1\. Research Journal
+### 1. Research Journal
 
 * **Methodological Notebook**: A dated research log for capturing field notes, personal reflections, coding rules, and analytical decisions.
 * **Features**: Create dated entries, search entry text, rename inline, and export notes. Unsaved drafts persist automatically across view refreshes.
 
-### 2\. Passage Annotations
+### 2. Passage Annotations
 
 * **Targeted Passage Notes**: Annotations are notes attached directly to specific character ranges in documents (distinct from codes).
 * **Features**: Passage annotations appear with dashed underlines in coders. The Annotations manager lists all project annotations with quick jump-to-file links.
 
-### 3\. Memos (Code \& File Memos)
+### 3. Memos (Code & File Memos)
 
 * **Analytical Commentary**: Memos articulate the meaning, boundaries, and evolution of codes or files.
 * **Tree View**: Code memos are displayed in a collapsible tree mirroring the codebook structure.
@@ -34,20 +34,20 @@ Access the Notes workspace by clicking **Journal** in the ribbon.
 
 **Crafter** is an advanced analysis workspace to organize findings into thematic sections guided by a research question.
 
-!\[Crafter Workspace](screenshots/crafter.jpg)
+![Crafter Workspace](screenshots/crafter.jpg)
 
-### Creating Worksheets \& Templates
+### Creating Worksheets & Templates
 
 Click **Add Worksheet** and select a template type:
 
 * **Qualitative Template**: Flexible single-column layout seeded with default "Insights" sections.
-* **Mixed-Methods Template**: Two-column layout seeded with **Creswell's 14 Mixed-Methods Steps** (Research Questions, Data Collection \& Analysis, Joint Display Planning, Data Integration, Meta-Inferences, Validity, Ethical Considerations, Implications).
+* **Mixed-Methods Template**: Two-column layout seeded with **Creswell's 14 Mixed-Methods Steps** (Research Questions, Data Collection & Analysis, Joint Display Planning, Data Integration, Meta-Inferences, Validity, Ethical Considerations, Implications).
 
-### Worksheet Items \& Dynamic Links
+### Worksheet Items & Dynamic Links
 
 Worksheet sections hold four types of curated items:
 
-|Item Kind|Content \& Behavior|
+|Item Kind|Content & Behavior|
 |-|-|
 |**Quote Segment**|Direct quote extracted from a document. **Clicking a segment item jumps directly to the source passage in the active coder.**|
 |**Analytical Note**|Free-text commentary written directly within the section.|

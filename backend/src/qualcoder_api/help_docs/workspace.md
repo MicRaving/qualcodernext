@@ -1,23 +1,23 @@
-# Workspace Shell, Projects \& Collaboration
+# Workspace Shell, Projects & Collaboration
 
 [← Back to Documentation Hub](README.md)
 
 This guide covers the core application structure of QCnext: project creation and management, the 5-slot workspace layout, background job execution, asynchronous multi-coder collaboration sync, the full audit history with per-row undo/redo, and the integrated bug reporter.
 
-\---
+---
 
-## Dashboard \& Project Management
+## Dashboard & Project Management
 
 The **Dashboard** is the application home screen for opening / creating projects and showing basic project statistics and shortcuts.
 
-!\[Active Project Dashboard](screenshots/dashboard.jpg)
+![Active Project Dashboard](screenshots/dashboard.jpg)
 
 * **New Project**: Opens the project creation dialog. Keep in mind that projects are hosted in folders. A **project** in QCnext is a self-contained directory holding your raw source material (interview transcripts, PDFs, images, field notes, survey spreadsheets, audio/video recordings, and web captures) along with an integrated database that records your analysis.
 * **Open Project**: Opens the system folder picker to open an existing project folder.
 * **Recent Projects**: Displays recently opened projects.
 * **Accessibility Controls**: Quick dropdown to select high-contrast, screenreader, large-text, reduced-motion, or colorblind-friendly modes (experimental).
 
-\---
+---
 
 ## The General Layout
 
@@ -37,7 +37,7 @@ It also contains a **Task Queue Indicator** that displays background execution s
 
 The **Collaboration** flyout allows switching the active coder and toggling collaboration sync. Multiple raters can work on the **same project simultaneously** without requiring a dedicated server. QCnext automatically detects potential shared folders and turns sync on/off, but you can always override this setting.
 
-When turned on, raters work **on separate copies of the same `.qda` project folder**, shared through any folder-sync tool (Nextcloud, ownCloud, Sync\&Share, Syncthing, Dropbox, ...). Every instance writes its own change history and merges each other's changes on an **asynchronous \~60-second cycle** (plus on demand via the "Sync now" button).
+When turned on, raters work **on separate copies of the same `.qda` project folder**, shared through any folder-sync tool (Nextcloud, ownCloud, Sync&Share, Syncthing, Dropbox, ...). Every instance writes its own change history and merges each other's changes on an **asynchronous ~60-second cycle** (plus on demand via the "Sync now" button).
 
 The coder flyout shows a **per-coder activity indicator** (who is actively working right now, and on which file) and a **Live now** section. The sync dot in the ribbon reflects the overall sync state: green = in sync, yellow = changes pending, red = conflicts or an error.
 
@@ -89,7 +89,7 @@ Stable releases arrive as full installers. The opt-in **Nightly** channel (Setti
 
 Every patch is checksum- and signature-verified before anything is touched, the previous state is kept for one-step **Undo patch**, and oversized deltas are refused in favor of the full release. Every available update installs automatically — there is no size gate.
 
-\---
+---
 
 [← Back to Documentation Hub](README.md)
 

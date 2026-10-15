@@ -1,4 +1,4 @@
-# Files \& Import
+# Files & Import
 
 [← Back to Documentation Hub](README.md)
 
@@ -6,7 +6,7 @@ This guide covers file management, document import options, batch processing, me
 
 When you select multiple files, you have the option to batch Autocode and Transcribe them with identical settings; QCnext only selects previously unprocessed files and adds them to the background queue. You can also batch delete files here.
 
-!\[File Manager](screenshots/files.jpg)
+![File Manager](screenshots/files.jpg)
 
 ## Importing Material
 
@@ -16,14 +16,14 @@ QCnext supports a wide range of document types and data formats:
 
 |File Type|Supported Formats|Description|
 |-|-|-|
-|**Plain Text \& Transcripts**|`.txt`, `.md`, `.docx`, `.odt`, `.rtf`|Interview transcripts, field notes, articles. Extracted to UTF-8 text.|
+|**Plain Text & Transcripts**|`.txt`, `.md`, `.docx`, `.odt`, `.rtf`|Interview transcripts, field notes, articles. Extracted to UTF-8 text.|
 |**PDF Documents**|`.pdf`|Multi-page PDF files. Rendered visually via PDF.js while text is extracted for text coding.|
-|**Images \& Graphic Material**|`.png`, `.jpg`, `.jpeg`, `.webp`, `.gif`, `.bmp`, `.svg`|Photos, diagrams, field drawings, scanned documents.|
-|**Spreadsheets \& Data Tables**|`.csv`, `.tsv`|Survey responses, tabular data, social media comments. Parsed with RFC-4180 compatibility.|
-|**Webpages \& HTML Captures**|`.html`, `.htm`, or via URL|Web articles, forum threads, online posts. Preserves layout snapshots safely.|
-|**Audio \& Video Media**|`.mp3`, `.wav`, `.m4a`, `.ogg`, `.flac`, `.mp4`, `.mov`, `.mkv`, `.webm`|Media files for timeline coding and Whisper automated transcription.|
+|**Images & Graphic Material**|`.png`, `.jpg`, `.jpeg`, `.webp`, `.gif`, `.bmp`, `.svg`|Photos, diagrams, field drawings, scanned documents.|
+|**Spreadsheets & Data Tables**|`.csv`, `.tsv`|Survey responses, tabular data, social media comments. Parsed with RFC-4180 compatibility.|
+|**Webpages & HTML Captures**|`.html`, `.htm`, or via URL|Web articles, forum threads, online posts. Preserves layout snapshots safely.|
+|**Audio & Video Media**|`.mp3`, `.wav`, `.m4a`, `.ogg`, `.flac`, `.mp4`, `.mov`, `.mkv`, `.webm`|Media files for timeline coding and Whisper automated transcription.|
 
-### Webpage \& URL Import
+### Webpage & URL Import
 
 Entering a URL into the **Import URL** dialog provides two import modes:
 
@@ -31,14 +31,14 @@ Entering a URL into the **Import URL** dialog provides two import modes:
 2. **Full Snapshot**: Captures full HTML, stylesheets, and images into a self-contained snapshot for visual webpage coding.
 3. **YouTube Import**: Scrapes video comments and organizes them in a worksheet.
 
-\---
+---
 
-## File Management \& Batch Jobs
+## File Management & Batch Jobs
 
-### Organizing \& Grouping Files
+### Organizing & Grouping Files
 
 * **Multiselect**: Select multiple files using `Ctrl+Click` or `Shift+Click` to move, assign cases, or delete in bulk.
-* **File Memos \& Attributes**: Attach analytical notes to any file or assign structured attributes (e.g., source medium, collection date).
+* **File Memos & Attributes**: Attach analytical notes to any file or assign structured attributes (e.g., source medium, collection date).
 * **Pseudonymization**: Click the mask icon in the topbar (left of broken-links) to define original-to-replacement pseudonym pairs (e.g., `John Doe → Participant_A`) for automated name anonymization on file replacement and survey import. They travel with the project.
 
 ### Batch Processing
@@ -46,7 +46,7 @@ Entering a URL into the **Import URL** dialog provides two import modes:
 * **Batch AI / Dictionary Autocode**: Select multiple files in the File Manager and click **Autocode** to queue background coding across all selected files.
 * **Batch Export**: Export raw files or coded document reports for selected subsets of material.
 
-\---
+---
 
 ### Supported Interchange Formats
 
@@ -54,7 +54,7 @@ QCnext offers broad interoperability with other QDA software, allowing you to mi
 
 Access the Interchange tool via **Settings → Import / Export**.
 
-|Format / Source|Extension|Details \& Capability|
+|Format / Source|Extension|Details & Capability|
 |-|-|-|
 |**REFI-QDA Standard**|`.qdp`, `.qdc`|Full open-standard export and import. Transfers codebooks, documents, codings, cases, and memos across compliant tools (NVivo, MAXQDA, ATLAS.ti).|
 |**RQDA**|`.rqda`|Import legacy QualCoder v3 and RQDA SQLite project files.|
@@ -67,11 +67,11 @@ Access the Interchange tool via **Settings → Import / Export**.
 |**Codebooks**|`.txt`, `.csv`|Plain-text codebooks formatted as `Category>>Subcategory>>Code`.|
 |**Project Merge**|`.zip`|Merge another QCnext `.qda` project directory directly into your open project.|
 
-### Automatic Format Detection \& Preview
+### Automatic Format Detection & Preview
 
 When importing external files or projects, QCnext inspects content markers and headers (e.g., XML schemas, magic numbers) rather than relying solely on file extensions. Before committing changes, a read-only preview card displays expected imports (count of files, codes, codings, cases, and attributes to be created).
 
-\---
+---
 
 [← Back to Documentation Hub](README.md)
 

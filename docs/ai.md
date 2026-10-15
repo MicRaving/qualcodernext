@@ -1,4 +1,4 @@
-# AI Assistant \& Settings
+# AI Assistant & Settings
 
 QCnext integrates both privacy-focused Local LLMs (Ollama, LM Studio) and Cloud AI Providers (Gemini, OpenAI GPT, Anthropic Claude, custom endpoints) to support qualitative coding and topic discovery.
 

@@ -16,7 +16,7 @@ Click **Autocode** in any coder to open the dialog and code via AI Autocode usin
 
 Across all text-based coders (Text, PDF, CSV, Webpage, AV Transcripts), selecting content triggers the floating **Selection Toolbar**:
 
-!\[Text Coder](screenshots/coder.jpg)
+![Text Coder](screenshots/coder.jpg)
 
 
 
@@ -27,26 +27,26 @@ Toolbar Actions
 * **💬 Annotate**: Opens a popover to attach a text note directly to the passage without assigning a code.
 * **📥 Send to Crafter**: Sends the selected quote directly to a Crafter worksheet as an analytical segment item.
 
-### Highlighting \& Overlaps
+### Highlighting & Overlaps
 
 * Coded passages are highlighted in the color assigned to the code.
 * When multiple codes overlap on the same text, their colors stack.
 * Hovering over a coded segment displays a tooltip with code names and memos; clicking opens the **Segment Details Inspector**.
 
-\---
+---
 
 ## Text Coder
 
 The **Text Coder** is the primary workspace for interview transcripts, field notes, survey text, and imported documents (`.txt`, `.md`, `.docx`).
 
-* **Document Reading \& Highlights**: Rendered text displays code highlights, annotation underlines (dashed), and outgoing segment links (wavy underline).
+* **Document Reading & Highlights**: Rendered text displays code highlights, annotation underlines (dashed), and outgoing segment links (wavy underline).
 * **Live Document Editing**: Toggle **Edit mode** to correct transcription typos directly inside the coder:
 
   * Text shifts are automatically tracked and debounced.
   * Upon saving (`Ctrl/Cmd+S`), all character offsets for existing codings and annotations are re-anchored instantly.
 * **Code Tree Integration**: Single-clicking a code in the left bar sets it as active; double-clicking opens its Inspector details.
 
-\---
+---
 
 ## PDF Coder
 
@@ -56,13 +56,13 @@ The **PDF Coder** combines visual page region drawing with extracted plain-text 
 * **Plain text**: Display extracted plain text; PDF and Plain text can be shown in split view.
 * **Coding**: You can code either text or rectangular regions anywhere on a PDF page to code charts, diagrams, formulas, or non-extractable text. Coordinates are stored in vector page relative space.
 
-\---
+---
 
 ## Image Coder
 
 The **Image Coder** allows researchers to mark and code graphic material (`.png`, `.jpg`, `.webp`, `.svg`). Click and drag over photos, diagrams, or scans to mark rectangular regions.
 
-\---
+---
 
 ## CSV / Table Coder
 
@@ -71,7 +71,7 @@ The **CSV / Table Coder** provides cell-level text coding for survey data, tabul
 * **Cell-Level Character Coding**: Code specific words or phrases *inside* individual cells rather than marking entire table rows.
 * **Plain Text Fallback**: Toggle to view the raw tabular document in the standard text coder if preferred.
 
-\---
+---
 
 ## Webpage Coder
 
@@ -80,16 +80,16 @@ The **Webpage Coder** handles HTML page captures and web articles imported via U
 * **Split View Layout**: Displays the raw rendered HTML snapshot alongside clean extracted article text, similar to PDFs.
 * **Coding**: Select text on the rendered webpage to code it directly like in other text modes.
 
-\---
+---
 
-## Audio / Video Coder \& Transcripts
+## Audio / Video Coder & Transcripts
 
 The **Audio / Video Coder** integrates media playback, timeline range coding, transcript synchronization, Whisper automated transcription, and speaker detection.
 
-### Playback \& Timeline Coding
+### Playback & Timeline Coding
 
 * **Transport Row**: Play/pause, playback speed selector (0.5× to 2.0×), and a clickable timeline.
-* **Keyboard \& Media Keys**: `Space` toggles play/pause, `F9` inserts timestamps, and hardware media keys control playback.
+* **Keyboard & Media Keys**: `Space` toggles play/pause, `F9` inserts timestamps, and hardware media keys control playback.
 * **Timeline Range Coding**:
 
   1. Click **Set start** at the desired playback timestamp.
@@ -101,14 +101,14 @@ The **Audio / Video Coder** integrates media playback, timeline range coding, tr
 
 * Click **Transcribe** to launch background transcription powered by Whisper models.
 * **Options**: Model size, language selection, translation to English, Voice Activity Detection (VAD), and automatic turn coding.
-* **Live Preview**: Progress streams live into the transcript pane as `\[mm:ss] text` while transcription runs in the background queue.
+* **Live Preview**: Progress streams live into the transcript pane as `[mm:ss] text` while transcription runs in the background queue.
 
-### Manual Transcription \& Speaker Detection
+### Manual Transcription & Speaker Detection
 
-* **Manual Mode**: Turn on **Transcribe mode** to type transcripts manually. Pressing `Enter` or `F9` auto-inserts timestamp markers `\[mm:ss]`.
-* **Speaker Detection**: Automatically detect speaker turns from transcript identifiers (e.g., `Speaker 1:`, `\[Alice]`, `{@Bob}`) or custom regex patterns. QCnext automatically generates speaker codes and codes every turn across the transcript.
+* **Manual Mode**: Turn on **Transcribe mode** to type transcripts manually. Pressing `Enter` or `F9` auto-inserts timestamp markers `[mm:ss]`.
+* **Speaker Detection**: Automatically detect speaker turns from transcript identifiers (e.g., `Speaker 1:`, `[Alice]`, `{@Bob}`) or custom regex patterns. QCnext automatically generates speaker codes and codes every turn across the transcript.
 
-\---
+---
 
 [← Back to Documentation Hub](README.md)
 

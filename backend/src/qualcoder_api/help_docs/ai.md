@@ -1,4 +1,4 @@
-# AI Assistant \& Settings
+# AI Assistant & Settings
 
 [← Back to Documentation Hub](README.md)
 

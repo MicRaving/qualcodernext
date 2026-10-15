@@ -60,7 +60,7 @@ If a single transcript contains dialogue from multiple participants (e.g., a foc
 
 ## Mixed-Methods Integration
 
-Setting up cases and attributes unlocks powerful mixed-methods reports in the Analysis section (see [Analysis Guide](analysis-and-reports.md)):
+Setting up cases and attributes unlocks powerful mixed-methods reports in the Analysis section (see [Analysis Guide](reports.md)):
 
 - **Crosstabs & Chi-Square**: Test whether code frequencies differ significantly across attribute categories (e.g., comparing themes between *Control* vs. *Treatment* groups).
 - **Group Comparisons (Mann-Whitney U)**: Evaluate differences in code density across numeric attribute scales.

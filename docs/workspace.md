@@ -1,9 +1,9 @@
-# Workspace Shell, Projects \& Collaboration
+# Workspace Shell, Projects & Collaboration
 
 This guide covers the core application structure of QCnext: project creation and management, the 5-slot workspace layout, background job execution, asynchronous multi-coder collaboration sync, the full audit history with per-row undo/redo, and the integrated bug reporter.
 
 
-## Dashboard \& Project Management
+## Dashboard & Project Management
 
 The **Dashboard** is the application home screen for opening / creating projects and showing basic project statistics and shortcuts.
 
@@ -31,13 +31,13 @@ It also contains a **Task Queue Indicator** that displays background execution s
 
 
 
-The **Collaboration** flyout allows switching the active coder and toggling collaboration sync. Multiple raters can work on the **same project simultaneously** without requiring a dedicated server. When turned on, raters work **on separate copies of the same `.qda` project folder**, shared through any folder-sync tool (Nextcloud, ownCloud, Sync\&Share, Syncthing, Dropbox, ...). Every instance writes its own change history and merges each other's changes. The project in the shared folder is refreshed whenever a collaborator closes the project (or on demand via **Refresh archive** in the coder flyout) and gets downloaded whenever problems in the local problems are detected.
+The **Collaboration** flyout allows switching the active coder and toggling collaboration sync. Multiple raters can work on the **same project simultaneously** without requiring a dedicated server. When turned on, raters work **on separate copies of the same `.qda` project folder**, shared through any folder-sync tool (Nextcloud, ownCloud, Sync&Share, Syncthing, Dropbox, ...). Every instance writes its own change history and merges each other's changes. The project in the shared folder is refreshed whenever a collaborator closes the project (or on demand via **Refresh archive** in the coder flyout) and gets downloaded whenever problems in the local problems are detected.
 
 The coder flyout shows a **per-coder activity indicator** (who is actively working right now, and on which file) and a **Live now** section. The sync dot in the ribbon reflects the overall sync state: green = in sync, yellow = changes pending, red = conflicts or an error.
 
 When two coders edit the same item concurrently, QCnext detects the conflict and shows it in the **Conflict Resolution** dialog. For each conflict you can choose **Keep mine**, **Take theirs**, or **Merge** to combine both versions — or resolve every pending conflict at once with **Keep all mine** / **Take all theirs**. Resolved changes sync to all other instances automatically.
 
-> \[!NOTE]
+> [!NOTE]
 > Simultaneous collaboration is currently considered an experimental feature. Make sure to back up your data regularly.
 
 **The Left Bar** holds view-specific navigation. You will usually see the files list if no file is open, the codes if a file is open, the case list in Cases, report list in Analysis, or worksheet list in Crafter.
