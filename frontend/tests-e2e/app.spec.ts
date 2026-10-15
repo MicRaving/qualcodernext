@@ -71,7 +71,7 @@ test("create project, import a file, autocode it, and run a report", async ({ pa
     await dialog.getByRole("button", { name: "Create project" }).click();
 
     // Project shell replaces the dashboard empty state.
-    await expect(page.getByRole("button", { name: "Cases" })).toBeVisible({
+    await expect(page.getByRole("button", { name: "Cases" })).toBeEnabled({
       timeout: 30_000,
     });
     await expect(page.getByRole("button", { name: "Coding", exact: true })).toBeVisible();
@@ -151,7 +151,7 @@ test("settings and AI status", async ({ page }) => {
   const recent = page.getByRole("button", { name: PROJECT_PATH, exact: true });
   await expect(recent).toBeVisible();
   await recent.click();
-  await expect(page.getByRole("button", { name: "Cases" })).toBeVisible({
+  await expect(page.getByRole("button", { name: "Cases" })).toBeEnabled({
     timeout: 30_000,
   });
 

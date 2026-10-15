@@ -35,32 +35,39 @@ async function createProject(page: import("@playwright/test").Page, projectPath:
   const dialog = page.getByRole("dialog", { name: "New project" });
   await dialog.locator("#create-path").fill(projectPath);
   await dialog.getByRole("button", { name: "Create project" }).click();
-  await expect(page.getByRole("button", { name: "Cases" })).toBeVisible({ timeout: 30_000 });
+  // The ribbon's "Cases" button exists but is DISABLED on the dashboard, so
+  // `toBeVisible` passes before the project opens — gate on `toBeEnabled`.
+  await expect(page.getByRole("button", { name: "Cases" })).toBeEnabled({ timeout: 30_000 });
 }
 
 async function openCoderFlyout(page: import("@playwright/test").Page) {
-  // Slow CI runners can race the dashboard→ribbon render right after a
-  // project opens (the button can vanish for seconds). Retry with a reload,
-  // mirroring the ensureProjectOpen pattern used by other specs.
+  // The coder flyout lives in the ribbon, which only hydrates once a project
+  // is open; slow CI runners can race that render. Retry by reloading and
+  // re-opening the project, mirroring ensureProjectOpen in the other specs.
+  // Every assertion stays INSIDE a try/catch: one escaping the catch would
+  // abort the loop on its first attempt instead of retrying.
   for (let attempt = 0; attempt < 3; attempt++) {
     const coderBtn = page.getByRole("button", { name: /Current coder:/ });
     try {
-      await expect(coderBtn).toBeVisible({ timeout: 15_000 });
-        await coderBtn.click();
-        // Collaboration is a single switch, off in single mode.
-        await expect(
-          page.getByRole("switch", { name: "Collaboration" }),
-        ).toHaveAttribute("aria-checked", "false", { timeout: 8_000 });
-        return;
-    } catch {
-      await page.goto("/");
+      await coderBtn.click({ timeout: 15_000 });
+      // Collaboration is a single switch, off in single mode.
       await expect(
-        page.getByRole("button", { name: PLAIN_PROJECT, exact: true }),
-      ).toBeVisible({ timeout: 15_000 });
-      await page.getByRole("button", { name: PLAIN_PROJECT, exact: true }).click();
-      await expect(page.getByRole("button", { name: "Cases" })).toBeVisible({
+        page.getByRole("switch", { name: "Collaboration" }),
+      ).toHaveAttribute("aria-checked", "false", { timeout: 8_000 });
+      return;
+    } catch {
+      /* fall through to the reload-and-reopen retry */
+    }
+    try {
+      await page.goto("/");
+      const recent = page.getByRole("button", { name: PLAIN_PROJECT, exact: true });
+      await expect(recent).toBeVisible({ timeout: 15_000 });
+      await recent.click();
+      await expect(page.getByRole("button", { name: "Cases" })).toBeEnabled({
         timeout: 30_000,
       });
+    } catch {
+      /* reload and retry */
     }
   }
   throw new Error(`Could not open the coder flyout after 3 attempts`);
@@ -97,7 +104,7 @@ test("shared-folder auto-detect does NOT auto-enable collaboration", async ({ pa
   await openDialog.locator("#open-path").fill(CLOUD_PROJECT);
   await openDialog.getByRole("button", { name: "Open project" }).click();
 
-    await expect(page.getByRole("button", { name: "Cases" })).toBeVisible({ timeout: 30_000 });
+    await expect(page.getByRole("button", { name: "Cases" })).toBeEnabled({ timeout: 30_000 });
     await openCoderFlyout(page);
     await expect(
       page.getByRole("switch", { name: "Collaboration", exact: true }),
@@ -120,7 +127,7 @@ test("live coder presence: indicator + file shown in the coder flyout", async ({
   const recent = page.getByRole("button", { name: actual, exact: true });
   await expect(recent).toBeVisible({ timeout: 15_000 });
   await recent.click();
-  await expect(page.getByRole("button", { name: "Cases" })).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByRole("button", { name: "Cases" })).toBeEnabled({ timeout: 30_000 });
 
   // Simulate another live instance: spawn a real (long-lived) process and
   // write its presence file into the project folder. The app's presence poll
@@ -167,15 +174,20 @@ test("live coder presence: indicator + file shown in the coder flyout", async ({
       try {
         await coderBtn.click({ timeout: 15_000 });
       } catch {
-        // Ribbon not hydrated yet on slow CI - reload and retry.
-        await page.goto("/");
-        await expect(
-          page.getByRole("button", { name: actual, exact: true }),
-        ).toBeVisible({ timeout: 15_000 });
-        await page.getByRole("button", { name: actual, exact: true }).click();
-        await expect(page.getByRole("button", { name: "Cases" })).toBeVisible({
-          timeout: 30_000,
-        });
+        // Ribbon not hydrated yet on slow CI — reload and retry. Keep the
+        // recovery inside its own try/catch: an escaping reopen failure would
+        // end the test instead of letting the loop try again.
+        try {
+          await page.goto("/");
+          const recent = page.getByRole("button", { name: actual, exact: true });
+          await expect(recent).toBeVisible({ timeout: 15_000 });
+          await recent.click();
+          await expect(page.getByRole("button", { name: "Cases" })).toBeEnabled({
+            timeout: 30_000,
+          });
+        } catch {
+          /* retry */
+        }
         continue;
       }
       try {

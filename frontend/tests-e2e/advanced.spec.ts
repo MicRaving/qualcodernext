@@ -143,7 +143,7 @@ test("PDF import and region coding", async ({ page }) => {
   await expect(dialog).toBeVisible();
   await dialog.locator("#create-path").fill(PROJECT_PATH);
   await dialog.getByRole("button", { name: "Create project" }).click();
-  await expect(page.getByRole("button", { name: "Cases" })).toBeVisible({
+  await expect(page.getByRole("button", { name: "Cases" })).toBeEnabled({
     timeout: 30_000,
   });
 
@@ -314,7 +314,7 @@ test("recent projects persist after reload", async ({ page }) => {
   fs.rmSync(path.join(PROJECT_PATH, "project_in_use.lock"), { force: true });
   await repairProjectMeta();
   await recent.click();
-  await expect(page.getByRole("button", { name: "Cases" })).toBeVisible({
+  await expect(page.getByRole("button", { name: "Cases" })).toBeEnabled({
     timeout: 30_000,
   });
 });

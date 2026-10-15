@@ -2,10 +2,10 @@
 
 The central focus of the software is to load text and multimedia files for qualitative coding. It can transcribe audio/video files, organize codes and files, generate reports like coding graphs and coder comparisons, and integrates LLMs to explore the data, support coding, and analyze the results.
 
-> [!NOTE]
+> \[!NOTE]
 > This software is currently in beta. While I consider it mostly feature-complete and use it as my daily driver, you may encounter bugs, visual quirks, etc. Please report any issues and suggestions for improvements!
 
-![Active Project Dashboard](docs/screenshots/dashboard.jpg)
+!\[Active Project Dashboard](docs/screenshots/dashboard.jpg)
 
 QCnext uses a single-window **Workspace Layout** organized into
 
@@ -14,12 +14,12 @@ QCnext uses a single-window **Workspace Layout** organized into
 * a **center view** for the main information, and
 * a **right bar** for additional information or an active side-pane (AI Chat, Settings, Audit History, Creative Scratchpad).
 
-This rework is loosely based on the [QualCoder](https://github.com/ccbogel/QualCoder) 4.0 source code (~2% copied, ~12% adapted) with the following major goals (full [changelog](Changelog.md)):
+This rework is loosely based on the [QualCoder](https://github.com/ccbogel/QualCoder) 4.0 source code (\~2% copied, \~12% adapted) with the following major goals (full [changelog](Changelog.md)):
 
 * **Simplified UI**: The rework tries to simplify and reorganize the UI as much as possible while retaining full functionality.
 * **Simultaneous collaboration** (experimental): Simultaneous collaboration is now possible by saving the project in a shared folder and enabling collaboration in the coder flyout.
 * **Reduce architectural debt**: The rework tried to make the codebase more modular and sleaker to eliminate the old, monolithic scripts to reduce redundancy and make maintaining easier.
-* **Increase responsiveness**: The startup time is reduced from ~30s to to ~2s, the memory footprint is roughly cut in half (from 450mb to 200mb)
+* **Increase responsiveness**: The startup time is reduced from \~30s to to \~2s, the RAM footprint is a bit more than one quarter (from 450mb to 125mb)
 * **Full compatibility**: All of these changes do not break compatibility with your existing projects.
 * **Minor features**: Undo/redo with a full project history. More reports and additional interrater agreements like Fleiss Kappa. A dashboard for quick access. Easier file management with multiselect etc. Tools for conducting meta-analyses (experimental).
 * **(Future) Web apps**: The rework prepared to allow for a client-server structure with full web apps, although future iterations will always retain offline functionality.
@@ -37,13 +37,14 @@ All releases are available on: [https://github.com/MicRaving/qualcodernext/relea
 
 You can find the documentation here:
 
-* [**Workspace Shell & Collaboration Guide**](docs/workspace.md) — Layout, projects, asynchronous sync, audit history & bug reporter.
-* [**Files & Material Import Guide**](docs/files.md) — Document management, web scraping, and QDA interchange (REFI-QDA, NVivo, SPSS, Zotero).
+* [**Workspace Shell \& Collaboration Guide**](docs/workspace.md) — Layout, projects, asynchronous sync, audit history \& bug reporter.
+* [**Files \& Material Import Guide**](docs/files.md) — Document management, web scraping, and QDA interchange (REFI-QDA, NVivo, SPSS, Zotero).
 * [**Qualitative Coders Guide**](docs/coders.md) — Text, PDF, Image, CSV/Table, Webpage, and Audio/Video coders with Whisper auto-transcription.
-* [**Cases & Attributes Guide**](docs/cases.md) — Study units, participant metadata, and mixed-methods attributes.
-* [**Notes, Worksheets & Synthesis Guide**](docs/notes.md) — Journal, annotations, code memos, Crafter (QTT), and Creative Coding.
-* [**Analysis, Reports & Graphs Guide**](docs/reports.md) — Analytical reports, interrater agreement, publishing (Word/Excel/PPT), SQL/R console & visual code maps.
-* [**AI Assistant & Settings Guide**](docs/ai.md) — Local/Cloud LLM config, semantic vector search, MCP endpoints, and app preferences.
+* [**Cases \& Attributes Guide**](docs/cases.md) — Study units, participant metadata, and mixed-methods attributes.
+* [**Notes, Worksheets \& Synthesis Guide**](docs/notes.md) — Journal, annotations, code memos, Crafter (QTT), and Creative Coding.
+* [**Analysis, Reports \& Graphs Guide**](docs/reports.md) — Analytical reports, interrater agreement, publishing (Word/Excel/PPT), SQL/R console \& visual code maps.
+* [**AI Assistant \& Settings Guide**](docs/ai.md) — Local/Cloud LLM config, semantic vector search, MCP endpoints, and app preferences.
+* Meta-Analysis (experimental) — screen abstracts, create coding schemes, data extraction, basic analyses. Experimental, AI support may not work, there might be bugs, features are missing, documentation will follow when I consider this feature stable.
 
 The typical workflow will look similar to this:
 
@@ -53,8 +54,8 @@ The typical workflow will look similar to this:
 4. **Import Material**: Open the [File Manager](docs/files.md) and import your interview transcripts, PDFs, images, or media files.
 5. **Define Codes**: Create codes and categories in the left-bar [Code Tree](docs/coders.md).
 6. **Code Your Data**: Open a source file in one of the specialized [Coders](docs/coders.md), select passages or regions, and assign codes.
-7. **Synthesize & Memos**: Write analytical memos and synthesize findings in [Crafter](docs/notes.md).
-8. **Analyze & Export**: Generate [Reports & Visual Code Maps](docs/reports.md), test interrater reliability, and publish reports to Word, Excel, or REFI-QDA.
+7. **Synthesize \& Memos**: Write analytical memos and synthesize findings in [Crafter](docs/notes.md).
+8. **Analyze \& Export**: Generate [Reports \& Visual Code Maps](docs/reports.md), test interrater reliability, and publish reports to Word, Excel, or REFI-QDA.
 
 ## Future
 

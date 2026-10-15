@@ -22,7 +22,7 @@ test("reports menu bar + graphs under reports + journal ribbon", async ({ page }
   const dialog = page.getByRole("dialog", { name: "New project" });
   await dialog.locator("#create-path").fill(PROJECT_PATH);
   await dialog.getByRole("button", { name: "Create project" }).click();
-  await expect(page.getByRole("button", { name: "Cases" })).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByRole("button", { name: "Cases" })).toBeEnabled({ timeout: 30_000 });
 
   // Reports view: the center menu bar shows the report's buttons
   // (Codebook always has export actions, even without data).
@@ -40,7 +40,7 @@ test("reports menu bar + graphs under reports + journal ribbon", async ({ page }
         timeout: 15_000,
       });
       await page.getByRole("button", { name: PROJECT_PATH, exact: true }).click();
-      await expect(page.getByRole("button", { name: "Cases" })).toBeVisible({
+      await expect(page.getByRole("button", { name: "Cases" })).toBeEnabled({
         timeout: 30_000,
       });
     }

@@ -97,7 +97,7 @@ async function createProject(page: Page) {
   const dialog = page.getByRole("dialog", { name: "New project" });
   await dialog.locator("#create-path").fill(PROJECT_PATH);
   await dialog.getByRole("button", { name: "Create project" }).click();
-  await expect(page.getByRole("button", { name: "Cases" })).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByRole("button", { name: "Cases" })).toBeEnabled({ timeout: 30_000 });
 }
 
 /** Files view → open a text source in the coder and wait for its text. */
