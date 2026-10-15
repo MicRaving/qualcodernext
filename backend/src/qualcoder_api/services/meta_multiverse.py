@@ -23,8 +23,7 @@ from __future__ import annotations
 from itertools import product
 from typing import Any
 
-import numpy as np
-
+from qualcoder_api.core.lazy_import import LazyModule
 from qualcoder_api.services.meta_analysis import (
     _num,
     _safe,
@@ -33,6 +32,9 @@ from qualcoder_api.services.meta_analysis import (
     pool_two_level,
     primary_effects,
 )
+
+# See meta_analysis: numpy loads on the first analysis, not at import.
+np = LazyModule("numpy")
 
 _ESTIMATORS = ("dl", "two_level", "fixed")
 _PRIMARY_LEVELS = ("primary", "all")

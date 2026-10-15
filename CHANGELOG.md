@@ -7,6 +7,13 @@
      include (first releases have no base tag, so no link). Add a section
      like "## 0.1.1 (2026-08-31)" at the TOP of the file. -->
 
+## 0.2.1 (2026-10-15)
+
+- Faster startup: numpy and Pillow now load only when a meta-analysis or figure actually runs, and the app's feature views load on demand instead of at launch.
+- Security: raised urllib3 and PyJWT past their published advisories and refreshed the backend and frontend dependency sets (no known npm advisories).
+
+**Full Changelog**: https://github.com/MicRaving/qualcodernext/compare/v0.2.0...v0.2.1
+
 ## 0.2.0 (2026-10-12)
 
 - New Meta-analysis workspace: search-hit table with abstract screening, paper download and data extraction, each optionally automated with the AI backend.

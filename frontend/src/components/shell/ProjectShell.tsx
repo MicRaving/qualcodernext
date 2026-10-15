@@ -35,28 +35,77 @@ import { Inspector } from "@/components/shell/Inspector";
 import { CoderSwitcher } from "@/components/shell/CoderSwitcher";
 import { WorkspaceLayout } from "@/components/shell/WorkspaceLayout";
 import { DashboardView } from "@/features/dashboard/DashboardView";
-import { CodingWorkspace } from "@/features/coding/CodingWorkspace";
-import { FileManager } from "@/features/manage/FileManager";
-import { CaseDetails, CasesList } from "@/features/cases/CasesView";
-import { NotesEditor, NotesList } from "@/features/notes/NotesView";
-import { QttList, QttView } from "@/features/qtt/QttView";
-import { AnalyzeView } from "@/features/analyze/AnalyzeView";
-import { ReportsList } from "@/features/analyze/ReportsList";
-import { GraphsInspector, GraphsView } from "@/features/graphs/GraphsView";
-import { HistoryView } from "@/features/history/HistoryView";
-import { MetaList } from "@/features/meta/MetaList";
-import { MetaView } from "@/features/meta/MetaView";
-import { MetaPdfPane } from "@/features/meta/MetaPdfPane";
-import { CreativePanel } from "@/features/creative/CreativePanel";
-import { SettingsView } from "@/features/settings/SettingsView";
-import { AiView } from "@/features/ai/AiView";
-// BugReportView pulls in html2canvas (~200KB) — split it out of the main
-// chunk; it only renders when the user opens the bug reporter.
+import { SearchDialog } from "@/features/search/SearchDialog";
+
+// Feature views are code-split: the shell + dashboard paint immediately and
+// each workspace/sidebar/inspector chunk is fetched from the local bundle only
+// when its view actually opens. Keeps the boot bundle - and the JS the webview
+// must parse and execute before first paint - small.
+const CodingWorkspace = lazy(() =>
+  import("@/features/coding/CodingWorkspace").then((m) => ({ default: m.CodingWorkspace })),
+);
+const FileManager = lazy(() =>
+  import("@/features/manage/FileManager").then((m) => ({ default: m.FileManager })),
+);
+const CasesList = lazy(() =>
+  import("@/features/cases/CasesView").then((m) => ({ default: m.CasesList })),
+);
+const CaseDetails = lazy(() =>
+  import("@/features/cases/CasesView").then((m) => ({ default: m.CaseDetails })),
+);
+const NotesList = lazy(() =>
+  import("@/features/notes/NotesView").then((m) => ({ default: m.NotesList })),
+);
+const NotesEditor = lazy(() =>
+  import("@/features/notes/NotesView").then((m) => ({ default: m.NotesEditor })),
+);
+const QttList = lazy(() =>
+  import("@/features/qtt/QttView").then((m) => ({ default: m.QttList })),
+);
+const QttView = lazy(() =>
+  import("@/features/qtt/QttView").then((m) => ({ default: m.QttView })),
+);
+const AnalyzeView = lazy(() =>
+  import("@/features/analyze/AnalyzeView").then((m) => ({ default: m.AnalyzeView })),
+);
+const ReportsList = lazy(() =>
+  import("@/features/analyze/ReportsList").then((m) => ({ default: m.ReportsList })),
+);
+const GraphsView = lazy(() =>
+  import("@/features/graphs/GraphsView").then((m) => ({ default: m.GraphsView })),
+);
+const GraphsInspector = lazy(() =>
+  import("@/features/graphs/GraphsView").then((m) => ({ default: m.GraphsInspector })),
+);
+const HistoryView = lazy(() =>
+  import("@/features/history/HistoryView").then((m) => ({ default: m.HistoryView })),
+);
+const MetaList = lazy(() =>
+  import("@/features/meta/MetaList").then((m) => ({ default: m.MetaList })),
+);
+const MetaView = lazy(() =>
+  import("@/features/meta/MetaView").then((m) => ({ default: m.MetaView })),
+);
+const MetaPdfPane = lazy(() =>
+  import("@/features/meta/MetaPdfPane").then((m) => ({ default: m.MetaPdfPane })),
+);
+const CreativePanel = lazy(() =>
+  import("@/features/creative/CreativePanel").then((m) => ({ default: m.CreativePanel })),
+);
+const SettingsView = lazy(() =>
+  import("@/features/settings/SettingsView").then((m) => ({ default: m.SettingsView })),
+);
+const AiView = lazy(() =>
+  import("@/features/ai/AiView").then((m) => ({ default: m.AiView })),
+);
+const HelpView = lazy(() =>
+  import("@/features/help/HelpView").then((m) => ({ default: m.HelpView })),
+);
+// BugReportView pulls in html2canvas (~200KB) - split it out of the main chunk;
+// it only renders when the user opens the bug reporter.
 const BugReportView = lazy(() =>
   import("@/features/bugreport/BugReportView").then((m) => ({ default: m.BugReportView })),
 );
-import { SearchDialog } from "@/features/search/SearchDialog";
-import { HelpView } from "@/features/help/HelpView";
 import { APP_VERSION } from "@/lib/version";
 import { api } from "@/lib/api";
 import { useToast } from "@/lib/toast";
@@ -939,45 +988,49 @@ export function ProjectShell() {
       </header>
       }
       leftBar={
-        view.kind === "cases" ? (
-          <CasesList />
-        ) : view.kind === "notes" ? (
-          <NotesList />
-        ) :         view.kind === "qtt" ? (
-          <QttList />
-        ) : view.kind === "meta" ? (
-          <MetaList />
-        ) : view.kind === "analyze" ? (
-          // The reports list replaces the standard file-groups sidebar
-          // while the Analysis area is active (graphs live under it too).
-          <ReportsList />
-        ) : (
-          <Sidebar />
-        )
+        <Suspense fallback={null}>
+          {view.kind === "cases" ? (
+            <CasesList />
+          ) : view.kind === "notes" ? (
+            <NotesList />
+          ) : view.kind === "qtt" ? (
+            <QttList />
+          ) : view.kind === "meta" ? (
+            <MetaList />
+          ) : view.kind === "analyze" ? (
+            // The reports list replaces the standard file-groups sidebar
+            // while the Analysis area is active (graphs live under it too).
+            <ReportsList />
+          ) : (
+            <Sidebar />
+          )}
+        </Suspense>
       }
       rightBar={
-        rightPane === "ai" ? (
-          <AiView />
-        ) : rightPane === "settings" ? (
-          <SettingsView />
-        ) : rightPane === "help" ? (
-          <HelpView />
-        ) : rightPane === "history" ? (
-          <HistoryView />
-        ) : rightPane === "creative" ? (
-          <CreativePanel />
-        ) : view.kind === "meta" && metaUi.tab === "download" ? (
-          // The Download tab's right bar is the paper linked to the clicked
-          // (or focused) study — the Extract tab shows its paper inline; the
-          // app's shared PDF viewer returns here when AI/Settings/etc. close.
-          <MetaPdfPane />
-        ) : view.kind === "analyze" && analyzeUi.selectedId === "graphs" ? (
-          // The graph details inspector opens automatically; closing the
-          // AI/Settings/History panes returns here.
-          <GraphsInspector />
-        ) : (
-          <Inspector />
-        )
+        <Suspense fallback={null}>
+          {rightPane === "ai" ? (
+            <AiView />
+          ) : rightPane === "settings" ? (
+            <SettingsView />
+          ) : rightPane === "help" ? (
+            <HelpView />
+          ) : rightPane === "history" ? (
+            <HistoryView />
+          ) : rightPane === "creative" ? (
+            <CreativePanel />
+          ) : view.kind === "meta" && metaUi.tab === "download" ? (
+            // The Download tab's right bar is the paper linked to the clicked
+            // (or focused) study — the Extract tab shows its paper inline; the
+            // app's shared PDF viewer returns here when AI/Settings/etc. close.
+            <MetaPdfPane />
+          ) : view.kind === "analyze" && analyzeUi.selectedId === "graphs" ? (
+            // The graph details inspector opens automatically; closing the
+            // AI/Settings/History panes returns here.
+            <GraphsInspector />
+          ) : (
+            <Inspector />
+          )}
+        </Suspense>
       }
       statusBar={<StatusBar />}
     >
@@ -985,31 +1038,33 @@ export function ProjectShell() {
         key={projectOpen ? view.kind : "dashboard"}
         className="qc-enter-fade h-full min-w-0"
       >
-        {projectOpen ? (
-          view.kind === "coding" ? (
-            <CodingWorkspace sourceId={view.sourceId} />
-          ) : view.kind === "files" ? (
-            <FileManager />
-          ) : view.kind === "cases" ? (
-            <CaseDetails />
-          ) : view.kind === "notes" ? (
-            <NotesEditor />
-          ) : view.kind === "qtt" ? (
-            <QttView />
-          ) : view.kind === "meta" ? (
-            <MetaView />
-          ) : view.kind === "analyze" ? (
-            analyzeUi.selectedId === "graphs" ? (
-              <GraphsView />
+        <Suspense fallback={null}>
+          {projectOpen ? (
+            view.kind === "coding" ? (
+              <CodingWorkspace sourceId={view.sourceId} />
+            ) : view.kind === "files" ? (
+              <FileManager />
+            ) : view.kind === "cases" ? (
+              <CaseDetails />
+            ) : view.kind === "notes" ? (
+              <NotesEditor />
+            ) : view.kind === "qtt" ? (
+              <QttView />
+            ) : view.kind === "meta" ? (
+              <MetaView />
+            ) : view.kind === "analyze" ? (
+              analyzeUi.selectedId === "graphs" ? (
+                <GraphsView />
+              ) : (
+                <AnalyzeView />
+              )
             ) : (
-              <AnalyzeView />
+              <DashboardView />
             )
           ) : (
             <DashboardView />
-          )
-        ) : (
-          <DashboardView />
-        )}
+          )}
+        </Suspense>
       </div>
       </WorkspaceLayout>
       {bugReportOpen && (

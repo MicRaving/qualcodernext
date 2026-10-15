@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "qualcoder-api"
-version = "0.2.0"
+version = "0.2.1"
 description = "QualCoder v4 backend"
 requires-python = ">=3.11"
 dependencies = [
@@ -35,6 +35,11 @@ dependencies = [
     "python-docx>=1.1",
     "python-pptx>=1.0",
     "mcp>=1.2,<2",
+    # Security floors: transitive runtime deps with published advisories.
+    # Keep the resolved versions at or above the fixed releases so no build
+    # (CI has no lockfile) can pull a vulnerable one.
+    "urllib3>=2.8",  # via trafilatura / yt-dlp
+    "pyjwt>=2.14",  # via webauthn / mcp (server-mode auth)
     # Server mode (SERVER_PLAN.md) — imported only when QC_SERVER_MODE is on
     "argon2-cffi>=23.1",
     "webauthn>=2.0",

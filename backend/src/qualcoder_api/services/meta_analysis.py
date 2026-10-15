@@ -20,11 +20,15 @@ from __future__ import annotations
 import math
 from typing import Any
 
-import numpy as np
-
+from qualcoder_api.core.lazy_import import LazyModule
 from qualcoder_api.services.meta_effects import derive_effect
 from qualcoder_api.services.meta_roles import metric_by_role, role_map
 from qualcoder_api.services.meta_scheme import all_fields, normalise_codebook
+
+# numpy is only touched once an analysis actually runs. Deferring it keeps a
+# native wheel (and the antivirus scan of its DLLs) off the launch path;
+# ``from __future__ import annotations`` keeps the ``np.ndarray`` hints lazy.
+np = LazyModule("numpy")
 
 _Z95 = 1.959963984540054
 _MAX_MOD_LEVELS = 8

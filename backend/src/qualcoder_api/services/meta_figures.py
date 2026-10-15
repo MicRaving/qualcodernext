@@ -12,7 +12,11 @@ import io
 import math
 from typing import Any
 
-from PIL import Image, ImageDraw
+from qualcoder_api.core.lazy_import import LazyModule
+
+# Pillow is a native wheel drawn on only when a figure is actually rendered.
+Image = LazyModule("PIL.Image")
+ImageDraw = LazyModule("PIL.ImageDraw")
 
 _WIDTH = 1220
 
