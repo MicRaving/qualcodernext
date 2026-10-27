@@ -7,6 +7,12 @@
      include (first releases have no base tag, so no link). Add a section
      like "## 0.1.1 (2026-08-31)" at the TOP of the file. -->
 
+## 0.2.2 (2026-10-27)
+
+- Flatpak: the app now appears in the app list with its icon, and targets the supported GNOME 51 runtime instead of the end-of-life GNOME 48.
+
+**Full Changelog**: https://github.com/MicRaving/qualcodernext/compare/v0.2.1...v0.2.2
+
 ## 0.2.1 (2026-10-15)
 
 - Faster startup: numpy and Pillow now load only when a meta-analysis or figure actually runs, and the app's feature views load on demand instead of at launch.
