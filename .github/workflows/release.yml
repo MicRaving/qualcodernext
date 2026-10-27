@@ -21,7 +21,7 @@ name: Release
 # Linux ships as a single-file .flatpak: the stock Tauri v2 CLI cannot emit
 # flatpak bundles (`--bundles` only accepts deb/rpm/appimage on Linux), so the
 # pipeline builds the .deb and wraps it via flatpak-builder with the checked-in
-# manifest frontend/src-tauri/packaging/flatpak/org.qcnext.desktop.yml. Only
+# manifest frontend/src-tauri/packaging/flatpak/org.qcnext.QCnext.yml. Only
 # the .flatpak is uploaded (the .deb is an intermediate artifact).
 #
 # macOS x86_64 uses the macos-15-intel label — the macos-13 image was retired
@@ -173,7 +173,7 @@ jobs:
             target: linux-x86_64
             # The stock Tauri CLI cannot emit flatpak bundles; build the deb
             # and wrap it into a .flatpak via flatpak-builder (see the step
-            # below + packaging/flatpak/org.qcnext.desktop.yml). Only the
+            # below + packaging/flatpak/org.qcnext.QCnext.yml). Only the
             # .flatpak ships.
             bundles: deb
             release_files: |
@@ -255,17 +255,36 @@ jobs:
           $stage = "target/release/bundle/flatpak-stage"
           New-Item -ItemType Directory -Force $stage | Out-Null
           Copy-Item $deb.FullName "$stage/qcnext.deb"
-          Copy-Item "packaging/flatpak/org.qcnext.desktop.yml" $stage
+          Copy-Item "packaging/flatpak/org.qcnext.QCnext.yml" $stage
 
           flatpak remote-add --if-not-exists --user flathub https://flathub.org/repo/flathub.flatpakrepo
-          flatpak install --assumeyes --user --noninteractive flathub org.gnome.Sdk//48 org.gnome.Platform//48
+          # Newest stable GNOME runtime: a branch is EOL-ed roughly a year
+          # after release and flatpak then warns on every operation.
+          flatpak install --assumeyes --user --noninteractive flathub org.gnome.Sdk//51 org.gnome.Platform//51
 
           Push-Location $stage
-          flatpak-builder --force-clean --user --repo=repo builddir org.qcnext.desktop.yml
+          flatpak-builder --force-clean --user --repo=repo builddir org.qcnext.QCnext.yml
           $version = ("$env:GITHUB_REF_NAME") -replace '^v', ''
           New-Item -ItemType Directory -Force "../flatpak" | Out-Null
-          flatpak build-bundle repo "../flatpak/QCnext_$version.flatpak" org.qcnext.desktop
+          flatpak build-bundle repo "../flatpak/QCnext_$version.flatpak" org.qcnext.QCnext
           Pop-Location
+
+          # Smoke-check before shipping (a broken bundle is otherwise invisible
+          # to CI): Flatpak must EXPORT the desktop entry (else the app never
+          # appears in the host's app list) and the runtime must provide
+          # WebKitGTK 4.1 (else the Tauri webview cannot start).
+          $bundle = "target/release/bundle/flatpak/QCnext_$version.flatpak"
+          flatpak install --user --noninteractive --assumeyes $bundle
+          $entry = "$env:HOME/.local/share/flatpak/exports/share/applications/org.qcnext.QCnext.desktop"
+          if (-not (Test-Path $entry)) {
+            throw "flatpak did not export $entry - the app would not appear in the app list"
+          }
+          flatpak run --command=sh org.qcnext.QCnext -c "find /usr/lib -name 'libwebkit2gtk-4.1.so*' | grep -q ."
+          if ($LASTEXITCODE -ne 0) {
+            throw "org.gnome.Platform//51 is missing webkit2gtk-4.1 - the webview would not start"
+          }
+          Write-Host "flatpak smoke check OK: desktop entry exported, webkit2gtk-4.1 present"
+
           Get-ChildItem "target/release/bundle/flatpak"
 
       - name: Rename macOS updater bundles (unique asset names per arch)

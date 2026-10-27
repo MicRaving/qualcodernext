@@ -4,8 +4,16 @@
 # builds the regular .deb first (see release.yml / scripts/build-flatpak.sh)
 # and THIS manifest repackages it into a self-contained single-file .flatpak.
 #
-# Runtime: org.gnome.Platform ships WebKitGTK 4.1, which the Tauri WebView
-# needs (the freedesktop runtime would require an extra WebKit2Gtk extension).
+# Runtime: org.gnome.Platform ships WebKitGTK (webkit2gtk-4.1), which the Tauri
+# WebView needs (the freedesktop runtime would require an extra WebKit2Gtk
+# extension). Stay on the NEWEST stable branch: a branch is EOL-ed roughly a
+# year after release, and `flatpak` warns on every operation once it is.
+# (GNOME 48 went EOL 2026-03-24 -> the runtime dropped to 51.)
+#
+# App id: deliberately NOT `org.qcnext.desktop`. Flatpak/AppStream treat ids
+# ending in `.desktop` as a legacy special case, and a desktop entry must be
+# named exactly `<app-id>.desktop` — with such an id that becomes the confusing
+# `org.qcnext.desktop.desktop`. The Tauri bundle identifier is unaffected.
 #
 # Note: because the app ships prebuilt binaries instead of building from
 # source inside the sandbox, this manifest is suitable for direct
@@ -14,12 +22,12 @@
 # declared sources.
 #
 # Regenerate the bundle:
-#   flatpak-builder --force-clean --user --repo=repo builddir org.qcnext.desktop.yml
-#   flatpak build-bundle --user repo QCnext.flatpak org.qcnext.desktop
+#   flatpak-builder --force-clean --user --repo=repo builddir org.qcnext.QCnext.yml
+#   flatpak build-bundle --user repo QCnext.flatpak org.qcnext.QCnext
 
-app-id: org.qcnext.desktop
+app-id: org.qcnext.QCnext
 runtime: org.gnome.Platform
-runtime-version: "48"
+runtime-version: "51"
 sdk: org.gnome.Sdk
 command: qcnext
 separate-locales: false
@@ -52,10 +60,21 @@ modules:
       - cp -a usr/. /app/
       - rm -rf usr
       - chmod +x /app/bin/*
-      # Flatpak convention: the desktop entry id must match the app id.
-      # (Tauri names the entry after the product; keep its Icon= value.)
-      - mv /app/share/applications/*.desktop /app/share/applications/org.qcnext.desktop
-      - desktop-file-edit --set-key=Exec --set-value=qcnext /app/share/applications/org.qcnext.desktop
+      # Flatpak only exports a desktop entry named EXACTLY <app-id>.desktop,
+      # and icons named after the app id. Tauri names both after the product,
+      # so without this rename the app installs and runs but never appears in
+      # the host's app list (and has no icon).
+      - |
+        set -e
+        appid=org.qcnext.QCnext
+        entry="/app/share/applications/$appid.desktop"
+        mv /app/share/applications/*.desktop "$entry"
+        desktop-file-edit --set-key=Exec --set-value=qcnext "$entry"
+        desktop-file-edit --set-key=Icon --set-value="$appid" "$entry"
+        find /app/share/icons/hicolor -type f -path '*/apps/*' | while read -r icon; do
+          ext="${icon##*.}"
+          mv "$icon" "$(dirname "$icon")/$appid.$ext"
+        done
     sources:
       - type: file
         path: qcnext.deb

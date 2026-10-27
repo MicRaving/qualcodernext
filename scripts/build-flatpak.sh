@@ -54,15 +54,15 @@ DEB=$(find target/release/bundle/deb -name "*.deb" 2>/dev/null | head -1)
 STAGE=target/release/bundle/flatpak-stage
 mkdir -p "$STAGE"
 cp "$DEB" "$STAGE/qcnext.deb"
-cp packaging/flatpak/org.qcnext.desktop.yml "$STAGE/"
+cp packaging/flatpak/org.qcnext.QCnext.yml "$STAGE/"
 
 flatpak remote-add --if-not-exists --user flathub https://flathub.org/repo/flathub.flatpakrepo || true
-flatpak install --assumeyes --user --noninteractive flathub org.gnome.Sdk//48 org.gnome.Platform//48
+flatpak install --assumeyes --user --noninteractive flathub org.gnome.Sdk//51 org.gnome.Platform//51
 
 (
   cd "$STAGE"
-  flatpak-builder --force-clean --user --repo=repo builddir org.qcnext.desktop.yml
-  flatpak build-bundle repo ../flatpak/QCnext.local.flatpak org.qcnext.desktop
+  flatpak-builder --force-clean --user --repo=repo builddir org.qcnext.QCnext.yml
+  flatpak build-bundle repo ../flatpak/QCnext.local.flatpak org.qcnext.QCnext
 )
 
 BUNDLE=$(find target/release/bundle/flatpak -name "*.flatpak" 2>/dev/null | head -1)
@@ -70,4 +70,4 @@ echo ""
 echo "== DONE =="
 echo "Flatpak bundle: $BUNDLE"
 echo "Install:        flatpak install --user $BUNDLE"
-echo "Run:            flatpak run org.qcnext.desktop"
+echo "Run:            flatpak run org.qcnext.QCnext"
