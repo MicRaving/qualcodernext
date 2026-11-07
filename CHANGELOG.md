@@ -7,6 +7,16 @@
      include (first releases have no base tag, so no link). Add a section
      like "## 0.1.1 (2026-08-31)" at the TOP of the file. -->
 
+## 0.2.3 (2026-11-07)
+
+- Full code audit: fixed a large set of bugs, tightened security (server-side request forgery, path traversal, unsafe uploads, update-signature checks) and removed dead code.
+- Fixed many cases where a slow, older response could overwrite newer data.
+- Statistics: corrected the r-to-d variance, meta-regression tau-squared and R-squared, Gwet's AC1 with unrated cases, the Egger test in reports, and the exact Mann-Whitney U with tied values.
+- Editing a sub-code's memo or colour no longer detaches it from its parent code.
+- The updater no longer offers an already-installed version, and the window no longer freezes while the backend restarts.
+
+**Full Changelog**: https://github.com/MicRaving/qualcodernext/compare/v0.2.2...v0.2.3
+
 ## 0.2.2 (2026-10-27)
 
 - Flatpak: the app now appears in the app list with its icon, and targets the supported GNOME 51 runtime instead of the end-of-life GNOME 48.
