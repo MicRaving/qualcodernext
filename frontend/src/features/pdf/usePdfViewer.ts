@@ -153,7 +153,14 @@ export function usePdfViewer({
         signal.throwIfAborted();
         const task = pdfjsLib.getDocument({ data });
         const doc = await task.promise;
-        signal.throwIfAborted();
+        try {
+          signal.throwIfAborted();
+        } catch (abort) {
+          // Superseded before it was handed to state: nothing else owns this
+          // document, so release it (and its worker) here.
+          void doc.loadingTask.destroy().catch(() => {});
+          throw abort;
+        }
         setPdf(doc);
         const sizes = new Map<number, PdfPageSize>();
         const items = new Map<number, PdfTextItem[]>();
@@ -194,6 +201,16 @@ export function usePdfViewer({
     },
     [sourceId, reloadTick, loadErrorFallback, extractText],
   );
+
+  // Each loaded document owns a pdf.js worker; release it when the document
+  // is replaced (source switch / reload) or the viewer unmounts, otherwise
+  // every opened PDF leaks a worker and its parsed data.
+  useEffect(() => {
+    if (!pdf) return;
+    return () => {
+      void pdf.loadingTask.destroy().catch(() => {});
+    };
+  }, [pdf]);
 
   // HiDPI: render the canvas backing store at devicePixelRatio so pages are
   // sharp; re-measure when the window moves between displays.

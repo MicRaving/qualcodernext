@@ -195,7 +195,9 @@ def _derive_raw(by: dict[str, Any]) -> tuple[str, float, float] | None:
     r_val = _num(by.get("r"))
     if r_val is not None and -1 < r_val < 1 and n_total and n_total > 1:
         d_r = 2 * r_val / math.sqrt(1 - r_val * r_val)
-        var_r = 4 * (1 - r_val * r_val) / (n_total - 1)
+        # Borenstein et al. (2009) eq. 7.10: V_d = 4·V_r / (1-r²)³ with
+        # V_r = (1-r²)² / (n-1), i.e. 4 / ((1-r²)(n-1)).
+        var_r = 4 / ((1 - r_val * r_val) * (n_total - 1))
         return "r_to_d", d_r, var_r
 
     # 7. odds ratio / risk ratio (each with its own CI roles)

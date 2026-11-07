@@ -337,7 +337,9 @@ async def test_job_starts_queued_then_runs(monkeypatch, tmp_path):
         spawn.set()
         deadline = time.monotonic() + 5
         while time.monotonic() < deadline:
-            if r_service_module.get_r_job(job_id)["state"] in ("running", "done"):
+            # Wait for a TERMINAL state: breaking on "running" raced the
+            # final assert under load.
+            if r_service_module.get_r_job(job_id)["state"] in ("done", "error", "cancelled"):
                 break
             await asyncio.sleep(0.05)
         assert r_service_module.get_r_job(job_id)["state"] == "done"

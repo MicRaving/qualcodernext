@@ -54,11 +54,14 @@ import concurrent.futures
 import concurrent.futures.thread
 import csv
 import html
+import http.client
 import io
+import ipaddress
 import json
 import logging
 import os
 import re
+import socket
 import subprocess
 import sys
 import threading
@@ -146,6 +149,53 @@ def detect_mode(url: str, mode: str = "auto") -> str:
     return "article"
 
 
+#: Hard cap on any single fetched body (page or sub-resource) so a hostile
+#: or endless response cannot exhaust memory.
+FETCH_MAX_BYTES = 100 * 1024 * 1024
+
+
+def _blocked_ip(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+    mapped = getattr(ip, "ipv4_mapped", None)
+    if mapped is not None:
+        ip = mapped
+    return (
+        ip.is_private
+        or ip.is_loopback
+        or ip.is_link_local
+        or ip.is_multicast
+        or ip.is_reserved
+        or ip.is_unspecified
+    )
+
+
+def _resolves_to_blocked_host(url: str) -> bool:
+    """True when the URL's hostname RESOLVES to a private/local address.
+
+    ``is_ssrf_blocked_url`` only inspects the literal host, so a public
+    name pointing at 127.0.0.1 (``localtest.me``, ``*.nip.io``) or a
+    numeric shorthand like ``http://2130706433/`` would pass it. Resolution
+    failures are not treated as blocked — the fetch then fails on its own.
+    """
+    try:
+        host = urlparse(url).hostname
+    except ValueError:
+        return True
+    if not host:
+        return True
+    try:
+        infos = socket.getaddrinfo(host, None)
+    except (OSError, UnicodeError):
+        return False
+    for info in infos:
+        try:
+            ip = ipaddress.ip_address(str(info[4][0]).split("%", 1)[0])
+        except ValueError:
+            continue
+        if _blocked_ip(ip):
+            return True
+    return False
+
+
 class _SsrfRedirectHandler(urllib.request.HTTPRedirectHandler):
     """Reject redirects to private/local hosts (SSRF guard)."""
 
@@ -153,7 +203,9 @@ class _SsrfRedirectHandler(urllib.request.HTTPRedirectHandler):
         from qualcoder_api.core.security import is_ssrf_blocked_url
 
         target = urllib.parse.urljoin(req.full_url, newurl or "")
-        if is_ssrf_blocked_url(target):
+        if urlparse(target).scheme.lower() not in ("http", "https"):
+            raise ScrapeError("redirect to a non-http(s) URL refused")
+        if is_ssrf_blocked_url(target) or _resolves_to_blocked_host(target):
             raise ScrapeError("redirect targets a private or local host")
         return super().redirect_request(req, fp, code, msg, headers, newurl)
 
@@ -175,6 +227,8 @@ def fetch_url(
     build custom requests.
     """
     validate_url(url)
+    if _resolves_to_blocked_host(url):
+        raise ScrapeError("URL targets a private or local host")
     headers = {
         "User-Agent": user_agent,
         "Accept": "text/html,application/xhtml+xml,application/json,*/*;q=0.8",
@@ -185,7 +239,7 @@ def fetch_url(
     opener = urllib.request.build_opener(_SsrfRedirectHandler)
     try:
         with opener.open(request, timeout=timeout) as response:
-            return response.read()
+            body = response.read(FETCH_MAX_BYTES + 1)
     except urllib.error.HTTPError as err:
         raise ScrapeError(
             f"server returned HTTP {err.code} for {url}",
@@ -194,6 +248,13 @@ def fetch_url(
         ) from err
     except urllib.error.URLError as err:
         raise ScrapeError(f"could not reach {url}: {err.reason}") from err
+    except (OSError, http.client.HTTPException) as err:
+        # Read timeouts (TimeoutError) and dropped connections during
+        # ``read()`` are not URLErrors; without this they surfaced as 500s.
+        raise ScrapeError(f"could not fetch {url}: {err}") from err
+    if len(body) > FETCH_MAX_BYTES:
+        raise ScrapeError(f"response from {url} is too large")
+    return body
 
 
 def sanitize_name(title: str, fallback: str) -> str:
@@ -235,19 +296,6 @@ def _as_int(value: object) -> int | None:
         except ValueError:
             return None
     return None
-
-
-def _format_duration(seconds: object) -> str:
-    total = _as_int(seconds)
-    if total is None:
-        return str(seconds)
-    if total < 0:
-        return "0:00"
-    hours, remainder = divmod(total, 3600)
-    minutes, secs = divmod(remainder, 60)
-    if hours:
-        return f"{hours}:{minutes:02d}:{secs:02d}"
-    return f"{minutes}:{secs:02d}"
 
 
 # ----------------------------------------------------------------------

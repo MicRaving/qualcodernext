@@ -83,8 +83,11 @@ def gwet_ac(
         total += (s - ri[i]) / (ri[i] * (ri[i] - 1))
     pa = total / n2
 
+    # irrCAC averages over the subjects rated at least once; cases with no
+    # usable rating (e.g. every rater excluded) must not dilute pi_k.
+    n1 = sum(1 for count in ri if count >= 1)
     pi = [
-        sum(agree[i][k] / ri[i] for i in range(n) if ri[i] >= 1) / n
+        sum(agree[i][k] / ri[i] for i in range(n) if ri[i] >= 1) / n1
         for k in range(q)
     ]
     sum_w = sum(weight(k, level) for k in range(q) for level in range(q))

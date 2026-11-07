@@ -17,6 +17,9 @@ from qualcoder_api.services import sync, sync_engine, user_settings
 
 router = APIRouter(prefix="/sync", tags=["sync"])
 
+#: Strong references to fire-and-forget sync tasks (see put_sync_settings).
+_BACKGROUND_TASKS: set = set()
+
 
 def _sync_id(svc) -> str:
     """The active sync identity: the per-session id in collaboration mode
@@ -94,7 +97,11 @@ async def put_sync_settings(req: SyncSettingsRequest, svc: ServiceDep) -> dict:
             except Exception as err:
                 _logging.getLogger(__name__).exception("immediate sync cycle failed: %s", err)
 
-        asyncio.get_running_loop().create_task(_immediate())
+        # Keep a strong reference: the event loop holds tasks only weakly, so
+        # an unreferenced task can be garbage-collected mid-cycle.
+        task = asyncio.get_running_loop().create_task(_immediate())
+        _BACKGROUND_TASKS.add(task)
+        task.add_done_callback(_BACKGROUND_TASKS.discard)
     # Record the toggle in the open project's history (best effort).
     if svc.engine is not None:
         from qualcoder_api.services import audit

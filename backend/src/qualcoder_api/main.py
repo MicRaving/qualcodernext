@@ -133,7 +133,8 @@ async def _sync_loop() -> None:
                             if not replay_service.has_acked(service.project_path, rp.stem, sync_id):
                                 replay_service.write_ack(service.project_path, rp.stem, sync_id)
                     except Exception:
-                        pass
+                        # Non-fatal (retried next cycle) but must not vanish.
+                        logger.warning("replay ack failed", exc_info=True)
                     # Admin merge (spec 2c): when every other session is closed or
                     # stale, snapshot the sandbox into the master archive so a
                     # crashed instance's changes still land.  No-op while another

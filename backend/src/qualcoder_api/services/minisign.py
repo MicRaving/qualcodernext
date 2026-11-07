@@ -91,7 +91,14 @@ def _decode_point(data: bytes) -> tuple[int, int, int, int] | None:
     sign = (data[31] >> 7) & 1
     if y >= _Q:
         return None
+    # RFC 8032 §5.1.3: reject encodings whose y has no x on the curve
+    # (x² is a non-residue) and the non-canonical "negative zero" x.
+    xx = (y * y - 1) * pow(_D * y * y + 1, _Q - 2, _Q) % _Q
     x = _xrecover(y)
+    if (x * x - xx) % _Q != 0:
+        return None
+    if x == 0 and sign:
+        return None
     if (x & 1) != sign:
         x = _Q - x
     return (x, y, 1, (x * y) % _Q)

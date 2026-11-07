@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from collections import defaultdict
 from typing import cast
 
@@ -150,9 +151,15 @@ async def group_compare(
     skipped = 0
     for unit_id, value in values.items():
         try:
-            numeric[unit_id] = float(value)
+            number = float(value)
         except (TypeError, ValueError):
             skipped += 1
+            continue
+        # "nan"/"inf" parse as floats but break ranking and JSON output.
+        if not math.isfinite(number):
+            skipped += 1
+            continue
+        numeric[unit_id] = number
 
     code_row = (
         await session.execute(

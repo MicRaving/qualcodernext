@@ -282,6 +282,9 @@ const UNSUPPORTED_FN = /(?:oklab|oklch|color-mix|color)\s*\(/gi;
  * to change.
  */
 export function rewriteColors(value: string): string | null {
+  // The regex is global (stateful `lastIndex`): always scan from the start,
+  // or a previous call's position would make this one miss early tokens.
+  UNSUPPORTED_FN.lastIndex = 0;
   if (!UNSUPPORTED_FN.test(value)) return null;
   UNSUPPORTED_FN.lastIndex = 0;
   const hits: { start: number; end: number; replacement: string }[] = [];
@@ -303,21 +306,23 @@ export function rewriteColors(value: string): string | null {
   return out === value ? null : out;
 }
 
-/** The properties html2canvas reads whose values can carry oklab colors. */
-const COLOR_PROPS = [
+/** The properties html2canvas reads whose values can carry oklab colors.
+ *  CSS (kebab-case) names: `getPropertyValue`/`setProperty` ignore
+ *  camelCase names and return "" for them. */
+export const COLOR_PROPS = [
   "color",
-  "backgroundColor",
-  "backgroundImage",
-  "borderTopColor",
-  "borderRightColor",
-  "borderBottomColor",
-  "borderLeftColor",
-  "boxShadow",
-  "textShadow",
-  "outlineColor",
-  "textDecorationColor",
-  "caretColor",
-  "webkitTextStrokeColor",
+  "background-color",
+  "background-image",
+  "border-top-color",
+  "border-right-color",
+  "border-bottom-color",
+  "border-left-color",
+  "box-shadow",
+  "text-shadow",
+  "outline-color",
+  "text-decoration-color",
+  "caret-color",
+  "-webkit-text-stroke-color",
   "fill",
   "stroke",
 ] as const;
@@ -343,14 +348,6 @@ function neutralizeColors(clonedDoc: Document): void {
       if (rewritten !== null) {
         el.style.setProperty(prop, rewritten);
         dbg.rewritten++;
-      }
-    }
-    // TEMP DEBUG: full-clone scan for any remaining unsupported function.
-    for (let i = 0; i < style.length; i++) {
-      const p = style[i];
-      const v = style.getPropertyValue(p);
-      if (UNSUPPORTED_FN.test(v)) {
-        console.warn(`[probe:cloneAll] <${el.tagName.toLowerCase()}> ${p}: ${v.slice(0, 120)}`);
       }
     }
   }

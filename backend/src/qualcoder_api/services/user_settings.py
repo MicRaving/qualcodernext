@@ -194,15 +194,6 @@ def get_compact_on_close(settings: dict | None = None) -> bool:
     return bool(get_maintenance_settings(settings)["compact_on_close"])
 
 
-def set_compact_on_close(enabled: bool, settings: dict | None = None) -> bool:
-    """Persist the compact-on-close switch."""
-    settings = settings or load_settings()
-    maintenance = get_maintenance_settings(settings)
-    maintenance["compact_on_close"] = bool(enabled)
-    save_maintenance_settings(maintenance, settings)
-    return bool(enabled)
-
-
 def get_last_compact(settings: dict | None = None) -> str:
     """Timestamp of the last compaction that actually ran ("" if never)."""
     settings = settings or load_settings()

@@ -41,22 +41,26 @@ def _client_data(response_json: str) -> dict:
     )
 
 
-async def _consume_client_challenge(response_json: str, kind: str) -> bytes:
-    """Extract + consume the single-use challenge from a response."""
+async def _consume_client_challenge(
+    response_json: str, kind: str, user_id: int | None = None
+) -> bytes:
+    """Extract + consume the single-use challenge from a response.
+
+    A challenge issued for a specific user (``user_id`` on the row) is only
+    valid for that user.
+    """
     from webauthn.helpers.exceptions import (
         InvalidAuthenticationResponse,
         InvalidRegistrationResponse,
     )
 
+    exc = InvalidRegistrationResponse if kind == "register" else InvalidAuthenticationResponse
     client_data = _client_data(response_json)
     row = await metadata_db.take_challenge(client_data["challenge"], kind)
     if row is None:
-        exc = (
-            InvalidRegistrationResponse
-            if kind == "register"
-            else InvalidAuthenticationResponse
-        )
         raise exc(f"unknown or expired {kind} challenge")
+    if row.get("user_id") is not None and row["user_id"] != user_id:
+        raise exc(f"{kind} challenge was issued for a different user")
     return base64url_to_bytes(client_data["challenge"])
 
 
@@ -84,7 +88,9 @@ async def begin_registration(user: dict) -> str:
 async def complete_registration(user: dict, response_json: str) -> dict:
     """Verify an attestation and store the credential; returns a summary."""
     rp_id, origin = _rp()
-    expected_challenge = await _consume_client_challenge(response_json, "register")
+    expected_challenge = await _consume_client_challenge(
+        response_json, "register", int(user["id"])
+    )
     credential = parse_registration_credential_json(response_json)
     verification = webauthn.verify_registration_response(
         credential=credential,
@@ -130,10 +136,12 @@ async def begin_login(username: str | None) -> str:
 async def complete_login(username: str, response_json: str) -> dict:
     """Verify an assertion; returns the owning user row on success."""
     rp_id, origin = _rp()
-    expected_challenge = await _consume_client_challenge(response_json, "login")
+    user = await metadata_db.get_user_by_username(username) if username else None
+    expected_challenge = await _consume_client_challenge(
+        response_json, "login", int(user["id"]) if user else None
+    )
     credential = parse_authentication_credential_json(response_json)
     passkey = await metadata_db.get_passkey_by_credential_id(bytes_to_base64url(credential.raw_id))
-    user = await metadata_db.get_user_by_username(username) if username else None
     if passkey is None or user is None or passkey["user_id"] != user["id"]:
         raise InvalidAuthenticationResponse("unknown credential for this user")
     verification = webauthn.verify_authentication_response(

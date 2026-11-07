@@ -177,7 +177,10 @@ async function fetchSourceBytes(
   try {
     return await attempt();
   } catch (err) {
-    if (err instanceof ApiError) throw err;
+    // Only transport failures are retried (like request()): a non-JSON 2xx
+    // body or any other error means the request already reached the
+    // backend — re-sending a POST would apply it twice.
+    if (!isNetworkError(err)) throw err;
     basePromise = null;
     resolvedBase = null;
     await new Promise((r) => setTimeout(r, 1000));
@@ -303,7 +306,10 @@ export async function localRequest<T>(
   try {
     return await doFetch();
   } catch (err) {
-    if (err instanceof ApiError) throw err;
+    // Only transport failures are retried (like request()): a non-JSON 2xx
+    // body or any other error means the request already reached the
+    // backend — re-sending a POST would apply it twice.
+    if (!isNetworkError(err)) throw err;
     // Network-level failure (the packaged backend restarted): drop the cached
     // base so the retry re-resolves it afresh (mirrors request()).
     basePromise = null;
@@ -340,7 +346,10 @@ export async function uploadRequest<T>(path: string, form: FormData, timeoutMs =
   try {
     return await doFetch();
   } catch (err) {
-    if (err instanceof ApiError) throw err;
+    // Only transport failures are retried (like request()): a non-JSON 2xx
+    // body or any other error means the request already reached the
+    // backend — re-sending a POST would apply it twice.
+    if (!isNetworkError(err)) throw err;
     basePromise = null;
     resolvedBase = null;
     try {
@@ -387,7 +396,10 @@ export async function localRequestBlob(
   try {
     return await doFetch();
   } catch (err) {
-    if (err instanceof ApiError) throw err;
+    // Only transport failures are retried (like request()): a non-JSON 2xx
+    // body or any other error means the request already reached the
+    // backend — re-sending a POST would apply it twice.
+    if (!isNetworkError(err)) throw err;
     basePromise = null;
     resolvedBase = null;
     try {

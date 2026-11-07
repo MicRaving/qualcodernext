@@ -25,14 +25,8 @@ function persist(opts: ViewOptions) {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(opts));
 }
 
-/* ---- plain accessors (for non-React contexts) ---- */
-
-export function getGutterVisible(): boolean {
+function getGutterVisible(): boolean {
   return load().gutterVisible;
-}
-
-export function setGutterVisible(v: boolean) {
-  persist({ ...load(), gutterVisible: v });
 }
 
 /* ---- React hook ---- */

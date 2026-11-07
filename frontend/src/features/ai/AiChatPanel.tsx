@@ -126,6 +126,9 @@ export function AiChatPanel({
       } catch {
         signal.throwIfAborted();
         setMessages([]);
+        // The shown messages no longer belong to the previously loaded chat:
+        // forget it, or reopening that chat would skip the reload above.
+        setLoadedChatId(null);
       }
     },
     [chatId],

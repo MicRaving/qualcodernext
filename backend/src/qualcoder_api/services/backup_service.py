@@ -15,6 +15,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import os
+import re
 import shutil
 import tempfile
 import zipfile
@@ -44,6 +45,15 @@ def _stamp() -> str:
     # Microsecond precision: two backups within one second must not
     # overwrite each other's archive.
     return _utcnow().strftime("%Y%m%d-%H%M%S%f")
+
+
+def _safe_filename(name: str) -> str:
+    """A project name reduced to one safe path component.
+
+    The name is free text (``CreateProjectRequest``); a ``/`` or ``..`` in it
+    would otherwise place the archive outside ``backups_root/<project>``."""
+    cleaned = re.sub(r"[^\w.-]+", "_", name).strip("._")
+    return cleaned or "project"
 
 
 def _sha256(path: Path) -> str:
@@ -84,7 +94,7 @@ async def create_backup(project_id: str, kind: str = "manual") -> dict:
 
     backups_dir = cfg.backups_root / project_id
     backups_dir.mkdir(parents=True, exist_ok=True)
-    archive = backups_dir / f"{project['name']}_{_stamp()}_{kind}.zip"
+    archive = backups_dir / f"{_safe_filename(str(project['name']))}_{_stamp()}_{kind}.zip"
     _zip_project(source, archive)
 
     backup_id = await metadata_db.add_backup_record(

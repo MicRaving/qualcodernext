@@ -46,9 +46,11 @@ export function useCoder<T>(
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [tick, setTick] = useState(0);
-  /** Resolver of the latest awaited `reload()` — resolved with the fresh
-   *  codings once the load settles (never left dangling). */
-  const pendingReloadRef = useRef<((codings: T[]) => void) | null>(null);
+  /** Resolvers of awaited `reload()` calls - resolved with the fresh codings
+   *  once a load that was NOT superseded settles. A load aborted by a newer
+   *  run (e.g. reload() while a load is in flight) leaves them for the newer
+   *  run, so callers never receive stale or empty codings. */
+  const pendingReloadsRef = useRef<Array<(codings: T[]) => void>>([]);
 
   useAsyncEffect(async (signal) => {
     setLoading(true);
@@ -64,16 +66,17 @@ export function useCoder<T>(
       signal.throwIfAborted();
       setError(errorMessage(e, fallback));
     } finally {
-      pendingReloadRef.current?.(result);
-      pendingReloadRef.current = null;
       signal.throwIfAborted();
+      const resolvers = pendingReloadsRef.current;
+      pendingReloadsRef.current = [];
+      for (const resolve of resolvers) resolve(result);
       setLoading(false);
     }
   }, [source.id, loadCodings, fallback, tick]);
 
   const reload = useCallback((): Promise<T[]> => {
     return new Promise((resolve) => {
-      pendingReloadRef.current = resolve;
+      pendingReloadsRef.current.push(resolve);
       setTick((n) => n + 1);
     });
   }, []);

@@ -21,10 +21,28 @@ export function parseTranscript(fulltext: string): SubtitleSegment[] {
     /^(\d{1,2}):(\d{2}):(\d{2})[,.]\d{1,3}\s*-->\s*(\d{1,2}):(\d{2}):(\d{2})[,.]\d{1,3}/;
   let cursorMs = 0;
   let pendingSrt: SubtitleSegment | null = null;
-  for (const raw of fulltext.split(/\r?\n/)) {
-    const line = raw.trim();
+  // Each SRT cue ends at a blank line or the next cue/timestamp; previously
+  // only the LAST cue survived because every timing line overwrote the
+  // pending one.
+  const flushSrt = () => {
+    if (pendingSrt && pendingSrt.text) segments.push(pendingSrt);
+    pendingSrt = null;
+  };
+  const lines = fulltext.split(/\r?\n/);
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i].trim();
+    if (!line) {
+      flushSrt();
+      continue;
+    }
+    // SRT cue index ("12") directly above a timing line is not text.
+    if (/^\d+$/.test(line) && srtRe.test((lines[i + 1] ?? "").trim())) {
+      flushSrt();
+      continue;
+    }
     const m = line.match(re);
     if (m) {
+      flushSrt();
       const secs = m[3]
         ? Number(m[1]) * 3600 + Number(m[2]) * 60 + Number(m[3])
         : Number(m[1]) * 60 + Number(m[2]);
@@ -41,6 +59,7 @@ export function parseTranscript(fulltext: string): SubtitleSegment[] {
         (Number(srt[1]) * 3600 + Number(srt[2]) * 60 + Number(srt[3])) * 1000;
       const endMs =
         (Number(srt[4]) * 3600 + Number(srt[5]) * 60 + Number(srt[6])) * 1000;
+      flushSrt();
       pendingSrt = { startMs, endMs, text: "" };
       cursorMs = startMs;
       continue;
@@ -49,11 +68,9 @@ export function parseTranscript(fulltext: string): SubtitleSegment[] {
       pendingSrt.text = pendingSrt.text ? `${pendingSrt.text} ${line}` : line;
       continue;
     }
-    if (line) {
-      segments.push({ startMs: cursorMs, endMs: cursorMs + 2500, text: line });
-    }
+    segments.push({ startMs: cursorMs, endMs: cursorMs + 2500, text: line });
   }
-  if (pendingSrt && pendingSrt.text) segments.push(pendingSrt);
+  flushSrt();
   return segments;
 }
 
@@ -168,14 +185,8 @@ export function normalizeCodingPositions<C extends PositionedCoding>(
 ): C {
   const sel = (coding.seltext ?? "").replace(/\r/g, "");
   if (raw.slice(coding.pos0, coding.pos1).replace(/\r/g, "") === sel) return coding;
-  if (stripCr(raw).slice(coding.pos0, coding.pos1) === sel) {
-    return {
-      ...coding,
-      pos0: renderedToRaw(raw, crAt, coding.pos0),
-      pos1: renderedToRaw(raw, crAt, coding.pos1),
-    };
-  }
-  // Broken/empty seltext (old builds) — stored in rendered space.
+  // Otherwise the coding was stored in rendered space - either its seltext
+  // matches the CR-stripped text there, or it is broken/empty (old builds).
   return {
     ...coding,
     pos0: renderedToRaw(raw, crAt, coding.pos0),

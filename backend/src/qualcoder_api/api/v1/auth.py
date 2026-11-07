@@ -102,7 +102,6 @@ async def register(
     if not req.password or len(req.password) < 8:
         raise HTTPException(status_code=422, detail="password must be at least 8 characters")
     users_exist = await metadata_db.count_users() > 0
-    role = "user"
     if users_exist:
         user = await get_current_user(authorization)
         if user.get("role") != "admin":
@@ -142,7 +141,8 @@ async def register(
                 await session.commit()
             created["role"] = "user"
         except Exception:
-            pass
+            # Leaves a second admin behind — must not go unnoticed.
+            logger.exception("failed to demote concurrent bootstrap admin %s", created["id"])
     return {"user": _public_user(created)}
 
 

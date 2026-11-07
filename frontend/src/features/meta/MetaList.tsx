@@ -140,8 +140,13 @@ export function MetaList() {
     setMetaUi({ tick: useWorkspaceStore.getState().metaUi.tick + 1 });
   }, [setMetaUi]);
 
+  // Bumped on every list (re)load so a "load more" page that resolves after
+  // the scope/tab changed (or the list reloaded) is dropped, not appended.
+  const listGenRef = useRef(0);
+
   useEffect(() => {
     let cancelled = false;
+    listGenRef.current += 1;
     void (async () => {
       try {
         const needsHits = tab !== "analyze" && tab !== "conflicts";
@@ -197,13 +202,15 @@ export function MetaList() {
 
   const loadMore = async () => {
     setLoadingMore(true);
+    const gen = listGenRef.current;
     try {
       const res = await api.metaHits({ scope: scope ?? "all", limit: PAGE_SIZE, offset: hits.length });
+      if (gen !== listGenRef.current) return;
       setHits((prev) => [...prev, ...res.hits]);
       setTotal(res.total);
       setError(null);
     } catch (err) {
-      setError(errorMessage(err));
+      if (gen === listGenRef.current) setError(errorMessage(err));
     } finally {
       setLoadingMore(false);
     }

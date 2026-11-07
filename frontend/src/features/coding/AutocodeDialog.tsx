@@ -66,6 +66,29 @@ export function AutocodeDialog({
   const [dictBusy, setDictBusy] = useState(false);
   const [dictResult, setDictResult] = useState<DictionaryAutocodeResult | null>(null);
 
+  // Pending auto-close after a successful run. Cancelled whenever the dialog
+  // is closed/reopened or unmounted so a stale timer cannot close a dialog
+  // the user has since reopened.
+  const closeTimer = useRef<number | null>(null);
+  const cancelAutoClose = () => {
+    if (closeTimer.current != null) window.clearTimeout(closeTimer.current);
+    closeTimer.current = null;
+  };
+  const scheduleAutoClose = () => {
+    cancelAutoClose();
+    closeTimer.current = window.setTimeout(() => {
+      closeTimer.current = null;
+      onClose();
+    }, 1200);
+  };
+  useEffect(
+    () => () => {
+      if (closeTimer.current != null) window.clearTimeout(closeTimer.current);
+      closeTimer.current = null;
+    },
+    [open],
+  );
+
   useEffect(() => {
     if (open) {
       setPrompt("");
@@ -188,7 +211,7 @@ export function AutocodeDialog({
           });
         });
         setQueued(true);
-        window.setTimeout(() => onClose(), 1200);
+        scheduleAutoClose();
         return;
       }
       const res: AutocodeResponse = await api.autocode({
@@ -204,7 +227,7 @@ export function AutocodeDialog({
       onDone({ count: res.count, suggested: res.suggested ?? [] });
       // Close right away: the overlay would otherwise block the app, and the
       // coded result is visible in the document.
-      window.setTimeout(() => onClose(), 1200);
+      scheduleAutoClose();
     } catch (e) {
       setError(errorDetail(e, t("coder.autoError")));
     } finally {
@@ -221,7 +244,7 @@ export function AutocodeDialog({
       const res = await dictionaryApi.autocode(dictId, sources);
       setDictResult(res);
       onDone({ count: res.total, suggested: [] });
-      window.setTimeout(() => onClose(), 1200);
+      scheduleAutoClose();
     } catch (e) {
       setError(errorDetail(e, t("dictionary.autocodeError")));
     } finally {

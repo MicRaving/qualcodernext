@@ -341,7 +341,13 @@ async def _pump(job_id: str, stream, tail_key: str, file_path: Path) -> None:
     try:
         with open(file_path, "w", encoding="utf-8", newline="\n") as fh:  # noqa: ASYNC230 - small local writes
             while True:
-                raw = await stream.readline()
+                try:
+                    raw = await stream.readline()
+                except ValueError:
+                    # A line longer than the StreamReader limit: the reader
+                    # drops the buffered chunk and keeps going — note it and
+                    # continue rather than abandoning the pipe.
+                    raw = b"[line too long - truncated]\n"
                 if not raw:
                     break
                 line = raw.decode("utf-8", errors="replace").rstrip("\r\n")
@@ -355,6 +361,11 @@ async def _pump(job_id: str, stream, tail_key: str, file_path: Path) -> None:
                 _set_job(job_id, **update)
     except Exception:
         logger.exception("R output pump failed for job %s", job_id)
+        # Keep draining: an unread pipe fills up, blocks Rscript on write and
+        # the job (``proc.wait()``) would then hang forever.
+        with contextlib.suppress(Exception):
+            while await stream.read(65536):
+                pass
 
 
 def _scan_outputs(out_dir: Path, started: float) -> list[dict]:

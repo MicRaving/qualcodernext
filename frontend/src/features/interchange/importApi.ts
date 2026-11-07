@@ -29,16 +29,14 @@ export const FORCEABLE_FORMATS = [
   "merge",
 ] as const;
 
-export type ForceableFormat = (typeof FORCEABLE_FORMATS)[number];
-
 /** Client-side fetch timeouts for the interchange endpoints (ms). The
  *  import call is generous: survey/xlsx/sav imports parse and write many
  *  rows on the backend and can legitimately run for minutes. Aborting the
  *  client fetch mid-import surfaces as Chromium's "signal is aborted
  *  without reason" — the import itself keeps running server-side. The
  *  preview/sniff call stays short. */
-export const PREVIEW_TIMEOUT_MS = 30_000;
-export const IMPORT_TIMEOUT_MS = 300_000;
+const PREVIEW_TIMEOUT_MS = 30_000;
+const IMPORT_TIMEOUT_MS = 300_000;
 
 /** The backend's sniff+sample response for one upload. */
 export interface InterchangePreview {

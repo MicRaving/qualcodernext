@@ -74,18 +74,30 @@ export function HelpView() {
       setError(null);
       return;
     }
+    // A superseded search must not overwrite newer results (or resurrect
+    // results after the query was cleared) when it resolves late.
+    let cancelled = false;
     timerRef.current = window.setTimeout(() => {
       setBusy(true);
       void api
         .helpSearch(q, true)
         .then((res) => {
+          if (cancelled) return;
           setResults(res.results);
           setError(null);
         })
-        .catch((e) => setError(errorMessage(e)))
-        .finally(() => setBusy(false));
+        .catch((e) => {
+          if (!cancelled) setError(errorMessage(e));
+        })
+        .finally(() => {
+          if (!cancelled) setBusy(false);
+        });
     }, 250);
-    return () => window.clearTimeout(timerRef.current);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timerRef.current);
+      setBusy(false);
+    };
   }, [query]);
 
   const openTopic = useCallback(async (id: string) => {

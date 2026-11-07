@@ -9,6 +9,7 @@ endpoints; both share the same autocode engine.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import os
 from pathlib import Path
 from typing import Annotated
@@ -168,11 +169,12 @@ async def import_dictionary(
     tmp = os.path.join(
         svc.project_path, f"_dict_import_{sanitize_filename(file.filename, 'dictionary.txt')}"
     )
-    with open(tmp, "wb") as out:  # noqa: ASYNC230 - small local temp write
-        while chunk := await file.read(1 << 20):
-            out.write(chunk)
     owner = resolve_owner(codername)
     try:
+        # Inside the try so a failed/aborted upload still removes the partial file.
+        with open(tmp, "wb") as out:  # noqa: ASYNC230 - small local temp write
+            while chunk := await file.read(1 << 20):
+                out.write(chunk)
         content = await asyncio.to_thread(
             lambda: Path(tmp).read_text(encoding="utf-8-sig", errors="replace")
         )
@@ -181,7 +183,8 @@ async def import_dictionary(
             db, dict_name, content, owner
         )
     finally:
-        os.remove(tmp)
+        with contextlib.suppress(FileNotFoundError):
+            os.remove(tmp)
     await audit.record(
         db, user=owner, action="dictionary.import", entity="dictionary",
         entity_id=result["dictionary"]["id"],

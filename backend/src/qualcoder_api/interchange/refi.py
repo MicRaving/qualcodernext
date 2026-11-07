@@ -278,7 +278,8 @@ async def import_refi_qdp(
                     supercid=supercid,
                 )
                 cid = code.cid if code is not None else None
-                counts["codes"] += 1
+                if cid is not None:
+                    counts["codes"] += 1
             if guid and cid is not None:
                 code_guid[guid] = cid
             # Nested codes (exported as sub-codes) keep their hierarchy.
@@ -295,7 +296,8 @@ async def import_refi_qdp(
                     name=name, owner=codername, supercatid=supercatid
                 )
                 catid = category.catid if category is not None else None
-                counts["categories"] += 1
+                if catid is not None:
+                    counts["categories"] += 1
             if guid and catid is not None:
                 cat_guid[guid] = catid
             for categories_elem in _children(elem, "Categories"):
@@ -361,6 +363,8 @@ async def import_refi_qdp(
                 cid = code_guid.get(code_ref)
                 if fid is None or cid is None:
                     continue
+                if start < 0 or end <= start:
+                    continue  # missing/unparseable/inverted TextRef: not a span
                 try:
                     await coding_repo.add_text_coding(
                         cid=cid,

@@ -344,12 +344,24 @@ async def source_pdf(source_id: int, db: DbDep, svc: ServiceDep) -> Response:
     path = resolve_source_path(svc.project_path, source.mediapath, source.name)
     if path is None or not os.path.exists(path):
         raise HTTPException(status_code=404, detail="file not found")
+    from urllib.parse import quote
+
     pdf = await asyncio.to_thread(_render_source_pdf, path, source.fulltext)
     stem = os.path.splitext(source.name)[0]
+    # Headers are latin-1 on the wire: a raw non-ASCII (or quote-bearing)
+    # name would crash the response. ASCII fallback + RFC 5987 UTF-8 name.
+    ascii_name = (
+        f"{stem}.pdf".encode("ascii", "replace").decode("ascii").replace('"', "_")
+    )
     return Response(
         content=pdf,
         media_type="application/pdf",
-        headers={"Content-Disposition": f'attachment; filename="{stem}.pdf"'},
+        headers={
+            "Content-Disposition": (
+                f"attachment; filename=\"{ascii_name}\"; "
+                f"filename*=UTF-8''{quote(f'{stem}.pdf')}"
+            )
+        },
     )
 
 
@@ -447,16 +459,18 @@ async def import_source(
     safe_name = sanitize_filename(file.filename, "upload")
     tmp = os.path.join(svc.project_path, f"_upload_{safe_name}")
 
-    with open(tmp, "wb") as out:  # noqa: ASYNC230 - small local temp write
-        while chunk := await file.read(1 << 20):
-            out.write(chunk)
     try:
+        # Inside the try: a failed/aborted upload must not strand the temp file.
+        with open(tmp, "wb") as out:  # noqa: ASYNC230 - small local temp write
+            while chunk := await file.read(1 << 20):
+                out.write(chunk)
         service = ImportService(svc.project_path, session_factory)
         source = await service.import_file(
             tmp, owner=resolve_owner(owner), link=False, filename=file.filename
         )
     finally:
-        os.remove(tmp)
+        if os.path.exists(tmp):
+            os.remove(tmp)
     if source is None:
         raise HTTPException(status_code=409, detail="duplicate filename or import failed")
     await audit.record(
@@ -532,7 +546,9 @@ async def update_source(source_id: int, req: SourceUpdate, db: DbDep) -> Source:
                 )
                 await db.commit()
         except Exception:
-            pass
+            # Best effort (the local change is committed), but never silent:
+            # a failed capture means collaborators miss this memo_type edit.
+            logger.exception("sync capture of source %s memo_type failed", source_id)
         source = await SourceRepository(db).get_source(source_id)
     if source is None:  # pragma: no cover - row vanished mid-update
         raise HTTPException(status_code=404, detail="source not found")

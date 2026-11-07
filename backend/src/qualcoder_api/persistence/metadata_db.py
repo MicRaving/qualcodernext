@@ -50,12 +50,6 @@ async def dispose_metadata_engine() -> None:
     _factory = None
 
 
-def get_metadata_engine() -> AsyncEngine:
-    if _engine is None:
-        raise RuntimeError("metadata engine not initialised — call init_metadata_engine()")
-    return _engine
-
-
 def metadata_factory() -> async_sessionmaker:
     if _factory is None:
         raise RuntimeError("metadata engine not initialised — call init_metadata_engine()")
@@ -599,8 +593,12 @@ async def take_challenge(challenge: str, kind: str) -> dict | None:
         ).mappings().first()
         if not row:
             return None
-        await session.execute(
+        result = await session.execute(
             text("DELETE FROM webauthn_challenges WHERE id = :id"), {"id": row["id"]}
         )
         await session.commit()
+        # A concurrent request may have consumed it between SELECT and
+        # DELETE; only the caller whose DELETE removed the row owns it.
+        if (result.rowcount or 0) == 0:
+            return None
         return dict(row)

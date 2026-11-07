@@ -527,8 +527,12 @@ def _bias_section(bias: dict[str, Any]) -> dict[str, Any]:
         preferred_ci = "-"
     preferred_est = chosen_est
     paragraphs = [
-        f"Egger's regression intercept was {_fmt(egger.get('intercept'))} "
-        f"(t = {_fmt(egger.get('t'))}, p {_fmt_p(egger.get('p'))}). "
+        # Egger is fitted as the WLS regression of the effect on its SE, so the
+        # funnel-asymmetry test is the SE slope; the intercept is the PET
+        # bias-adjusted estimate (reported separately below).
+        f"Egger's regression test for funnel asymmetry gave a slope on the "
+        f"standard error of {_fmt(egger.get('slope'))} "
+        f"(p {_fmt_p(egger.get('slope_p'))}). "
         f"PET gave {_fmt(pet.get('intercept'))} (p {_fmt_p(pet.get('p'))}) and PEESE "
         f"{_fmt(peese.get('intercept'))} (p {_fmt_p(peese.get('p'))}); the preferred "
         f"estimator was {preferred} = {_fmt(preferred_est)} (95% CI {preferred_ci}).",
@@ -930,10 +934,11 @@ def render_pptx_bytes(ctx: dict[str, Any]) -> bytes:
             ["Test", "Estimate", "Statistic", "p"],
             [
                 {
-                    "Test": "Egger intercept",
-                    "Estimate": _fmt((bias.get("egger") or {}).get("intercept")),
-                    "Statistic": f"t = {_fmt((bias.get('egger') or {}).get('t'))}",
-                    "p": _fmt_p((bias.get("egger") or {}).get("p")),
+                    # Asymmetry test = slope on SE (see ``_bias_section``).
+                    "Test": "Egger (slope on SE)",
+                    "Estimate": _fmt((bias.get("egger") or {}).get("slope")),
+                    "Statistic": "",
+                    "p": _fmt_p((bias.get("egger") or {}).get("slope_p")),
                 },
                 {"Test": "PET", "Estimate": _fmt(pet.get("intercept")),
                  "Statistic": "", "p": _fmt_p(pet.get("p"))},

@@ -12,11 +12,6 @@ import hashlib
 import json
 
 from qualcoder_api.core.models import MetaCriterion
-from qualcoder_api.services.meta_scheme import (
-    all_fields,
-    field_listing,
-    normalise_codebook,
-)
 
 
 def extract_json(text: str | None):
@@ -81,12 +76,6 @@ def criteria_prompt_hash(criteria: list[MetaCriterion]) -> str:
         sort_keys=True,
     )
     return hashlib.sha256(blob.encode("utf-8")).hexdigest()
-
-
-def role_aware_field_listing(codebook: dict | None) -> str:
-    """Field listing (with roles) for a codebook, v1 or v2."""
-    book = normalise_codebook(codebook)
-    return field_listing(all_fields(book), include_role=True)
 
 
 def scheme_prompt_hash(scheme_name: str, coding_prompt: str, prescreen_prompt: str) -> str:

@@ -49,12 +49,6 @@ def sandbox_exists(uuid: str, instance_id: str = "") -> bool:
     return sandbox_path(uuid, instance_id).exists()
 
 
-def prepare_sandbox_dir(uuid: str, instance_id: str = "") -> Path:
-    d = sandbox_dir(uuid, instance_id)
-    d.mkdir(parents=True, exist_ok=True)
-    return d
-
-
 def create_sandbox_from(source_db: str, uuid: str, instance_id: str = "") -> Path:
     """Copy a (checkpointed) database file into the sandbox location.
 
@@ -116,8 +110,3 @@ def remove_sandbox(uuid: str) -> None:
     d = _SANDBOX_ROOT / uuid
     if d.exists():
         shutil.rmtree(d, ignore_errors=True)
-
-
-def sandbox_candidate_paths(uuid: str, instance_id: str = "") -> list[Path]:
-    """Sandbox files to try in order when opening (live, then .bak)."""
-    return [sandbox_path(uuid, instance_id), sandbox_backup_path(uuid, instance_id)]

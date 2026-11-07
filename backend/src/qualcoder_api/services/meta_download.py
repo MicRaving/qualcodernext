@@ -258,9 +258,9 @@ async def resolve_crossref(client: httpx.AsyncClient, doi: str) -> dict | None:
             "title": (msg.get("title") or [""])[0],
             "url": (msg.get("URL") or "") or (f"https://doi.org/{doi}" if doi else ""),
         }
-    except httpx.HTTPError:
+    except (httpx.HTTPError, ValueError):
+        # ValueError: a 200 whose body is not JSON (proxy/captcha page).
         return None
-    return None
 
 
 async def resolve_landing_page(client: httpx.AsyncClient, url: str) -> str | None:

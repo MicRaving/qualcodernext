@@ -177,13 +177,6 @@ def close_session(project_path: str, session_id: str) -> bool:
         return False
 
 
-def read_session(project_path: str, session_id: str) -> dict | None:
-    try:
-        return json.loads(_session_path(project_path, session_id).read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return None
-
-
 def list_sessions(project_path: str, include_closed: bool = True) -> list[dict]:
     """List all session files, pruning stale closed sessions' acks later."""
     root = _sessions_dir(project_path)
@@ -229,20 +222,6 @@ def is_all_other_closed(project_path: str, current_session_id: str) -> bool:
     return True
 
 
-def get_active_sessions(project_path: str) -> list[dict]:
-    """Active (not closed, not stale) sessions."""
-    now = time.time()
-    active: list[dict] = []
-    for s in list_sessions(project_path, include_closed=True):
-        if s.get("closed"):
-            continue
-        last = float(s.get("last_heartbeat", 0) or s.get("opened_at", 0))
-        if now - last > SESSION_TTL_SECS or last - now > SESSION_TTL_SECS:
-            continue
-        active.append(s)
-    return active
-
-
 def prune_sessions(project_path: str) -> int:
     """Delete session files that can no longer matter: closed sessions older
     than the TTL, and stale (crashed) sessions whose heartbeat is long gone.
@@ -261,19 +240,26 @@ def prune_sessions(project_path: str) -> int:
             data = json.loads(p.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
             continue
-        closed_at = float(data.get("closed_at", 0))
-        last = float(data.get("last_heartbeat", 0) or data.get("opened_at", 0))
+        # Open sessions carry ``closed_at: None`` (see create_session).
+        try:
+            closed_at = float(data.get("closed_at") or 0)
+            last = float(data.get("last_heartbeat", 0) or data.get("opened_at", 0) or 0)
+        except (TypeError, ValueError):
+            continue
+        prune = False
         if data.get("closed"):
-            if closed_at and now - closed_at > SESSION_TTL_SECS:
-                with contextlib.suppress(OSError):
-                    p.unlink(missing_ok=True)
-                    removed += 1
+            prune = bool(closed_at) and now - closed_at > SESSION_TTL_SECS
         elif now - last > SESSION_TTL_SECS * 2 or last - now > SESSION_TTL_SECS * 2:
             # Crashed long ago — prune its file and (below) its acks.
-            with contextlib.suppress(OSError):
-                p.unlink(missing_ok=True)
-                removed += 1
-        # Best-effort: drop this session's acks (they can no longer be needed).
+            prune = True
+        if not prune:
+            continue
+        try:
+            p.unlink(missing_ok=True)
+            removed += 1
+        except OSError:
+            continue
+        # Best-effort: drop the pruned session's acks (no longer needed).
         ack_dir = _acks_dir(project_path) / p.stem
         if ack_dir.is_dir():
             with contextlib.suppress(OSError):

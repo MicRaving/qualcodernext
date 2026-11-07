@@ -31,8 +31,6 @@ async def help_search(
 ) -> dict:
     if not q.strip():
         raise HTTPException(status_code=422, detail="query is empty")
-    if len(q.strip()) > 500:
-        raise HTTPException(status_code=422, detail="query too long")
     try:
         results = help_service.search_topics(q.strip(), regex=regex)
     except re.error as err:

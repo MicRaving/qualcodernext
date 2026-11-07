@@ -234,9 +234,6 @@ async def generate_model(
     grid = (await create_graph(session, name, f"Model: {model}", width, height, owner))["grid"]
 
     # --- helpers -------------------------------------------------------
-    async def add_cat(cat: dict, x: int, y: int) -> None:
-        await add_cdct_item(session, grid, "category", cat["catid"], x, y)
-
     async def add_code(code: dict, x: int, y: int) -> dict:
         return await add_cdct_item(session, grid, "code", code["cid"], x, y)
 

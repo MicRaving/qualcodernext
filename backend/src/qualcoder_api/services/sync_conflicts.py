@@ -68,6 +68,12 @@ async def _resolve_conflict_locked(
         table = getattr(tables, entity, None)
         if table is None:
             return {"ok": False, "reason": f"unknown entity {entity}"}
+        # Column names are interpolated into SQL below; ``merged_row`` comes
+        # from the request body and ``remote_row`` from a peer's sidecar, so
+        # keep only real columns (same filter as replay's ``_insert_row``).
+        allowed_cols = {c.name for c in table.columns}
+        if pk_name not in allowed_cols:
+            return {"ok": False, "reason": f"unknown key column {pk_name}"}
 
         local_pk = _as_pk(pk)
         new_rev = max(local_rev, remote_rev) + 1
@@ -92,7 +98,7 @@ async def _resolve_conflict_locked(
             remote_row = json.loads(conflict["remote_row"]) if conflict["remote_row"] else None
             if remote_row:
                 # Apply remote row.
-                update_row = dict(remote_row)
+                update_row = {k: v for k, v in remote_row.items() if k in allowed_cols}
                 update_row[pk_name] = local_pk
                 # Check if row still exists locally.
                 existing = await session.execute(
@@ -123,7 +129,7 @@ async def _resolve_conflict_locked(
                 resolved_deleted = True
 
         elif resolution == "merged" and merged_row:
-            apply_row = dict(merged_row)
+            apply_row = {k: v for k, v in merged_row.items() if k in allowed_cols}
             apply_row[pk_name] = local_pk
             existing = await session.execute(
                 text(f"SELECT 1 FROM {entity} WHERE {pk_name} = :pk"),

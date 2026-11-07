@@ -3,7 +3,7 @@
  * (CaseDetails). Both share the selection via the project store, so the
  * orchestrator can deliver them in the standard slots.
  */
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   FileText,
   Info,
@@ -310,14 +310,19 @@ export function CaseDetails() {
     [cases, selectedId],
   );
 
+  // Only the newest request may apply: switching cases quickly must not let
+  // the previous case's (slower) file list land on the newly selected case.
+  const filesSeqRef = useRef(0);
   const loadFiles = useCallback(async (caseid: number) => {
+    const seq = ++filesSeqRef.current;
     setFilesLoading(true);
     try {
-      setFiles(await api.caseFiles(caseid));
+      const list = await api.caseFiles(caseid);
+      if (seq === filesSeqRef.current) setFiles(list);
     } catch (e) {
-      setActionError(errorMessage(e, t("cases.loadFilesError")));
+      if (seq === filesSeqRef.current) setActionError(errorMessage(e, t("cases.loadFilesError")));
     } finally {
-      setFilesLoading(false);
+      if (seq === filesSeqRef.current) setFilesLoading(false);
     }
   }, [t]);
 
@@ -328,25 +333,31 @@ export function CaseDetails() {
 
   useEffect(() => {
     if (selectedId == null) {
+      filesSeqRef.current++; // drop any in-flight file list
       setFiles([]);
       setMemo("");
       setCaseAttrs([]);
       return;
     }
+    let cancelled = false;
     setMemo(selected?.memo ?? "");
     void loadFiles(selectedId);
     void (async () => {
       try {
         const values = await api.attributeValues();
+        if (cancelled) return;
         setCaseAttrs(
           values
             .filter((v) => v.attr_type === "case" && v.id === selectedId)
             .map((v) => ({ name: v.name, value: v.value })),
         );
       } catch {
-        setCaseAttrs([]);
+        if (!cancelled) setCaseAttrs([]);
       }
     })();
+    return () => {
+      cancelled = true;
+    };
   }, [selectedId, loadFiles, selected?.memo]);
 
   const linkedFids = useMemo(() => new Set(files.map((f) => f.id)), [files]);

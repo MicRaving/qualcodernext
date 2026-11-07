@@ -328,7 +328,8 @@ export function FileManager() {
     return () => window.removeEventListener("resize", onResize);
   }, [menu]);
 
-  const filtered = useMemo(() => filterSources(sources, fileQuery), [sources, fileQuery]);  const rows = useMemo(
+  const filtered = useMemo(() => filterSources(sources, fileQuery), [sources, fileQuery]);
+  const rows = useMemo(
     () => sortSources(filtered, sortKey, sortDir),
     [filtered, sortKey, sortDir],
   );
@@ -451,17 +452,10 @@ export function FileManager() {
           continue;
         }
         try {
-          const controller = new AbortController();
-          const timeout = window.setTimeout(() => controller.abort(), 120_000);
-          try {
-            const src = await api.importSource(file);
-            useProjectStore.setState((s) => ({
-              sources: [...s.sources.filter((x) => x.name !== src.name), src],
-            }));
-          } finally {
-            window.clearTimeout(timeout);
-          }
-          void controller;
+          const src = await api.importSource(file);
+          useProjectStore.setState((s) => ({
+            sources: [...s.sources.filter((x) => x.name !== src.name), src],
+          }));
         } catch (e) {
           if (e instanceof ApiError && e.status === 409) {
             dupes.push(file.name);

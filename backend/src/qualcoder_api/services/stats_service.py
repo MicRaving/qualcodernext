@@ -258,7 +258,7 @@ def _rank_values(values: list[float]) -> list[float]:
     return ranks
 
 
-def _exact_u_distribution(nx: int, ny: int, ranks: list[float]) -> dict[int, int]:
+def _exact_u_distribution(nx: int, ny: int, ranks: list[float]) -> dict[float, int]:
     """Exact null distribution of U via subset-sum combinatorics.
 
     Counts, for every possible U value, the number of rank subsets of size
@@ -295,10 +295,12 @@ def _exact_u_distribution(nx: int, ny: int, ranks: list[float]) -> dict[int, int
                         new[k + j][s + add] += ways * dp[k][s]
         dp = new
 
-    distribution: dict[int, int] = {}
-    for s in range(base2, base2 + 2 * max_u + 1, 2):
+    # With ties a doubled rank sum can be odd (U is then a half-integer),
+    # so every doubled sum is visited, not just the even ones.
+    distribution: dict[float, int] = {}
+    for s in range(base2, base2 + 2 * max_u + 1):
         if dp[nx][s]:
-            distribution[(s - base2) // 2] = dp[nx][s]
+            distribution[(s - base2) / 2] = dp[nx][s]
     return distribution
 
 

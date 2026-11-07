@@ -13,7 +13,7 @@
  * each row is a disagreement cell addressed by `criterion_key` (screening) or
  * `field_name` + record/metric coordinates (extraction).
  */
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "@/lib/api";
 import type {
   MetaAgreementField,
@@ -77,8 +77,14 @@ export function MetaAgreementPanel() {
   const [error, setError] = useState<string | null>(null);
   const [busyKeys, setBusyKeys] = useState<string[]>([]);
 
+  // Every load supersedes the previous one, so a reload started by an older
+  // render (e.g. after settling a conflict) can never land over a newer one.
+  const loadSeqRef = useRef(0);
+
   const load = useCallback(
-    async (isCancelled?: () => boolean) => {
+    async (cancelled?: () => boolean) => {
+      const seq = ++loadSeqRef.current;
+      const isCancelled = () => seq !== loadSeqRef.current || Boolean(cancelled?.());
       setLoading(true);
       try {
         const studyFilter = study || undefined;
@@ -107,21 +113,25 @@ export function MetaAgreementPanel() {
                 }),
               ],
         );
-        if (isCancelled?.()) return;
+        if (isCancelled()) return;
         setAgreement(asObject<MetaAgreementResult>(rel));
         setConflicts(asObject<MetaConflictsResult>(conf));
         setError(null);
       } catch (err) {
-        if (isCancelled?.()) return;
+        if (isCancelled()) return;
         setError(errorMessage(err));
         setAgreement(null);
         setConflicts(null);
       } finally {
-        if (!isCancelled?.()) setLoading(false);
+        if (!isCancelled()) setLoading(false);
       }
     },
     [writeOwner, schemeName, screeningStage, scope, study],
   );
+  const loadRef = useRef(load);
+  useEffect(() => {
+    loadRef.current = load;
+  }, [load]);
 
   // Reload on scope / coder / stage / study changes; a cancelled flag drops an
   // out-of-order response so a scope switch can never render the wrong scope.
@@ -157,7 +167,8 @@ export function MetaAgreementPanel() {
         });
       }
       toast.success(t("meta.conflictResolved"));
-      await load();
+      // Reload with the *current* scope, not the one captured at click time.
+      await loadRef.current();
     } catch (err) {
       toast.error(errorMessage(err));
     } finally {

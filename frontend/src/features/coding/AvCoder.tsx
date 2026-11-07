@@ -1152,18 +1152,12 @@ export function AvCoder({ source }: { source: Source }) {
   }
 
   // Clicking a code in the left sidebar assigns it to the pending range.
-  useEffect(() => {
-    const onAssign = (e: Event) => {
-      const cid = (e as CustomEvent<{ cid: number }>).detail?.cid;
-      if (typeof cid !== "number") return;
-      setPickerOpen(false);
-      const start = pendingStartRef.current;
-      if (codingIntentRef.current === "range" && start !== null) {
-        void codeRange(cid, start, currentMsRef.current);
-      }
-    };
-    window.addEventListener("qc:assign-code", onAssign);
-    return () => window.removeEventListener("qc:assign-code", onAssign);
+  useAssignCode((cid) => {
+    setPickerOpen(false);
+    const start = pendingStartRef.current;
+    if (codingIntentRef.current === "range" && start !== null) {
+      void codeRange(cid, start, currentMsRef.current);
+    }
   });
 
   async function handlePick(codes: PickedCode[]) {

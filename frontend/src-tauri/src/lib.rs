@@ -362,7 +362,10 @@ fn wait_for_backend_health(port: u16, timeout: Duration) -> bool {
 /// Waits for a real `/api/v1/health` answer, not just the port file: the
 /// file appears ~2s before the server listens, and returning early made
 /// every caller race the boot ("Backend unreachable — Failed to fetch").
-#[tauri::command]
+///
+/// `async` attribute: a plain sync command runs on the MAIN thread, so the
+/// blocking sleeps/polls below (up to ~60s) froze the whole window.
+#[tauri::command(async)]
 fn restart_backend(app: tauri::AppHandle) -> Result<u16, String> {
     kill_backend();
     // Give the OS a beat to release the port and remove the old port file

@@ -63,19 +63,3 @@ class MediaType(StrEnum):
 def is_pdf_filename(filename: str) -> bool:
     """True when a document should be opened with the PDF coder."""
     return filename.lower().endswith(".pdf")
-
-
-class AttributeScope(StrEnum):
-    """Whether an attribute type applies to files or cases."""
-
-    CASE = "case"
-    FILE = "file"
-
-
-class AttributeValueType(StrEnum):
-    """Value kind of an attribute type."""
-
-    TEXT = "text"
-    NUMBER = "number"
-    DATE = "date"
-    BOOLEAN = "boolean"

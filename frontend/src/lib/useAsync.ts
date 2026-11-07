@@ -21,7 +21,15 @@ export function useAsyncEffect(
         if (cancelled) throw new DOMException("Aborted", "AbortError");
       },
     };
-    void effect(signal).catch((err) => {
+    let cleanup: (() => void) | undefined;
+    void effect(signal)
+      .then((fn) => {
+        if (typeof fn !== "function") return;
+        // Effect resolved after unmount/dep change: clean up immediately.
+        if (cancelled) fn();
+        else cleanup = fn;
+      })
+      .catch((err) => {
       // Effects should handle their own errors; log anything that escapes so
       // failures are never silently swallowed (ignore aborts from unmount).
       if (err instanceof DOMException && err.name === "AbortError") return;
@@ -33,6 +41,7 @@ export function useAsyncEffect(
     });
     return () => {
       cancelled = true;
+      cleanup?.();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- caller controls deps
   }, deps);

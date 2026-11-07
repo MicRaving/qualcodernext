@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy import select, text, union
@@ -14,6 +16,7 @@ from qualcoder_api.services import audit
 from qualcoder_api.services.user_settings import get_codername, resolve_owner
 
 router = APIRouter(prefix="/codes", tags=["codes"])
+logger = logging.getLogger(__name__)
 
 
 class CodeCreate(BaseModel):
@@ -188,7 +191,12 @@ async def update_code(cid: int, req: CodeUpdate, db: DbDep) -> Code:
         code = await repo.rename_code(cid, req.name)
         if code is None:
             raise HTTPException(status_code=404, detail="code not found")
-    if req.supercid is not None or (old_code is not None and old_code.supercid is not None and "supercid" in req.model_dump()):
+    # ``model_fields_set`` (not ``model_dump()``, which always contains every
+    # field): only an EXPLICIT ``supercid: null`` detaches a sub-code — a
+    # memo/colour-only PATCH must not silently clear the parent.
+    if req.supercid is not None or (
+        old_code is not None and old_code.supercid is not None and "supercid" in req.model_fields_set
+    ):
         try:
             code = await repo.set_supercid(cid, req.supercid)
         except ValueError as err:
@@ -224,7 +232,7 @@ async def update_code(cid: int, req: CodeUpdate, db: DbDep) -> Code:
                     )
                     await db.commit()
             except Exception:
-                pass
+                logger.warning("sync capture failed for code_name %s", cid, exc_info=True)
     code = await repo.get_code(cid)
     if code is None:
         raise HTTPException(status_code=404, detail="code not found")
@@ -244,8 +252,6 @@ async def update_code(cid: int, req: CodeUpdate, db: DbDep) -> Code:
 
 @router.delete("/{cid}", status_code=204)
 async def delete_code(cid: int, db: DbDep) -> None:
-    from sqlalchemy import select
-
     row = (
         await db.execute(select(tables.code_name).where(tables.code_name.c.cid == cid))
     ).first()
@@ -332,8 +338,6 @@ async def merge_code(cid: int, req: MergeRequest, db: DbDep) -> Code:
         raise HTTPException(status_code=422, detail="cannot merge a code into itself")
     # Capture everything the undo needs: the merged-away code row, every
     # coding it owns, and its sub-codes.
-    from sqlalchemy import select
-
     old_row = (
         await db.execute(select(tables.code_name).where(tables.code_name.c.cid == cid))
     ).first()
@@ -473,9 +477,12 @@ async def promote_code(cid: int, db: DbDep) -> Code:
                 position = await repo.category_sibling_index(
                     category.catid, supercatid=category.supercatid
                 )
-        code = await repo.move_code(
-            cid, catid=new_catid, supercid=None, position=position
-        )
+        try:
+            code = await repo.move_code(
+                cid, catid=new_catid, supercid=None, position=position
+            )
+        except ValueError as err:
+            raise HTTPException(status_code=422, detail=str(err)) from err
     else:
         raise HTTPException(status_code=422, detail="This code is already at the top level and cannot be promoted further.")
     if code is None:
@@ -502,9 +509,10 @@ async def demote_code(cid: int, db: DbDep) -> Code:
     )
     if sibling is None:
         raise HTTPException(status_code=422, detail="This code cannot be demoted — there is no sibling below it to move under.")
-    code = await repo.move_code(
-        cid, catid=None, supercid=sibling
-    )
+    try:
+        code = await repo.move_code(cid, catid=None, supercid=sibling)
+    except ValueError as err:
+        raise HTTPException(status_code=422, detail=str(err)) from err
     if code is None:
         raise HTTPException(status_code=404, detail="code not found")
     await audit.record(
@@ -585,7 +593,7 @@ async def rename_category(catid: int, req: CategoryRename, db: DbDep) -> Categor
         )
         await db.commit()
     except Exception:
-        pass
+        logger.warning("sync capture failed for code_cat %s", catid, exc_info=True)
     await audit.record(
         db, user=get_codername(), action="category.rename", entity="code_cat",
         entity_id=catid, detail={"old_name": old[0], "new_name": name},
@@ -597,8 +605,6 @@ async def rename_category(catid: int, req: CategoryRename, db: DbDep) -> Categor
 async def merge_category(catid: int, req: MergeCategoryRequest, db: DbDep) -> None:
     if catid == req.target_catid:
         raise HTTPException(status_code=422, detail="cannot merge a category into itself")
-    from sqlalchemy import select
-
     old_row = (
         await db.execute(select(tables.code_cat).where(tables.code_cat.c.catid == catid))
     ).first()

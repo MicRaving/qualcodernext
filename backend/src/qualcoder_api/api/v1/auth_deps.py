@@ -46,35 +46,6 @@ async def require_admin(
     return user
 
 
-async def resolve_project_service(
-    request: Request,
-    x_project_id: Annotated[str | None, Header()] = None,
-    user: Annotated[dict | None, Depends(get_current_user)] = None,
-) -> AsyncIterator[ProjectService]:
-    """Server-mode gate for EVERY project-scoped endpoint (plan §7.2).
-
-    Resolves the bearer token, acquires the project session and places the
-    request-scoped ProjectService into ``CURRENT_SERVICE`` — which
-    ``deps.get_service`` reads, so the existing endpoint layer is untouched.
-    Viewers are limited to GET/HEAD here (§7.5); admins act as owners.
-    """
-    if not x_project_id:
-        raise HTTPException(status_code=400, detail="X-Project-Id header required")
-    if user is None:  # get_current_user always yields; narrow for mypy
-        raise HTTPException(status_code=401, detail="invalid or expired token")
-    service, role = await manager.acquire(user, x_project_id)
-    if role == "viewer" and request.method not in ("GET", "HEAD", "OPTIONS"):
-        raise HTTPException(status_code=403, detail="read-only membership")
-    token = CURRENT_SERVICE.set(service)
-    try:
-        yield service
-    finally:
-        CURRENT_SERVICE.reset(token)
-
-
-ResolveProjectDep = Annotated[ProjectService, Depends(resolve_project_service)]
-
-
 async def gate_project_scoped(
     request: Request,
     authorization: Annotated[str, Header()] = "",
@@ -83,8 +54,10 @@ async def gate_project_scoped(
     """Router-attached gate that decides AT REQUEST TIME (never at import).
 
     Local mode: no-op — yields the local singleton so endpoints behave
-    byte-identically. Server mode: full bearer + X-Project-Id resolution
-    (identical to ``resolve_project_service``). The import-time variant of
+    byte-identically. Server mode (plan §7.2): resolves the bearer token,
+    acquires the project session and places the request-scoped
+    ProjectService into ``CURRENT_SERVICE`` (read by ``deps.get_service``);
+    viewers are limited to GET/HEAD/OPTIONS (§7.5). The import-time variant of
     this gating broke once ANY module imported the router before the env
     was set (pytest collection order).
     """

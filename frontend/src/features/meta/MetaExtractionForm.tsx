@@ -48,7 +48,12 @@ function JsonField({
 }) {
   const [text, setText] = useState(() => JSON.stringify(value ?? null, null, 2));
   const [error, setError] = useState(false);
+  // The value this field last emitted: echoing it back through `value` must
+  // not re-pretty-print the text the user is typing (caret/format jumps).
+  const emittedRef = useRef<unknown>(undefined);
   useEffect(() => {
+    if (emittedRef.current !== undefined && value === emittedRef.current) return;
+    emittedRef.current = undefined;
     setText(JSON.stringify(value ?? null, null, 2));
     setError(false);
   }, [value]);
@@ -61,7 +66,9 @@ function JsonField({
       onChange={(e) => {
         setText(e.target.value);
         try {
-          onChange(e.target.value.trim() === "" ? null : JSON.parse(e.target.value));
+          const parsed: unknown = e.target.value.trim() === "" ? null : JSON.parse(e.target.value);
+          emittedRef.current = parsed;
+          onChange(parsed);
           setError(false);
         } catch {
           setError(true);
@@ -109,7 +116,9 @@ function KeyValueEditor({
   return (
     <div className="space-y-1">
       {entries.map(([k, v], i) => (
-        <div key={`${k}-${i}`} className="flex items-center gap-1">
+        // Keyed by position: keying by the (editable) key text remounted the
+        // row on every keystroke in the key input and dropped focus.
+        <div key={i} className="flex items-center gap-1">
           <Input
             value={k}
             onChange={(e) => setKey(i, e.target.value)}
@@ -160,7 +169,9 @@ function ObjectListEditor({
   const columns = field.columns?.length ? field.columns : [{ name: "value", type: "string" }];
   const rows = Array.isArray(value) ? value : [];
   const patch = (rowIndex: number, column: string, raw: string, type: string) => {
-    const parsed = type === "number" || type === "integer" ? Number(raw) : raw;
+    // An emptied numeric cell stays empty (null) instead of becoming 0.
+    const numeric = type === "number" || type === "integer";
+    const parsed = numeric ? (raw.trim() === "" ? null : Number(raw)) : raw;
     onChange(rows.map((r, i) => (i === rowIndex ? { ...r, [column]: parsed } : r)));
   };
   return (

@@ -224,14 +224,16 @@ def _run_worker(job_id: str, source_path: str, options: dict) -> None:
             return
         # Persist the finished transcript so it survives an app restart even
         # when nobody polls the job (a sweep on project open finalizes it).
+        # The result must be on the job BEFORE persisting (persist reads it),
+        # while "done" is only published afterwards so a poll cannot finalize
+        # (and delete the sidecar) before it is written.
+        _set_job(job_id, segments=len(segments), result=segments)
         persist_finished_job(job_id)
         _set_job(
             job_id,
             state="done",
             progress=100.0,
             message="done",
-            segments=len(segments),
-            result=segments,
         )
     except JobCancelled:
         _set_job(job_id, state="cancelled", message="cancelled")

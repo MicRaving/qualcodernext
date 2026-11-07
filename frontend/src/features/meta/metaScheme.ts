@@ -5,8 +5,6 @@
  */
 import type {
   FieldRole,
-  MetaExtraction,
-  MetaExtractionRecord,
   MetaScheme,
   MetaSchemeCodebookV2,
   MetaEffectFamily,
@@ -40,14 +38,6 @@ export function metricFieldsOf(book: MetaSchemeCodebookV2 | null): SchemeField[]
   return Array.isArray(fields) ? fields : [];
 }
 
-/** Study + metric fields offered as moderator variables. A field opts out only
- *  with an explicit `moderator: false`; legacy fields (flag absent) stay in. */
-export function moderatorFieldsOf(book: MetaSchemeCodebookV2 | null): SchemeField[] {
-  return [...studyFieldsOf(book), ...metricFieldsOf(book)].filter(
-    (field) => field.moderator !== false,
-  );
-}
-
 export function metricsEnabled(book: MetaSchemeCodebookV2 | null): boolean {
   if (!book) return false;
   return Boolean(book.metrics?.enabled) || metricFieldsOf(book).length > 0;
@@ -55,10 +45,6 @@ export function metricsEnabled(book: MetaSchemeCodebookV2 | null): boolean {
 
 export function effectFamiliesOf(book: MetaSchemeCodebookV2 | null): MetaEffectFamily[] {
   return Array.isArray(book?.effect_families) ? (book?.effect_families ?? []) : [];
-}
-
-export function findScheme(schemes: MetaScheme[], name: string): MetaScheme | null {
-  return schemes.find((s) => s.name === name) ?? null;
 }
 
 /** field name -> role (only fields that actually carry a role). */
@@ -81,40 +67,6 @@ export function valueByRole(
     if (mapped === role && record[name] !== undefined) return record[name];
   }
   return undefined;
-}
-
-/** Normalise an extraction's study_vars into the contract §4 record list. */
-export function extractionRecords(extraction: MetaExtraction): MetaExtractionRecord[] {
-  const vars = extraction.study_vars;
-  if (!vars || typeof vars !== "object") return [];
-  const rawRecords = (vars as { records?: unknown }).records;
-  if (!Array.isArray(rawRecords)) {
-    const hasKeys = Object.keys(vars).some((k) => k !== "records");
-    if (!hasKeys) return [];
-    const { records: _drop, ...rest } = vars as Record<string, unknown>;
-    void _drop;
-    return [{ study: rest, metrics: [] }];
-  }
-  return rawRecords
-    .filter((r): r is Record<string, unknown> => Boolean(r) && typeof r === "object")
-    .map((raw) => {
-      if ("study" in raw || "metrics" in raw) {
-        const study =
-          raw.study && typeof raw.study === "object"
-            ? (raw.study as Record<string, unknown>)
-            : {};
-        const metrics = Array.isArray(raw.metrics)
-          ? (raw.metrics.filter((m) => m && typeof m === "object") as Record<string, unknown>[])
-          : [];
-        return { study, metrics };
-      }
-      // Legacy (v1) row: the row itself is the study; metrics live in DV_Metrics.
-      const { DV_Metrics, ...study } = raw;
-      const metrics = Array.isArray(DV_Metrics)
-        ? (DV_Metrics.filter((m) => m && typeof m === "object") as Record<string, unknown>[])
-        : [];
-      return { study, metrics };
-    });
 }
 
 type MetricStatus = "complete" | "fallback" | "incomplete";

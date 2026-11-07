@@ -204,10 +204,6 @@ def field_by_role(codebook: dict[str, Any], role: str) -> dict[str, Any] | None:
     return None
 
 
-def fields_by_role(codebook: dict[str, Any], role: str) -> list[dict[str, Any]]:
-    return [f for f in all_fields(codebook) if f.get("role") == role]
-
-
 def field_listing(fields: list[dict[str, Any]], *, include_role: bool = False) -> str:
     """Human/LLM-readable listing of fields, grouped in list order."""
     lines: list[str] = []

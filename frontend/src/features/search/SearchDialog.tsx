@@ -181,6 +181,9 @@ export function SearchDialog({
       window.clearTimeout(timerRef.current);
       return;
     }
+    // A superseded request (query/mode/scope changed or the flyout closed)
+    // must not overwrite the newer results when it resolves late.
+    let cancelled = false;
     const run = async () => {
       const q = query.trim();
       if (!q) {
@@ -194,24 +197,31 @@ export function SearchDialog({
       try {
         if (mode === "exact") {
           const res = await api.search({ query: q, regex: true, entities, limit: 50 });
+          if (cancelled) return;
           setResults(res.results);
           setTotal(res.total);
         } else {
           const res = await api.aiSearch({ query: q, limit: 20 });
+          if (cancelled) return;
           setResults(res.results);
           setTotal(res.results.length);
         }
       } catch (e) {
+        if (cancelled) return;
         setResults([]);
         setTotal(null);
         setError(errorMessage(e));
       } finally {
-        setBusy(false);
+        if (!cancelled) setBusy(false);
       }
     };
     window.clearTimeout(timerRef.current);
     timerRef.current = window.setTimeout(() => void run(), 250);
-    return () => window.clearTimeout(timerRef.current);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timerRef.current);
+      setBusy(false);
+    };
   }, [open, query, mode, entities]);
 
   function openResult(result: SearchResultItem | AiSearchResult) {

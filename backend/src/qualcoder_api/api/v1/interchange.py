@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from typing import Annotated
+from urllib.parse import quote
 
 from fastapi import APIRouter, File, Form, HTTPException, Response, UploadFile
 
@@ -10,6 +11,19 @@ from qualcoder_api.api.v1.deps import DbDep, OpenProjectDep
 from qualcoder_api.interchange.refi import export_refi_qdp, import_refi_qdp
 
 router = APIRouter(prefix="/interchange", tags=["interchange"])
+
+
+def _attachment_disposition(filename: str) -> str:
+    """``Content-Disposition`` safe for any project name.
+
+    Starlette encodes header values as latin-1, so a raw non-latin-1 name
+    (e.g. CJK) raised UnicodeEncodeError → 500, and a ``"`` broke the quoted
+    string. Emit an ASCII fallback plus the RFC 5987 ``filename*`` form.
+    """
+    fallback = "".join(
+        c if 32 <= ord(c) < 127 and c not in '"\\' else "_" for c in filename
+    )
+    return f"attachment; filename=\"{fallback}\"; filename*=UTF-8''{quote(filename, safe='')}"
 
 
 @router.get("/export/refi")
@@ -21,7 +35,7 @@ async def export_refi(svc: OpenProjectDep, db: DbDep) -> Response:
     return Response(
         content=xml,
         media_type="application/xml",
-        headers={"Content-Disposition": f'attachment; filename="{svc.project_name}.qdp"'},
+        headers={"Content-Disposition": _attachment_disposition(f"{svc.project_name}.qdp")},
     )
 
 

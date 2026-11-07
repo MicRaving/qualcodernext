@@ -57,15 +57,16 @@ async def scrape_import(
     from qualcoder_api.core.security import sanitize_filename
 
     tmp = os.path.join(svc.project_path, f"_scrape_{sanitize_filename(scraped.filename, 'scrape')}")
-    with open(tmp, "wb") as out:  # noqa: ASYNC230 - small local temp write
-        out.write(scraped.data)
     try:
+        with open(tmp, "wb") as out:  # noqa: ASYNC230 - small local temp write
+            out.write(scraped.data)
         service = ImportService(svc.project_path, svc.session_factory)
         source = await service.import_file(
             tmp, owner=resolve_owner(None), link=False, filename=scraped.filename
         )
     finally:
-        os.remove(tmp)
+        if os.path.exists(tmp):
+            os.remove(tmp)
     if source is None:
         raise HTTPException(status_code=409, detail="duplicate filename or import failed")
 

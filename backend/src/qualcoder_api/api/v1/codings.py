@@ -395,7 +395,6 @@ async def autocode_batch_endpoint(req: AutocodeBatchRequest, svc: OpenProjectDep
     """Queue one background autocode job per source file (prompt-based only).
     Jobs are created in the ``queued`` state and started one by one by the
     UI dispatcher via ``POST /codings/autocode/jobs/{id}/start``."""
-    from qualcoder_api.services import audit
     from qualcoder_api.services.autocode_jobs import start_batch
 
     owner = resolve_owner(req.owner)
@@ -489,15 +488,12 @@ async def shift_positions_endpoint(req: ShiftPositionsRequest) -> dict:
 
 @router.post("/commit-edit")
 async def commit_edit_endpoint(req: CommitEditRequest, db: DbDep) -> dict:
-    old_text = ""
-    try:
-        old_row = (
-            await db.execute(select(tables.source.c.fulltext).where(tables.source.c.id == req.fid))
-        ).first()
-        if old_row is not None:
-            old_text = old_row[0] or ""
-    except Exception:
-        old_text = ""
+    # No try/except here: the undo path restores the source from ``before``,
+    # so swallowing a read failure would record "" and make undo wipe the text.
+    old_row = (
+        await db.execute(select(tables.source.c.fulltext).where(tables.source.c.id == req.fid))
+    ).first()
+    old_text = (old_row[0] or "") if old_row is not None else ""
     try:
         result = await commit_edit(
             db, fid=req.fid, new_text=req.new_text, owner=resolve_owner(req.owner)

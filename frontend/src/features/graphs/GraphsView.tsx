@@ -312,7 +312,7 @@ function ConfirmDialog({
 /** The center-contained graph toolbar: graph dropdown + Add on the right
  *  (graph picking lives here since the dedicated left bar is gone), plus
  *  Models / zoom / connect / delete. The dialogs are owned here. */
-export function GraphsMenuBar() {
+function GraphsMenuBar() {
   const { t } = useI18n();
   const graphsUi = useGraphStore((s) => s.graphsUi);
   const setGraphsUi = useGraphStore((s) => s.setGraphsUi);

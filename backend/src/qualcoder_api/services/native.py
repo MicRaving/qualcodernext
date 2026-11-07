@@ -25,6 +25,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import re
 import shutil
 import threading
 from pathlib import Path
@@ -113,6 +114,20 @@ def native_status() -> dict:
     }
 
 
+def _is_safe_relpath(relpath: object) -> bool:
+    """True for a plain install-relative path (no absolute/drive/``..``).
+
+    The shell applies these paths relative to the install dir at boot, so a
+    traversal entry would write or delete outside it.
+    """
+    if not isinstance(relpath, str) or not relpath or "\x00" in relpath:
+        return False
+    normalized = relpath.replace("\\", "/")
+    if normalized.startswith("/") or re.match(r"^[A-Za-z]:", normalized):
+        return False
+    return ".." not in normalized.split("/")
+
+
 def _verify_staged(unpacked: Path, version: str, expected_from: str) -> dict:
     """Cross-check an unpacked delta against its ``delta.json`` + request."""
     data = _read_json(unpacked / "delta.json")
@@ -124,10 +139,15 @@ def _verify_staged(unpacked: Path, version: str, expected_from: str) -> dict:
     deleted = data.get("deleted")
     if not isinstance(files, list) or not isinstance(deleted, list):
         raise HotpatchError("patch delta manifest is malformed")
+    for item in deleted:
+        if not _is_safe_relpath(item):
+            raise HotpatchError(f"patch deletes an unsafe path: {item!r}")
     for entry in files:
         if not isinstance(entry, dict):
             raise HotpatchError("patch delta manifest is malformed")
         relpath = entry.get("path")
+        if isinstance(relpath, str) and not _is_safe_relpath(relpath):
+            raise HotpatchError(f"patch has an unsafe file path: {relpath!r}")
         target = unpacked / relpath if isinstance(relpath, str) else unpacked
         if not isinstance(relpath, str) or not target.is_file():
             raise HotpatchError(f"patch is missing file {relpath!r}")

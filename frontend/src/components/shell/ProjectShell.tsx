@@ -418,7 +418,20 @@ export function ProjectShell() {
   // the project when one finishes.
   useEffect(() => {
     if (tasks.length === 0) return;
+    // One poll at a time: a slow backend (>1.5s per round) let rounds
+    // overlap, both saw the job as "running" and fired the completion
+    // toast/refresh twice.
+    let inFlight = false;
     const poll = async () => {
+      if (inFlight) return;
+      inFlight = true;
+      try {
+        await pollOnce();
+      } finally {
+        inFlight = false;
+      }
+    };
+    const pollOnce = async () => {
       const store = useProjectStore.getState();
       for (const task of store.tasks) {
         if (task.state !== "running") continue;

@@ -26,6 +26,11 @@ dist-patches/
 # Packaged backend onedir (copied by release.ps1 -Compile; regenerable, ~150 MB)
 frontend/src-tauri/resources/backend/
 
+# Local dev-server logs / debug captures / one-off scripts
+*.log
+dbg*.png
+backend/scripts_*.py
+
 # OS / editor
 .DS_Store
 Thumbs.db

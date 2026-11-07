@@ -239,11 +239,3 @@ async def create_new_project_schema(
         ),
     )
     await conn.commit()
-
-
-async def table_names(conn: aiosqlite.Connection) -> set[str]:
-    """Return the set of user table names in the database."""
-    cur = await conn.cursor()
-    await cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")
-    rows = await cur.fetchall()
-    return {row[0] for row in rows}

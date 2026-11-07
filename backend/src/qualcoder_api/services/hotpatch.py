@@ -146,10 +146,13 @@ def download_patch(url: str, dest: Path, timeout_secs: int = 60) -> None:
 def safe_unpack(zip_path: Path, dest: Path) -> None:
     """Unpack a patch zip, rejecting absolute paths and ``..`` escapes."""
     try:
+        root = dest.resolve()
         with zipfile.ZipFile(zip_path) as archive:
             for member in archive.infolist():
                 target = (dest / member.filename).resolve()
-                if not str(target).startswith(str(dest.resolve())):
+                # Path containment, not a string prefix: ``../unpacked2/x``
+                # resolves to a sibling that shares ``unpacked`` as a prefix.
+                if not target.is_relative_to(root):
                     raise HotpatchError("patch archive contains an unsafe path")
             archive.extractall(dest)
     except HotpatchError:

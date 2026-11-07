@@ -369,6 +369,11 @@ async def import_nvivo(session_factory: async_sessionmaker, nvpx_path: str, code
         existing_cats = await existing_names(tables.code_cat)
 
         async def import_category(rec: _NodeRec, supercatid: int | None) -> None:
+            # A GUID re-declared under its own descendant (malformed or split
+            # bundle) links a child back to an ancestor; visit each node once
+            # so the walk cannot recurse forever.
+            if rec.key in catid_by_key:
+                return
             catid = None
             if rec.children:
                 if rec.name and rec.name not in existing_cats:

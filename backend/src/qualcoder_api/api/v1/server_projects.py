@@ -15,6 +15,7 @@ from fastapi import APIRouter, Depends, HTTPException, UploadFile
 from pydantic import BaseModel, Field
 
 from qualcoder_api.api.v1.auth_deps import get_current_user, require_admin
+from qualcoder_api.core.security import assert_safe_zip_names, sanitize_filename
 from qualcoder_api.core.server_config import load_server_config, resolve_under_root
 from qualcoder_api.persistence import metadata_db
 from qualcoder_api.services.project_service import ProjectService
@@ -60,7 +61,14 @@ async def list_projects(user: Annotated[dict, Depends(get_current_user)]) -> dic
 async def create_project(req: CreateProjectRequest, user: Annotated[dict, Depends(get_current_user)]) -> dict:
     cfg = load_server_config()
     pid = new_project_id()
-    root = resolve_under_root(cfg.projects_root, pid) / f"{req.name}.qda"
+    # The display name is client-supplied: never let it shape the path
+    # beyond a single safe component under the project's own directory.
+    try:
+        root = resolve_under_root(
+            cfg.projects_root, f"{pid}/{sanitize_filename(req.name, 'project')}.qda"
+        )
+    except ValueError as err:
+        raise HTTPException(status_code=422, detail="invalid project name") from err
     if root.exists():
         raise HTTPException(status_code=409, detail="project id collision — retry")
     service = ProjectService()
@@ -160,10 +168,12 @@ async def close_session(project_id: str, user: Annotated[dict, Depends(get_curre
 
 
 def _zip_safe_names(zf: zipfile.ZipFile) -> None:
-    for name in zf.namelist():
-        candidate = Path(name)
-        if candidate.is_absolute() or ".." in candidate.parts:
-            raise HTTPException(status_code=422, detail=f"unsafe zip entry: {name}")
+    # Shared guard also rejects drive-relative ("C:x") and backslash-rooted
+    # entries, which ``Path.is_absolute`` misses.
+    try:
+        assert_safe_zip_names(zf.namelist())
+    except ValueError as err:
+        raise HTTPException(status_code=422, detail=str(err)) from err
 
 
 @router.post("/server/projects/upload")
@@ -225,6 +235,7 @@ async def download_project(
     include_backups: int = 0,
 ):
     from fastapi.responses import FileResponse
+    from starlette.background import BackgroundTask
 
     project = await metadata_db.get_project(project_id)
     if project is None or await _member_role(project_id, user) is None:
@@ -234,9 +245,11 @@ async def download_project(
     if not source.is_dir():
         raise HTTPException(status_code=404, detail="project data missing")
     cfg.temp_dir.mkdir(parents=True, exist_ok=True)
-    archive_base = cfg.temp_dir / f"{project_id}-{project['name']}"
+    # Unique, name-free temp path: the project name is client-supplied (no
+    # path components allowed here) and concurrent downloads of the same
+    # project must not overwrite each other's archive.
+    archive_base = cfg.temp_dir / f"{project_id}-{new_project_id()}"
     skip = {"changes", "presence", "backups"} if not include_backups else {"changes", "presence"}
-    shutil.make_archive(str(archive_base), "zip", source)
     # make_archive cannot exclude — rebuild the archive without the
     # transport-internal directories.
     final_zip = Path(shutil.make_archive(str(archive_base), "zip", source))
@@ -255,4 +268,6 @@ async def download_project(
         final_zip,
         media_type="application/zip",
         filename=f"{project['name']}.zip",
+        # The temp archive is single-use: delete it once streamed.
+        background=BackgroundTask(final_zip.unlink, missing_ok=True),
     )

@@ -326,16 +326,21 @@ export function staleBackend(hotpatch: HotpatchVersion | null): BackendBaseMisma
   return { app: APP_VERSION, backend: hotpatch?.app_version ?? "?" };
 }
 
-/** Effective running version: the newest of build / hotpatch / native delta.
- *  Comparing against the max (not just the build) keeps applied nightlies
- *  from being re-offered on the next check. */
+/** Effective running version: the newest of build / frontend hotpatch /
+ *  backend overlay / native delta. Comparing against the max (not just the
+ *  build) keeps applied nightlies from being re-offered on the next check —
+ *  including a backend-only nightly (only `overlay_version` moves), which
+ *  auto-update would otherwise reinstall (and restart the backend) forever. */
 export function effectiveVersion(
   hotpatch: HotpatchVersion | null,
   native: NativeVersion | null = null,
+  overlay: OverlayVersion | null = null,
 ): string {
-  let best = hotpatch?.frontend_version ?? hotpatch?.app_version ?? APP_VERSION;
-  const nativeTo = native?.applied_to;
-  if (nativeTo && compareNightlyVersions(nativeTo, best) > 0) best = nativeTo;
+  const backendVersion = hotpatch?.app_version;
+  let best = backendVersion && parseNightlyVersion(backendVersion) ? backendVersion : APP_VERSION;
+  for (const candidate of [hotpatch?.frontend_version, overlay?.overlay_version, native?.applied_to]) {
+    if (candidate && compareNightlyVersions(candidate, best) > 0) best = candidate;
+  }
   return best;
 }
 
@@ -469,7 +474,7 @@ export const useUpdatesStore = create<UpdatesState>((set, get) => ({
       // (Deliberately no `loadSettings()` here: it hits the network and
       // must never stall a manual check.)
       const channel = get().settings?.channel ?? "stable";
-      const current = effectiveVersion(get().hotpatch, get().native);
+      const current = effectiveVersion(get().hotpatch, get().native, get().overlay);
 
       const { check } = await import("@tauri-apps/plugin-updater");
       const update = await check({ timeout: 30_000 });

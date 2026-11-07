@@ -1004,16 +1004,22 @@ def moderator(
         result["covariance"] = "model"
     result["n_clusters"] = n_clusters
 
-    # Residual between-study variance (method of moments, same weights).
     sw = float(weights.sum())
-    c = sw - float((weights * weights).sum()) / sw if sw > 0 else 0.0
     q_res = float((weights * resid * resid).sum())
     p = x.shape[1]
-    tau2_res = max(0.0, (q_res - (len(y) - p)) / c) if c > 0 else 0.0
     mean_w = float((weights * y).sum()) / sw if sw > 0 else 0.0
     q_null = float((weights * (y - mean_w) ** 2).sum())
-    tau2_null = max(0.0, (q_null - (len(y) - 1)) / c) if c > 0 else 0.0
-    r2_tau = 1.0 - tau2_res / tau2_null if tau2_null > 0 else None
+    # Residual between-study variance: the DerSimonian-Laird meta-regression
+    # estimator, which (like the intercept-only ``tau2``) must use the fixed
+    # 1/v weights — Q computed with the random-effects weights is ~df by
+    # construction, which drove the old estimate (and R²_tau) towards zero.
+    w0 = 1.0 / v
+    cov0 = np.linalg.pinv(x.T @ (w0[:, None] * x))
+    resid0 = y - x @ (cov0 @ (x.T @ (w0 * y)))
+    q_e = float((w0 * resid0 * resid0).sum())
+    c_e = float(w0.sum()) - float(np.trace(cov0 @ (x.T @ ((w0 * w0)[:, None] * x))))
+    tau2_res = max(0.0, (q_e - (len(y) - p)) / c_e) if c_e > 0 else 0.0
+    r2_tau = max(0.0, 1.0 - tau2_res / tau2) if tau2 > 0 else None
     r2 = 1.0 - q_res / q_null if q_null > 0 else None
 
     coefficients = []

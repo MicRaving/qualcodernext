@@ -132,15 +132,6 @@ def update_consolidation_watermark(
         logger.warning("could not update consolidation watermark: %s", err)
 
 
-def consolidation_watermark(project_path: str) -> tuple[str, int]:
-    """The last consolidation watermark as (timestamp, max_sidecar_seq)."""
-    marker = read_marker(project_path)
-    if not marker:
-        return "", 0
-    wm = marker.get("consolidation_watermark") or {}
-    return str(wm.get("timestamp", "")), int(wm.get("max_sidecar_seq", 0))
-
-
 def remove_marker(project_path: str) -> None:
     """Delete the marker file (revert to single-coder mode)."""
     try:

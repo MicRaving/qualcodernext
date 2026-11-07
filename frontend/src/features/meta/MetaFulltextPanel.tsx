@@ -99,8 +99,9 @@ export function MetaFulltextPanel({
 
   const setRow = (key: string, patch: Partial<RowState>) =>
     setRows((prev) => {
-      const base = effective;
-      return { ...base, ...(prev ?? {}), [key]: { ...base[key], ...patch } };
+      // Build on the latest queued state so back-to-back patches compose.
+      const base = prev ?? effective;
+      return { ...base, [key]: { ...base[key], ...patch } };
     });
 
   const save = async () => {

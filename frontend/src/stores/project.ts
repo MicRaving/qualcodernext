@@ -452,6 +452,9 @@ export const useProjectStore = create<ProjectLifecycleState>((set, get) => ({
       summary: null,
       sources: [],
       codeTree: [],
+      // Previous project's cases/journals must not survive into the next one.
+      cases: [],
+      journals: [],
       error: null,
     });
     // Reset EVERY project-scoped store — stale selections/graph data/

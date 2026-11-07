@@ -50,23 +50,26 @@ class SessionManager:
             raise HTTPException(status_code=403, detail="not a member of this project")
         role = member["role"] if member else "owner"  # admin without membership acts as owner
 
-        entry = self.sessions.setdefault(project_id, SessionEntry())
-        # The lock serializes open-vs-close; concurrent REQUESTS share the
-        # already-open service without waiting on it.
-        async with entry.lock:
-            entry.last_used = time.monotonic()
-            if entry.service is None:
-                username = str(user["username"])
-                service = ProjectService()
-                data_path = str(project["data_path"])
-                result = await service.open_project(data_path, codername=username)
-                if not result.ok:
-                    raise HTTPException(status_code=409, detail=result.error or "open failed")
-                entry.service = service
-                logger.info("session opened: project=%s coder=%s", project_id, username)
-            else:
+        while True:
+            entry = self.sessions.setdefault(project_id, SessionEntry())
+            # The lock serializes open-vs-close; concurrent REQUESTS share the
+            # already-open service without waiting on it.
+            async with entry.lock:
+                if self.sessions.get(project_id) is not entry:
+                    # close() popped this entry while we waited on its lock:
+                    # opening into it would leak an untracked second writer.
+                    continue
                 entry.last_used = time.monotonic()
-        return entry.service, role
+                if entry.service is None:
+                    username = str(user["username"])
+                    service = ProjectService()
+                    data_path = str(project["data_path"])
+                    result = await service.open_project(data_path, codername=username)
+                    if not result.ok:
+                        raise HTTPException(status_code=409, detail=result.error or "open failed")
+                    entry.service = service
+                    logger.info("session opened: project=%s coder=%s", project_id, username)
+                return entry.service, role
 
     async def close(self, project_id: str) -> None:
         entry = self.sessions.pop(project_id, None)

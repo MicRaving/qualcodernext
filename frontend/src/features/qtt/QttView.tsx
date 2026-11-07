@@ -699,20 +699,27 @@ export function QttView() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // Only the newest request may apply: a slow load of the previously
+  // selected sheet must not replace the sheet the user switched to.
+  const loadSeqRef = useRef(0);
   const load = useCallback(async () => {
+    const seq = ++loadSeqRef.current;
     if (qttUi.selectedId == null) {
       setSheet(null);
+      setLoading(false);
       return;
     }
     setLoading(true);
     setError(null);
     try {
-      setSheet(await getQttSheet(qttUi.selectedId));
+      const detail = await getQttSheet(qttUi.selectedId);
+      if (seq === loadSeqRef.current) setSheet(detail);
     } catch (e) {
+      if (seq !== loadSeqRef.current) return;
       setError(errorMessage(e, t("qtt.loadSheetError")));
       setSheet(null);
     } finally {
-      setLoading(false);
+      if (seq === loadSeqRef.current) setLoading(false);
     }
   }, [qttUi.selectedId, t]);
 

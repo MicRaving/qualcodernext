@@ -8,7 +8,7 @@ import type { DragNode, DropZone } from "@/features/sidebar/types";
 
 /** A category can only nest in categories; a code nests in a category or
  *  as a sub-code — never under its own descendant (cycle guard). */
-export function canDropInto(drag: DragNode, target: CodeTreeItem): boolean {
+function canDropInto(drag: DragNode, target: CodeTreeItem): boolean {
   if (drag.kind === "category" && target.kind !== "category") return false;
   return !drag.subtree.has(`${target.kind}:${target.id}`);
 }
@@ -16,13 +16,13 @@ export function canDropInto(drag: DragNode, target: CodeTreeItem): boolean {
 /** before/after land in the target's sibling group — only same-kind rows
  *  can anchor a sibling slot, and never inside the dragged node's own
  *  subtree (the backend would reject that cycle anyway). */
-export function canOrderSibling(drag: DragNode, target: CodeTreeItem): boolean {
+function canOrderSibling(drag: DragNode, target: CodeTreeItem): boolean {
   if (drag.kind !== target.kind) return false;
   return !drag.subtree.has(`${target.kind}:${target.id}`);
 }
 
 /** Merge-onto needs a same-kind target outside the dragged subtree. */
-export function canDropMerge(drag: DragNode, target: CodeTreeItem): boolean {
+function canDropMerge(drag: DragNode, target: CodeTreeItem): boolean {
   if (drag.kind !== target.kind) return false;
   return !drag.subtree.has(`${target.kind}:${target.id}`);
 }

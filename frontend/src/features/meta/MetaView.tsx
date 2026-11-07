@@ -555,7 +555,14 @@ export function MetaView() {
       toast.success(t("meta.verdictSaved"));
       refresh();
       if (advance) goToHit(1);
-      else await refreshSelectedScreening(hit.hit_id, effectiveScreeningStage);
+      // Drop the reload if the user moved to another study meanwhile, so the
+      // saved hit's verdicts never overwrite the newly focused one.
+      else
+        await refreshSelectedScreening(
+          hit.hit_id,
+          effectiveScreeningStage,
+          () => useWorkspaceStore.getState().metaUi.selectedHit?.hit_id !== hit.hit_id,
+        );
     } catch (err) {
       toast.error(errorMessage(err));
     } finally {

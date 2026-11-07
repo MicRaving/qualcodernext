@@ -96,53 +96,6 @@ def _max_replay_seq(project_path: str) -> int:
     return max_seq
 
 
-def append_replay(project_path: str, session_id: str, lines: str) -> bool:
-    """Append lines to the session's replay file (fsynced). Returns True on success."""
-    path = replay_path(project_path, session_id)
-    try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        # Ensure file ends with newline before appending
-        if path.exists() and path.stat().st_size > 0:
-            with open(path, "rb") as rf:
-                rf.seek(-1, os.SEEK_END)
-                if rf.read(1) != b"\n":
-                    with open(path, "ab") as wf:
-                        wf.write(b"\n")
-        with open(path, "ab") as f:
-            f.write(lines.encode("utf-8"))
-            f.flush()
-            os.fsync(f.fileno())
-        if hasattr(os, "O_DIRECTORY"):
-            with contextlib.suppress(OSError):
-                dir_fd = os.open(str(path.parent), os.O_DIRECTORY)
-                try:
-                    os.fsync(dir_fd)
-                finally:
-                    os.close(dir_fd)
-        return True
-    except OSError as err:
-        logger.warning("append_replay failed for %s: %s", session_id, err)
-        return False
-
-
-def list_replays(project_path: str) -> list[Path]:
-    """All per-session replay files plus legacy sidecars (for replay)."""
-    out: list[Path] = []
-    replays_dir = _replays_dir(project_path)
-    if replays_dir.is_dir():
-        out.extend(sorted(replays_dir.glob("*.jsonl")))
-    # Include legacy sidecars as replays (migration)
-    legacy_root = Path(project_path) / LEGACY_CHANGES_DIR
-    if legacy_root.is_dir():
-        for d in sorted(legacy_root.iterdir()):
-            if not d.is_dir():
-                continue
-            p = d / "changes.jsonl"
-            if p.exists() and p.stat().st_size > 0:
-                out.append(p)
-    return out
-
-
 def list_session_replays(project_path: str) -> list[Path]:
     """Only per-session replays (excludes legacy)."""
     replays_dir = _replays_dir(project_path)

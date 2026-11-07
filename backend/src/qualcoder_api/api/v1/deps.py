@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from qualcoder_api.services.project_service import ProjectService
 
 #: Server mode: the request-scoped ProjectService is placed here by
-#: ``auth_deps.resolve_project_service`` (SERVER_PLAN.md Phase 2). It stays
+#: ``auth_deps.gate_project_scoped`` (SERVER_PLAN.md Phase 2). It stays
 #: UNSET in local mode — ``get_service`` then falls back to the global
 #: singleton, so desktop behavior is byte-identical.
 CURRENT_SERVICE: ContextVar[ProjectService | None] = ContextVar(

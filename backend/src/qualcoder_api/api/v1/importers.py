@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import os
 import tempfile
 from typing import Annotated, Any
@@ -45,6 +46,19 @@ def _detect_kind(tmp: str) -> str:
     return importers.detect_import_kind(tmp)
 
 
+async def _write_upload(file: UploadFile, tmp: str) -> None:
+    """Stream ``file`` to ``tmp``; on any failure (client disconnect, disk
+    full) remove the partial file instead of leaving it in the project dir."""
+    try:
+        with open(tmp, "wb") as out:  # noqa: ASYNC230 - small local temp write
+            while chunk := await file.read(1 << 20):
+                out.write(chunk)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            os.remove(tmp)
+        raise
+
+
 async def _run_import(svc, file: UploadFile, codername: str | None, importer, kind: str) -> dict:
     """Save the upload next to the project, run ``importer``, delete the temp file."""
     from qualcoder_api.core.security import sanitize_filename
@@ -53,9 +67,7 @@ async def _run_import(svc, file: UploadFile, codername: str | None, importer, ki
         raise HTTPException(status_code=409, detail="no project is open")
     safe_name = sanitize_filename(file.filename, "import")
     tmp = os.path.join(svc.project_path, f"_import_{safe_name}")
-    with open(tmp, "wb") as out:  # noqa: ASYNC230 - small local temp write
-        while chunk := await file.read(1 << 20):
-            out.write(chunk)
+    await _write_upload(file, tmp)
     try:
         from qualcoder_api.services import audit
         from qualcoder_api.services.user_settings import get_codername, resolve_owner
@@ -138,9 +150,7 @@ async def _save_upload(file: UploadFile, svc, prefix: str) -> str:
     safe_name = sanitize_filename(file.filename, "import")
     safe_prefix = "".join(c for c in prefix if c.isalnum() or c in ("-", "_"))[:32] or "import"
     tmp = os.path.join(svc.project_path, f"_{safe_prefix}_{safe_name}")
-    with open(tmp, "wb") as out:  # noqa: ASYNC230 - small local temp write
-        while chunk := await file.read(1 << 20):
-            out.write(chunk)
+    await _write_upload(file, tmp)
     return tmp
 
 

@@ -4,11 +4,11 @@ from __future__ import annotations
 
 import ipaddress
 import re
+import socket
 from pathlib import Path
 from urllib.parse import urlparse
 
 _INSTANCE_ID_RE = re.compile(r"^[A-Za-z0-9_.-]{1,64}$")
-_RESERVED_INSTANCES = frozenset({"__server__"})
 
 # SQL write keywords blocked by the read-only report gate.
 _SQL_WRITE_RE = re.compile(
@@ -54,10 +54,6 @@ def validate_session_id(session_id: str) -> str:
     return validate_instance_id(session_id)
 
 
-def is_reserved_instance(instance_id: str) -> bool:
-    return instance_id in _RESERVED_INSTANCES
-
-
 def assert_safe_zip_names(names: list[str]) -> None:
     """Raise ValueError when a zip archive contains traversal entries."""
     for name in names:
@@ -67,6 +63,24 @@ def assert_safe_zip_names(names: list[str]) -> None:
         # Reject absolute Windows paths and drive letters.
         if re.match(r"^[A-Za-z]:", name) or name.startswith(("\\\\", "\\")):
             raise ValueError(f"unsafe zip entry: {name}")
+
+
+_LEGACY_IPV4_RE = re.compile(r"^(0x[0-9a-f]*|[0-9]+)(\.(0x[0-9a-f]*|[0-9]+)){0,3}$")
+
+
+def _legacy_ipv4(host: str) -> ipaddress.IPv4Address | None:
+    """Parse inet_aton-style IPv4 forms (``2130706433``, ``0x7f.1``, ``127.1``).
+
+    The resolver (getaddrinfo) accepts these shorthand/decimal/hex/octal
+    spellings, but :func:`ipaddress.ip_address` does not — so without this
+    they would bypass the private/loopback checks.
+    """
+    if not _LEGACY_IPV4_RE.match(host):
+        return None
+    try:
+        return ipaddress.IPv4Address(socket.inet_aton(host))
+    except OSError:
+        return None
 
 
 def is_ssrf_blocked_url(url: str) -> bool:
@@ -84,6 +98,13 @@ def is_ssrf_blocked_url(url: str) -> bool:
         return True
     try:
         ip = ipaddress.ip_address(host)
+    except ValueError:
+        ip = _legacy_ipv4(host)
+    if ip is not None:
+        # ``::ffff:127.0.0.1`` reaches the IPv4 host; judge the mapped address.
+        mapped = getattr(ip, "ipv4_mapped", None)
+        if mapped is not None:
+            ip = mapped
         return (
             ip.is_private
             or ip.is_loopback
@@ -92,8 +113,6 @@ def is_ssrf_blocked_url(url: str) -> bool:
             or ip.is_reserved
             or ip.is_unspecified
         )
-    except ValueError:
-        pass
     # Hostnames resolving to localhost-ish names.
     return host.endswith((".local", ".internal"))
 

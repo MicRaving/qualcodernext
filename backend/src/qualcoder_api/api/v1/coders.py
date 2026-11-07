@@ -402,26 +402,10 @@ async def rename_coder(name: str, req: RenameCoderRequest, svc: ServiceDep) -> C
                 with _ctx.suppress(Exception):
                     await session.rollback()
                 raise
-        # Rename the coder's sync sidecar folder so future exports land in
-        # the new name (other raters import them unchanged).
-        from qualcoder_api.services.sync import SYNC_DIR_NAME, load_state, save_state
-
-        changes_root = svc.project_path and f"{svc.project_path}/{SYNC_DIR_NAME}"
-        if changes_root:
-            old_dir = f"{changes_root}/{name}"
-            new_dir = f"{changes_root}/{new_name}"
-            import os
-
-            if os.path.isdir(old_dir) and not os.path.isdir(new_dir):
-                os.rename(old_dir, new_dir)
-        # Carry the export/import watermarks over to the new name, so the
-        # renamed coder does not re-export its whole backlog from scratch.
-        if svc.project_path:
-            state = load_state(svc.project_path)
-            for bucket in ("exports", "imports"):
-                if bucket in state and name in state[bucket]:
-                    state[bucket][new_name] = state[bucket].pop(name)
-            save_state(svc.project_path, state)
+        # (No sync-folder/watermark rename: sidecars and the export/import
+        # watermarks are keyed by instance id, not coder name. The former
+        # ``changes/<name>`` rename here was dead and let an unvalidated
+        # ``new_name`` such as ``../x`` move a folder outside the project.)
 
     if name in names:
         renamed = [new_name if n == name else n for n in names]

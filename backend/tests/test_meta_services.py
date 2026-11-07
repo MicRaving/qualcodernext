@@ -523,7 +523,9 @@ def test_derive_effect_smd_labelling_and_hedges_correction():
     r_effect = derive_effect({"r": 0.4, "n_total": 50})
     assert r_effect is not None and r_effect["method"] == "r_to_d"
     assert r_effect["yi"] == pytest.approx(2 * 0.4 / math.sqrt(1 - 0.4**2))
-    assert r_effect["vi"] == pytest.approx(4 * (1 - 0.4**2) / (50 - 1))
+    # Borenstein eq. 7.10: V_d = 4·V_r/(1-r²)³, V_r = (1-r²)²/(n-1).
+    v_r = (1 - 0.4**2) ** 2 / (50 - 1)
+    assert r_effect["vi"] == pytest.approx(4 * v_r / (1 - 0.4**2) ** 3)
 
 
 # ── extraction record model (§4) ─────────────────────────────────────────
